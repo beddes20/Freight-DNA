@@ -42,6 +42,7 @@ const contactSchema = z.object({
   regions: z.string().optional(),
   freightSpend: z.string().optional(),
   spotBiddingProcess: z.string().optional(),
+  interests: z.string().optional(),
   notes: z.string().optional(),
 });
 
@@ -76,6 +77,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
       regions: "",
       freightSpend: "",
       spotBiddingProcess: "",
+      interests: "",
       notes: "",
     },
   });
@@ -92,6 +94,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
         regions: contact.regions?.join(", ") || "",
         freightSpend: contact.freightSpend || "",
         spotBiddingProcess: contact.spotBiddingProcess || "",
+        interests: contact.interests || "",
         notes: contact.notes || "",
       });
     } else {
@@ -105,6 +108,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
         regions: "",
         freightSpend: "",
         spotBiddingProcess: "",
+        interests: "",
         notes: "",
       });
     }
@@ -155,6 +159,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
       regions: data.regions ? data.regions.split(",").map((s) => s.trim()).filter(Boolean) : null,
       freightSpend: data.freightSpend || null,
       spotBiddingProcess: data.spotBiddingProcess || null,
+      interests: data.interests || null,
       notes: data.notes || null,
     };
 
@@ -323,6 +328,25 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
                 />
               </div>
             </div>
+
+            <FormField
+              control={form.control}
+              name="interests"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Interests Outside of Work</FormLabel>
+                  <FormControl>
+                    <Textarea 
+                      placeholder="e.g., Golf, fishing, family activities, travel..." 
+                      {...field} 
+                      data-testid="input-contact-interests"
+                    />
+                  </FormControl>
+                  <FormDescription>Personal interests to help build rapport</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <FormField
               control={form.control}
