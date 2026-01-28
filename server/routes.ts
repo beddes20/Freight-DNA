@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCompanySchema, insertContactSchema } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema } from "@shared/schema";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -146,6 +146,62 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error deleting contact:", error);
       res.status(500).json({ error: "Failed to delete contact" });
+    }
+  });
+
+  // RFP routes
+  app.get("/api/rfps", async (req, res) => {
+    try {
+      const rfps = await storage.getRfps();
+      res.json(rfps);
+    } catch (error) {
+      console.error("Error fetching RFPs:", error);
+      res.status(500).json({ error: "Failed to fetch RFPs" });
+    }
+  });
+
+  app.post("/api/rfps", async (req, res) => {
+    try {
+      const parsed = insertRfpSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.message });
+      }
+      const rfp = await storage.createRfp(parsed.data);
+      res.status(201).json(rfp);
+    } catch (error) {
+      console.error("Error creating RFP:", error);
+      res.status(500).json({ error: "Failed to create RFP" });
+    }
+  });
+
+  app.patch("/api/rfps/:id", async (req, res) => {
+    try {
+      const existing = await storage.getRfp(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: "RFP not found" });
+      }
+      const parsed = insertRfpSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.message });
+      }
+      const rfp = await storage.updateRfp(req.params.id, parsed.data);
+      res.json(rfp);
+    } catch (error) {
+      console.error("Error updating RFP:", error);
+      res.status(500).json({ error: "Failed to update RFP" });
+    }
+  });
+
+  app.delete("/api/rfps/:id", async (req, res) => {
+    try {
+      const deleted = await storage.deleteRfp(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ error: "RFP not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting RFP:", error);
+      res.status(500).json({ error: "Failed to delete RFP" });
     }
   });
 

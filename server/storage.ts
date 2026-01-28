@@ -5,12 +5,15 @@ import {
   users,
   companies,
   contacts,
+  rfps,
   type User,
   type InsertUser,
   type Company,
   type InsertCompany,
   type Contact,
   type InsertContact,
+  type Rfp,
+  type InsertRfp,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -32,6 +35,12 @@ export interface IStorage {
   createContact(contact: InsertContact): Promise<Contact>;
   updateContact(id: string, contact: InsertContact): Promise<Contact | undefined>;
   deleteContact(id: string): Promise<boolean>;
+  
+  getRfps(): Promise<Rfp[]>;
+  getRfp(id: string): Promise<Rfp | undefined>;
+  createRfp(rfp: InsertRfp): Promise<Rfp>;
+  updateRfp(id: string, rfp: InsertRfp): Promise<Rfp | undefined>;
+  deleteRfp(id: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -113,6 +122,34 @@ export class DatabaseStorage implements IStorage {
 
   async deleteContact(id: string): Promise<boolean> {
     const result = await db.delete(contacts).where(eq(contacts.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getRfps(): Promise<Rfp[]> {
+    return db.select().from(rfps);
+  }
+
+  async getRfp(id: string): Promise<Rfp | undefined> {
+    const [rfp] = await db.select().from(rfps).where(eq(rfps.id, id));
+    return rfp;
+  }
+
+  async createRfp(rfp: InsertRfp): Promise<Rfp> {
+    const [created] = await db.insert(rfps).values(rfp).returning();
+    return created;
+  }
+
+  async updateRfp(id: string, rfp: InsertRfp): Promise<Rfp | undefined> {
+    const [updated] = await db
+      .update(rfps)
+      .set(rfp)
+      .where(eq(rfps.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteRfp(id: string): Promise<boolean> {
+    const result = await db.delete(rfps).where(eq(rfps.id, id)).returning();
     return result.length > 0;
   }
 }

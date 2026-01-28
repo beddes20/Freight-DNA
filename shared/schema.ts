@@ -42,6 +42,23 @@ export const insertContactSchema = createInsertSchema(contacts).omit({
 export type InsertContact = z.infer<typeof insertContactSchema>;
 export type Contact = typeof contacts.$inferSelect;
 
+export const rfps = pgTable("rfps", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  status: text("status").notNull().default("pending"),
+  value: decimal("value", { precision: 12, scale: 2 }),
+  dueDate: text("due_date"),
+  notes: text("notes"),
+});
+
+export const insertRfpSchema = createInsertSchema(rfps).omit({
+  id: true,
+});
+
+export type InsertRfp = z.infer<typeof insertRfpSchema>;
+export type Rfp = typeof rfps.$inferSelect;
+
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
