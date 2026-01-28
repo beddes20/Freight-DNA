@@ -219,7 +219,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
                   <FormItem className="col-span-2">
                     <FormLabel>Relationship Base</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g., Met at conference, Referred by John, Cold outreach" {...field} data-testid="input-contact-relationship-base" />
+                      <Input placeholder="e.g., 1st base, 2nd base, 3rd base, homerun" {...field} data-testid="input-contact-relationship-base" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
