@@ -35,6 +35,7 @@ import type { Contact, InsertContact } from "@shared/schema";
 const contactSchema = z.object({
   name: z.string().min(1, "Name is required"),
   title: z.string().optional(),
+  relationshipBase: z.string().optional(),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
   phone: z.string().optional(),
   reportsToId: z.string().optional(),
@@ -70,6 +71,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
     defaultValues: {
       name: "",
       title: "",
+      relationshipBase: "",
       email: "",
       phone: "",
       reportsToId: "",
@@ -87,6 +89,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
       form.reset({
         name: contact.name || "",
         title: contact.title || "",
+        relationshipBase: contact.relationshipBase || "",
         email: contact.email || "",
         phone: contact.phone || "",
         reportsToId: contact.reportsToId || "",
@@ -101,6 +104,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
       form.reset({
         name: "",
         title: "",
+        relationshipBase: "",
         email: "",
         phone: "",
         reportsToId: "",
@@ -152,6 +156,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
       companyId,
       name: data.name,
       title: data.title || null,
+      relationshipBase: data.relationshipBase || null,
       email: data.email || null,
       phone: data.phone || null,
       reportsToId: data.reportsToId || null,
@@ -202,6 +207,19 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
                     <FormLabel>Job Title</FormLabel>
                     <FormControl>
                       <Input placeholder="e.g., Director of Logistics" {...field} data-testid="input-contact-title" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="relationshipBase"
+                render={({ field }) => (
+                  <FormItem className="col-span-2">
+                    <FormLabel>Relationship Base</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g., Met at conference, Referred by John, Cold outreach" {...field} data-testid="input-contact-relationship-base" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

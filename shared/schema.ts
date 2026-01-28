@@ -23,6 +23,7 @@ export const contacts = pgTable("contacts", {
   companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   title: text("title"),
+  relationshipBase: text("relationship_base"),
   email: text("email"),
   phone: text("phone"),
   reportsToId: varchar("reports_to_id"),
