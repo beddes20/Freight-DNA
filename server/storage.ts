@@ -1,38 +1,120 @@
-import { type User, type InsertUser } from "@shared/schema";
-import { randomUUID } from "crypto";
+import { eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
+import pg from "pg";
+import {
+  users,
+  companies,
+  contacts,
+  type User,
+  type InsertUser,
+  type Company,
+  type InsertCompany,
+  type Contact,
+  type InsertContact,
+} from "@shared/schema";
 
-// modify the interface with any CRUD methods
-// you might need
+const { Pool } = pg;
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  
+  getCompanies(): Promise<Company[]>;
+  getCompany(id: string): Promise<Company | undefined>;
+  createCompany(company: InsertCompany): Promise<Company>;
+  updateCompany(id: string, company: InsertCompany): Promise<Company | undefined>;
+  deleteCompany(id: string): Promise<boolean>;
+  
+  getContacts(): Promise<Contact[]>;
+  getContactsByCompany(companyId: string): Promise<Contact[]>;
+  getContact(id: string): Promise<Contact | undefined>;
+  createContact(contact: InsertContact): Promise<Contact>;
+  updateContact(id: string, contact: InsertContact): Promise<Contact | undefined>;
+  deleteContact(id: string): Promise<boolean>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
 
-  constructor() {
-    this.users = new Map();
-  }
+const db = drizzle(pool);
 
+export class DatabaseStorage implements IStorage {
   async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
+    const [user] = await db.insert(users).values(insertUser).returning();
     return user;
+  }
+
+  async getCompanies(): Promise<Company[]> {
+    return db.select().from(companies);
+  }
+
+  async getCompany(id: string): Promise<Company | undefined> {
+    const [company] = await db.select().from(companies).where(eq(companies.id, id));
+    return company;
+  }
+
+  async createCompany(company: InsertCompany): Promise<Company> {
+    const [created] = await db.insert(companies).values(company).returning();
+    return created;
+  }
+
+  async updateCompany(id: string, company: InsertCompany): Promise<Company | undefined> {
+    const [updated] = await db
+      .update(companies)
+      .set(company)
+      .where(eq(companies.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteCompany(id: string): Promise<boolean> {
+    const result = await db.delete(companies).where(eq(companies.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getContacts(): Promise<Contact[]> {
+    return db.select().from(contacts);
+  }
+
+  async getContactsByCompany(companyId: string): Promise<Contact[]> {
+    return db.select().from(contacts).where(eq(contacts.companyId, companyId));
+  }
+
+  async getContact(id: string): Promise<Contact | undefined> {
+    const [contact] = await db.select().from(contacts).where(eq(contacts.id, id));
+    return contact;
+  }
+
+  async createContact(contact: InsertContact): Promise<Contact> {
+    const [created] = await db.insert(contacts).values(contact).returning();
+    return created;
+  }
+
+  async updateContact(id: string, contact: InsertContact): Promise<Contact | undefined> {
+    const [updated] = await db
+      .update(contacts)
+      .set(contact)
+      .where(eq(contacts.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteContact(id: string): Promise<boolean> {
+    const result = await db.delete(contacts).where(eq(contacts.id, id)).returning();
+    return result.length > 0;
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();

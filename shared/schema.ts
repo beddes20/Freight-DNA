@@ -1,7 +1,44 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, decimal } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+
+export const companies = pgTable("companies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  industry: text("industry"),
+  website: text("website"),
+  notes: text("notes"),
+});
+
+export const insertCompanySchema = createInsertSchema(companies).omit({
+  id: true,
+});
+
+export type InsertCompany = z.infer<typeof insertCompanySchema>;
+export type Company = typeof companies.$inferSelect;
+
+export const contacts = pgTable("contacts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  title: text("title"),
+  email: text("email"),
+  phone: text("phone"),
+  reportsToId: varchar("reports_to_id"),
+  lanes: text("lanes").array(),
+  regions: text("regions").array(),
+  freightSpend: decimal("freight_spend", { precision: 12, scale: 2 }),
+  spotBiddingProcess: text("spot_bidding_process"),
+  notes: text("notes"),
+});
+
+export const insertContactSchema = createInsertSchema(contacts).omit({
+  id: true,
+});
+
+export type InsertContact = z.infer<typeof insertContactSchema>;
+export type Contact = typeof contacts.$inferSelect;
 
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
