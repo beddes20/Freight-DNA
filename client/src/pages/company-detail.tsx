@@ -26,6 +26,7 @@ import {
   ExternalLink,
   Network,
   List,
+  Trophy,
 } from "lucide-react";
 import { CompanyDialog } from "@/components/company-dialog";
 import { ContactDialog } from "@/components/contact-dialog";
@@ -147,7 +148,11 @@ export default function CompanyDetail() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button variant="outline" onClick={() => navigate("/rfp-awards")} data-testid="button-rfp-awards">
+            <Trophy className="h-4 w-4 mr-2" />
+            RFP & Awards
+          </Button>
           <Button variant="outline" onClick={() => setEditCompanyOpen(true)} data-testid="button-edit-company">
             <Pencil className="h-4 w-4 mr-2" />
             Edit
