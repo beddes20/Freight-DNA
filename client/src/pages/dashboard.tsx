@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Building2, Users, MapPin, DollarSign } from "lucide-react";
+import { Building2, Users, MapPin, DollarSign, ChevronRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Company, Contact } from "@shared/schema";
 
@@ -91,7 +92,7 @@ export default function Dashboard() {
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Recent Companies</CardTitle>
+            <CardTitle className="text-base">My Customers</CardTitle>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -103,9 +104,10 @@ export default function Dashboard() {
             ) : companies && companies.length > 0 ? (
               <div className="space-y-3">
                 {companies.slice(0, 5).map((company) => (
-                  <div
+                  <Link
                     key={company.id}
-                    className="flex items-center justify-between p-3 rounded-md bg-muted/50"
+                    href={`/companies/${company.id}`}
+                    className="flex items-center justify-between p-3 rounded-md bg-muted/50 hover-elevate cursor-pointer"
                     data-testid={`card-company-${company.id}`}
                   >
                     <div className="flex items-center gap-3">
@@ -119,13 +121,14 @@ export default function Dashboard() {
                         </p>
                       </div>
                     </div>
-                  </div>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  </Link>
                 ))}
               </div>
             ) : (
               <div className="text-center py-8 text-muted-foreground">
                 <Building2 className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                <p className="text-sm">No companies yet</p>
+                <p className="text-sm">No customers yet</p>
                 <p className="text-xs">Add your first company to get started</p>
               </div>
             )}
