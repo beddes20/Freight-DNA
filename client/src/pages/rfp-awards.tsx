@@ -394,7 +394,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                             data-testid={`button-assign-lane-${i}`}
                           >
                             <UserPlus className="h-4 w-4 mr-1" />
-                            Assign to AM
+                            Assign Lane to Planner
                           </Button>
                         ) : lane.status === "contact_added" ? (
                           <Button

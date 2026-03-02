@@ -410,7 +410,7 @@ export default function CompanyDetail() {
                                 data-testid={`button-assign-lane-task-${i}`}
                               >
                                 <UserPlus className="h-4 w-4 mr-1" />
-                                Assign to AM
+                                Assign Lane to Planner
                               </Button>
                             </>
                           ) : (
