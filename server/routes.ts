@@ -434,6 +434,121 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/companies/:id/facility-coverage", async (req, res) => {
+    try {
+      const companyId = req.params.id;
+      const allRfps = await storage.getRfps();
+      const contacts = await storage.getContactsByCompany(companyId);
+
+      const facilityMap = new Map<string, {
+        facility: string;
+        state: string;
+        type: "origin" | "destination";
+        totalVolume: number;
+        laneCount: number;
+        lanes: string[];
+        rfpTitles: string[];
+      }>();
+
+      for (const rfp of allRfps) {
+        if (rfp.companyId !== companyId) continue;
+        const fileData = rfp.fileData as { rows?: any[]; highVolumeLanes?: any[] } | null;
+        if (!fileData || Array.isArray(fileData) || !fileData.highVolumeLanes) continue;
+
+        for (const lane of fileData.highVolumeLanes) {
+          const addFacility = (name: string, state: string, type: "origin" | "destination") => {
+            if (!name) return;
+            const key = `${name.toLowerCase()}|${state.toLowerCase()}|${type}`;
+            const existing = facilityMap.get(key);
+            if (existing) {
+              existing.totalVolume += lane.volume || 0;
+              existing.laneCount += 1;
+              if (!existing.lanes.includes(lane.lane)) existing.lanes.push(lane.lane);
+              if (!existing.rfpTitles.includes(rfp.title)) existing.rfpTitles.push(rfp.title);
+            } else {
+              facilityMap.set(key, {
+                facility: name,
+                state: state,
+                type,
+                totalVolume: lane.volume || 0,
+                laneCount: 1,
+                lanes: [lane.lane],
+                rfpTitles: [rfp.title],
+              });
+            }
+          };
+
+          addFacility(lane.origin, lane.originState || "", "origin");
+          addFacility(lane.destination, lane.destinationState || "", "destination");
+        }
+      }
+
+      const contactLanes = new Set<string>();
+      const contactRegions = new Set<string>();
+      for (const contact of contacts) {
+        if (contact.lanes) {
+          for (const l of contact.lanes) contactLanes.add(l.toLowerCase());
+        }
+        if (contact.regions) {
+          for (const r of contact.regions) contactRegions.add(r.toLowerCase());
+        }
+      }
+
+      const facilities = Array.from(facilityMap.values()).map((f) => {
+        const facilityLower = f.facility.toLowerCase();
+        const stateLower = f.state.toLowerCase();
+        const fullName = f.state ? `${f.facility}, ${f.state}` : f.facility;
+        const fullNameLower = fullName.toLowerCase();
+
+        let coveredBy: string | null = null;
+        for (const contact of contacts) {
+          const lanes = (contact.lanes || []).map(l => l.toLowerCase().trim());
+          const regions = (contact.regions || []).map(r => r.toLowerCase().trim());
+
+          const laneMatch = lanes.some(l => {
+            if (!l) return false;
+            if (l.includes(facilityLower) || facilityLower.includes(l)) return true;
+            if (fullNameLower && l.includes(fullNameLower)) return true;
+            return false;
+          });
+
+          const regionMatch = regions.some(r => {
+            if (!r) return false;
+            if (r.includes(facilityLower) || facilityLower.includes(r)) return true;
+            if (stateLower && stateLower.length >= 2 && r === stateLower) return true;
+            if (fullNameLower && r.includes(fullNameLower)) return true;
+            return false;
+          });
+
+          if (laneMatch || regionMatch) {
+            coveredBy = contact.name;
+            break;
+          }
+        }
+
+        return {
+          ...f,
+          fullName,
+          covered: !!coveredBy,
+          coveredBy,
+        };
+      });
+
+      facilities.sort((a, b) => {
+        if (a.covered !== b.covered) return a.covered ? 1 : -1;
+        return b.totalVolume - a.totalVolume;
+      });
+
+      const gaps = facilities.filter(f => !f.covered).length;
+      const covered = facilities.filter(f => f.covered).length;
+
+      res.json({ facilities, summary: { total: facilities.length, gaps, covered } });
+    } catch (error) {
+      console.error("Error computing facility coverage:", error);
+      res.status(500).json({ error: "Failed to compute facility coverage" });
+    }
+  });
+
   app.delete("/api/rfps/:id", async (req, res) => {
     try {
       const deleted = await storage.deleteRfp(req.params.id);

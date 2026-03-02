@@ -137,6 +137,7 @@ export function ResearchLaneDialog({ open, onOpenChange, lane, laneIndex, rfpId,
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/research-tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
     },
     onError: (error: Error) => {
       toast({ title: "Error saving contact", description: error.message, variant: "destructive" });

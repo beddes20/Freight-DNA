@@ -75,11 +75,12 @@ shared/
 6. **Award Management**: Separate award tracking for won business
 7. **Excel Upload**: Drag-and-drop Excel/CSV files to auto-create RFPs with lane analysis; animated loading spinner during upload
 8. **Dark/Light Mode**: Theme toggle in sidebar footer; full dark/light theme support with blue and green accent colors
-9. **Lane Research & Assignment**: High-volume lanes table with "Assign to Account Manager" button; opens "Research Lane Owner" modal with pre-filled lane data + decision-maker contact form; saves contact and marks lane status (Open → Contact Added → Researched); confetti animation on save
+9. **Lane Research & Assignment**: High-volume lanes table with "Assign Lane to Planner" button; opens "Research Lane Owner" modal with pre-filled lane data + decision-maker contact form; saves contact and marks lane status (Open → Contact Added → Researched); confetti animation on save
 10. **Research Tasks Page**: Dedicated sidebar page showing all open/completed research tasks across all RFPs with filtering and search
 11. **Loading Spinners**: All save/upload/delete buttons show animated spinner + text during pending operations
 12. **Responsive Design**: Mobile-first padding (p-4 sm:p-6), responsive grid layouts across all pages
 13. **Export to Excel**: Company detail page exports org chart + contacts + high-volume lanes to .xlsx
+14. **Facility Coverage Gap Analysis**: Company detail page shows all unique facilities (origins/destinations) from RFP lanes, cross-referenced against existing contacts' lanes/regions; gaps (uncovered facilities) are highlighted in red with "Find Planner" button; covered facilities shown in green with assigned contact name
 
 ## UI Components
 - `client/src/components/confetti.tsx` - Confetti celebration animation (useConfetti hook)
@@ -108,6 +109,7 @@ shared/
 - `DELETE /api/awards/:id` - Delete award
 - `PATCH /api/rfps/:id/lanes/:laneIndex/status` - Update high-volume lane research status
 - `GET /api/research-tasks` - Get all research tasks across all RFPs
+- `GET /api/companies/:id/facility-coverage` - Facility coverage gap analysis for a company
 
 ## Development
 - Run `npm run dev` to start the development server

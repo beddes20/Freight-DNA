@@ -34,6 +34,9 @@ import {
   CheckCircle,
   Clock,
   Download,
+  MapPin,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -51,6 +54,7 @@ interface ResearchTask {
   companyId: string;
   laneIndex: number;
   lane: string;
+  laneId?: string;
   origin: string;
   destination: string;
   originState: string;
@@ -59,6 +63,24 @@ interface ResearchTask {
   rate: string;
   status: string;
   contactId: string | null;
+}
+
+interface Facility {
+  facility: string;
+  state: string;
+  type: "origin" | "destination";
+  totalVolume: number;
+  laneCount: number;
+  lanes: string[];
+  rfpTitles: string[];
+  fullName: string;
+  covered: boolean;
+  coveredBy: string | null;
+}
+
+interface FacilityCoverage {
+  facilities: Facility[];
+  summary: { total: number; gaps: number; covered: number };
 }
 
 export default function CompanyDetail() {
@@ -103,6 +125,10 @@ export default function CompanyDetail() {
       if (!res.ok) throw new Error("Failed to fetch research tasks");
       return res.json();
     },
+  });
+
+  const { data: facilityCoverage } = useQuery<FacilityCoverage>({
+    queryKey: ["/api/companies", companyId, "facility-coverage"],
   });
 
   const openTasks = researchTasks?.filter((t) => t.status === "open") || [];
@@ -445,6 +471,106 @@ export default function CompanyDetail() {
           </Card>
         );
       })()}
+
+      {facilityCoverage && facilityCoverage.facilities.length > 0 && (
+        <Card data-testid="card-facility-coverage">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <MapPin className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                <h2 className="text-base font-medium">
+                  Facility Coverage
+                </h2>
+              </div>
+              <div className="flex items-center gap-2">
+                {facilityCoverage.summary.gaps > 0 && (
+                  <Badge className="bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400" data-testid="badge-coverage-gaps">
+                    <ShieldAlert className="h-3 w-3 mr-1" />
+                    {facilityCoverage.summary.gaps} gap{facilityCoverage.summary.gaps !== 1 ? "s" : ""}
+                  </Badge>
+                )}
+                {facilityCoverage.summary.covered > 0 && (
+                  <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400" data-testid="badge-coverage-covered">
+                    <ShieldCheck className="h-3 w-3 mr-1" />
+                    {facilityCoverage.summary.covered} covered
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {facilityCoverage.facilities.map((f, i) => (
+                <div
+                  key={`${f.fullName}-${f.type}-${i}`}
+                  className={`flex items-center justify-between p-3 rounded-md border transition-colors ${
+                    f.covered
+                      ? "bg-green-50/50 border-green-200/50 dark:bg-green-950/20 dark:border-green-800/30"
+                      : "bg-red-50/50 border-red-200/50 dark:bg-red-950/20 dark:border-red-800/30"
+                  }`}
+                  data-testid={`facility-${i}`}
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className={`flex h-8 w-8 items-center justify-center rounded-lg flex-shrink-0 ${
+                      f.covered
+                        ? "bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400"
+                        : "bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400"
+                    }`}>
+                      <MapPin className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-medium text-sm">{f.fullName}</p>
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                          {f.type === "origin" ? "Origin" : "Destination"}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                        <span className="flex items-center gap-1">
+                          <BarChart3 className="h-3 w-3" />
+                          {f.totalVolume.toLocaleString()} shipments/yr
+                        </span>
+                        <span>{f.laneCount} lane{f.laneCount !== 1 ? "s" : ""}</span>
+                        {f.covered && f.coveredBy && (
+                          <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
+                            <Users className="h-3 w-3" />
+                            {f.coveredBy}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex-shrink-0">
+                    {f.covered ? (
+                      <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
+                        <CheckCircle className="h-3 w-3 mr-1" />
+                        Covered
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-red-300 text-red-700 hover:bg-red-100 dark:border-red-700 dark:text-red-400"
+                        onClick={() => {
+                          setContactDefaults({
+                            lane: f.fullName,
+                            region: f.state || undefined,
+                          });
+                          setEditingContact(undefined);
+                          setContactDialogOpen(true);
+                        }}
+                        data-testid={`button-find-planner-${i}`}
+                      >
+                        <UserPlus className="h-4 w-4 mr-1" />
+                        Find Planner
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
