@@ -241,7 +241,7 @@ export default function ResearchTasks() {
                           )}
                           <span className="flex items-center gap-1">
                             <BarChart3 className="h-3 w-3" />
-                            {task.volume.toLocaleString()} shipments/yr
+                            {task.volume.toLocaleString()} loads/yr
                           </span>
                           {company && (
                             <span className="flex items-center gap-1">

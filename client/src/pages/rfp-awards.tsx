@@ -343,7 +343,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
               </div>
             </div>
             <p className="text-sm text-muted-foreground mt-1">
-              These lanes have more than 50 annual shipments. Assign to an account manager to research who owns each lane.
+              These lanes have more than 50 annual loads. Assign a planner to research who owns each lane.
             </p>
           </CardHeader>
           <CardContent className="pt-0">

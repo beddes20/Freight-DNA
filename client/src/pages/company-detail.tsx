@@ -527,7 +527,7 @@ export default function CompanyDetail() {
                       <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
                         <span className="flex items-center gap-1">
                           <BarChart3 className="h-3 w-3" />
-                          {f.totalVolume.toLocaleString()} shipments/yr
+                          {f.totalVolume.toLocaleString()} loads/yr
                         </span>
                         <span>{f.laneCount} lane{f.laneCount !== 1 ? "s" : ""}</span>
                         {f.covered && f.coveredBy && (
