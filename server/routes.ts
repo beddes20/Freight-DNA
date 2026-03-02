@@ -434,6 +434,148 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/companies/:id/lane-patterns", async (req, res) => {
+    try {
+      const companyId = req.params.id;
+      const allRfps = await storage.getRfps();
+
+      const corridorMap = new Map<string, {
+        origin: string;
+        originState: string;
+        destination: string;
+        destinationState: string;
+        totalVolume: number;
+        count: number;
+        rfpTitles: string[];
+      }>();
+
+      const hubMap = new Map<string, {
+        facility: string;
+        state: string;
+        inboundVolume: number;
+        outboundVolume: number;
+        inboundCount: number;
+        outboundCount: number;
+      }>();
+
+      const stateCorridorMap = new Map<string, {
+        originState: string;
+        destinationState: string;
+        totalVolume: number;
+        laneCount: number;
+      }>();
+
+      for (const rfp of allRfps) {
+        if (rfp.companyId !== companyId) continue;
+        const fileData = rfp.fileData as { rows?: any[]; highVolumeLanes?: any[] } | null;
+        if (!fileData || Array.isArray(fileData) || !fileData.highVolumeLanes) continue;
+
+        for (const lane of fileData.highVolumeLanes) {
+          const orig = (lane.origin || "").trim();
+          const dest = (lane.destination || "").trim();
+          const oState = (lane.originState || "").trim();
+          const dState = (lane.destinationState || "").trim();
+          const vol = lane.volume || 0;
+
+          if (orig && dest) {
+            const corridorKey = `${orig.toLowerCase()}|${oState.toLowerCase()}|${dest.toLowerCase()}|${dState.toLowerCase()}`;
+            const existing = corridorMap.get(corridorKey);
+            if (existing) {
+              existing.totalVolume += vol;
+              existing.count += 1;
+              if (!existing.rfpTitles.includes(rfp.title)) existing.rfpTitles.push(rfp.title);
+            } else {
+              corridorMap.set(corridorKey, {
+                origin: orig,
+                originState: oState,
+                destination: dest,
+                destinationState: dState,
+                totalVolume: vol,
+                count: 1,
+                rfpTitles: [rfp.title],
+              });
+            }
+          }
+
+          const addHub = (name: string, state: string, direction: "inbound" | "outbound") => {
+            if (!name) return;
+            const key = `${name.toLowerCase()}|${state.toLowerCase()}`;
+            const existing = hubMap.get(key);
+            if (existing) {
+              if (direction === "inbound") {
+                existing.inboundVolume += vol;
+                existing.inboundCount += 1;
+              } else {
+                existing.outboundVolume += vol;
+                existing.outboundCount += 1;
+              }
+            } else {
+              hubMap.set(key, {
+                facility: name,
+                state,
+                inboundVolume: direction === "inbound" ? vol : 0,
+                outboundVolume: direction === "outbound" ? vol : 0,
+                inboundCount: direction === "inbound" ? 1 : 0,
+                outboundCount: direction === "outbound" ? 1 : 0,
+              });
+            }
+          };
+
+          addHub(orig, oState, "outbound");
+          addHub(dest, dState, "inbound");
+
+          if (oState && dState) {
+            const stKey = `${oState.toLowerCase()}→${dState.toLowerCase()}`;
+            const existing = stateCorridorMap.get(stKey);
+            if (existing) {
+              existing.totalVolume += vol;
+              existing.laneCount += 1;
+            } else {
+              stateCorridorMap.set(stKey, {
+                originState: oState,
+                destinationState: dState,
+                totalVolume: vol,
+                laneCount: 1,
+              });
+            }
+          }
+        }
+      }
+
+      const topCorridors = Array.from(corridorMap.values())
+        .sort((a, b) => b.totalVolume - a.totalVolume)
+        .slice(0, 15)
+        .map(c => ({
+          ...c,
+          lane: `${c.origin}${c.originState ? `, ${c.originState}` : ""} → ${c.destination}${c.destinationState ? `, ${c.destinationState}` : ""}`,
+          appearsInMultipleRfps: c.rfpTitles.length > 1,
+        }));
+
+      const hubs = Array.from(hubMap.values())
+        .filter(h => h.inboundCount > 0 && h.outboundCount > 0)
+        .sort((a, b) => (b.inboundVolume + b.outboundVolume) - (a.inboundVolume + a.outboundVolume))
+        .slice(0, 10)
+        .map(h => ({
+          ...h,
+          fullName: h.state ? `${h.facility}, ${h.state}` : h.facility,
+          totalVolume: h.inboundVolume + h.outboundVolume,
+        }));
+
+      const stateCorridors = Array.from(stateCorridorMap.values())
+        .sort((a, b) => b.totalVolume - a.totalVolume)
+        .slice(0, 15)
+        .map(s => ({
+          ...s,
+          corridor: `${s.originState} → ${s.destinationState}`,
+        }));
+
+      res.json({ topCorridors, hubs, stateCorridors });
+    } catch (error) {
+      console.error("Error computing lane patterns:", error);
+      res.status(500).json({ error: "Failed to compute lane patterns" });
+    }
+  });
+
   app.get("/api/companies/:id/facility-coverage", async (req, res) => {
     try {
       const companyId = req.params.id;

@@ -81,6 +81,7 @@ shared/
 12. **Responsive Design**: Mobile-first padding (p-4 sm:p-6), responsive grid layouts across all pages
 13. **Export to Excel**: Company detail page exports org chart + contacts + high-volume lanes to .xlsx
 14. **Facility Coverage Gap Analysis**: Company detail page shows all unique facilities (origins/destinations) from RFP lanes, cross-referenced against existing contacts' lanes/regions; gaps (uncovered facilities) are highlighted in red with "Find Planner" button; covered facilities shown in green with assigned contact name
+15. **Lane Pattern Analysis**: Company detail page with tabbed analysis: Top Corridors (highest-volume origin→destination pairs, with Multi-RFP badges), Shipping/Receiving Hubs (facilities appearing as both origins and destinations with inbound/outbound breakdown), State Corridors (state-to-state volume with visual bar chart)
 
 ## UI Components
 - `client/src/components/confetti.tsx` - Confetti celebration animation (useConfetti hook)
@@ -110,6 +111,7 @@ shared/
 - `PATCH /api/rfps/:id/lanes/:laneIndex/status` - Update high-volume lane research status
 - `GET /api/research-tasks` - Get all research tasks across all RFPs
 - `GET /api/companies/:id/facility-coverage` - Facility coverage gap analysis for a company
+- `GET /api/companies/:id/lane-patterns` - Lane pattern analysis (corridors, hubs, state corridors)
 
 ## Development
 - Run `npm run dev` to start the development server

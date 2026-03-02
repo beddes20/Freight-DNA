@@ -37,6 +37,12 @@ import {
   MapPin,
   ShieldCheck,
   ShieldAlert,
+  Route,
+  ArrowRightLeft,
+  Warehouse,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Repeat2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -81,6 +87,43 @@ interface Facility {
 interface FacilityCoverage {
   facilities: Facility[];
   summary: { total: number; gaps: number; covered: number };
+}
+
+interface Corridor {
+  origin: string;
+  originState: string;
+  destination: string;
+  destinationState: string;
+  totalVolume: number;
+  count: number;
+  rfpTitles: string[];
+  lane: string;
+  appearsInMultipleRfps: boolean;
+}
+
+interface Hub {
+  facility: string;
+  state: string;
+  inboundVolume: number;
+  outboundVolume: number;
+  inboundCount: number;
+  outboundCount: number;
+  fullName: string;
+  totalVolume: number;
+}
+
+interface StateCorridor {
+  originState: string;
+  destinationState: string;
+  totalVolume: number;
+  laneCount: number;
+  corridor: string;
+}
+
+interface LanePatterns {
+  topCorridors: Corridor[];
+  hubs: Hub[];
+  stateCorridors: StateCorridor[];
 }
 
 export default function CompanyDetail() {
@@ -129,6 +172,10 @@ export default function CompanyDetail() {
 
   const { data: facilityCoverage } = useQuery<FacilityCoverage>({
     queryKey: ["/api/companies", companyId, "facility-coverage"],
+  });
+
+  const { data: lanePatterns } = useQuery<LanePatterns>({
+    queryKey: ["/api/companies", companyId, "lane-patterns"],
   });
 
   const openTasks = researchTasks?.filter((t) => t.status === "open") || [];
@@ -568,6 +615,175 @@ export default function CompanyDetail() {
                 </div>
               ))}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {lanePatterns && (lanePatterns.topCorridors.length > 0 || lanePatterns.hubs.length > 0 || lanePatterns.stateCorridors.length > 0) && (
+        <Card data-testid="card-lane-patterns">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Route className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              <h2 className="text-base font-medium">Lane Patterns</h2>
+            </div>
+
+            <Tabs defaultValue="corridors" className="w-full">
+              <TabsList className="w-full grid grid-cols-3">
+                <TabsTrigger value="corridors" data-testid="tab-top-corridors">
+                  <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />
+                  Top Corridors
+                </TabsTrigger>
+                <TabsTrigger value="hubs" data-testid="tab-hubs">
+                  <Warehouse className="h-3.5 w-3.5 mr-1.5" />
+                  Shipping/Receiving Hubs
+                </TabsTrigger>
+                <TabsTrigger value="states" data-testid="tab-state-corridors">
+                  <Repeat2 className="h-3.5 w-3.5 mr-1.5" />
+                  State Corridors
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="corridors" className="mt-3">
+                {lanePatterns.topCorridors.length > 0 ? (
+                  <div className="space-y-2">
+                    {lanePatterns.topCorridors.map((c, i) => (
+                      <div
+                        key={i}
+                        className={`flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors ${
+                          c.appearsInMultipleRfps ? "border-blue-200 dark:border-blue-800/50" : ""
+                        }`}
+                        data-testid={`corridor-${i}`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 flex-shrink-0">
+                            <TruckIcon className="h-4 w-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-medium text-sm truncate">{c.lane}</p>
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                              <span className="flex items-center gap-1">
+                                <BarChart3 className="h-3 w-3" />
+                                {c.totalVolume.toLocaleString()} loads/yr
+                              </span>
+                              {c.count > 1 && (
+                                <span className="text-blue-600 dark:text-blue-400 font-medium">
+                                  appears {c.count}x
+                                </span>
+                              )}
+                              {c.appearsInMultipleRfps && (
+                                <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 text-[10px] px-1.5 py-0">
+                                  Multi-RFP
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right text-xs text-muted-foreground flex-shrink-0 ml-2">
+                          <span className="font-mono">{c.rfpTitles.join(", ")}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-6">No corridor data available</p>
+                )}
+              </TabsContent>
+
+              <TabsContent value="hubs" className="mt-3">
+                {lanePatterns.hubs.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Facilities that appear as both origins and destinations — likely managed by dedicated planners.
+                    </p>
+                    {lanePatterns.hubs.map((h, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors"
+                        data-testid={`hub-${i}`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 flex-shrink-0">
+                            <Warehouse className="h-4 w-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-medium text-sm">{h.fullName}</p>
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                              <span className="flex items-center gap-1">
+                                <BarChart3 className="h-3 w-3" />
+                                {h.totalVolume.toLocaleString()} total loads/yr
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          <div className="text-center">
+                            <div className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+                              <ArrowUpFromLine className="h-3 w-3" />
+                              <span className="font-medium">{h.outboundVolume.toLocaleString()}</span>
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">{h.outboundCount} outbound</span>
+                          </div>
+                          <div className="text-center">
+                            <div className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">
+                              <ArrowDownToLine className="h-3 w-3" />
+                              <span className="font-medium">{h.inboundVolume.toLocaleString()}</span>
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">{h.inboundCount} inbound</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-6">
+                    No facilities appear as both origins and destinations
+                  </p>
+                )}
+              </TabsContent>
+
+              <TabsContent value="states" className="mt-3">
+                {lanePatterns.stateCorridors.length > 0 ? (
+                  <div className="overflow-x-auto rounded-md border">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-muted/50 border-b">
+                          <th className="text-left font-medium px-3 py-2">Corridor</th>
+                          <th className="text-right font-medium px-3 py-2">Lanes</th>
+                          <th className="text-right font-medium px-3 py-2">Volume</th>
+                          <th className="text-left px-3 py-2 w-1/3">Share</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const maxVol = Math.max(...lanePatterns.stateCorridors.map(s => s.totalVolume));
+                          return lanePatterns.stateCorridors.map((s, i) => (
+                            <tr key={i} className="border-b last:border-0 hover:bg-muted/30 transition-colors" data-testid={`state-corridor-${i}`}>
+                              <td className="px-3 py-2">
+                                <span className="font-medium">{s.corridor}</span>
+                              </td>
+                              <td className="px-3 py-2 text-right text-muted-foreground">{s.laneCount}</td>
+                              <td className="px-3 py-2 text-right font-medium">{s.totalVolume.toLocaleString()}</td>
+                              <td className="px-3 py-2">
+                                <div className="flex items-center gap-2">
+                                  <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                                    <div
+                                      className="h-full bg-gradient-to-r from-blue-500 to-green-500 rounded-full transition-all"
+                                      style={{ width: `${(s.totalVolume / maxVol) * 100}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          ));
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-6">No state corridor data available</p>
+                )}
+              </TabsContent>
+            </Tabs>
           </CardContent>
         </Card>
       )}
