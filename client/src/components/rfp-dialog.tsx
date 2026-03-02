@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
+import { Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -262,6 +263,7 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
                 Cancel
               </Button>
               <Button type="submit" disabled={isPending} data-testid="button-save-rfp">
+                {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                 {isPending ? "Saving..." : isEditing ? "Save Changes" : "Add RFP"}
               </Button>
             </div>

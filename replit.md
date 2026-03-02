@@ -68,16 +68,24 @@ shared/
 - lanes (array), notes
 
 ## Key Features
-1. **Dashboard**: "My Customers" with clickable company links
+1. **Dashboard**: Gradient hero banner, KPI stat cards with colored icons, "My Customers" quick links, "Top Contacts by Freight Spend" leaderboard
 2. **Company Management**: Create, edit, delete companies with industry and website info
-3. **Contact Management**: Full CRUD for contacts with transportation-specific fields
+3. **Contact Management**: Full CRUD for contacts with transportation-specific fields; confetti celebration animation on save
 4. **Org Chart**: Visual hierarchical display showing reporting relationships
 5. **RFP Management**: Separate RFP tracking with Excel drag-and-drop upload + data analysis
 6. **Award Management**: Separate award tracking for won business
-7. **Excel Upload**: Drag-and-drop Excel/CSV files to auto-create RFPs with lane analysis
-8. **Dark Mode**: Full dark/light theme support
-9. **Lane Research & Assignment**: High-volume lanes table with "Assign to Account Manager" button; opens "Research Lane Owner" modal with pre-filled lane data + decision-maker contact form; saves contact and marks lane status (Open → Contact Added → Researched)
+7. **Excel Upload**: Drag-and-drop Excel/CSV files to auto-create RFPs with lane analysis; animated loading spinner during upload
+8. **Dark/Light Mode**: Theme toggle in sidebar footer; full dark/light theme support with blue and green accent colors
+9. **Lane Research & Assignment**: High-volume lanes table with "Assign to Account Manager" button; opens "Research Lane Owner" modal with pre-filled lane data + decision-maker contact form; saves contact and marks lane status (Open → Contact Added → Researched); confetti animation on save
 10. **Research Tasks Page**: Dedicated sidebar page showing all open/completed research tasks across all RFPs with filtering and search
+11. **Loading Spinners**: All save/upload/delete buttons show animated spinner + text during pending operations
+12. **Responsive Design**: Mobile-first padding (p-4 sm:p-6), responsive grid layouts across all pages
+13. **Export to Excel**: Company detail page exports org chart + contacts + high-volume lanes to .xlsx
+
+## UI Components
+- `client/src/components/confetti.tsx` - Confetti celebration animation (useConfetti hook)
+- `client/src/components/theme-toggle.tsx` - Dark/light mode toggle button
+- Blue + green gradient branding throughout (sidebar logo, dashboard hero, stat cards)
 
 ## API Endpoints
 - `GET /api/companies` - List all companies

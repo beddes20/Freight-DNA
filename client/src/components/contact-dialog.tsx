@@ -3,6 +3,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
+import { Loader2 } from "lucide-react";
+import { useConfetti } from "@/components/confetti";
 import {
   Dialog,
   DialogContent,
@@ -119,6 +121,8 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
     }
   }, [contact, form, defaults]);
 
+  const { fire: fireConfetti, ConfettiOverlay } = useConfetti();
+
   const createMutation = useMutation({
     mutationFn: async (data: InsertContact) => {
       const response = await apiRequest("POST", `/api/companies/${companyId}/contacts`, data);
@@ -127,9 +131,16 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
-      toast({ title: "Contact created successfully" });
-      onOpenChange(false);
-      form.reset();
+      toast({
+        title: "🎉 Contact created!",
+        description: "New contact added to your org chart",
+        className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
+      });
+      fireConfetti();
+      setTimeout(() => {
+        onOpenChange(false);
+        form.reset();
+      }, 800);
     },
     onError: (error: Error) => {
       toast({ title: "Error creating contact", description: error.message, variant: "destructive" });
@@ -144,8 +155,13 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
-      toast({ title: "Contact updated successfully" });
-      onOpenChange(false);
+      toast({
+        title: "✅ Contact updated!",
+        description: "Changes saved successfully",
+        className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
+      });
+      fireConfetti();
+      setTimeout(() => onOpenChange(false), 800);
     },
     onError: (error: Error) => {
       toast({ title: "Error updating contact", description: error.message, variant: "destructive" });
@@ -179,6 +195,8 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
+    <>
+    {ConfettiOverlay && <ConfettiOverlay />}
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -386,6 +404,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
                 Cancel
               </Button>
               <Button type="submit" disabled={isPending} data-testid="button-save-contact">
+                {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                 {isPending ? "Saving..." : isEditing ? "Save Changes" : "Add Contact"}
               </Button>
             </div>
@@ -393,5 +412,6 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         </Form>
       </DialogContent>
     </Dialog>
+    </>
   );
 }

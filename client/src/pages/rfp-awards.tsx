@@ -33,6 +33,7 @@ import {
   X,
   AlertTriangle,
   UserPlus,
+  Loader2,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -675,7 +676,7 @@ export default function RfpAwards() {
   };
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold" data-testid="text-rfp-awards-title">
@@ -755,8 +756,12 @@ export default function RfpAwards() {
             onDrop={handleDrop}
             data-testid="rfp-upload-dropzone"
           >
-            <div className={`rounded-full p-4 transition-colors ${isDragging ? "bg-primary/10" : "bg-muted"}`}>
-              <Upload className={`h-8 w-8 ${isDragging ? "text-primary" : "text-muted-foreground"}`} />
+            <div className={`rounded-full p-4 transition-colors ${isDragging ? "bg-primary/10" : uploadMutation.isPending ? "bg-green-100 dark:bg-green-900/30" : "bg-muted"}`}>
+              {uploadMutation.isPending ? (
+                <Loader2 className="h-8 w-8 text-green-600 dark:text-green-400 animate-spin" />
+              ) : (
+                <Upload className={`h-8 w-8 ${isDragging ? "text-primary" : "text-muted-foreground"}`} />
+              )}
             </div>
             <div className="text-center">
               <h3 className="font-medium mb-1">

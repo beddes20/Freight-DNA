@@ -3,6 +3,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import { z } from "zod";
+import { Loader2 } from "lucide-react";
+import { useConfetti } from "@/components/confetti";
 import {
   Dialog,
   DialogContent,
@@ -85,6 +87,8 @@ export function ResearchLaneDialog({ open, onOpenChange, lane, laneIndex, rfpId,
     }
   }, [open, form]);
 
+  const { fire: fireConfetti, ConfettiOverlay } = useConfetti();
+
   const submitMutation = useMutation({
     mutationFn: async (data: ResearchFormData) => {
       const lanesArray = lane ? [lane.lane] : [];
@@ -121,11 +125,12 @@ export function ResearchLaneDialog({ open, onOpenChange, lane, laneIndex, rfpId,
     },
     onSuccess: (data) => {
       toast({
-        title: `Task created for ${data.laneName}`,
+        title: `🎉 Task created for ${data.laneName}`,
         description: "Contact saved successfully",
         className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
       });
-      onOpenChange(false);
+      fireConfetti();
+      setTimeout(() => onOpenChange(false), 800);
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
@@ -145,6 +150,8 @@ export function ResearchLaneDialog({ open, onOpenChange, lane, laneIndex, rfpId,
   if (!lane) return null;
 
   return (
+    <>
+    {ConfettiOverlay && <ConfettiOverlay />}
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
@@ -286,6 +293,7 @@ export function ResearchLaneDialog({ open, onOpenChange, lane, laneIndex, rfpId,
                 Cancel
               </Button>
               <Button type="submit" disabled={submitMutation.isPending} data-testid="button-save-research">
+                {submitMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                 {submitMutation.isPending ? "Saving..." : "Save Contact & Assign"}
               </Button>
             </div>
@@ -293,5 +301,6 @@ export function ResearchLaneDialog({ open, onOpenChange, lane, laneIndex, rfpId,
         </Form>
       </DialogContent>
     </Dialog>
+    </>
   );
 }
