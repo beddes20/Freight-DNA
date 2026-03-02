@@ -33,7 +33,9 @@ import {
   UserPlus,
   CheckCircle,
   Clock,
+  Download,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
 import { ContactDialog } from "@/components/contact-dialog";
 import { ResearchLaneDialog } from "@/components/research-lane-dialog";
@@ -150,6 +152,85 @@ export default function CompanyDetail() {
     setContactDialogOpen(true);
   };
 
+  const handleExport = () => {
+    if (!company || !contacts) return;
+
+    const wb = XLSX.utils.book_new();
+
+    const highVolumeLanesData = (researchTasks || []).map((task) => {
+      const linkedContact = task.contactId && contacts
+        ? contacts.find((c) => c.id === task.contactId)
+        : null;
+      return {
+        "Lane": task.lane,
+        "Origin": task.origin || task.originState || "",
+        "Destination": task.destination || task.destinationState || "",
+        "Annual Shipments": task.volume,
+        "Rate": task.rate || "",
+        "Status": task.status === "open" ? "Open" : task.status === "contact_added" ? "Contact Added" : "Researched",
+        "Assigned Contact": linkedContact?.name || "",
+        "RFP": task.rfpTitle,
+      };
+    });
+
+    if (highVolumeLanesData.length > 0) {
+      const ws1 = XLSX.utils.json_to_sheet(highVolumeLanesData);
+      ws1["!cols"] = [
+        { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 18 },
+        { wch: 12 }, { wch: 16 }, { wch: 20 }, { wch: 25 },
+      ];
+      XLSX.utils.book_append_sheet(wb, ws1, "High-Volume Lanes");
+    }
+
+    const contactsData = contacts.map((c) => ({
+      "Name": c.name,
+      "Title": c.title || "",
+      "Email": c.email || "",
+      "Phone": c.phone || "",
+      "Lanes": c.lanes?.join(", ") || "",
+      "Regions": c.regions?.join(", ") || "",
+      "Freight Spend": c.freightSpend ? `$${Number(c.freightSpend).toLocaleString()}` : "",
+      "Spot Bidding Process": c.spotBiddingProcess || "",
+      "Relationship Base": c.relationshipBase || "",
+      "Notes": c.notes || "",
+    }));
+
+    const ws2 = XLSX.utils.json_to_sheet(contactsData.length > 0 ? contactsData : [{ "Name": "No contacts yet" }]);
+    ws2["!cols"] = [
+      { wch: 20 }, { wch: 25 }, { wch: 25 }, { wch: 16 },
+      { wch: 25 }, { wch: 20 }, { wch: 18 }, { wch: 30 },
+      { wch: 16 }, { wch: 30 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws2, "All Contacts");
+
+    const contactMap = new Map(contacts.map((c) => [c.id, c]));
+    const orgChartData = contacts.map((c) => {
+      const reportsTo = c.reportsToId ? contactMap.get(c.reportsToId) : null;
+      return {
+        "Name": c.name,
+        "Title": c.title || "",
+        "Reports To": reportsTo?.name || "",
+        "Email": c.email || "",
+        "Phone": c.phone || "",
+        "Lanes": c.lanes?.join(", ") || "",
+        "Regions": c.regions?.join(", ") || "",
+        "Freight Spend": c.freightSpend ? `$${Number(c.freightSpend).toLocaleString()}` : "",
+      };
+    });
+
+    const ws3 = XLSX.utils.json_to_sheet(orgChartData.length > 0 ? orgChartData : [{ "Name": "No contacts yet" }]);
+    ws3["!cols"] = [
+      { wch: 20 }, { wch: 25 }, { wch: 20 }, { wch: 25 },
+      { wch: 16 }, { wch: 25 }, { wch: 20 }, { wch: 18 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws3, "Org Chart");
+
+    const fileName = `${company.name.replace(/[^a-zA-Z0-9]/g, "_")}_Org_Chart.xlsx`;
+    XLSX.writeFile(wb, fileName);
+
+    toast({ title: "Export complete", description: `Saved as ${fileName}` });
+  };
+
   const isLoading = companyLoading || contactsLoading;
 
   if (isLoading) {
@@ -220,6 +301,10 @@ export default function CompanyDetail() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <Button variant="outline" onClick={handleExport} data-testid="button-export">
+            <Download className="h-4 w-4 mr-2" />
+            Export Org Chart + Contacts
+          </Button>
           <Button variant="outline" onClick={() => navigate("/rfp-awards")} data-testid="button-rfp-awards">
             <Trophy className="h-4 w-4 mr-2" />
             RFP & Awards
