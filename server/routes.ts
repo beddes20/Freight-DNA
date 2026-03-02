@@ -1,11 +1,26 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { readFileSync } from "fs";
+import { join } from "path";
 import multer from "multer";
 import XLSX from "xlsx";
 import { storage } from "./storage";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+const zipCodeMap: Record<string, string> = JSON.parse(
+  readFileSync(join(import.meta.dirname, "zipcodes.json"), "utf-8")
+);
+
+const ZIP_REGEX = /^\d{5}(-\d{4})?$/;
+
+function zipToCity(value: string): string {
+  const trimmed = value.trim();
+  if (!ZIP_REGEX.test(trimmed)) return trimmed;
+  const zip5 = trimmed.substring(0, 5);
+  return zipCodeMap[zip5] || trimmed;
+}
 
 function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
   const sheetName = workbook.SheetNames[0];
@@ -27,8 +42,8 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     return null;
   };
 
-  const originCol = findCol(["origin", "orig", "pickup", "ship from", "from_city", "from city", "o_city"]);
-  const destCol = findCol(["destination", "dest", "delivery", "ship to", "to_city", "to city", "d_city"]);
+  const originCol = findCol(["origin", "orig", "pickup", "ship from", "from_city", "from city", "o_city", "origin_zip", "origin zip", "o_zip", "from_zip", "from zip"]);
+  const destCol = findCol(["destination", "dest", "delivery", "ship to", "to_city", "to city", "d_city", "dest_zip", "dest zip", "destination_zip", "destination zip", "d_zip", "to_zip", "to zip"]);
   const originStateCol = findCol(["origin_state", "origin state", "o_state", "from_state", "from state", "orig_state"]);
   const destStateCol = findCol(["destination_state", "dest_state", "dest state", "to_state", "to state", "d_state"]);
   const volumeCol = findCol(["volume", "loads", "shipments", "qty", "quantity", "annual volume", "weekly volume"]);
@@ -59,8 +74,10 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     }
 
     if (rowVolume > 50) {
-      const originCity = originCol ? String(row[originCol] || "").trim() : "";
-      const destCity = destCol ? String(row[destCol] || "").trim() : "";
+      const rawOrigin = originCol ? String(row[originCol] || "").trim() : "";
+      const rawDest = destCol ? String(row[destCol] || "").trim() : "";
+      const originCity = zipToCity(rawOrigin);
+      const destCity = zipToCity(rawDest);
       const oState = originStateCol ? String(row[originStateCol] || "").trim() : "";
       const dState = destStateCol ? String(row[destStateCol] || "").trim() : "";
       const laneName = laneCol ? String(row[laneCol] || "").trim() : "";
