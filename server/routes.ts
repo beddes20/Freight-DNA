@@ -82,15 +82,15 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
       const dState = destStateCol ? String(row[destStateCol] || "").trim() : "";
       const laneName = laneCol ? String(row[laneCol] || "").trim() : "";
 
-      let laneDescription = laneName;
-      if (!laneDescription) {
-        const originPart = originCity ? `${originCity}${oState ? `, ${oState}` : ""}` : oState;
-        const destPart = destCity ? `${destCity}${dState ? `, ${dState}` : ""}` : dState;
-        laneDescription = originPart && destPart ? `${originPart} → ${destPart}` : originPart || destPart || "Unknown Lane";
-      }
+      const originPart = originCity ? `${originCity}${oState ? `, ${oState}` : ""}` : oState;
+      const destPart = destCity ? `${destCity}${dState ? `, ${dState}` : ""}` : dState;
+      const cityDescription = originPart && destPart ? `${originPart} → ${destPart}` : originPart || destPart || "";
+
+      const laneDescription = cityDescription || laneName || "Unknown Lane";
 
       highVolumeLanes.push({
         lane: laneDescription,
+        laneId: laneName || "",
         origin: originCity || oState || "",
         destination: destCity || dState || "",
         originState: oState,
@@ -414,6 +414,7 @@ export async function registerRoutes(
             companyId: rfp.companyId,
             laneIndex: index,
             lane: lane.lane,
+            laneId: lane.laneId || "",
             origin: lane.origin,
             destination: lane.destination,
             originState: lane.originState,

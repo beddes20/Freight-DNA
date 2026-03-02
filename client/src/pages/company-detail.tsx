@@ -378,6 +378,9 @@ export default function CompanyDetail() {
                           <div className="min-w-0">
                             <p className="font-medium text-sm truncate">{task.lane}</p>
                             <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                              {task.laneId && (
+                                <span className="font-mono text-muted-foreground/70">{task.laneId}</span>
+                              )}
                               <span className="flex items-center gap-1">
                                 <BarChart3 className="h-3 w-3" />
                                 {task.volume.toLocaleString()} / yr

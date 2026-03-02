@@ -236,6 +236,9 @@ export default function ResearchTasks() {
                           {getStatusBadge(task.status)}
                         </div>
                         <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
+                          {task.laneId && (
+                            <span className="font-mono text-muted-foreground/70">{task.laneId}</span>
+                          )}
                           <span className="flex items-center gap-1">
                             <BarChart3 className="h-3 w-3" />
                             {task.volume.toLocaleString()} shipments/yr
