@@ -55,8 +55,9 @@ shared/
 ### RFPs (separate entity)
 - id, companyId (FK), title, status (pending/submitted)
 - value, dueDate, notes
-- fileName, fileData (JSON from Excel upload)
+- fileName, fileData (JSON: { rows[], highVolumeLanes[] } from Excel upload)
 - laneCount, totalVolume, originStates[], destinationStates[]
+- High-volume lanes (>50 annual shipments) are auto-extracted and stored in fileData.highVolumeLanes
 
 ### Awards (separate entity)
 - id, companyId (FK), title, value, awardDate

@@ -13,7 +13,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
   const rows: Record<string, any>[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
   if (rows.length === 0) {
-    return { rows: [], headers: [], analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [] } };
+    return { rows: [], headers: [], highVolumeLanes: [], analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0 } };
   }
 
   const headers = Object.keys(rows[0]);
@@ -33,10 +33,13 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
   const destStateCol = findCol(["destination_state", "dest_state", "dest state", "to_state", "to state", "d_state"]);
   const volumeCol = findCol(["volume", "loads", "shipments", "qty", "quantity", "annual volume", "weekly volume"]);
   const rateCol = findCol(["rate", "price", "cost", "target", "rpm", "rpm target"]);
+  const laneCol = findCol(["lane", "lane_id", "lane id", "lane name", "lane_name"]);
 
   const originStates = new Set<string>();
   const destStates = new Set<string>();
   let totalVolume = 0;
+
+  const highVolumeLanes: Record<string, any>[] = [];
 
   for (const row of rows) {
     if (originStateCol && row[originStateCol]) {
@@ -45,15 +48,49 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     if (destStateCol && row[destStateCol]) {
       destStates.add(String(row[destStateCol]).trim().toUpperCase());
     }
+
+    let rowVolume = 0;
     if (volumeCol && row[volumeCol]) {
       const v = parseFloat(String(row[volumeCol]).replace(/[^0-9.]/g, ""));
-      if (!isNaN(v)) totalVolume += v;
+      if (!isNaN(v)) {
+        totalVolume += v;
+        rowVolume = v;
+      }
+    }
+
+    if (rowVolume > 50) {
+      const originCity = originCol ? String(row[originCol] || "").trim() : "";
+      const destCity = destCol ? String(row[destCol] || "").trim() : "";
+      const oState = originStateCol ? String(row[originStateCol] || "").trim() : "";
+      const dState = destStateCol ? String(row[destStateCol] || "").trim() : "";
+      const laneName = laneCol ? String(row[laneCol] || "").trim() : "";
+
+      let laneDescription = laneName;
+      if (!laneDescription) {
+        const originPart = originCity ? `${originCity}${oState ? `, ${oState}` : ""}` : oState;
+        const destPart = destCity ? `${destCity}${dState ? `, ${dState}` : ""}` : dState;
+        laneDescription = originPart && destPart ? `${originPart} → ${destPart}` : originPart || destPart || "Unknown Lane";
+      }
+
+      highVolumeLanes.push({
+        lane: laneDescription,
+        origin: originCity || oState || "",
+        destination: destCity || dState || "",
+        originState: oState,
+        destinationState: dState,
+        volume: rowVolume,
+        rate: rateCol ? String(row[rateCol] || "") : "",
+        rawRow: row,
+      });
     }
   }
+
+  highVolumeLanes.sort((a, b) => b.volume - a.volume);
 
   return {
     rows: rows.slice(0, 100),
     headers,
+    highVolumeLanes,
     analysis: {
       laneCount: rows.length,
       totalVolume: String(totalVolume),
@@ -63,6 +100,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
       rateColumn: rateCol,
       originColumn: originCol || originStateCol,
       destinationColumn: destCol || destStateCol,
+      highVolumeLaneCount: highVolumeLanes.length,
     },
   };
 }
@@ -273,7 +311,7 @@ export async function registerRoutes(
         dueDate: null,
         notes: null,
         fileName: req.file.originalname,
-        fileData: result.rows,
+        fileData: { rows: result.rows, highVolumeLanes: result.highVolumeLanes },
         laneCount: result.analysis.laneCount,
         totalVolume: result.analysis.totalVolume,
         originStates: result.analysis.originStates,
@@ -281,7 +319,7 @@ export async function registerRoutes(
       };
 
       const rfp = await storage.createRfp(rfpData);
-      res.status(201).json({ rfp, analysis: result.analysis, headers: result.headers, previewRows: result.rows.slice(0, 10) });
+      res.status(201).json({ rfp, analysis: result.analysis, headers: result.headers, highVolumeLanes: result.highVolumeLanes, previewRows: result.rows.slice(0, 10) });
     } catch (error) {
       console.error("Error uploading RFP:", error);
       res.status(500).json({ error: "Failed to process uploaded file" });

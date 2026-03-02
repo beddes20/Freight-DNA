@@ -54,9 +54,10 @@ interface ContactDialogProps {
   onOpenChange: (open: boolean) => void;
   companyId: string;
   contact?: Contact;
+  defaults?: { lane?: string; region?: string };
 }
 
-export function ContactDialog({ open, onOpenChange, companyId, contact }: ContactDialogProps) {
+export function ContactDialog({ open, onOpenChange, companyId, contact, defaults }: ContactDialogProps) {
   const { toast } = useToast();
   const isEditing = !!contact;
 
@@ -108,15 +109,15 @@ export function ContactDialog({ open, onOpenChange, companyId, contact }: Contac
         email: "",
         phone: "",
         reportsToId: "",
-        lanes: "",
-        regions: "",
+        lanes: defaults?.lane || "",
+        regions: defaults?.region || "",
         freightSpend: "",
         spotBiddingProcess: "",
         interests: "",
-        notes: "",
+        notes: defaults?.lane ? `Contact needed for lane: ${defaults.lane}` : "",
       });
     }
-  }, [contact, form]);
+  }, [contact, form, defaults]);
 
   const createMutation = useMutation({
     mutationFn: async (data: InsertContact) => {

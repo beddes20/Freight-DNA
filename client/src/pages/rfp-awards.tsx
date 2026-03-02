@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,8 @@ import {
   TruckIcon,
   BarChart3,
   X,
+  AlertTriangle,
+  UserPlus,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -102,6 +105,16 @@ function RfpCard({ rfp, company, onEdit, onDelete, onViewData }: RfpCardProps) {
               <span>{rfp.laneCount} lanes</span>
             </div>
           )}
+          {(() => {
+            const fd = rfp.fileData as { highVolumeLanes?: any[] } | null;
+            const hvCount = fd && !Array.isArray(fd) ? (fd.highVolumeLanes?.length || 0) : 0;
+            return hvCount > 0 ? (
+              <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                <span className="font-medium">{hvCount} lanes need contacts</span>
+              </div>
+            ) : null;
+          })()}
           {rfp.fileName && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <FileSpreadsheet className="h-3.5 w-3.5" />
@@ -227,105 +240,203 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
   );
 }
 
+interface HighVolumeLane {
+  lane: string;
+  origin: string;
+  destination: string;
+  originState: string;
+  destinationState: string;
+  volume: number;
+  rate: string;
+}
+
 interface RfpDataViewerProps {
   rfp: Rfp;
+  companyId: string;
   onClose: () => void;
 }
 
-function RfpDataViewer({ rfp, onClose }: RfpDataViewerProps) {
-  const data = rfp.fileData as Record<string, any>[] | null;
-  if (!data || data.length === 0) return null;
-  const headers = Object.keys(data[0]);
+function RfpDataViewer({ rfp, companyId, onClose }: RfpDataViewerProps) {
+  const [, navigate] = useLocation();
+  const fileDataObj = rfp.fileData as { rows?: Record<string, any>[]; highVolumeLanes?: HighVolumeLane[] } | Record<string, any>[] | null;
+
+  let rows: Record<string, any>[] = [];
+  let highVolumeLanes: HighVolumeLane[] = [];
+
+  if (Array.isArray(fileDataObj)) {
+    rows = fileDataObj;
+  } else if (fileDataObj && typeof fileDataObj === "object") {
+    rows = fileDataObj.rows || [];
+    highVolumeLanes = fileDataObj.highVolumeLanes || [];
+  }
+
+  if (rows.length === 0 && highVolumeLanes.length === 0) return null;
+  const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
+
+  const handleCreateContact = (lane: HighVolumeLane) => {
+    const laneStr = lane.lane;
+    const queryParams = new URLSearchParams({
+      newContact: "true",
+      lane: laneStr,
+      region: [lane.originState, lane.destinationState].filter(Boolean).join(", "),
+    });
+    navigate(`/companies/${companyId}?${queryParams.toString()}`);
+  };
 
   return (
-    <Card className="border-2 border-primary/20">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-base flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" />
-              {rfp.title} - Spreadsheet Data
-            </CardTitle>
+    <div className="space-y-4">
+      {highVolumeLanes.length > 0 && (
+        <Card className="border-2 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-4 w-4" />
+                High-Volume Lanes — Action Required
+              </CardTitle>
+              <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
+                {highVolumeLanes.length} lanes need contacts
+              </Badge>
+            </div>
             <p className="text-sm text-muted-foreground mt-1">
-              {rfp.fileName} - {data.length} rows
+              These lanes have more than 50 annual shipments. Find out who manages each lane and create a contact for them.
             </p>
-          </div>
-          <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-data-viewer">
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-          {rfp.laneCount && rfp.laneCount > 0 && (
-            <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
-              <TruckIcon className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <p className="text-xs text-muted-foreground">Lanes</p>
-                <p className="font-medium text-sm">{rfp.laneCount}</p>
-              </div>
-            </div>
-          )}
-          {rfp.totalVolume && rfp.totalVolume !== "0" && (
-            <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <p className="text-xs text-muted-foreground">Total Volume</p>
-                <p className="font-medium text-sm">{Number(rfp.totalVolume).toLocaleString()}</p>
-              </div>
-            </div>
-          )}
-          {rfp.originStates && rfp.originStates.length > 0 && (
-            <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
-              <MapPin className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <p className="text-xs text-muted-foreground">Origin States</p>
-                <p className="font-medium text-sm">{rfp.originStates.length}</p>
-              </div>
-            </div>
-          )}
-          {rfp.destinationStates && rfp.destinationStates.length > 0 && (
-            <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
-              <MapPin className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <p className="text-xs text-muted-foreground">Dest States</p>
-                <p className="font-medium text-sm">{rfp.destinationStates.length}</p>
-              </div>
-            </div>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="pt-0">
-        <div className="overflow-x-auto rounded-md border">
-          <table className="w-full text-sm" data-testid="table-rfp-data">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                {headers.map((h) => (
-                  <th key={h} className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.slice(0, 50).map((row, i) => (
-                <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
-                  {headers.map((h) => (
-                    <td key={h} className="px-3 py-2 whitespace-nowrap">
-                      {String(row[h] ?? "")}
-                    </td>
-                  ))}
-                </tr>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="space-y-2">
+              {highVolumeLanes.map((lane, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors"
+                  data-testid={`high-volume-lane-${i}`}
+                >
+                  <div className="flex items-center gap-4 min-w-0 flex-1">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/50 flex-shrink-0">
+                      <TruckIcon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{lane.lane}</p>
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <BarChart3 className="h-3 w-3" />
+                          {lane.volume.toLocaleString()} shipments/yr
+                        </span>
+                        {lane.rate && (
+                          <span className="flex items-center gap-1">
+                            <DollarSign className="h-3 w-3" />
+                            {lane.rate}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-shrink-0 border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-900/30"
+                    onClick={() => handleCreateContact(lane)}
+                    data-testid={`button-create-contact-lane-${i}`}
+                  >
+                    <UserPlus className="h-4 w-4 mr-1" />
+                    Create Contact
+                  </Button>
+                </div>
               ))}
-            </tbody>
-          </table>
-          {data.length > 50 && (
-            <p className="text-sm text-muted-foreground text-center py-2">
-              Showing 50 of {data.length} rows
-            </p>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card className="border-2 border-primary/20">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                {rfp.title} - Spreadsheet Data
+              </CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">
+                {rfp.fileName} - {rows.length} rows
+              </p>
+            </div>
+            <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-data-viewer">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+            {rfp.laneCount && rfp.laneCount > 0 && (
+              <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+                <TruckIcon className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Total Lanes</p>
+                  <p className="font-medium text-sm">{rfp.laneCount}</p>
+                </div>
+              </div>
+            )}
+            {highVolumeLanes.length > 0 && (
+              <div className="flex items-center gap-2 p-2 rounded-md bg-amber-50 dark:bg-amber-950/30">
+                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                <div>
+                  <p className="text-xs text-muted-foreground">50+ Volume</p>
+                  <p className="font-medium text-sm text-amber-700 dark:text-amber-400">{highVolumeLanes.length}</p>
+                </div>
+              </div>
+            )}
+            {rfp.totalVolume && rfp.totalVolume !== "0" && (
+              <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+                <BarChart3 className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Total Volume</p>
+                  <p className="font-medium text-sm">{Number(rfp.totalVolume).toLocaleString()}</p>
+                </div>
+              </div>
+            )}
+            {rfp.originStates && rfp.originStates.length > 0 && (
+              <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+                <MapPin className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Origin States</p>
+                  <p className="font-medium text-sm">{rfp.originStates.length}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        {rows.length > 0 && (
+          <CardContent className="pt-0">
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full text-sm" data-testid="table-rfp-data">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    {headers.map((h) => (
+                      <th key={h} className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 50).map((row, i) => (
+                    <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+                      {headers.map((h) => (
+                        <td key={h} className="px-3 py-2 whitespace-nowrap">
+                          {String(row[h] ?? "")}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {rows.length > 50 && (
+                <p className="text-sm text-muted-foreground text-center py-2">
+                  Showing 50 of {rows.length} rows
+                </p>
+              )}
+            </div>
+          </CardContent>
+        )}
+      </Card>
+    </div>
   );
 }
 
@@ -628,7 +739,7 @@ export default function RfpAwards() {
       </div>
 
       {viewingRfp && (
-        <RfpDataViewer rfp={viewingRfp} onClose={() => setViewingRfp(null)} />
+        <RfpDataViewer rfp={viewingRfp} companyId={viewingRfp.companyId} onClose={() => setViewingRfp(null)} />
       )}
 
       {isLoading ? (

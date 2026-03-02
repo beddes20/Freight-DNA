@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,6 +39,7 @@ import type { Company, Contact } from "@shared/schema";
 export default function CompanyDetail() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
+  const searchString = useSearch();
   const { toast } = useToast();
   const companyId = params.id!;
 
@@ -46,6 +47,19 @@ export default function CompanyDetail() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | undefined>();
+  const [contactDefaults, setContactDefaults] = useState<{ lane?: string; region?: string } | undefined>();
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(searchString);
+    if (urlParams.get("newContact") === "true") {
+      const lane = urlParams.get("lane") || undefined;
+      const region = urlParams.get("region") || undefined;
+      setContactDefaults({ lane, region });
+      setEditingContact(undefined);
+      setContactDialogOpen(true);
+      navigate(`/companies/${companyId}`, { replace: true });
+    }
+  }, [searchString, companyId, navigate]);
 
   const { data: company, isLoading: companyLoading } = useQuery<Company>({
     queryKey: ["/api/companies", companyId],
@@ -240,10 +254,14 @@ export default function CompanyDetail() {
         open={contactDialogOpen}
         onOpenChange={(open) => {
           setContactDialogOpen(open);
-          if (!open) setEditingContact(undefined);
+          if (!open) {
+            setEditingContact(undefined);
+            setContactDefaults(undefined);
+          }
         }}
         companyId={companyId}
         contact={editingContact}
+        defaults={contactDefaults}
       />
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
