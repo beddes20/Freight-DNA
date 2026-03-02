@@ -29,112 +29,110 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Rfp, InsertRfp, Company } from "@shared/schema";
+import type { Award, InsertAward, Company } from "@shared/schema";
 
-const rfpSchema = z.object({
+const awardSchema = z.object({
   companyId: z.string().min(1, "Company is required"),
   title: z.string().min(1, "Title is required"),
-  status: z.string().min(1, "Status is required"),
   value: z.string().optional(),
-  dueDate: z.string().optional(),
+  awardDate: z.string().optional(),
+  lanes: z.string().optional(),
   notes: z.string().optional(),
 });
 
-type RfpFormData = z.infer<typeof rfpSchema>;
+type AwardFormData = z.infer<typeof awardSchema>;
 
-interface RfpDialogProps {
+interface AwardDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  rfp?: Rfp;
+  award?: Award;
 }
 
-export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
+export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
   const { toast } = useToast();
-  const isEditing = !!rfp;
+  const isEditing = !!award;
 
   const { data: companies } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
   });
 
-  const form = useForm<RfpFormData>({
-    resolver: zodResolver(rfpSchema),
+  const form = useForm<AwardFormData>({
+    resolver: zodResolver(awardSchema),
     defaultValues: {
       companyId: "",
       title: "",
-      status: "pending",
       value: "",
-      dueDate: "",
+      awardDate: "",
+      lanes: "",
       notes: "",
     },
   });
 
   useEffect(() => {
-    if (rfp) {
+    if (award) {
       form.reset({
-        companyId: rfp.companyId || "",
-        title: rfp.title || "",
-        status: rfp.status || "pending",
-        value: rfp.value || "",
-        dueDate: rfp.dueDate || "",
-        notes: rfp.notes || "",
+        companyId: award.companyId || "",
+        title: award.title || "",
+        value: award.value || "",
+        awardDate: award.awardDate || "",
+        lanes: award.lanes?.join(", ") || "",
+        notes: award.notes || "",
       });
     } else {
       form.reset({
         companyId: "",
         title: "",
-        status: "pending",
         value: "",
-        dueDate: "",
+        awardDate: "",
+        lanes: "",
         notes: "",
       });
     }
-  }, [rfp, form]);
+  }, [award, form]);
 
   const createMutation = useMutation({
-    mutationFn: async (data: InsertRfp) => {
-      const response = await apiRequest("POST", "/api/rfps", data);
+    mutationFn: async (data: InsertAward) => {
+      const response = await apiRequest("POST", "/api/awards", data);
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
-      toast({ title: "RFP created successfully" });
+      queryClient.invalidateQueries({ queryKey: ["/api/awards"] });
+      toast({ title: "Award created successfully" });
       onOpenChange(false);
       form.reset();
     },
     onError: (error: Error) => {
-      toast({ title: "Error creating RFP", description: error.message, variant: "destructive" });
+      toast({ title: "Error creating award", description: error.message, variant: "destructive" });
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: async (data: InsertRfp) => {
-      const response = await apiRequest("PATCH", `/api/rfps/${rfp?.id}`, data);
+    mutationFn: async (data: InsertAward) => {
+      const response = await apiRequest("PATCH", `/api/awards/${award?.id}`, data);
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
-      toast({ title: "RFP updated successfully" });
+      queryClient.invalidateQueries({ queryKey: ["/api/awards"] });
+      toast({ title: "Award updated successfully" });
       onOpenChange(false);
     },
     onError: (error: Error) => {
-      toast({ title: "Error updating RFP", description: error.message, variant: "destructive" });
+      toast({ title: "Error updating award", description: error.message, variant: "destructive" });
     },
   });
 
-  const onSubmit = (data: RfpFormData) => {
-    const payload: InsertRfp = {
+  const onSubmit = (data: AwardFormData) => {
+    const lanesArray = data.lanes
+      ? data.lanes.split(",").map((l) => l.trim()).filter(Boolean)
+      : null;
+
+    const payload: InsertAward = {
       companyId: data.companyId,
       title: data.title,
-      status: data.status,
       value: data.value || null,
-      dueDate: data.dueDate || null,
+      awardDate: data.awardDate || null,
+      lanes: lanesArray,
       notes: data.notes || null,
-      fileName: isEditing ? (rfp?.fileName ?? null) : null,
-      fileData: isEditing ? (rfp?.fileData ?? null) : null,
-      laneCount: isEditing ? (rfp?.laneCount ?? null) : null,
-      totalVolume: isEditing ? (rfp?.totalVolume ?? null) : null,
-      originStates: isEditing ? (rfp?.originStates ?? null) : null,
-      destinationStates: isEditing ? (rfp?.destinationStates ?? null) : null,
     };
 
     if (isEditing) {
@@ -150,7 +148,7 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{isEditing ? "Edit RFP" : "Add RFP"}</DialogTitle>
+          <DialogTitle>{isEditing ? "Edit Award" : "Add Award"}</DialogTitle>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -162,7 +160,7 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
                   <FormLabel>Company</FormLabel>
                   <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl>
-                      <SelectTrigger data-testid="select-rfp-company">
+                      <SelectTrigger data-testid="select-award-company">
                         <SelectValue placeholder="Select a company" />
                       </SelectTrigger>
                     </FormControl>
@@ -184,32 +182,10 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
               name="title"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>RFP Title</FormLabel>
+                  <FormLabel>Award Title</FormLabel>
                   <FormControl>
-                    <Input placeholder="e.g., Q1 2024 Midwest Lanes RFP" {...field} data-testid="input-rfp-title" />
+                    <Input placeholder="e.g., Southeast Lanes Award" {...field} data-testid="input-award-title" />
                   </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="status"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Status</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger data-testid="select-rfp-status">
-                        <SelectValue placeholder="Select status" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="submitted">Submitted</SelectItem>
-                    </SelectContent>
-                  </Select>
                   <FormMessage />
                 </FormItem>
               )}
@@ -220,9 +196,9 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
               name="value"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Estimated Value ($)</FormLabel>
+                  <FormLabel>Award Value ($)</FormLabel>
                   <FormControl>
-                    <Input type="number" placeholder="e.g., 500000" {...field} data-testid="input-rfp-value" />
+                    <Input type="number" placeholder="e.g., 500000" {...field} data-testid="input-award-value" />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -231,12 +207,26 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
 
             <FormField
               control={form.control}
-              name="dueDate"
+              name="awardDate"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Due Date</FormLabel>
+                  <FormLabel>Award Date</FormLabel>
                   <FormControl>
-                    <Input type="date" {...field} data-testid="input-rfp-due-date" />
+                    <Input type="date" {...field} data-testid="input-award-date" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="lanes"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Lanes (comma-separated)</FormLabel>
+                  <FormControl>
+                    <Input placeholder="e.g., ATL-CHI, DAL-LAX" {...field} data-testid="input-award-lanes" />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -250,7 +240,7 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
                 <FormItem>
                   <FormLabel>Notes</FormLabel>
                   <FormControl>
-                    <Textarea placeholder="Any additional notes about this RFP..." {...field} data-testid="input-rfp-notes" />
+                    <Textarea placeholder="Any additional notes about this award..." {...field} data-testid="input-award-notes" />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -258,11 +248,11 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
             />
 
             <div className="flex justify-end gap-2 pt-4">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-rfp">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-award">
                 Cancel
               </Button>
-              <Button type="submit" disabled={isPending} data-testid="button-save-rfp">
-                {isPending ? "Saving..." : isEditing ? "Save Changes" : "Add RFP"}
+              <Button type="submit" disabled={isPending} data-testid="button-save-award">
+                {isPending ? "Saving..." : isEditing ? "Save Changes" : "Add Award"}
               </Button>
             </div>
           </form>

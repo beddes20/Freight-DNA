@@ -1,10 +1,17 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Trophy,
   Plus,
@@ -13,12 +20,16 @@ import {
   Calendar,
   DollarSign,
   Building2,
-  CheckCircle,
   Clock,
-  XCircle,
+  Send,
   Pencil,
   Trash2,
-  Send,
+  Upload,
+  FileSpreadsheet,
+  MapPin,
+  TruckIcon,
+  BarChart3,
+  X,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -31,15 +42,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { RfpDialog } from "@/components/rfp-dialog";
+import { AwardDialog } from "@/components/award-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Rfp, Company } from "@shared/schema";
+import type { Rfp, Award, Company } from "@shared/schema";
 
-const statusConfig = {
+const rfpStatusConfig = {
   pending: { label: "Pending", icon: Clock, color: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400" },
   submitted: { label: "Submitted", icon: Send, color: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
-  won: { label: "Won", icon: CheckCircle, color: "bg-green-500/10 text-green-600 dark:text-green-400" },
-  lost: { label: "Lost", icon: XCircle, color: "bg-red-500/10 text-red-600 dark:text-red-400" },
 };
 
 interface RfpCardProps {
@@ -47,10 +57,11 @@ interface RfpCardProps {
   company?: Company;
   onEdit: (rfp: Rfp) => void;
   onDelete: (rfp: Rfp) => void;
+  onViewData: (rfp: Rfp) => void;
 }
 
-function RfpCard({ rfp, company, onEdit, onDelete }: RfpCardProps) {
-  const status = statusConfig[rfp.status as keyof typeof statusConfig] || statusConfig.pending;
+function RfpCard({ rfp, company, onEdit, onDelete, onViewData }: RfpCardProps) {
+  const status = rfpStatusConfig[rfp.status as keyof typeof rfpStatusConfig] || rfpStatusConfig.pending;
   const StatusIcon = status.icon;
 
   return (
@@ -85,12 +96,41 @@ function RfpCard({ rfp, company, onEdit, onDelete }: RfpCardProps) {
               <span>Due: {new Date(rfp.dueDate).toLocaleDateString()}</span>
             </div>
           )}
+          {rfp.laneCount && rfp.laneCount > 0 && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <TruckIcon className="h-3.5 w-3.5" />
+              <span>{rfp.laneCount} lanes</span>
+            </div>
+          )}
+          {rfp.fileName && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+              <span className="truncate">{rfp.fileName}</span>
+            </div>
+          )}
+          {rfp.originStates && rfp.originStates.length > 0 && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="truncate">Origins: {rfp.originStates.join(", ")}</span>
+            </div>
+          )}
           {rfp.notes && (
             <p className="text-muted-foreground line-clamp-2">{rfp.notes}</p>
           )}
         </div>
 
         <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t">
+          {rfp.fileData && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onViewData(rfp)}
+              data-testid={`button-view-data-${rfp.id}`}
+            >
+              <BarChart3 className="h-4 w-4 mr-1" />
+              View Data
+            </Button>
+          )}
           <Button
             size="icon"
             variant="ghost"
@@ -113,69 +153,332 @@ function RfpCard({ rfp, company, onEdit, onDelete }: RfpCardProps) {
   );
 }
 
+interface AwardCardProps {
+  award: Award;
+  company?: Company;
+  onEdit: (award: Award) => void;
+  onDelete: (award: Award) => void;
+}
+
+function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
+  return (
+    <Card className="hover-elevate" data-testid={`card-award-${award.id}`}>
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-2 mb-3">
+          <div className="min-w-0 flex-1">
+            <h3 className="font-medium truncate">{award.title}</h3>
+            {company && (
+              <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
+                <Building2 className="h-3 w-3" />
+                <span className="truncate">{company.name}</span>
+              </div>
+            )}
+          </div>
+          <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
+            <Trophy className="h-3 w-3 mr-1" />
+            Won
+          </Badge>
+        </div>
+
+        <div className="space-y-2 text-sm">
+          {award.value && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <DollarSign className="h-3.5 w-3.5" />
+              <span>${Number(award.value).toLocaleString()}</span>
+            </div>
+          )}
+          {award.awardDate && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Calendar className="h-3.5 w-3.5" />
+              <span>Awarded: {new Date(award.awardDate).toLocaleDateString()}</span>
+            </div>
+          )}
+          {award.lanes && award.lanes.length > 0 && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <TruckIcon className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="truncate">{award.lanes.join(", ")}</span>
+            </div>
+          )}
+          {award.notes && (
+            <p className="text-muted-foreground line-clamp-2">{award.notes}</p>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => onEdit(award)}
+            data-testid={`button-edit-award-${award.id}`}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => onDelete(award)}
+            data-testid={`button-delete-award-${award.id}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface RfpDataViewerProps {
+  rfp: Rfp;
+  onClose: () => void;
+}
+
+function RfpDataViewer({ rfp, onClose }: RfpDataViewerProps) {
+  const data = rfp.fileData as Record<string, any>[] | null;
+  if (!data || data.length === 0) return null;
+  const headers = Object.keys(data[0]);
+
+  return (
+    <Card className="border-2 border-primary/20">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <BarChart3 className="h-4 w-4" />
+              {rfp.title} - Spreadsheet Data
+            </CardTitle>
+            <p className="text-sm text-muted-foreground mt-1">
+              {rfp.fileName} - {data.length} rows
+            </p>
+          </div>
+          <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-data-viewer">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+          {rfp.laneCount && rfp.laneCount > 0 && (
+            <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+              <TruckIcon className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <p className="text-xs text-muted-foreground">Lanes</p>
+                <p className="font-medium text-sm">{rfp.laneCount}</p>
+              </div>
+            </div>
+          )}
+          {rfp.totalVolume && rfp.totalVolume !== "0" && (
+            <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+              <BarChart3 className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <p className="text-xs text-muted-foreground">Total Volume</p>
+                <p className="font-medium text-sm">{Number(rfp.totalVolume).toLocaleString()}</p>
+              </div>
+            </div>
+          )}
+          {rfp.originStates && rfp.originStates.length > 0 && (
+            <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+              <MapPin className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <p className="text-xs text-muted-foreground">Origin States</p>
+                <p className="font-medium text-sm">{rfp.originStates.length}</p>
+              </div>
+            </div>
+          )}
+          {rfp.destinationStates && rfp.destinationStates.length > 0 && (
+            <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+              <MapPin className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <p className="text-xs text-muted-foreground">Dest States</p>
+                <p className="font-medium text-sm">{rfp.destinationStates.length}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="overflow-x-auto rounded-md border">
+          <table className="w-full text-sm" data-testid="table-rfp-data">
+            <thead>
+              <tr className="border-b bg-muted/50">
+                {headers.map((h) => (
+                  <th key={h} className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.slice(0, 50).map((row, i) => (
+                <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+                  {headers.map((h) => (
+                    <td key={h} className="px-3 py-2 whitespace-nowrap">
+                      {String(row[h] ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {data.length > 50 && (
+            <p className="text-sm text-muted-foreground text-center py-2">
+              Showing 50 of {data.length} rows
+            </p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function RfpAwards() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [rfpDialogOpen, setRfpDialogOpen] = useState(false);
+  const [awardDialogOpen, setAwardDialogOpen] = useState(false);
   const [editingRfp, setEditingRfp] = useState<Rfp | undefined>();
-  const [deleteTarget, setDeleteTarget] = useState<Rfp | null>(null);
+  const [editingAward, setEditingAward] = useState<Award | undefined>();
+  const [deleteRfpTarget, setDeleteRfpTarget] = useState<Rfp | null>(null);
+  const [deleteAwardTarget, setDeleteAwardTarget] = useState<Award | null>(null);
+  const [viewingRfp, setViewingRfp] = useState<Rfp | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadCompanyId, setUploadCompanyId] = useState("");
 
   const { data: rfps, isLoading: rfpsLoading } = useQuery<Rfp[]>({
     queryKey: ["/api/rfps"],
+  });
+
+  const { data: allAwards, isLoading: awardsLoading } = useQuery<Award[]>({
+    queryKey: ["/api/awards"],
   });
 
   const { data: companies } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
   });
 
-  const deleteMutation = useMutation({
+  const deleteRfpMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/rfps/${id}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
       toast({ title: "RFP deleted successfully" });
-      setDeleteTarget(null);
+      setDeleteRfpTarget(null);
     },
     onError: (error: Error) => {
       toast({ title: "Error deleting RFP", description: error.message, variant: "destructive" });
     },
   });
 
+  const deleteAwardMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/awards/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/awards"] });
+      toast({ title: "Award deleted successfully" });
+      setDeleteAwardTarget(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error deleting award", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      if (!uploadCompanyId) throw new Error("Please select a company first");
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("companyId", uploadCompanyId);
+      const response = await fetch("/api/rfps/upload", { method: "POST", body: formData });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || "Upload failed");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      toast({
+        title: "RFP uploaded successfully",
+        description: `Analyzed ${data.analysis.laneCount} lanes from ${data.rfp.fileName}`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
+    },
+  });
+
   const companiesMap = new Map(companies?.map((c) => [c.id, c]) || []);
 
-  const activeRfps = rfps?.filter((rfp) =>
-    (rfp.status === "pending" || rfp.status === "submitted") &&
-    (rfp.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    rfp.status.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    companiesMap.get(rfp.companyId)?.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  const filteredRfps = rfps?.filter((rfp) =>
+    rfp.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    companiesMap.get(rfp.companyId)?.name.toLowerCase().includes(searchQuery.toLowerCase())
   ) || [];
 
-  const awards = rfps?.filter((rfp) =>
-    (rfp.status === "won" || rfp.status === "lost") &&
-    (rfp.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    rfp.status.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    companiesMap.get(rfp.companyId)?.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  const filteredAwards = allAwards?.filter((award) =>
+    award.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    companiesMap.get(award.companyId)?.name.toLowerCase().includes(searchQuery.toLowerCase())
   ) || [];
 
-  const handleEdit = (rfp: Rfp) => {
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file && (file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv"))) {
+      uploadMutation.mutate(file);
+    } else {
+      toast({ title: "Invalid file type", description: "Please upload an Excel (.xlsx, .xls) or CSV file", variant: "destructive" });
+    }
+  }, [uploadMutation, toast]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv")) {
+        uploadMutation.mutate(file);
+      } else {
+        toast({ title: "Invalid file type", description: "Please upload an Excel (.xlsx, .xls) or CSV file", variant: "destructive" });
+      }
+    }
+    e.target.value = "";
+  }, [uploadMutation, toast]);
+
+  const handleEditRfp = (rfp: Rfp) => {
     setEditingRfp(rfp);
-    setDialogOpen(true);
+    setRfpDialogOpen(true);
   };
 
-  const handleAdd = () => {
+  const handleAddRfp = () => {
     setEditingRfp(undefined);
-    setDialogOpen(true);
+    setRfpDialogOpen(true);
   };
+
+  const handleEditAward = (award: Award) => {
+    setEditingAward(award);
+    setAwardDialogOpen(true);
+  };
+
+  const handleAddAward = () => {
+    setEditingAward(undefined);
+    setAwardDialogOpen(true);
+  };
+
+  const isLoading = rfpsLoading || awardsLoading;
 
   const stats = {
-    total: rfps?.length || 0,
-    pending: rfps?.filter((r) => r.status === "pending").length || 0,
-    submitted: rfps?.filter((r) => r.status === "submitted").length || 0,
-    won: rfps?.filter((r) => r.status === "won").length || 0,
-    lost: rfps?.filter((r) => r.status === "lost").length || 0,
-    totalValue: rfps?.reduce((acc, r) => acc + (r.value ? parseFloat(r.value) : 0), 0) || 0,
-    wonValue: rfps?.filter((r) => r.status === "won").reduce((acc, r) => acc + (r.value ? parseFloat(r.value) : 0), 0) || 0,
+    totalRfps: rfps?.length || 0,
+    totalAwards: allAwards?.length || 0,
+    rfpPipeline: rfps?.reduce((acc, r) => acc + (r.value ? parseFloat(r.value) : 0), 0) || 0,
+    awardedValue: allAwards?.reduce((acc, a) => acc + (a.value ? parseFloat(a.value) : 0), 0) || 0,
   };
 
   return (
@@ -186,13 +489,19 @@ export default function RfpAwards() {
             RFP & Awards
           </h1>
           <p className="text-muted-foreground">
-            Track your RFP submissions and awarded business
+            Manage your RFP submissions and awarded business separately
           </p>
         </div>
-        <Button onClick={handleAdd} data-testid="button-add-rfp">
-          <Plus className="h-4 w-4 mr-2" />
-          Add RFP
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button onClick={handleAddRfp} data-testid="button-add-rfp">
+            <Plus className="h-4 w-4 mr-2" />
+            Add RFP
+          </Button>
+          <Button onClick={handleAddAward} variant="outline" data-testid="button-add-award">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Award
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -201,7 +510,7 @@ export default function RfpAwards() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Active RFPs</p>
-                <p className="text-2xl font-bold">{stats.pending + stats.submitted}</p>
+                <p className="text-2xl font-bold">{stats.totalRfps}</p>
               </div>
               <FileText className="h-8 w-8 text-muted-foreground/50" />
             </div>
@@ -211,12 +520,8 @@ export default function RfpAwards() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Win Rate</p>
-                <p className="text-2xl font-bold">
-                  {stats.won + stats.lost > 0 
-                    ? `${Math.round((stats.won / (stats.won + stats.lost)) * 100)}%`
-                    : "N/A"}
-                </p>
+                <p className="text-sm text-muted-foreground">Awards Won</p>
+                <p className="text-2xl font-bold">{stats.totalAwards}</p>
               </div>
               <Trophy className="h-8 w-8 text-muted-foreground/50" />
             </div>
@@ -226,8 +531,8 @@ export default function RfpAwards() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Total Pipeline</p>
-                <p className="text-2xl font-bold">${(stats.totalValue / 1000000).toFixed(1)}M</p>
+                <p className="text-sm text-muted-foreground">RFP Pipeline</p>
+                <p className="text-2xl font-bold">${(stats.rfpPipeline / 1000000).toFixed(1)}M</p>
               </div>
               <DollarSign className="h-8 w-8 text-muted-foreground/50" />
             </div>
@@ -237,16 +542,79 @@ export default function RfpAwards() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Won Value</p>
+                <p className="text-sm text-muted-foreground">Awarded Value</p>
                 <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                  ${(stats.wonValue / 1000000).toFixed(1)}M
+                  ${(stats.awardedValue / 1000000).toFixed(1)}M
                 </p>
               </div>
-              <CheckCircle className="h-8 w-8 text-green-500/50" />
+              <Trophy className="h-8 w-8 text-green-500/50" />
             </div>
           </CardContent>
         </Card>
       </div>
+
+      <Card className={`border-2 border-dashed transition-colors ${isDragging ? "border-primary bg-primary/5" : "border-muted-foreground/25"}`}>
+        <CardContent className="p-6">
+          <div
+            className="flex flex-col items-center gap-4"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            data-testid="rfp-upload-dropzone"
+          >
+            <div className={`rounded-full p-4 transition-colors ${isDragging ? "bg-primary/10" : "bg-muted"}`}>
+              <Upload className={`h-8 w-8 ${isDragging ? "text-primary" : "text-muted-foreground"}`} />
+            </div>
+            <div className="text-center">
+              <h3 className="font-medium mb-1">
+                {uploadMutation.isPending ? "Uploading & Analyzing..." : "Upload RFP Spreadsheet"}
+              </h3>
+              <p className="text-sm text-muted-foreground mb-3">
+                Drag and drop an Excel or CSV file here to create an RFP with data analysis
+              </p>
+            </div>
+            <div className="flex items-center gap-3 w-full max-w-md">
+              <Select value={uploadCompanyId} onValueChange={setUploadCompanyId}>
+                <SelectTrigger className="flex-1" data-testid="select-upload-company">
+                  <SelectValue placeholder="Select company for upload" />
+                </SelectTrigger>
+                <SelectContent>
+                  {companies?.map((company) => (
+                    <SelectItem key={company.id} value={company.id}>
+                      {company.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <label>
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                  disabled={!uploadCompanyId || uploadMutation.isPending}
+                  data-testid="input-file-upload"
+                />
+                <Button
+                  variant="outline"
+                  disabled={!uploadCompanyId || uploadMutation.isPending}
+                  asChild
+                >
+                  <span className="cursor-pointer">
+                    <FileSpreadsheet className="h-4 w-4 mr-2" />
+                    Browse
+                  </span>
+                </Button>
+              </label>
+            </div>
+            {!uploadCompanyId && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Select a company above before uploading
+              </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -259,7 +627,11 @@ export default function RfpAwards() {
         />
       </div>
 
-      {rfpsLoading ? (
+      {viewingRfp && (
+        <RfpDataViewer rfp={viewingRfp} onClose={() => setViewingRfp(null)} />
+      )}
+
+      {isLoading ? (
         <div className="space-y-8">
           <div>
             <Skeleton className="h-8 w-32 mb-4" />
@@ -285,19 +657,20 @@ export default function RfpAwards() {
                 RFPs
               </h2>
               <Badge variant="secondary" className="ml-1">
-                {activeRfps.length}
+                {filteredRfps.length}
               </Badge>
             </div>
 
-            {activeRfps.length > 0 ? (
+            {filteredRfps.length > 0 ? (
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {activeRfps.map((rfp) => (
+                {filteredRfps.map((rfp) => (
                   <RfpCard
                     key={rfp.id}
                     rfp={rfp}
                     company={companiesMap.get(rfp.companyId)}
-                    onEdit={handleEdit}
-                    onDelete={setDeleteTarget}
+                    onEdit={handleEditRfp}
+                    onDelete={setDeleteRfpTarget}
+                    onViewData={setViewingRfp}
                   />
                 ))}
               </div>
@@ -305,14 +678,14 @@ export default function RfpAwards() {
               <Card>
                 <CardContent className="flex flex-col items-center justify-center py-8">
                   <FileText className="h-10 w-10 text-muted-foreground/50 mb-3" />
-                  <h3 className="font-medium mb-1">No active RFPs</h3>
+                  <h3 className="font-medium mb-1">No RFPs</h3>
                   <p className="text-sm text-muted-foreground text-center max-w-sm">
                     {searchQuery
                       ? "No RFPs match your search"
-                      : "Start by adding your first RFP to track"}
+                      : "Add an RFP manually or upload an Excel spreadsheet"}
                   </p>
                   {!searchQuery && (
-                    <Button onClick={handleAdd} className="mt-3" size="sm" data-testid="button-add-first-rfp">
+                    <Button onClick={handleAddRfp} className="mt-3" size="sm" data-testid="button-add-first-rfp">
                       <Plus className="h-4 w-4 mr-2" />
                       Add RFP
                     </Button>
@@ -329,19 +702,19 @@ export default function RfpAwards() {
                 Awards
               </h2>
               <Badge variant="secondary" className="ml-1">
-                {awards.length}
+                {filteredAwards.length}
               </Badge>
             </div>
 
-            {awards.length > 0 ? (
+            {filteredAwards.length > 0 ? (
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {awards.map((rfp) => (
-                  <RfpCard
-                    key={rfp.id}
-                    rfp={rfp}
-                    company={companiesMap.get(rfp.companyId)}
-                    onEdit={handleEdit}
-                    onDelete={setDeleteTarget}
+                {filteredAwards.map((award) => (
+                  <AwardCard
+                    key={award.id}
+                    award={award}
+                    company={companiesMap.get(award.companyId)}
+                    onEdit={handleEditAward}
+                    onDelete={setDeleteAwardTarget}
                   />
                 ))}
               </div>
@@ -353,8 +726,14 @@ export default function RfpAwards() {
                   <p className="text-sm text-muted-foreground text-center max-w-sm">
                     {searchQuery
                       ? "No awards match your search"
-                      : "Won or lost RFPs will appear here"}
+                      : "Record your won business here"}
                   </p>
+                  {!searchQuery && (
+                    <Button onClick={handleAddAward} className="mt-3" size="sm" variant="outline" data-testid="button-add-first-award">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Award
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -363,30 +742,60 @@ export default function RfpAwards() {
       )}
 
       <RfpDialog
-        open={dialogOpen}
+        open={rfpDialogOpen}
         onOpenChange={(open) => {
-          setDialogOpen(open);
+          setRfpDialogOpen(open);
           if (!open) setEditingRfp(undefined);
         }}
         rfp={editingRfp}
       />
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+      <AwardDialog
+        open={awardDialogOpen}
+        onOpenChange={(open) => {
+          setAwardDialogOpen(open);
+          if (!open) setEditingAward(undefined);
+        }}
+        award={editingAward}
+      />
+
+      <AlertDialog open={!!deleteRfpTarget} onOpenChange={(open) => !open && setDeleteRfpTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete RFP</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{deleteTarget?.title}"? This action cannot be undone.
+              Are you sure you want to delete "{deleteRfpTarget?.title}"? This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel data-testid="button-cancel-delete-rfp">Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+              onClick={() => deleteRfpTarget && deleteRfpMutation.mutate(deleteRfpTarget.id)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete-rfp"
             >
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              {deleteRfpMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deleteAwardTarget} onOpenChange={(open) => !open && setDeleteAwardTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Award</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{deleteAwardTarget?.title}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-award">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteAwardTarget && deleteAwardMutation.mutate(deleteAwardTarget.id)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-award"
+            >
+              {deleteAwardMutation.isPending ? "Deleting..." : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

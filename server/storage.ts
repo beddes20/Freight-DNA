@@ -6,6 +6,7 @@ import {
   companies,
   contacts,
   rfps,
+  awards,
   type User,
   type InsertUser,
   type Company,
@@ -14,6 +15,8 @@ import {
   type InsertContact,
   type Rfp,
   type InsertRfp,
+  type Award,
+  type InsertAward,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -41,6 +44,12 @@ export interface IStorage {
   createRfp(rfp: InsertRfp): Promise<Rfp>;
   updateRfp(id: string, rfp: InsertRfp): Promise<Rfp | undefined>;
   deleteRfp(id: string): Promise<boolean>;
+
+  getAwards(): Promise<Award[]>;
+  getAward(id: string): Promise<Award | undefined>;
+  createAward(award: InsertAward): Promise<Award>;
+  updateAward(id: string, award: InsertAward): Promise<Award | undefined>;
+  deleteAward(id: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -150,6 +159,34 @@ export class DatabaseStorage implements IStorage {
 
   async deleteRfp(id: string): Promise<boolean> {
     const result = await db.delete(rfps).where(eq(rfps.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getAwards(): Promise<Award[]> {
+    return db.select().from(awards);
+  }
+
+  async getAward(id: string): Promise<Award | undefined> {
+    const [award] = await db.select().from(awards).where(eq(awards.id, id));
+    return award;
+  }
+
+  async createAward(award: InsertAward): Promise<Award> {
+    const [created] = await db.insert(awards).values(award).returning();
+    return created;
+  }
+
+  async updateAward(id: string, award: InsertAward): Promise<Award | undefined> {
+    const [updated] = await db
+      .update(awards)
+      .set(award)
+      .where(eq(awards.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteAward(id: string): Promise<boolean> {
+    const result = await db.delete(awards).where(eq(awards.id, id)).returning();
     return result.length > 0;
   }
 }

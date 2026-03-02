@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, decimal } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, decimal, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -50,6 +50,12 @@ export const rfps = pgTable("rfps", {
   value: decimal("value", { precision: 12, scale: 2 }),
   dueDate: text("due_date"),
   notes: text("notes"),
+  fileName: text("file_name"),
+  fileData: jsonb("file_data"),
+  laneCount: integer("lane_count"),
+  totalVolume: text("total_volume"),
+  originStates: text("origin_states").array(),
+  destinationStates: text("destination_states").array(),
 });
 
 export const insertRfpSchema = createInsertSchema(rfps).omit({
@@ -58,6 +64,23 @@ export const insertRfpSchema = createInsertSchema(rfps).omit({
 
 export type InsertRfp = z.infer<typeof insertRfpSchema>;
 export type Rfp = typeof rfps.$inferSelect;
+
+export const awards = pgTable("awards", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  value: decimal("value", { precision: 12, scale: 2 }),
+  awardDate: text("award_date"),
+  lanes: text("lanes").array(),
+  notes: text("notes"),
+});
+
+export const insertAwardSchema = createInsertSchema(awards).omit({
+  id: true,
+});
+
+export type InsertAward = z.infer<typeof insertAwardSchema>;
+export type Award = typeof awards.$inferSelect;
 
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
