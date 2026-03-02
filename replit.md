@@ -26,7 +26,8 @@ client/src/
   ├── pages/
   │   ├── dashboard.tsx       # Overview with stats and "My Customers" links
   │   ├── companies.tsx       # Company listing page
-  │   ├── company-detail.tsx  # Company detail with org chart + RFP & Awards button
+  │   ├── company-detail.tsx  # Company detail with org chart + RFP & Awards button + high-volume lanes
+  │   ├── customers.tsx       # Customer listing with contact counts and research task badges
   │   ├── rfp-awards.tsx      # RFP & Awards page with Excel upload
   │   └── research-tasks.tsx  # Research tasks overview page
   └── App.tsx                 # Main app with routing

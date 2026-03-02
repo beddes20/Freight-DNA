@@ -382,9 +382,11 @@ export async function registerRoutes(
   app.get("/api/research-tasks", async (req, res) => {
     try {
       const allRfps = await storage.getRfps();
+      const companyFilter = req.query.companyId as string | undefined;
       const tasks: any[] = [];
 
       for (const rfp of allRfps) {
+        if (companyFilter && rfp.companyId !== companyFilter) continue;
         const fileData = rfp.fileData as { rows?: any[]; highVolumeLanes?: any[] } | null;
         if (!fileData || Array.isArray(fileData) || !fileData.highVolumeLanes) continue;
 

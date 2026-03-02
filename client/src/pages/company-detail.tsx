@@ -27,14 +27,37 @@ import {
   Network,
   List,
   Trophy,
+  TruckIcon,
+  AlertTriangle,
+  BarChart3,
+  UserPlus,
+  CheckCircle,
+  Clock,
 } from "lucide-react";
 import { CompanyDialog } from "@/components/company-dialog";
 import { ContactDialog } from "@/components/contact-dialog";
+import { ResearchLaneDialog } from "@/components/research-lane-dialog";
 import { OrgChart } from "@/components/org-chart";
 import { ContactList } from "@/components/contact-list";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company, Contact } from "@shared/schema";
+
+interface ResearchTask {
+  rfpId: string;
+  rfpTitle: string;
+  companyId: string;
+  laneIndex: number;
+  lane: string;
+  origin: string;
+  destination: string;
+  originState: string;
+  destinationState: string;
+  volume: number;
+  rate: string;
+  status: string;
+  contactId: string | null;
+}
 
 export default function CompanyDetail() {
   const params = useParams<{ id: string }>();
@@ -48,6 +71,8 @@ export default function CompanyDetail() {
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | undefined>();
   const [contactDefaults, setContactDefaults] = useState<{ lane?: string; region?: string } | undefined>();
+  const [researchDialogOpen, setResearchDialogOpen] = useState(false);
+  const [selectedTask, setSelectedTask] = useState<ResearchTask | null>(null);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -68,6 +93,38 @@ export default function CompanyDetail() {
   const { data: contacts, isLoading: contactsLoading } = useQuery<Contact[]>({
     queryKey: ["/api/companies", companyId, "contacts"],
   });
+
+  const { data: researchTasks } = useQuery<ResearchTask[]>({
+    queryKey: ["/api/research-tasks", { companyId }],
+    queryFn: async () => {
+      const res = await fetch(`/api/research-tasks?companyId=${companyId}`);
+      if (!res.ok) throw new Error("Failed to fetch research tasks");
+      return res.json();
+    },
+  });
+
+  const openTasks = researchTasks?.filter((t) => t.status === "open") || [];
+
+  const markResearchedMutation = useMutation({
+    mutationFn: async (task: ResearchTask) => {
+      await apiRequest("PATCH", `/api/rfps/${task.rfpId}/lanes/${task.laneIndex}/status`, {
+        status: "researched",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/research-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      toast({
+        title: "Lane marked as researched",
+        className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
+      });
+    },
+  });
+
+  const handleAssignTask = (task: ResearchTask) => {
+    setSelectedTask(task);
+    setResearchDialogOpen(true);
+  };
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
@@ -186,6 +243,116 @@ export default function CompanyDetail() {
         </Card>
       )}
 
+      {researchTasks && researchTasks.length > 0 && (() => {
+        const unresolvedTasks = researchTasks.filter((t) => t.status === "open" || t.status === "contact_added");
+        const completedTasks = researchTasks.filter((t) => t.status === "researched");
+
+        return (
+          <Card className="border-2 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-lanes-needing-contacts">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                  <h2 className="text-base font-medium text-amber-700 dark:text-amber-400">
+                    High-Volume Lanes Needing Contacts
+                  </h2>
+                </div>
+                <div className="flex items-center gap-2">
+                  {completedTasks.length > 0 && (
+                    <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400">
+                      {completedTasks.length} done
+                    </Badge>
+                  )}
+                  {openTasks.length > 0 && (
+                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
+                      {openTasks.length} open
+                    </Badge>
+                  )}
+                </div>
+              </div>
+
+              {unresolvedTasks.length > 0 ? (
+                <div className="space-y-2">
+                  {unresolvedTasks.map((task, i) => {
+                    const linkedContact = task.contactId && contacts
+                      ? contacts.find((c) => c.id === task.contactId)
+                      : null;
+                    return (
+                      <div
+                        key={`${task.rfpId}-${task.laneIndex}`}
+                        className="flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors"
+                        data-testid={`lane-task-${i}`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <TruckIcon className="h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                          <div className="min-w-0">
+                            <p className="font-medium text-sm truncate">{task.lane}</p>
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                              <span className="flex items-center gap-1">
+                                <BarChart3 className="h-3 w-3" />
+                                {task.volume.toLocaleString()} / yr
+                              </span>
+                              <span>{task.rfpTitle}</span>
+                              {linkedContact && (
+                                <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
+                                  <Users className="h-3 w-3" />
+                                  {linkedContact.name}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {task.status === "open" ? (
+                            <>
+                              <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                <Clock className="h-3 w-3 mr-1" />
+                                Open
+                              </Badge>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
+                                onClick={() => handleAssignTask(task)}
+                                data-testid={`button-assign-lane-task-${i}`}
+                              >
+                                <UserPlus className="h-4 w-4 mr-1" />
+                                Assign to AM
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                                <UserPlus className="h-3 w-3 mr-1" />
+                                Contact Added
+                              </Badge>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400"
+                                onClick={() => markResearchedMutation.mutate(task)}
+                                disabled={markResearchedMutation.isPending}
+                                data-testid={`button-mark-complete-task-${i}`}
+                              >
+                                Mark Complete
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  All high-volume lanes have been researched.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Users className="h-5 w-5 text-muted-foreground" />
@@ -285,6 +452,17 @@ export default function CompanyDetail() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {selectedTask && (
+        <ResearchLaneDialog
+          open={researchDialogOpen}
+          onOpenChange={setResearchDialogOpen}
+          lane={selectedTask}
+          laneIndex={selectedTask.laneIndex}
+          rfpId={selectedTask.rfpId}
+          companyId={companyId}
+        />
+      )}
     </div>
   );
 }

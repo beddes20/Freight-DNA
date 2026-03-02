@@ -1,4 +1,4 @@
-import { Building2, ClipboardList, LayoutGrid, Trophy, Users } from "lucide-react";
+import { Building2, ClipboardList, LayoutGrid, Network, Trophy, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -17,6 +17,11 @@ const menuItems = [
     title: "Dashboard",
     url: "/",
     icon: LayoutGrid,
+  },
+  {
+    title: "Customers",
+    url: "/customers",
+    icon: Network,
   },
   {
     title: "Companies",

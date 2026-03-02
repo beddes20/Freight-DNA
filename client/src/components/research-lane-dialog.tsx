@@ -120,16 +120,18 @@ export function ResearchLaneDialog({ open, onOpenChange, lane, laneIndex, rfpId,
       return { contact, laneName: lane?.lane };
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/research-tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
       toast({
         title: `Task created for ${data.laneName}`,
         description: "Contact saved successfully",
         className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
       });
       onOpenChange(false);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/research-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
     },
     onError: (error: Error) => {
       toast({ title: "Error saving contact", description: error.message, variant: "destructive" });
