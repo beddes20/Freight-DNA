@@ -1,4 +1,4 @@
-import { Building2, ClipboardList, LayoutGrid, Network, Trophy, Users, TruckIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, TruckIcon } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -24,11 +24,6 @@ const menuItems = [
     title: "Customers",
     url: "/customers",
     icon: Network,
-  },
-  {
-    title: "Companies",
-    url: "/companies",
-    icon: Building2,
   },
   {
     title: "RFP & Awards",
@@ -65,7 +60,8 @@ export function AppSidebar() {
             <SidebarMenu>
               {menuItems.map((item) => {
                 const isActive = location === item.url || 
-                  (item.url !== "/" && location.startsWith(item.url));
+                  (item.url !== "/" && location.startsWith(item.url)) ||
+                  (item.url === "/customers" && location.startsWith("/companies/"));
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild isActive={isActive}>

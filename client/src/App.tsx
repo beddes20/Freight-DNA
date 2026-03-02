@@ -7,7 +7,6 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
-import Companies from "@/pages/companies";
 import CompanyDetail from "@/pages/company-detail";
 import RfpAwards from "@/pages/rfp-awards";
 import ResearchTasks from "@/pages/research-tasks";
@@ -18,7 +17,6 @@ function Router() {
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/customers" component={Customers} />
-      <Route path="/companies" component={Companies} />
       <Route path="/companies/:id" component={CompanyDetail} />
       <Route path="/rfp-awards" component={RfpAwards} />
       <Route path="/research-tasks" component={ResearchTasks} />

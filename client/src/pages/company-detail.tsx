@@ -135,7 +135,7 @@ export default function CompanyDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
       toast({ title: "Company deleted successfully" });
-      navigate("/companies");
+      navigate("/customers");
     },
     onError: (error: Error) => {
       toast({ title: "Error deleting company", description: error.message, variant: "destructive" });
@@ -258,9 +258,9 @@ export default function CompanyDetail() {
       <div className="flex flex-col items-center justify-center gap-4 p-12">
         <Building2 className="h-12 w-12 text-muted-foreground/50" />
         <h2 className="text-lg font-medium">Company not found</h2>
-        <Button variant="outline" onClick={() => navigate("/companies")}>
+        <Button variant="outline" onClick={() => navigate("/customers")}>
           <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Companies
+          Back to Customers
         </Button>
       </div>
     );
@@ -273,7 +273,7 @@ export default function CompanyDetail() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => navigate("/companies")}
+            onClick={() => navigate("/customers")}
             data-testid="button-back"
           >
             <ArrowLeft className="h-4 w-4" />
