@@ -406,6 +406,32 @@ export default function CompanyDetail() {
         </Card>
       )}
 
+      <Card data-testid="card-org-chart-section">
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Network className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              <h2 className="text-base font-medium">Org Chart</h2>
+              <Badge variant="secondary">{contacts?.length || 0} contacts</Badge>
+            </div>
+            <Button onClick={handleAddContact} data-testid="button-add-contact-top">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Contact
+            </Button>
+          </div>
+          {contacts && contacts.length > 0 ? (
+            <OrgChart contacts={contacts} onEditContact={handleEditContact} />
+          ) : (
+            <div className="flex flex-col items-center justify-center py-8">
+              <Users className="h-10 w-10 text-muted-foreground/50 mb-3" />
+              <p className="text-sm text-muted-foreground text-center max-w-sm">
+                Start building your org chart by adding the first contact for this company
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {researchTasks && researchTasks.length > 0 && (() => {
         const unresolvedTasks = researchTasks.filter((t) => t.status === "open" || t.status === "contact_added");
         const completedTasks = researchTasks.filter((t) => t.status === "researched");
@@ -788,62 +814,18 @@ export default function CompanyDetail() {
         </Card>
       )}
 
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Users className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-lg font-medium">Contacts</h2>
-          <Badge variant="secondary">{contacts?.length || 0}</Badge>
+      {contacts && contacts.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <List className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-lg font-medium">Contact Details</h2>
+          </div>
+          <ContactList
+            contacts={contacts}
+            companyId={companyId}
+            onEditContact={handleEditContact}
+          />
         </div>
-        <Button onClick={handleAddContact} data-testid="button-add-contact">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Contact
-        </Button>
-      </div>
-
-      {contacts && contacts.length > 0 ? (
-        <Tabs defaultValue="org-chart" className="w-full">
-          <TabsList>
-            <TabsTrigger value="org-chart" data-testid="tab-org-chart">
-              <Network className="h-4 w-4 mr-2" />
-              Org Chart
-            </TabsTrigger>
-            <TabsTrigger value="list" data-testid="tab-list">
-              <List className="h-4 w-4 mr-2" />
-              List View
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="org-chart" className="mt-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Organization Chart</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <OrgChart contacts={contacts} onEditContact={handleEditContact} />
-              </CardContent>
-            </Card>
-          </TabsContent>
-          <TabsContent value="list" className="mt-4">
-            <ContactList
-              contacts={contacts}
-              companyId={companyId}
-              onEditContact={handleEditContact}
-            />
-          </TabsContent>
-        </Tabs>
-      ) : (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Users className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <h3 className="text-lg font-medium mb-1">No contacts yet</h3>
-            <p className="text-sm text-muted-foreground text-center max-w-sm mb-4">
-              Start building your org chart by adding the first contact for this company
-            </p>
-            <Button onClick={handleAddContact} data-testid="button-add-first-contact">
-              <Plus className="h-4 w-4 mr-2" />
-              Add First Contact
-            </Button>
-          </CardContent>
-        </Card>
       )}
 
       <CompanyDialog

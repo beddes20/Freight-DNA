@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Pencil, MapPin, Route, DollarSign, FileText, Heart, Star } from "lucide-react";
+import { Pencil, MapPin, Route, DollarSign, FileText } from "lucide-react";
 import type { Contact } from "@shared/schema";
 
 interface OrgChartProps {
