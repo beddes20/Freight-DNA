@@ -20,13 +20,15 @@ client/src/
   │   ├── contact-dialog.tsx  # Add/edit contact modal
   │   ├── contact-list.tsx    # List view for contacts
   │   ├── org-chart.tsx       # Hierarchical org chart visualization
+  │   ├── research-lane-dialog.tsx # "Research Lane Owner" modal for assigning AM
   │   ├── rfp-dialog.tsx      # Add/edit RFP modal
   │   └── theme-toggle.tsx    # Dark/light mode toggle
   ├── pages/
   │   ├── dashboard.tsx       # Overview with stats and "My Customers" links
   │   ├── companies.tsx       # Company listing page
   │   ├── company-detail.tsx  # Company detail with org chart + RFP & Awards button
-  │   └── rfp-awards.tsx      # RFP & Awards page with Excel upload
+  │   ├── rfp-awards.tsx      # RFP & Awards page with Excel upload
+  │   └── research-tasks.tsx  # Research tasks overview page
   └── App.tsx                 # Main app with routing
 
 server/
@@ -58,6 +60,7 @@ shared/
 - fileName, fileData (JSON: { rows[], highVolumeLanes[] } from Excel upload)
 - laneCount, totalVolume, originStates[], destinationStates[]
 - High-volume lanes (>50 annual shipments) are auto-extracted and stored in fileData.highVolumeLanes
+- Each high-volume lane can have a `status` (open/contact_added/researched) and `contactId` stored in the fileData JSON
 
 ### Awards (separate entity)
 - id, companyId (FK), title, value, awardDate
@@ -72,6 +75,8 @@ shared/
 6. **Award Management**: Separate award tracking for won business
 7. **Excel Upload**: Drag-and-drop Excel/CSV files to auto-create RFPs with lane analysis
 8. **Dark Mode**: Full dark/light theme support
+9. **Lane Research & Assignment**: High-volume lanes table with "Assign to Account Manager" button; opens "Research Lane Owner" modal with pre-filled lane data + decision-maker contact form; saves contact and marks lane status (Open → Contact Added → Researched)
+10. **Research Tasks Page**: Dedicated sidebar page showing all open/completed research tasks across all RFPs with filtering and search
 
 ## API Endpoints
 - `GET /api/companies` - List all companies
@@ -93,6 +98,8 @@ shared/
 - `POST /api/awards` - Create award
 - `PATCH /api/awards/:id` - Update award
 - `DELETE /api/awards/:id` - Delete award
+- `PATCH /api/rfps/:id/lanes/:laneIndex/status` - Update high-volume lane research status
+- `GET /api/research-tasks` - Get all research tasks across all RFPs
 
 ## Development
 - Run `npm run dev` to start the development server

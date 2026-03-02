@@ -344,6 +344,76 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/rfps/:id/lanes/:laneIndex/status", async (req, res) => {
+    try {
+      const rfp = await storage.getRfp(req.params.id);
+      if (!rfp) {
+        return res.status(404).json({ error: "RFP not found" });
+      }
+
+      const laneIndex = parseInt(req.params.laneIndex);
+      if (isNaN(laneIndex) || laneIndex < 0) {
+        return res.status(400).json({ error: "Invalid lane index" });
+      }
+      const { status, contactId } = req.body;
+      const validStatuses = ["open", "contact_added", "researched"];
+      if (status && !validStatuses.includes(status)) {
+        return res.status(400).json({ error: "Invalid status. Must be one of: open, contact_added, researched" });
+      }
+
+      const fileData = rfp.fileData as { rows?: any[]; highVolumeLanes?: any[] } | null;
+      if (!fileData || Array.isArray(fileData) || !fileData.highVolumeLanes || laneIndex >= fileData.highVolumeLanes.length) {
+        return res.status(400).json({ error: "Invalid lane index" });
+      }
+
+      fileData.highVolumeLanes[laneIndex].status = status || "contact_added";
+      if (contactId) {
+        fileData.highVolumeLanes[laneIndex].contactId = contactId;
+      }
+
+      const updated = await storage.updateRfp(req.params.id, { ...rfp, fileData } as any);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating lane status:", error);
+      res.status(500).json({ error: "Failed to update lane status" });
+    }
+  });
+
+  app.get("/api/research-tasks", async (req, res) => {
+    try {
+      const allRfps = await storage.getRfps();
+      const tasks: any[] = [];
+
+      for (const rfp of allRfps) {
+        const fileData = rfp.fileData as { rows?: any[]; highVolumeLanes?: any[] } | null;
+        if (!fileData || Array.isArray(fileData) || !fileData.highVolumeLanes) continue;
+
+        fileData.highVolumeLanes.forEach((lane: any, index: number) => {
+          tasks.push({
+            rfpId: rfp.id,
+            rfpTitle: rfp.title,
+            companyId: rfp.companyId,
+            laneIndex: index,
+            lane: lane.lane,
+            origin: lane.origin,
+            destination: lane.destination,
+            originState: lane.originState,
+            destinationState: lane.destinationState,
+            volume: lane.volume,
+            rate: lane.rate,
+            status: lane.status || "open",
+            contactId: lane.contactId || null,
+          });
+        });
+      }
+
+      res.json(tasks);
+    } catch (error) {
+      console.error("Error fetching research tasks:", error);
+      res.status(500).json({ error: "Failed to fetch research tasks" });
+    }
+  });
+
   app.delete("/api/rfps/:id", async (req, res) => {
     try {
       const deleted = await storage.deleteRfp(req.params.id);

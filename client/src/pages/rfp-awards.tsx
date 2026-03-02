@@ -46,6 +46,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { RfpDialog } from "@/components/rfp-dialog";
 import { AwardDialog } from "@/components/award-dialog";
+import { ResearchLaneDialog } from "@/components/research-lane-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Rfp, Award, Company } from "@shared/schema";
@@ -248,16 +249,40 @@ interface HighVolumeLane {
   destinationState: string;
   volume: number;
   rate: string;
+  status?: string;
+  contactId?: string;
 }
 
 interface RfpDataViewerProps {
   rfp: Rfp;
   companyId: string;
   onClose: () => void;
+  onRfpUpdated?: () => void;
 }
 
-function RfpDataViewer({ rfp, companyId, onClose }: RfpDataViewerProps) {
-  const [, navigate] = useLocation();
+function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerProps) {
+  const { toast } = useToast();
+  const [researchDialogOpen, setResearchDialogOpen] = useState(false);
+  const [selectedLane, setSelectedLane] = useState<HighVolumeLane | null>(null);
+  const [selectedLaneIndex, setSelectedLaneIndex] = useState(0);
+
+  const markResearchedMutation = useMutation({
+    mutationFn: async ({ laneIdx }: { laneIdx: number }) => {
+      await apiRequest("PATCH", `/api/rfps/${rfp.id}/lanes/${laneIdx}/status`, {
+        status: "researched",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/research-tasks"] });
+      onRfpUpdated?.();
+      toast({
+        title: "Lane marked as researched",
+        className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
+      });
+    },
+  });
+
   const fileDataObj = rfp.fileData as { rows?: Record<string, any>[]; highVolumeLanes?: HighVolumeLane[] } | Record<string, any>[] | null;
 
   let rows: Record<string, any>[] = [];
@@ -273,14 +298,26 @@ function RfpDataViewer({ rfp, companyId, onClose }: RfpDataViewerProps) {
   if (rows.length === 0 && highVolumeLanes.length === 0) return null;
   const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
 
-  const handleCreateContact = (lane: HighVolumeLane) => {
-    const laneStr = lane.lane;
-    const queryParams = new URLSearchParams({
-      newContact: "true",
-      lane: laneStr,
-      region: [lane.originState, lane.destinationState].filter(Boolean).join(", "),
-    });
-    navigate(`/companies/${companyId}?${queryParams.toString()}`);
+  const openLanes = highVolumeLanes.filter(l => !l.status || l.status === "open");
+  const completedLanes = highVolumeLanes.filter(l => l.status && l.status !== "open");
+
+  const handleAssign = (lane: HighVolumeLane, index: number) => {
+    setSelectedLane(lane);
+    setSelectedLaneIndex(index);
+    setResearchDialogOpen(true);
+  };
+
+  const getLaneStatusBadge = (lane: HighVolumeLane) => {
+    if (!lane.status || lane.status === "open") {
+      return <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">Open</Badge>;
+    }
+    if (lane.status === "contact_added") {
+      return <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400">Contact Added</Badge>;
+    }
+    if (lane.status === "researched") {
+      return <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">Researched</Badge>;
+    }
+    return <Badge variant="secondary">{lane.status}</Badge>;
   };
 
   return (
@@ -293,54 +330,90 @@ function RfpDataViewer({ rfp, companyId, onClose }: RfpDataViewerProps) {
                 <AlertTriangle className="h-4 w-4" />
                 High-Volume Lanes — Action Required
               </CardTitle>
-              <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
-                {highVolumeLanes.length} lanes need contacts
-              </Badge>
+              <div className="flex items-center gap-2">
+                {completedLanes.length > 0 && (
+                  <Badge variant="secondary" className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400">
+                    {completedLanes.length} completed
+                  </Badge>
+                )}
+                <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
+                  {openLanes.length} open
+                </Badge>
+              </div>
             </div>
             <p className="text-sm text-muted-foreground mt-1">
-              These lanes have more than 50 annual shipments. Find out who manages each lane and create a contact for them.
+              These lanes have more than 50 annual shipments. Assign to an account manager to research who owns each lane.
             </p>
           </CardHeader>
           <CardContent className="pt-0">
-            <div className="space-y-2">
-              {highVolumeLanes.map((lane, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors"
-                  data-testid={`high-volume-lane-${i}`}
-                >
-                  <div className="flex items-center gap-4 min-w-0 flex-1">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/50 flex-shrink-0">
-                      <TruckIcon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{lane.lane}</p>
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1">
-                          <BarChart3 className="h-3 w-3" />
-                          {lane.volume.toLocaleString()} shipments/yr
-                        </span>
-                        {lane.rate && (
-                          <span className="flex items-center gap-1">
-                            <DollarSign className="h-3 w-3" />
-                            {lane.rate}
-                          </span>
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full text-sm" data-testid="table-high-volume-lanes">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Lane</th>
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Volume</th>
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Rate</th>
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Status</th>
+                    <th className="px-3 py-2 text-right font-medium text-muted-foreground whitespace-nowrap">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {highVolumeLanes.map((lane, i) => (
+                    <tr
+                      key={i}
+                      className={`border-b last:border-0 transition-colors ${
+                        lane.status && lane.status !== "open"
+                          ? "bg-green-50/50 dark:bg-green-950/10"
+                          : "hover:bg-muted/30"
+                      }`}
+                      data-testid={`high-volume-lane-${i}`}
+                    >
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <TruckIcon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                          <span className="font-medium">{lane.lane}</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {lane.volume.toLocaleString()} / yr
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {lane.rate || "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        {getLaneStatusBadge(lane)}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {(!lane.status || lane.status === "open") ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-900/30"
+                            onClick={() => handleAssign(lane, i)}
+                            data-testid={`button-assign-lane-${i}`}
+                          >
+                            <UserPlus className="h-4 w-4 mr-1" />
+                            Assign to AM
+                          </Button>
+                        ) : lane.status === "contact_added" ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-900/30"
+                            onClick={() => markResearchedMutation.mutate({ laneIdx: i })}
+                            disabled={markResearchedMutation.isPending}
+                            data-testid={`button-mark-researched-${i}`}
+                          >
+                            Mark Complete
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-green-600 dark:text-green-400">Done</span>
                         )}
-                      </div>
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-shrink-0 border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-900/30"
-                    onClick={() => handleCreateContact(lane)}
-                    data-testid={`button-create-contact-lane-${i}`}
-                  >
-                    <UserPlus className="h-4 w-4 mr-1" />
-                    Create Contact
-                  </Button>
-                </div>
-              ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </CardContent>
         </Card>
@@ -436,6 +509,15 @@ function RfpDataViewer({ rfp, companyId, onClose }: RfpDataViewerProps) {
           </CardContent>
         )}
       </Card>
+
+      <ResearchLaneDialog
+        open={researchDialogOpen}
+        onOpenChange={setResearchDialogOpen}
+        lane={selectedLane}
+        laneIndex={selectedLaneIndex}
+        rfpId={rfp.id}
+        companyId={companyId}
+      />
     </div>
   );
 }
@@ -739,7 +821,14 @@ export default function RfpAwards() {
       </div>
 
       {viewingRfp && (
-        <RfpDataViewer rfp={viewingRfp} companyId={viewingRfp.companyId} onClose={() => setViewingRfp(null)} />
+        <RfpDataViewer
+          rfp={rfps?.find(r => r.id === viewingRfp.id) || viewingRfp}
+          companyId={viewingRfp.companyId}
+          onClose={() => setViewingRfp(null)}
+          onRfpUpdated={() => {
+            queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+          }}
+        />
       )}
 
       {isLoading ? (

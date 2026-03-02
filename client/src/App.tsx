@@ -11,6 +11,7 @@ import Dashboard from "@/pages/dashboard";
 import Companies from "@/pages/companies";
 import CompanyDetail from "@/pages/company-detail";
 import RfpAwards from "@/pages/rfp-awards";
+import ResearchTasks from "@/pages/research-tasks";
 
 function Router() {
   return (
@@ -19,6 +20,7 @@ function Router() {
       <Route path="/companies" component={Companies} />
       <Route path="/companies/:id" component={CompanyDetail} />
       <Route path="/rfp-awards" component={RfpAwards} />
+      <Route path="/research-tasks" component={ResearchTasks} />
       <Route component={NotFound} />
     </Switch>
   );

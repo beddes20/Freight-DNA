@@ -1,4 +1,4 @@
-import { Building2, LayoutGrid, Trophy, Users } from "lucide-react";
+import { Building2, ClipboardList, LayoutGrid, Trophy, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -27,6 +27,11 @@ const menuItems = [
     title: "RFP & Awards",
     url: "/rfp-awards",
     icon: Trophy,
+  },
+  {
+    title: "Research Tasks",
+    url: "/research-tasks",
+    icon: ClipboardList,
   },
 ];
 
