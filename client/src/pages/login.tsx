@@ -44,7 +44,7 @@ export default function LoginPage() {
             <Truck className="w-8 h-8 text-white" />
           </div>
           <CardTitle className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-green-600 bg-clip-text text-transparent">
-            OrgChart CRM
+            Growth Chart VT
           </CardTitle>
           <CardDescription>
             {isRegister ? "Create your account" : "Sign in to your account"}

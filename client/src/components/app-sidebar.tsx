@@ -57,7 +57,7 @@ export function AppSidebar() {
             <TruckIcon className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-sm font-bold tracking-tight">OrgChart CRM</h1>
+            <h1 className="text-sm font-bold tracking-tight">Growth Chart VT</h1>
             <p className="text-xs text-muted-foreground">Transportation Sales</p>
           </div>
         </div>
