@@ -12,7 +12,7 @@ import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardS
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const zipCodeMap: Record<string, string> = JSON.parse(
-  readFileSync(join(import.meta.dirname, "zipcodes.json"), "utf-8")
+  readFileSync(join(process.cwd(), "server", "zipcodes.json"), "utf-8")
 );
 
 const ZIP_REGEX = /^\d{5}(-\d{4})?$/;
