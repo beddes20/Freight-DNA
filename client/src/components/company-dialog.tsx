@@ -1,8 +1,9 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 import { Loader2 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import {
   Dialog,
   DialogContent,
@@ -20,15 +21,19 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Company, InsertCompany } from "@shared/schema";
+import type { Company, InsertCompany, User } from "@shared/schema";
+
+type SafeUser = Omit<User, "password">;
 
 const companySchema = z.object({
   name: z.string().min(1, "Company name is required"),
   industry: z.string().optional(),
   website: z.string().optional(),
   notes: z.string().optional(),
+  assignedTo: z.string().optional(),
 });
 
 type CompanyFormData = z.infer<typeof companySchema>;
@@ -41,7 +46,14 @@ interface CompanyDialogProps {
 
 export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProps) {
   const { toast } = useToast();
+  const { user: currentUser } = useAuth();
   const isEditing = !!company;
+  const isAdmin = currentUser?.role === "admin";
+
+  const { data: users = [] } = useQuery<SafeUser[]>({
+    queryKey: ["/api/users"],
+    enabled: isAdmin,
+  });
 
   const form = useForm<CompanyFormData>({
     resolver: zodResolver(companySchema),
@@ -50,6 +62,7 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
       industry: company?.industry || "",
       website: company?.website || "",
       notes: company?.notes || "",
+      assignedTo: company?.assignedTo || (currentUser?.id || ""),
     },
   });
 
@@ -91,6 +104,7 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
       industry: data.industry || null,
       website: data.website || null,
       notes: data.notes || null,
+      assignedTo: data.assignedTo || currentUser?.id || null,
     };
 
     if (isEditing) {
@@ -162,6 +176,30 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
                 </FormItem>
               )}
             />
+            {isAdmin && users.length > 0 && (
+              <FormField
+                control={form.control}
+                name="assignedTo"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Assigned To</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ""}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-company-assigned-to">
+                          <SelectValue placeholder="Select account manager" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {users.map(u => (
+                          <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-company">
                 Cancel

@@ -1,38 +1,44 @@
 # OrgChart CRM - Transportation Brokerage Sales Tool
 
 ## Overview
-A mini CRM application designed for transportation brokerage sales teams to build and manage organizational charts for their customer accounts. The application allows sales reps to track contacts, their reporting structure, lanes/regions they manage, freight spend, and spot bidding processes. Includes separate RFP and Award management with Excel upload and data analysis for RFPs.
+A mini CRM application designed for transportation brokerage sales teams to build and manage organizational charts for their customer accounts. The application allows sales reps to track contacts, their reporting structure, lanes/regions they manage, freight spend, and spot bidding processes. Includes separate RFP and Award management with Excel upload and data analysis for RFPs. Features role-based access control (RBAC) with admin, director, and account manager roles.
 
 ## Tech Stack
 - **Frontend**: React with TypeScript, TanStack Query, Wouter routing
 - **Backend**: Express.js with TypeScript
 - **Database**: PostgreSQL with Drizzle ORM
 - **Styling**: Tailwind CSS with shadcn/ui components
+- **Auth**: express-session + connect-pg-simple + bcrypt (email/password login)
 - **File Processing**: xlsx (SheetJS) for Excel/CSV parsing, multer for file uploads
 
 ## Project Structure
 ```
 client/src/
   ├── components/
-  │   ├── app-sidebar.tsx     # Main navigation sidebar
+  │   ├── app-sidebar.tsx     # Main navigation sidebar (with user info + logout + admin link)
   │   ├── award-dialog.tsx    # Add/edit award modal
-  │   ├── company-dialog.tsx  # Add/edit company modal
+  │   ├── company-dialog.tsx  # Add/edit company modal (with "Assign To" for admins)
   │   ├── contact-dialog.tsx  # Add/edit contact modal
   │   ├── contact-list.tsx    # List view for contacts
   │   ├── org-chart.tsx       # Hierarchical org chart visualization
   │   ├── research-lane-dialog.tsx # "Research Lane Owner" modal for assigning AM
   │   ├── rfp-dialog.tsx      # Add/edit RFP modal
   │   └── theme-toggle.tsx    # Dark/light mode toggle
+  ├── hooks/
+  │   └── use-auth.ts         # Auth hook (login/register/logout/current user)
   ├── pages/
+  │   ├── admin-users.tsx     # Admin user management page (CRUD users, roles, managers)
   │   ├── dashboard.tsx       # Overview with stats and "My Customers" links
   │   ├── company-detail.tsx  # Company detail with org chart + RFP & Awards button + high-volume lanes
-  │   ├── customers.tsx       # Customer listing with contact counts and research task badges (main entry point)
+  │   ├── customers.tsx       # Customer listing with contact counts and research task badges
+  │   ├── login.tsx           # Login/register page
   │   ├── rfp-awards.tsx      # RFP & Awards page with Excel upload
   │   └── research-tasks.tsx  # Research tasks overview page
-  └── App.tsx                 # Main app with routing
+  └── App.tsx                 # Main app with routing + auth gating
 
 server/
-  ├── routes.ts               # API endpoints (incl. file upload)
+  ├── auth.ts                 # Auth middleware, session setup, role-based visibility
+  ├── routes.ts               # API endpoints (incl. file upload, user management)
   └── storage.ts              # Database operations
 
 shared/
@@ -41,8 +47,14 @@ shared/
 
 ## Data Models
 
+### Users
+- id, username (email), password (bcrypt hashed), name
+- role: "admin" | "director" | "account_manager"
+- managerId (FK to self for team hierarchy)
+
 ### Companies
 - id, name, industry, website, notes
+- assignedTo (FK to users - which account manager owns this company)
 
 ### Contacts
 - id, companyId (FK), name, title, email, phone
@@ -66,9 +78,18 @@ shared/
 - id, companyId (FK), title, value, awardDate
 - lanes (array), notes
 
+## RBAC (Role-Based Access Control)
+- **Admin**: Full access to everything; can manage users, assign companies, see all data
+- **Director**: Sees own companies + companies assigned to their direct/indirect reports
+- **Account Manager**: Sees only companies assigned to them
+- First user to register automatically gets admin role
+- Auth: session-based with PostgreSQL session store
+- All `/api/` routes (except `/api/auth/*`) require authentication
+- Company list, contacts, RFPs, awards, and research tasks are all filtered by role visibility
+
 ## Key Features
 1. **Dashboard**: Gradient hero banner, KPI stat cards with colored icons, "My Customers" quick links, "Top Contacts by Freight Spend" leaderboard
-2. **Company Management**: Create, edit, delete companies with industry and website info
+2. **Company Management**: Create, edit, delete companies with industry and website info; admin can assign to any user
 3. **Contact Management**: Full CRUD for contacts with transportation-specific fields; confetti celebration animation on save
 4. **Org Chart**: Visual hierarchical display showing reporting relationships
 5. **RFP Management**: Separate RFP tracking with Excel drag-and-drop upload + data analysis
@@ -82,6 +103,8 @@ shared/
 13. **Export to Excel**: Company detail page exports org chart + contacts + high-volume lanes to .xlsx
 14. **Facility Coverage Gap Analysis**: Company detail page shows all unique facilities (origins/destinations) from RFP lanes, cross-referenced against existing contacts' lanes/regions; gaps (uncovered facilities) are highlighted in red with "Find Planner" button; covered facilities shown in green with assigned contact name
 15. **Lane Pattern Analysis**: Company detail page with tabbed analysis: Top Corridors (highest-volume origin→destination pairs, with Multi-RFP badges), Shipping/Receiving Hubs (facilities appearing as both origins and destinations with inbound/outbound breakdown), State Corridors (state-to-state volume with visual bar chart)
+16. **User Management**: Admin-only page for CRUD operations on users with role assignment and manager hierarchy
+17. **Authentication**: Email/password login with session persistence; login/register page with gradient branding
 
 ## UI Components
 - `client/src/components/confetti.tsx` - Confetti celebration animation (useConfetti hook)
@@ -89,27 +112,48 @@ shared/
 - Blue + green gradient branding throughout (sidebar logo, dashboard hero, stat cards)
 
 ## API Endpoints
-- `GET /api/companies` - List all companies
+### Auth
+- `POST /api/auth/register` - Register new user (first user = admin)
+- `POST /api/auth/login` - Login with email/password
+- `POST /api/auth/logout` - Logout
+- `GET /api/auth/me` - Get current user
+
+### Users (admin only)
+- `GET /api/users` - List all users
+- `POST /api/users` - Create user
+- `PATCH /api/users/:id` - Update user
+- `DELETE /api/users/:id` - Delete user
+
+### Companies (filtered by role)
+- `GET /api/companies` - List visible companies
 - `POST /api/companies` - Create company
 - `GET /api/companies/:id` - Get company details
 - `PATCH /api/companies/:id` - Update company
 - `DELETE /api/companies/:id` - Delete company
 - `GET /api/companies/:id/contacts` - Get contacts for company
 - `POST /api/companies/:id/contacts` - Create contact
-- `GET /api/contacts` - List all contacts
+
+### Contacts (filtered by role)
+- `GET /api/contacts` - List all visible contacts
 - `PATCH /api/contacts/:id` - Update contact
 - `DELETE /api/contacts/:id` - Delete contact
-- `GET /api/rfps` - List all RFPs
+
+### RFPs (filtered by role)
+- `GET /api/rfps` - List visible RFPs
 - `POST /api/rfps` - Create RFP manually
 - `POST /api/rfps/upload` - Upload Excel/CSV and create RFP with analysis
 - `PATCH /api/rfps/:id` - Update RFP
 - `DELETE /api/rfps/:id` - Delete RFP
-- `GET /api/awards` - List all awards
+- `PATCH /api/rfps/:id/lanes/:laneIndex/status` - Update high-volume lane research status
+
+### Awards (filtered by role)
+- `GET /api/awards` - List visible awards
 - `POST /api/awards` - Create award
 - `PATCH /api/awards/:id` - Update award
 - `DELETE /api/awards/:id` - Delete award
-- `PATCH /api/rfps/:id/lanes/:laneIndex/status` - Update high-volume lane research status
-- `GET /api/research-tasks` - Get all research tasks across all RFPs
+
+### Analysis
+- `GET /api/research-tasks` - Get visible research tasks across all RFPs
 - `GET /api/companies/:id/facility-coverage` - Facility coverage gap analysis for a company
 - `GET /api/companies/:id/lane-patterns` - Lane pattern analysis (corridors, hubs, state corridors)
 

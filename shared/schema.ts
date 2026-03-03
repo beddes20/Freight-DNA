@@ -9,6 +9,7 @@ export const companies = pgTable("companies", {
   industry: text("industry"),
   website: text("website"),
   notes: text("notes"),
+  assignedTo: varchar("assigned_to"),
 });
 
 export const insertCompanySchema = createInsertSchema(companies).omit({
@@ -86,11 +87,13 @@ export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
   password: text("password").notNull(),
+  name: text("name").notNull().default(""),
+  role: text("role").notNull().default("account_manager"),
+  managerId: varchar("manager_id"),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;

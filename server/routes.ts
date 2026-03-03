@@ -4,7 +4,9 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
 import XLSX from "xlsx";
+import bcrypt from "bcrypt";
 import { storage } from "./storage";
+import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -126,9 +128,104 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  app.use("/api", (req, res, next) => {
+    if (req.path.startsWith("/auth/")) return next();
+    requireAuth(req, res, next);
+  });
+
+  app.get("/api/users", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser || currentUser.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const allUsers = await storage.getUsers();
+      const safeUsers = allUsers.map(({ password, ...u }) => u);
+      res.json(safeUsers);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
+  app.post("/api/users", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser || currentUser.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const { username, password, name, role, managerId } = req.body;
+      if (!username || !password || !name) {
+        return res.status(400).json({ error: "Username, password, and name are required" });
+      }
+      const existing = await storage.getUserByUsername(username);
+      if (existing) {
+        return res.status(400).json({ error: "Username already exists" });
+      }
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = await storage.createUser({
+        username,
+        password: hashedPassword,
+        name,
+        role: role || "account_manager",
+        managerId: managerId || null,
+      });
+      const { password: _, ...safeUser } = user;
+      res.status(201).json(safeUser);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create user" });
+    }
+  });
+
+  app.patch("/api/users/:id", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser || currentUser.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const data: any = {};
+      if (req.body.name !== undefined) data.name = req.body.name;
+      if (req.body.role !== undefined) data.role = req.body.role;
+      if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
+      if (req.body.username !== undefined) data.username = req.body.username;
+      if (req.body.password) {
+        data.password = await bcrypt.hash(req.body.password, 10);
+      }
+      const user = await storage.updateUser(req.params.id, data);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const { password: _, ...safeUser } = user;
+      res.json(safeUser);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update user" });
+    }
+  });
+
+  app.delete("/api/users/:id", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser || currentUser.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      if (req.params.id === currentUser.id) {
+        return res.status(400).json({ error: "Cannot delete yourself" });
+      }
+      const deleted = await storage.deleteUser(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "User not found" });
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete user" });
+    }
+  });
+
   app.get("/api/companies", async (req, res) => {
     try {
-      const companies = await storage.getCompanies();
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+
+      let companies = await storage.getCompanies();
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      if (visibleIds !== null) {
+        companies = companies.filter(c => visibleIds.includes(c.id));
+      }
       res.json(companies);
     } catch (error) {
       console.error("Error fetching companies:", error);
@@ -138,9 +235,14 @@ export async function registerRoutes(
 
   app.get("/api/companies/:id", async (req, res) => {
     try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const company = await storage.getCompany(req.params.id);
       if (!company) {
         return res.status(404).json({ error: "Company not found" });
+      }
+      if (!(await canAccessCompany(currentUser, company.id))) {
+        return res.status(403).json({ error: "Access denied" });
       }
       res.json(company);
     } catch (error) {
@@ -151,11 +253,17 @@ export async function registerRoutes(
 
   app.post("/api/companies", async (req, res) => {
     try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const parsed = insertCompanySchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      const company = await storage.createCompany(parsed.data);
+      const data = { ...parsed.data };
+      if (currentUser.role !== "admin") {
+        data.assignedTo = currentUser.id;
+      }
+      const company = await storage.createCompany(data);
       res.status(201).json(company);
     } catch (error) {
       console.error("Error creating company:", error);
@@ -165,11 +273,20 @@ export async function registerRoutes(
 
   app.patch("/api/companies/:id", async (req, res) => {
     try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const parsed = insertCompanySchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      const company = await storage.updateCompany(req.params.id, parsed.data);
+      const data = { ...parsed.data };
+      if (currentUser.role !== "admin") {
+        delete (data as any).assignedTo;
+      }
+      const company = await storage.updateCompany(req.params.id, data);
       if (!company) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -182,6 +299,11 @@ export async function registerRoutes(
 
   app.delete("/api/companies/:id", async (req, res) => {
     try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const deleted = await storage.deleteCompany(req.params.id);
       if (!deleted) {
         return res.status(404).json({ error: "Company not found" });
@@ -195,7 +317,13 @@ export async function registerRoutes(
 
   app.get("/api/contacts", async (req, res) => {
     try {
-      const contacts = await storage.getContacts();
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      let contacts = await storage.getContacts();
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      if (visibleIds !== null) {
+        contacts = contacts.filter(c => visibleIds.includes(c.companyId));
+      }
       res.json(contacts);
     } catch (error) {
       console.error("Error fetching contacts:", error);
@@ -205,6 +333,11 @@ export async function registerRoutes(
 
   app.get("/api/companies/:companyId/contacts", async (req, res) => {
     try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const contacts = await storage.getContactsByCompany(req.params.companyId);
       res.json(contacts);
     } catch (error) {
@@ -215,6 +348,11 @@ export async function registerRoutes(
 
   app.post("/api/companies/:companyId/contacts", async (req, res) => {
     try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const contactData = {
         ...req.body,
         companyId: req.params.companyId,
@@ -233,9 +371,14 @@ export async function registerRoutes(
 
   app.patch("/api/contacts/:id", async (req, res) => {
     try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const existing = await storage.getContact(req.params.id);
       if (!existing) {
         return res.status(404).json({ error: "Contact not found" });
+      }
+      if (!(await canAccessCompany(currentUser, existing.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
       }
       const contactData = {
         ...req.body,
@@ -255,6 +398,15 @@ export async function registerRoutes(
 
   app.delete("/api/contacts/:id", async (req, res) => {
     try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getContact(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: "Contact not found" });
+      }
+      if (!(await canAccessCompany(currentUser, existing.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const deleted = await storage.deleteContact(req.params.id);
       if (!deleted) {
         return res.status(404).json({ error: "Contact not found" });
@@ -268,7 +420,13 @@ export async function registerRoutes(
 
   app.get("/api/rfps", async (req, res) => {
     try {
-      const rfps = await storage.getRfps();
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      let rfps = await storage.getRfps();
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      if (visibleIds !== null) {
+        rfps = rfps.filter(r => visibleIds.includes(r.companyId));
+      }
       res.json(rfps);
     } catch (error) {
       console.error("Error fetching RFPs:", error);
@@ -398,7 +556,13 @@ export async function registerRoutes(
 
   app.get("/api/research-tasks", async (req, res) => {
     try {
-      const allRfps = await storage.getRfps();
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      let allRfps = await storage.getRfps();
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      if (visibleIds !== null) {
+        allRfps = allRfps.filter(r => visibleIds.includes(r.companyId));
+      }
       const companyFilter = req.query.companyId as string | undefined;
       const tasks: any[] = [];
 
@@ -706,7 +870,13 @@ export async function registerRoutes(
 
   app.get("/api/awards", async (req, res) => {
     try {
-      const allAwards = await storage.getAwards();
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      let allAwards = await storage.getAwards();
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      if (visibleIds !== null) {
+        allAwards = allAwards.filter(a => visibleIds.includes(a.companyId));
+      }
       res.json(allAwards);
     } catch (error) {
       console.error("Error fetching awards:", error);
