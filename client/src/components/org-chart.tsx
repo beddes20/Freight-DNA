@@ -62,6 +62,18 @@ function ContactCard({ contact, onEdit, level }: ContactCardProps) {
     ? `$${Number(contact.freightSpend).toLocaleString()}`
     : null;
 
+  const baseConfig: Record<string, { label: string; className: string }> = {
+    "1st": { label: "1st Base", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400" },
+    "2nd": { label: "2nd Base", className: "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-400" },
+    "3rd": { label: "3rd Base", className: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400" },
+    "homerun": { label: "Home Run", className: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400" },
+  };
+
+  const baseKey = contact.relationshipBase
+    ? Object.keys(baseConfig).find((k) => contact.relationshipBase?.toLowerCase().startsWith(k))
+    : null;
+  const base = baseKey ? baseConfig[baseKey] : null;
+
   return (
     <Card className="hover-elevate" data-testid={`card-org-contact-${contact.id}`}>
       <CardContent className="p-4">
@@ -74,9 +86,16 @@ function ContactCard({ contact, onEdit, level }: ContactCardProps) {
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <h4 className="font-medium truncate" data-testid={`text-contact-name-${contact.id}`}>
-                  {contact.name}
-                </h4>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="font-medium truncate" data-testid={`text-contact-name-${contact.id}`}>
+                    {contact.name}
+                  </h4>
+                  {base && (
+                    <Badge className={`text-[10px] px-1.5 py-0 shrink-0 ${base.className}`} data-testid={`badge-base-${contact.id}`}>
+                      {base.label}
+                    </Badge>
+                  )}
+                </div>
                 {contact.title && (
                   <p className="text-sm text-muted-foreground truncate">
                     {contact.title}
