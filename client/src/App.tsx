@@ -16,6 +16,7 @@ import Customers from "@/pages/customers";
 import LoginPage from "@/pages/login";
 import AdminUsers from "@/pages/admin-users";
 import RepCustomers from "@/pages/rep-customers";
+import Financials from "@/pages/financials";
 
 function Router() {
   return (
@@ -27,6 +28,7 @@ function Router() {
       <Route path="/research-tasks" component={ResearchTasks} />
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/reps/:userId" component={RepCustomers} />
+      <Route path="/financials" component={Financials} />
       <Route component={NotFound} />
     </Switch>
   );

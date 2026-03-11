@@ -1100,5 +1100,89 @@ export async function registerRoutes(
     }
   });
 
+  // ── Financial Data ─────────────────────────────────────────────────────────
+
+  app.get("/api/financials", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || (user.role !== "admin" && user.role !== "national_account_manager")) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const upload = await storage.getLatestFinancialUpload();
+      if (!upload) return res.json(null);
+
+      let rows = (upload.rows as any[]) || [];
+
+      if (user.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
+        const teamNames = teamUsers.map(u => u.name.toLowerCase());
+        rows = rows.filter((r: any) => {
+          const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
+          return teamNames.some(n => op.includes(n) || n.includes(op));
+        });
+      }
+
+      res.json({ ...upload, rows });
+    } catch (error) {
+      console.error("Error fetching financials:", error);
+      res.status(500).json({ error: "Failed to fetch financials" });
+    }
+  });
+
+  app.get("/api/financials/uploads", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const uploads = await storage.getFinancialUploads();
+      res.json(uploads.map(u => ({ id: u.id, fileName: u.fileName, uploadedAt: u.uploadedAt, rowCount: u.rowCount })));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch uploads" });
+    }
+  });
+
+  app.post("/api/financials/upload", requireAuth, upload.single("file"), async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      const upload = await storage.createFinancialUpload({
+        fileName: req.file.originalname,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: user.id,
+        rowCount: rows.length,
+        rows,
+      });
+
+      res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
+    } catch (error) {
+      console.error("Error uploading financials:", error);
+      res.status(500).json({ error: "Failed to upload financials" });
+    }
+  });
+
+  app.delete("/api/financials/uploads/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await storage.deleteFinancialUpload(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete upload" });
+    }
+  });
+
   return httpServer;
 }

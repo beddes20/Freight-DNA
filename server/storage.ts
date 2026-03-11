@@ -7,6 +7,7 @@ import {
   contacts,
   rfps,
   awards,
+  financialUploads,
   type User,
   type InsertUser,
   type Company,
@@ -17,6 +18,8 @@ import {
   type InsertRfp,
   type Award,
   type InsertAward,
+  type FinancialUpload,
+  type InsertFinancialUpload,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -54,6 +57,11 @@ export interface IStorage {
   createAward(award: InsertAward): Promise<Award>;
   updateAward(id: string, award: InsertAward): Promise<Award | undefined>;
   deleteAward(id: string): Promise<boolean>;
+
+  getFinancialUploads(): Promise<FinancialUpload[]>;
+  getLatestFinancialUpload(): Promise<FinancialUpload | undefined>;
+  createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload>;
+  deleteFinancialUpload(id: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -218,6 +226,26 @@ export class DatabaseStorage implements IStorage {
 
   async deleteAward(id: string): Promise<boolean> {
     const result = await db.delete(awards).where(eq(awards.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getFinancialUploads(): Promise<FinancialUpload[]> {
+    return db.select().from(financialUploads);
+  }
+
+  async getLatestFinancialUpload(): Promise<FinancialUpload | undefined> {
+    const all = await db.select().from(financialUploads);
+    if (all.length === 0) return undefined;
+    return all.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))[0];
+  }
+
+  async createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload> {
+    const [created] = await db.insert(financialUploads).values(upload).returning();
+    return created;
+  }
+
+  async deleteFinancialUpload(id: string): Promise<boolean> {
+    const result = await db.delete(financialUploads).where(eq(financialUploads.id, id)).returning();
     return result.length > 0;
   }
 }

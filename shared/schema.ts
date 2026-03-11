@@ -103,3 +103,19 @@ export const insertUserSchema = createInsertSchema(users).omit({
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+export const financialUploads = pgTable("financial_uploads", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  fileName: text("file_name").notNull(),
+  uploadedAt: text("uploaded_at").notNull(),
+  uploadedBy: varchar("uploaded_by").notNull(),
+  rowCount: integer("row_count").notNull().default(0),
+  rows: jsonb("rows").notNull().default([]),
+});
+
+export const insertFinancialUploadSchema = createInsertSchema(financialUploads).omit({
+  id: true,
+});
+
+export type InsertFinancialUpload = z.infer<typeof insertFinancialUploadSchema>;
+export type FinancialUpload = typeof financialUploads.$inferSelect;

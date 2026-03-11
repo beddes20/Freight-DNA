@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -94,6 +94,14 @@ export function AppSidebar() {
                     <Link href="/admin/users" data-testid="link-admin-users">
                       <Users className="h-4 w-4" />
                       <span>{user?.role === "admin" ? "User Management" : "My Team"}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location === "/financials"}>
+                    <Link href="/financials" data-testid="link-financials">
+                      <BarChart3 className="h-4 w-4" />
+                      <span>Numbers & Historical Data</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
