@@ -35,6 +35,8 @@ import {
   UserPlus,
   Loader2,
   Paperclip,
+  ArrowUpDown,
+  ChevronsUpDown,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -282,6 +284,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
   const [researchDialogOpen, setResearchDialogOpen] = useState(false);
   const [selectedLane, setSelectedLane] = useState<HighVolumeLane | null>(null);
   const [selectedLaneIndex, setSelectedLaneIndex] = useState(0);
+  const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "volume", dir: "desc" });
 
   const markResearchedMutation = useMutation({
     mutationFn: async ({ laneIdx }: { laneIdx: number }) => {
@@ -363,79 +366,128 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
             </p>
           </CardHeader>
           <CardContent className="pt-0">
-            <div className="overflow-x-auto rounded-md border">
-              <table className="w-full text-sm" data-testid="table-high-volume-lanes">
-                <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Origin</th>
-                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Destination</th>
-                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Volume</th>
-                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Equipment</th>
-                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Status</th>
-                    <th className="px-3 py-2 text-right font-medium text-muted-foreground whitespace-nowrap">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {highVolumeLanes.map((lane, i) => (
-                    <tr
-                      key={i}
-                      className={`border-b last:border-0 transition-colors ${
-                        lane.status && lane.status !== "open"
-                          ? "bg-green-50/50 dark:bg-green-950/10"
-                          : "hover:bg-muted/30"
-                      }`}
-                      data-testid={`high-volume-lane-${i}`}
-                    >
-                      <td className="px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <TruckIcon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                          <span className="font-medium">{lane.origin || lane.originState || "—"}</span>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className="font-medium">{lane.destination || lane.destinationState || "—"}</span>
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        {Math.round(lane.volume).toLocaleString()} / yr
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
-                        {lane.equipment || "—"}
-                      </td>
-                      <td className="px-3 py-2">
-                        {getLaneStatusBadge(lane)}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        {(!lane.status || lane.status === "open") ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-900/30"
-                            onClick={() => handleAssign(lane, i)}
-                            data-testid={`button-assign-lane-${i}`}
-                          >
-                            <UserPlus className="h-4 w-4 mr-1" />
-                            Assign Lane to Planner
-                          </Button>
-                        ) : lane.status === "contact_added" ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-900/30"
-                            onClick={() => markResearchedMutation.mutate({ laneIdx: i })}
-                            disabled={markResearchedMutation.isPending}
-                            data-testid={`button-mark-researched-${i}`}
-                          >
-                            Mark Complete
-                          </Button>
-                        ) : (
-                          <span className="text-xs text-green-600 dark:text-green-400">Done</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {(() => {
+              const fmtLoc = (city: string, state: string) => {
+                if (!city && !state) return "—";
+                if (!city) return state;
+                if (!state) return city;
+                if (city.toUpperCase().includes(state.toUpperCase())) return city;
+                return `${city}, ${state}`;
+              };
+
+              const handleLaneSort = (col: string) => {
+                setLaneSort((prev) =>
+                  prev.col === col
+                    ? { col, dir: prev.dir === "asc" ? "desc" : "asc" }
+                    : { col, dir: col === "volume" ? "desc" : "asc" }
+                );
+              };
+
+              const SortIcon = ({ col }: { col: string }) => (
+                laneSort.col === col
+                  ? <ArrowUpDown className={`h-3 w-3 ml-1 inline ${laneSort.dir === "asc" ? "rotate-180" : ""}`} />
+                  : <ChevronsUpDown className="h-3 w-3 ml-1 inline opacity-40" />
+              );
+
+              const sortedLanes = [...highVolumeLanes].map((lane, origIdx) => ({ lane, origIdx })).sort((a, b) => {
+                const dir = laneSort.dir === "asc" ? 1 : -1;
+                switch (laneSort.col) {
+                  case "origin": return dir * fmtLoc(a.lane.origin, a.lane.originState).localeCompare(fmtLoc(b.lane.origin, b.lane.originState));
+                  case "destination": return dir * fmtLoc(a.lane.destination, a.lane.destinationState).localeCompare(fmtLoc(b.lane.destination, b.lane.destinationState));
+                  case "volume": return dir * (a.lane.volume - b.lane.volume);
+                  case "equipment": return dir * (a.lane.equipment || "").localeCompare(b.lane.equipment || "");
+                  case "status": return dir * (a.lane.status || "open").localeCompare(b.lane.status || "open");
+                  default: return 0;
+                }
+              });
+
+              const thClass = "px-3 py-2 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap";
+
+              return (
+                <div className="overflow-x-auto rounded-md border">
+                  <table className="w-full text-sm" data-testid="table-high-volume-lanes">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className={thClass} onClick={() => handleLaneSort("origin")}>
+                          Origin <SortIcon col="origin" />
+                        </th>
+                        <th className={thClass} onClick={() => handleLaneSort("destination")}>
+                          Destination <SortIcon col="destination" />
+                        </th>
+                        <th className={thClass} onClick={() => handleLaneSort("volume")}>
+                          Volume <SortIcon col="volume" />
+                        </th>
+                        <th className={thClass} onClick={() => handleLaneSort("equipment")}>
+                          Equipment <SortIcon col="equipment" />
+                        </th>
+                        <th className={thClass} onClick={() => handleLaneSort("status")}>
+                          Status <SortIcon col="status" />
+                        </th>
+                        <th className="px-3 py-2 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">
+                          Action
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedLanes.map(({ lane, origIdx }) => (
+                        <tr
+                          key={origIdx}
+                          className={`border-b last:border-0 transition-colors ${
+                            lane.status && lane.status !== "open"
+                              ? "bg-green-50/50 dark:bg-green-950/10"
+                              : "hover:bg-muted/30"
+                          }`}
+                          data-testid={`high-volume-lane-${origIdx}`}
+                        >
+                          <td className="px-3 py-2 font-medium">
+                            {fmtLoc(lane.origin, lane.originState)}
+                          </td>
+                          <td className="px-3 py-2 font-medium">
+                            {fmtLoc(lane.destination, lane.destinationState)}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                            {Math.round(lane.volume).toLocaleString()} / yr
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                            {lane.equipment || "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            {getLaneStatusBadge(lane)}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {(!lane.status || lane.status === "open") ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-900/30"
+                                onClick={() => handleAssign(lane, origIdx)}
+                                data-testid={`button-assign-lane-${origIdx}`}
+                              >
+                                <UserPlus className="h-4 w-4 mr-1" />
+                                Assign Lane to Planner
+                              </Button>
+                            ) : lane.status === "contact_added" ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-900/30"
+                                onClick={() => markResearchedMutation.mutate({ laneIdx: origIdx })}
+                                disabled={markResearchedMutation.isPending}
+                                data-testid={`button-mark-researched-${origIdx}`}
+                              >
+                                Mark Complete
+                              </Button>
+                            ) : (
+                              <span className="text-xs text-green-600 dark:text-green-400">Done</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </CardContent>
         </Card>
       )}
