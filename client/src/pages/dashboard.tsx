@@ -87,8 +87,9 @@ export default function Dashboard() {
     const initials = user.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
     const manager = managerNameFor(user.managerId);
     return (
-      <div
-        className="flex items-center justify-between p-3 rounded-lg hover:bg-muted/50 transition-colors"
+      <Link
+        href={`/reps/${user.id}`}
+        className="flex items-center justify-between p-3 rounded-lg hover:bg-muted/50 hover:border-border border border-transparent transition-all group cursor-pointer"
         data-testid={`row-user-${user.id}`}
       >
         <div className="flex items-center gap-3 min-w-0">
@@ -96,18 +97,21 @@ export default function Dashboard() {
             {initials}
           </div>
           <div className="min-w-0">
-            <p className="font-medium text-sm truncate" data-testid={`text-user-name-${user.id}`}>{user.name}</p>
+            <p className="font-medium text-sm truncate group-hover:text-primary transition-colors" data-testid={`text-user-name-${user.id}`}>{user.name}</p>
             <p className="text-xs text-muted-foreground truncate">{user.username}</p>
             {manager && (
               <p className="text-xs text-muted-foreground/70 truncate">Reports to: {manager}</p>
             )}
           </div>
         </div>
-        <div className="shrink-0 ml-2 text-right">
-          <p className="text-sm font-semibold text-blue-600 dark:text-blue-400">{count}</p>
-          <p className="text-xs text-muted-foreground">{count === 1 ? "account" : "accounts"}</p>
+        <div className="flex items-center gap-2 shrink-0 ml-2">
+          <div className="text-right">
+            <p className="text-sm font-semibold text-blue-600 dark:text-blue-400">{count}</p>
+            <p className="text-xs text-muted-foreground">{count === 1 ? "account" : "accounts"}</p>
+          </div>
+          <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
         </div>
-      </div>
+      </Link>
     );
   };
 
