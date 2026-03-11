@@ -441,6 +441,32 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/companies/:id/reassign", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Only admins and NAMs can reassign accounts" });
+      }
+      const { assignedTo } = req.body;
+      if (!assignedTo) return res.status(400).json({ error: "assignedTo is required" });
+      if (currentUser.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id);
+        if (!teamIds.includes(assignedTo)) {
+          return res.status(403).json({ error: "Can only assign to team members" });
+        }
+      }
+      const company = await storage.updateCompany(req.params.id, { assignedTo });
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to reassign company" });
+    }
+  });
+
   app.delete("/api/companies/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);

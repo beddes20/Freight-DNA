@@ -10,6 +10,9 @@ export const companies = pgTable("companies", {
   website: text("website"),
   notes: text("notes"),
   assignedTo: varchar("assigned_to"),
+  portalUrl: text("portal_url"),
+  portalUsername: text("portal_username"),
+  portalPassword: text("portal_password"),
 });
 
 export const insertCompanySchema = createInsertSchema(companies).omit({

@@ -59,6 +59,11 @@ import {
   Repeat2,
   ArrowUpDown,
   ChevronsUpDown,
+  Globe,
+  KeyRound,
+  Eye,
+  EyeOff,
+  UserCheck,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -67,8 +72,9 @@ import { ResearchLaneDialog } from "@/components/research-lane-dialog";
 import { OrgChart } from "@/components/org-chart";
 import { ContactList } from "@/components/contact-list";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Company, Contact } from "@shared/schema";
+import type { Company, Contact, User } from "@shared/schema";
 
 interface ResearchTask {
   rfpId: string;
@@ -148,6 +154,7 @@ export default function CompanyDetail() {
   const [, navigate] = useLocation();
   const searchString = useSearch();
   const { toast } = useToast();
+  const { user: currentUser } = useAuth();
   const companyId = params.id!;
 
   const [editCompanyOpen, setEditCompanyOpen] = useState(false);
@@ -160,6 +167,13 @@ export default function CompanyDetail() {
   const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "volume", dir: "desc" });
   const [findPlannerFacility, setFindPlannerFacility] = useState<Facility | null>(null);
   const [assignExistingContactId, setAssignExistingContactId] = useState<string>("");
+  const [portalEdit, setPortalEdit] = useState(false);
+  const [portalUrl, setPortalUrl] = useState("");
+  const [portalUsername, setPortalUsername] = useState("");
+  const [portalPassword, setPortalPassword] = useState("");
+  const [showPortalPassword, setShowPortalPassword] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTo, setTransferTo] = useState("");
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -197,6 +211,50 @@ export default function CompanyDetail() {
   const { data: lanePatterns } = useQuery<LanePatterns>({
     queryKey: ["/api/companies", companyId, "lane-patterns"],
   });
+
+  const canReassign = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
+  const { data: assignableUsers = [] } = useQuery<Omit<User, "password">[]>({
+    queryKey: ["/api/users"],
+    enabled: canReassign,
+  });
+
+  const savePortalMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/companies/${companyId}`, {
+        name: company!.name,
+        portalUrl: portalUrl || null,
+        portalUsername: portalUsername || null,
+        portalPassword: portalPassword || null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
+      setPortalEdit(false);
+      toast({ title: "Portal info saved", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
+    },
+    onError: () => toast({ title: "Failed to save portal info", variant: "destructive" }),
+  });
+
+  const reassignMutation = useMutation({
+    mutationFn: async (assignedTo: string) => {
+      await apiRequest("PATCH", `/api/companies/${companyId}/reassign`, { assignedTo });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      setTransferOpen(false);
+      setTransferTo("");
+      toast({ title: "Account transferred successfully", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
+    },
+    onError: (e: any) => toast({ title: "Failed to transfer account", description: e.message, variant: "destructive" }),
+  });
+
+  const openPortalEdit = () => {
+    setPortalUrl(company?.portalUrl || "");
+    setPortalUsername(company?.portalUsername || "");
+    setPortalPassword(company?.portalPassword || "");
+    setPortalEdit(true);
+  };
 
   const openTasks = researchTasks?.filter((t) => t.status === "open") || [];
 
@@ -433,6 +491,12 @@ export default function CompanyDetail() {
             <Trophy className="h-4 w-4 mr-2" />
             RFP & Awards
           </Button>
+          {canReassign && (
+            <Button variant="outline" onClick={() => { setTransferTo(company.assignedTo || ""); setTransferOpen(true); }} data-testid="button-transfer-account">
+              <UserCheck className="h-4 w-4 mr-2" />
+              Transfer Account
+            </Button>
+          )}
           <Button variant="outline" onClick={() => setEditCompanyOpen(true)} data-testid="button-edit-company">
             <Pencil className="h-4 w-4 mr-2" />
             Edit
@@ -443,6 +507,140 @@ export default function CompanyDetail() {
           </Button>
         </div>
       </div>
+
+      {/* Customer Portal Information */}
+      <Card data-testid="card-portal-info">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Globe className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              Customer Portal Information
+            </CardTitle>
+            {!portalEdit && (
+              <Button variant="ghost" size="sm" onClick={openPortalEdit} data-testid="button-edit-portal">
+                <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {portalEdit ? (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Globe className="h-3 w-3" /> Portal URL</label>
+                <input
+                  className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                  placeholder="https://portal.example.com"
+                  value={portalUrl}
+                  onChange={e => setPortalUrl(e.target.value)}
+                  data-testid="input-portal-url"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Users className="h-3 w-3" /> Username</label>
+                <input
+                  className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                  placeholder="username"
+                  value={portalUsername}
+                  onChange={e => setPortalUsername(e.target.value)}
+                  data-testid="input-portal-username"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><KeyRound className="h-3 w-3" /> Password</label>
+                <div className="relative">
+                  <input
+                    className="w-full border rounded-md px-3 py-1.5 pr-9 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                    type={showPortalPassword ? "text" : "password"}
+                    placeholder="••••••••"
+                    value={portalPassword}
+                    onChange={e => setPortalPassword(e.target.value)}
+                    data-testid="input-portal-password"
+                  />
+                  <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setShowPortalPassword(v => !v)} data-testid="button-toggle-password">
+                    {showPortalPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button size="sm" onClick={() => savePortalMutation.mutate()} disabled={savePortalMutation.isPending} data-testid="button-save-portal">
+                  {savePortalMutation.isPending && <span className="mr-1 h-3 w-3 animate-spin rounded-full border-2 border-background border-t-transparent inline-block" />}
+                  Save
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setPortalEdit(false)} data-testid="button-cancel-portal">Cancel</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Globe className="h-3 w-3" /> Portal URL</p>
+                {company.portalUrl ? (
+                  <a href={company.portalUrl.startsWith("http") ? company.portalUrl : `https://${company.portalUrl}`} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1" data-testid="link-portal-url">
+                    {company.portalUrl} <ExternalLink className="h-3 w-3" />
+                  </a>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">Not set</p>
+                )}
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Users className="h-3 w-3" /> Username</p>
+                <p className="text-sm font-mono" data-testid="text-portal-username">{company.portalUsername || <span className="text-muted-foreground italic font-sans">Not set</span>}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><KeyRound className="h-3 w-3" /> Password</p>
+                {company.portalPassword ? (
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-mono" data-testid="text-portal-password">{showPortalPassword ? company.portalPassword : "••••••••"}</p>
+                    <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setShowPortalPassword(v => !v)} data-testid="button-reveal-password">
+                      {showPortalPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">Not set</p>
+                )}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Transfer Account Dialog */}
+      <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserCheck className="h-5 w-5 text-blue-600" />
+              Transfer Account
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">Select who should own <span className="font-medium text-foreground">{company.name}</span>:</p>
+            <Select value={transferTo} onValueChange={setTransferTo}>
+              <SelectTrigger data-testid="select-transfer-to">
+                <SelectValue placeholder="Select a user..." />
+              </SelectTrigger>
+              <SelectContent>
+                {assignableUsers.map(u => (
+                  <SelectItem key={u.id} value={u.id} data-testid={`option-transfer-${u.id}`}>
+                    {u.name} ({u.role === "admin" ? "Admin" : u.role === "national_account_manager" ? "NAM" : "AM"})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setTransferOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => transferTo && reassignMutation.mutate(transferTo)}
+              disabled={!transferTo || reassignMutation.isPending}
+              data-testid="button-confirm-transfer"
+            >
+              {reassignMutation.isPending && <span className="mr-2 h-3 w-3 animate-spin rounded-full border-2 border-background border-t-transparent inline-block" />}
+              Transfer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {company.notes && (
         <Card>

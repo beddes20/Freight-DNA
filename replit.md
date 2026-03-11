@@ -55,6 +55,7 @@ shared/
 ### Companies
 - id, name, industry, website, notes
 - assignedTo (FK to users - which account manager owns this company)
+- portalUrl, portalUsername, portalPassword (customer portal login credentials)
 
 ### Contacts
 - id, companyId (FK), name, title, email, phone
@@ -103,8 +104,10 @@ shared/
 13. **Export to Excel**: Company detail page exports org chart + contacts + high-volume lanes to .xlsx
 14. **Facility Coverage Gap Analysis**: Company detail page shows all unique facilities (origins/destinations) from RFP lanes, cross-referenced against existing contacts' lanes/regions; gaps (uncovered facilities) are highlighted in red with "Find Planner" button; covered facilities shown in green with assigned contact name
 15. **Lane Pattern Analysis**: Company detail page with tabbed analysis: Top Corridors (highest-volume origin→destination pairs, with Multi-RFP badges), Shipping/Receiving Hubs (facilities appearing as both origins and destinations with inbound/outbound breakdown), State Corridors (state-to-state volume with visual bar chart)
-16. **User Management**: Admin-only page for CRUD operations on users with role assignment and manager hierarchy
+16. **User Management**: Admin + NAM page for CRUD operations on users; admins see all users/all roles; NAMs see/create/edit/delete only their Account Managers (role and manager fields hidden for NAM-created users); sidebar shows "My Team" for NAMs
 17. **Authentication**: Email/password login with session persistence; login/register page with gradient branding
+18. **Account Transfer**: Company detail page has "Transfer Account" button (visible to admins and NAMs); opens dialog to reassign company to another user; admins can assign to anyone, NAMs can only assign within their team
+19. **Customer Portal Information**: Company detail page shows a portal info card (URL, username, password) near the top action buttons; inline editable with password reveal toggle; stored in DB
 
 ## UI Components
 - `client/src/components/confetti.tsx` - Confetti celebration animation (useConfetti hook)
