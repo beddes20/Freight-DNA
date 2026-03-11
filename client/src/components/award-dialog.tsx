@@ -1,9 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
-import { Loader2 } from "lucide-react";
+import { Loader2, Paperclip, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +52,8 @@ interface AwardDialogProps {
 export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
   const { toast } = useToast();
   const isEditing = !!award;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] = useState<{ name: string; data: string } | null>(null);
 
   const { data: companies } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -79,6 +81,7 @@ export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
         lanes: award.lanes?.join(", ") || "",
         notes: award.notes || "",
       });
+      setSelectedFile(award.fileName ? { name: award.fileName, data: award.fileData || "" } : null);
     } else {
       form.reset({
         companyId: "",
@@ -88,8 +91,26 @@ export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
         lanes: "",
         notes: "",
       });
+      setSelectedFile(null);
     }
   }, [award, form]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const MAX_SIZE = 10 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      toast({ title: "File too large", description: "Please select a file under 10MB.", variant: "destructive" });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSelectedFile({ name: file.name, data: reader.result as string });
+    };
+    reader.readAsDataURL(file);
+  };
 
   const createMutation = useMutation({
     mutationFn: async (data: InsertAward) => {
@@ -101,6 +122,7 @@ export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
       toast({ title: "Award created successfully" });
       onOpenChange(false);
       form.reset();
+      setSelectedFile(null);
     },
     onError: (error: Error) => {
       toast({ title: "Error creating award", description: error.message, variant: "destructive" });
@@ -134,6 +156,8 @@ export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
       awardDate: data.awardDate || null,
       lanes: lanesArray,
       notes: data.notes || null,
+      fileName: selectedFile?.name || null,
+      fileData: selectedFile?.data || null,
     };
 
     if (isEditing) {
@@ -247,6 +271,45 @@ export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
                 </FormItem>
               )}
             />
+
+            <div className="space-y-2">
+              <FormLabel>Attachment (optional)</FormLabel>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg"
+                onChange={handleFileChange}
+                data-testid="input-award-file"
+              />
+              {selectedFile ? (
+                <div className="flex items-center gap-2 p-2 rounded-md border bg-muted/40">
+                  <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="text-sm truncate flex-1" data-testid="text-award-filename">{selectedFile.name}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    onClick={() => { setSelectedFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+                    data-testid="button-remove-file"
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => fileInputRef.current?.click()}
+                  data-testid="button-browse-file"
+                >
+                  <Paperclip className="h-4 w-4 mr-2" />
+                  Browse Files
+                </Button>
+              )}
+            </div>
 
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-award">

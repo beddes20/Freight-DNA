@@ -74,6 +74,8 @@ export const awards = pgTable("awards", {
   awardDate: text("award_date"),
   lanes: text("lanes").array(),
   notes: text("notes"),
+  fileName: text("file_name"),
+  fileData: text("file_data"),
 });
 
 export const insertAwardSchema = createInsertSchema(awards).omit({

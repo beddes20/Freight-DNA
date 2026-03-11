@@ -34,6 +34,7 @@ import {
   AlertTriangle,
   UserPlus,
   Loader2,
+  Paperclip,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -216,6 +217,20 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
           )}
           {award.notes && (
             <p className="text-muted-foreground line-clamp-2">{award.notes}</p>
+          )}
+          {award.fileName && award.fileData && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Paperclip className="h-3.5 w-3.5 shrink-0" />
+              <a
+                href={award.fileData}
+                download={award.fileName}
+                className="text-blue-600 dark:text-blue-400 hover:underline truncate text-sm"
+                onClick={(e) => e.stopPropagation()}
+                data-testid={`link-award-file-${award.id}`}
+              >
+                {award.fileName}
+              </a>
+            </div>
           )}
         </div>
 
