@@ -17,6 +17,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   ArrowLeft,
   Building2,
   Users,
@@ -144,6 +158,8 @@ export default function CompanyDetail() {
   const [researchDialogOpen, setResearchDialogOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<ResearchTask | null>(null);
   const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "volume", dir: "desc" });
+  const [findPlannerFacility, setFindPlannerFacility] = useState<Facility | null>(null);
+  const [assignExistingContactId, setAssignExistingContactId] = useState<string>("");
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -204,6 +220,32 @@ export default function CompanyDetail() {
     setSelectedTask(task);
     setResearchDialogOpen(true);
   };
+
+  const assignContactToFacilityMutation = useMutation({
+    mutationFn: async ({ contactId, laneToAdd }: { contactId: string; laneToAdd: string }) => {
+      const contact = contacts?.find((c) => c.id === contactId);
+      if (!contact) throw new Error("Contact not found");
+      const existingLanes: string[] = contact.lanes || [];
+      if (!existingLanes.includes(laneToAdd)) {
+        await apiRequest("PATCH", `/api/contacts/${contactId}`, {
+          lanes: [...existingLanes, laneToAdd],
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
+      setFindPlannerFacility(null);
+      setAssignExistingContactId("");
+      toast({
+        title: "Contact assigned to facility",
+        className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error assigning contact", description: error.message, variant: "destructive" });
+    },
+  });
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
@@ -699,12 +741,8 @@ export default function CompanyDetail() {
                         variant="outline"
                         className="border-red-300 text-red-700 hover:bg-red-100 dark:border-red-700 dark:text-red-400"
                         onClick={() => {
-                          setContactDefaults({
-                            lane: f.fullName,
-                            region: f.state || undefined,
-                          });
-                          setEditingContact(undefined);
-                          setContactDialogOpen(true);
+                          setAssignExistingContactId("");
+                          setFindPlannerFacility(f);
                         }}
                         data-testid={`button-find-planner-${i}`}
                       >
@@ -955,6 +993,92 @@ export default function CompanyDetail() {
           companyId={companyId}
         />
       )}
+
+      <Dialog
+        open={!!findPlannerFacility}
+        onOpenChange={(open) => {
+          if (!open) {
+            setFindPlannerFacility(null);
+            setAssignExistingContactId("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-red-500" />
+              {findPlannerFacility?.fullName}
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground pt-1">
+              Assign an existing contact or create a new one for this facility.
+            </p>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Select existing contact</p>
+              <Select
+                value={assignExistingContactId}
+                onValueChange={setAssignExistingContactId}
+              >
+                <SelectTrigger data-testid="select-existing-contact">
+                  <SelectValue placeholder="Choose a contact…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(contacts || []).map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}{c.title ? ` — ${c.title}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                className="w-full"
+                disabled={!assignExistingContactId || assignContactToFacilityMutation.isPending}
+                onClick={() => {
+                  if (findPlannerFacility && assignExistingContactId) {
+                    assignContactToFacilityMutation.mutate({
+                      contactId: assignExistingContactId,
+                      laneToAdd: findPlannerFacility.fullName,
+                    });
+                  }
+                }}
+                data-testid="button-assign-existing-contact"
+              >
+                {assignContactToFacilityMutation.isPending ? "Assigning…" : "Assign to This Facility"}
+              </Button>
+            </div>
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-background px-2 text-muted-foreground">or</span>
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                setFindPlannerFacility(null);
+                setAssignExistingContactId("");
+                setContactDefaults({
+                  lane: findPlannerFacility?.fullName,
+                  region: findPlannerFacility?.state || undefined,
+                });
+                setEditingContact(undefined);
+                setContactDialogOpen(true);
+              }}
+              data-testid="button-create-new-contact-for-facility"
+            >
+              <UserPlus className="h-4 w-4 mr-2" />
+              Create New Contact
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
