@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, TruckIcon, Users, LogOut } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -15,6 +15,7 @@ import {
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
+import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const menuItems = [
   {
@@ -52,14 +53,12 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="p-4 border-b border-sidebar-border">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-green-600 text-white shadow-sm">
-            <TruckIcon className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-sm font-bold tracking-tight">Growth Chart VT</h1>
-            <p className="text-xs text-muted-foreground">Transportation Sales</p>
-          </div>
+        <div className="flex items-center justify-center py-1">
+          <img
+            src={vtLogoWhite}
+            alt="Value Truck"
+            className="h-10 w-auto object-contain"
+          />
         </div>
       </SidebarHeader>
       <SidebarContent>
@@ -68,13 +67,13 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {menuItems.map((item) => {
-                const isActive = location === item.url || 
+                const isActive = location === item.url ||
                   (item.url !== "/" && location.startsWith(item.url)) ||
                   (item.url === "/customers" && location.startsWith("/companies/"));
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild isActive={isActive}>
-                      <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/\s/g, '-')}`}>
+                      <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/\s/g, "-")}`}>
                         <item.icon className="h-4 w-4" />
                         <span>{item.title}</span>
                       </Link>
@@ -108,12 +107,12 @@ export function AppSidebar() {
           <div className="flex items-center justify-between">
             <div className="min-w-0">
               <p className="text-sm font-medium truncate" data-testid="text-current-user">{user.name}</p>
-              <p className="text-xs text-muted-foreground">{ROLE_LABELS[user.role] || user.role}</p>
+              <p className="text-xs text-sidebar-foreground/60">{ROLE_LABELS[user.role] || user.role}</p>
             </div>
             <Button
               variant="ghost"
               size="icon"
-              className="shrink-0 text-muted-foreground hover:text-foreground"
+              className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
               onClick={() => logout.mutate()}
               data-testid="button-logout"
             >
@@ -122,7 +121,7 @@ export function AppSidebar() {
           </div>
         )}
         <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">Theme</span>
+          <span className="text-xs text-sidebar-foreground/60">Theme</span>
           <ThemeToggle />
         </div>
       </SidebarFooter>

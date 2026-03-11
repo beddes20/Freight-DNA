@@ -113,7 +113,7 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
-      <div className="rounded-xl bg-gradient-to-r from-blue-600 to-green-600 p-6 sm:p-8 text-white">
+      <div className="rounded-xl p-6 sm:p-8 text-white" style={{ background: "linear-gradient(135deg, #001AB3 0%, #044ad3 60%, #2868ff 100%)" }}>
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold" data-testid="text-dashboard-title">

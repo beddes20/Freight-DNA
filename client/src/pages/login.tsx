@@ -3,9 +3,11 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Truck } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import vtLogoBlack from "@assets/value-truck-logo-black.png";
+import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 export default function LoginPage() {
   const [isRegister, setIsRegister] = useState(false);
@@ -37,82 +39,100 @@ export default function LoginPage() {
   const isPending = login.isPending || register.isPending;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-green-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 p-4">
-      <Card className="w-full max-w-md" data-testid="card-login">
-        <CardHeader className="text-center space-y-2">
-          <div className="mx-auto w-14 h-14 rounded-xl bg-gradient-to-br from-blue-600 to-green-600 flex items-center justify-center mb-2">
-            <Truck className="w-8 h-8 text-white" />
-          </div>
-          <CardTitle className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-green-600 bg-clip-text text-transparent">
-            Growth Chart VT
-          </CardTitle>
-          <CardDescription>
-            {isRegister ? "Create your account" : "Sign in to your account"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {isRegister && (
+    <div className="min-h-screen flex dark:bg-[#0a1a33]" style={{ background: "linear-gradient(135deg, #001AB3 0%, #044ad3 50%, #1a6bff 100%)" }}>
+      <div className="hidden lg:flex flex-1 flex-col items-center justify-center p-12 text-white">
+        <img
+          src={vtLogoWhite}
+          alt="Value Truck"
+          className="w-72 object-contain mb-8"
+        />
+        <h2 className="text-3xl font-bold text-center">Growth Chart VT</h2>
+        <p className="text-blue-200 text-center mt-3 max-w-sm text-lg">
+          Transportation brokerage sales — org charts, RFPs, and relationship tracking in one place.
+        </p>
+      </div>
+
+      <div className="flex flex-1 items-center justify-center p-6 lg:bg-white lg:dark:bg-[#0d1f3c] lg:rounded-l-3xl">
+        <Card className="w-full max-w-md border-0 shadow-none bg-transparent lg:bg-card lg:shadow-sm lg:border" data-testid="card-login">
+          <CardHeader className="text-center space-y-4 pb-6">
+            <img
+              src={vtLogoBlack}
+              alt="Value Truck"
+              className="mx-auto h-14 object-contain dark:hidden"
+            />
+            <img
+              src={vtLogoWhite}
+              alt="Value Truck"
+              className="mx-auto h-14 object-contain hidden dark:block lg:dark:hidden"
+            />
+            <CardDescription className="text-base">
+              {isRegister ? "Create your account" : "Sign in to your account"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {isRegister && (
+                <div className="space-y-2">
+                  <Label htmlFor="name">Full Name</Label>
+                  <Input
+                    id="name"
+                    data-testid="input-name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="John Smith"
+                    required
+                  />
+                </div>
+              )}
               <div className="space-y-2">
-                <Label htmlFor="name">Full Name</Label>
+                <Label htmlFor="username">Email</Label>
                 <Input
-                  id="name"
-                  data-testid="input-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="John Smith"
+                  id="username"
+                  data-testid="input-username"
+                  type="email"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="john@example.com"
                   required
                 />
               </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="username">Email</Label>
-              <Input
-                id="username"
-                data-testid="input-username"
-                type="email"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="john@example.com"
-                required
-              />
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  data-testid="input-password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                />
+              </div>
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={isPending}
+                data-testid="button-submit-login"
+              >
+                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {isRegister ? "Create Account" : "Sign In"}
+              </Button>
+            </form>
+            <div className="mt-4 text-center text-sm">
+              <button
+                type="button"
+                className="text-primary hover:underline"
+                onClick={() => setIsRegister(!isRegister)}
+                data-testid="button-toggle-auth-mode"
+              >
+                {isRegister
+                  ? "Already have an account? Sign in"
+                  : "Need an account? Register"}
+              </button>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                data-testid="input-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-              />
-            </div>
-            <Button
-              type="submit"
-              className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
-              disabled={isPending}
-              data-testid="button-submit-login"
-            >
-              {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {isRegister ? "Create Account" : "Sign In"}
-            </Button>
-          </form>
-          <div className="mt-4 text-center text-sm">
-            <button
-              type="button"
-              className="text-blue-600 hover:underline dark:text-blue-400"
-              onClick={() => setIsRegister(!isRegister)}
-              data-testid="button-toggle-auth-mode"
-            >
-              {isRegister
-                ? "Already have an account? Sign in"
-                : "Need an account? Register"}
-            </button>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
