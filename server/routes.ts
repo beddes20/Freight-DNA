@@ -27,13 +27,49 @@ function zipToCity(value: string): string {
 function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  const rows: Record<string, any>[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+  // First, try to find the real header row by scanning first 15 rows as raw arrays
+  const rawAll: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+  if (rawAll.length === 0) {
+    return { rows: [], headers: [], highVolumeLanes: [], analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0 } };
+  }
+
+  const headerKeywords = ["origin", "dest", "volume", "load", "ship", "from", "to", "lane", "state", "city", "zip", "rate", "qty", "pickup", "delivery"];
+  let headerRowIdx = 0;
+  let bestScore = 0;
+
+  for (let i = 0; i < Math.min(15, rawAll.length); i++) {
+    const rowStr = rawAll[i].join(" ").toLowerCase();
+    const score = headerKeywords.filter(kw => rowStr.includes(kw)).length;
+    if (score > bestScore) {
+      bestScore = score;
+      headerRowIdx = i;
+    }
+  }
+
+  // Build rows from the detected header row
+  let rows: Record<string, any>[];
+  let headers: string[];
+
+  if (bestScore >= 2) {
+    // Use detected header row
+    headers = rawAll[headerRowIdx].map((h: any, i: number) => (h !== "" && h !== null) ? String(h).trim() : `col_${i}`);
+    rows = rawAll.slice(headerRowIdx + 1).map((row: any[]) => {
+      const obj: Record<string, any> = {};
+      headers.forEach((h, i) => { obj[h] = row[i] ?? ""; });
+      return obj;
+    }).filter(r => Object.values(r).some(v => v !== "" && v !== null));
+  } else {
+    // Fallback: use first row as headers (original behavior)
+    rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    headers = rows.length > 0 ? Object.keys(rows[0]) : [];
+  }
 
   if (rows.length === 0) {
     return { rows: [], headers: [], highVolumeLanes: [], analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0 } };
   }
 
-  const headers = Object.keys(rows[0]);
   const headerLower = headers.map(h => h.toLowerCase());
 
   const findCol = (keywords: string[]) => {
@@ -44,13 +80,62 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     return null;
   };
 
-  const originCol = findCol(["origin", "orig", "pickup", "ship from", "from_city", "from city", "o_city", "origin_zip", "origin zip", "o_zip", "from_zip", "from zip"]);
-  const destCol = findCol(["destination", "dest", "delivery", "ship to", "to_city", "to city", "d_city", "dest_zip", "dest zip", "destination_zip", "destination zip", "d_zip", "to_zip", "to zip"]);
-  const originStateCol = findCol(["origin_state", "origin state", "o_state", "from_state", "from state", "orig_state"]);
+  let originCol = findCol(["origin city", "orig city", "from city", "o_city", "origin_city"]);
+  if (!originCol) originCol = findCol(["origin zip", "orig zip", "from zip", "o_zip", "origin_zip", "from_zip"]);
+  if (!originCol) originCol = findCol(["origin", "orig", "pickup", "ship from", "from"]);
+
+  let destCol = findCol(["destination city", "dest city", "to city", "d_city", "destination_city"]);
+  if (!destCol) destCol = findCol(["destination zip", "dest zip", "to zip", "d_zip", "destination_zip", "to_zip"]);
+  if (!destCol) destCol = findCol(["destination", "dest", "delivery", "ship to", "to"]);
+
+  const originStateCol = findCol(["origin_state", "origin state", "o_state", "from_state", "from state", "orig state", "orig_state"]);
   const destStateCol = findCol(["destination_state", "dest_state", "dest state", "to_state", "to state", "d_state"]);
-  const volumeCol = findCol(["volume", "loads", "shipments", "qty", "quantity", "annual volume", "weekly volume"]);
-  const rateCol = findCol(["rate", "price", "cost", "target", "rpm", "rpm target"]);
-  const laneCol = findCol(["lane", "lane_id", "lane id", "lane name", "lane_name"]);
+  let volumeCol = findCol(["annual volume", "annual loads", "annual shipments", "yearly volume", "yearly loads"]);
+  if (!volumeCol) volumeCol = findCol(["volume", "loads", "shipments", "qty", "quantity"]);
+  if (!volumeCol) volumeCol = findCol(["weekly volume", "weekly loads", "weekly shipments", "wkly"]);
+  const rateCol = findCol(["rate", "price", "cost", "target", "rpm"]);
+  let laneCol = findCol(["lane_id", "lane id", "lane name", "lane_name", "lane #", "lane#", "lane"]);
+
+  // Fallback: if no volume column found by keyword, auto-detect from column content
+  let isWeeklyVolume = false;
+  if (!volumeCol) {
+    // Find the column with the most numeric values (potential volume)
+    let bestNumericCol: string | null = null;
+    let bestNumericCount = 0;
+    for (const h of headers) {
+      const numericValues = rows.map(r => parseFloat(String(r[h] || "").replace(/[^0-9.]/g, ""))).filter(v => !isNaN(v) && v > 0);
+      if (numericValues.length > bestNumericCount) {
+        bestNumericCount = numericValues.length;
+        bestNumericCol = h;
+      }
+    }
+    if (bestNumericCol && bestNumericCount > rows.length * 0.3) {
+      volumeCol = bestNumericCol;
+      // If max value is small (< 52), it's likely weekly loads
+      const maxVal = Math.max(...rows.map(r => parseFloat(String(r[bestNumericCol!] || "").replace(/[^0-9.]/g, ""))).filter(v => !isNaN(v)));
+      if (maxVal <= 52) isWeeklyVolume = true;
+    }
+  } else {
+    // Check if the detected volume column has small values suggesting weekly cadence
+    const colHeader = volumeCol.toLowerCase();
+    if (colHeader.includes("week") || colHeader.includes("wkly")) {
+      isWeeklyVolume = true;
+    }
+  }
+
+  // If no lane/origin/dest columns found, try to detect from text columns
+  if (!laneCol && !originCol && !destCol) {
+    // Find column with the most text content that looks like lane descriptions
+    for (const h of headers) {
+      const textValues = rows.map(r => String(r[h] || "")).filter(v => v.length > 3 && /[a-zA-Z]/.test(v));
+      if (textValues.length > rows.length * 0.3) {
+        if (!laneCol) {
+          laneCol = h;
+          break;
+        }
+      }
+    }
+  }
 
   const originStates = new Set<string>();
   const destStates = new Set<string>();
@@ -67,11 +152,12 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     }
 
     let rowVolume = 0;
-    if (volumeCol && row[volumeCol]) {
+    if (volumeCol && row[volumeCol] !== "" && row[volumeCol] !== null) {
       const v = parseFloat(String(row[volumeCol]).replace(/[^0-9.]/g, ""));
-      if (!isNaN(v)) {
-        totalVolume += v;
-        rowVolume = v;
+      if (!isNaN(v) && v > 0) {
+        const annualV = isWeeklyVolume ? v * 52 : v;
+        totalVolume += annualV;
+        rowVolume = annualV;
       }
     }
 
@@ -112,7 +198,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     highVolumeLanes,
     analysis: {
       laneCount: rows.length,
-      totalVolume: String(totalVolume),
+      totalVolume: String(Math.round(totalVolume)),
       originStates: Array.from(originStates).sort(),
       destinationStates: Array.from(destStates).sort(),
       volumeColumn: volumeCol,
@@ -120,6 +206,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
       originColumn: originCol || originStateCol,
       destinationColumn: destCol || destStateCol,
       highVolumeLaneCount: highVolumeLanes.length,
+      isWeeklyVolume,
     },
   };
 }
