@@ -225,12 +225,15 @@ export async function registerRoutes(
   app.get("/api/users", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
-      if (!currentUser || currentUser.role !== "admin") {
-        return res.status(403).json({ error: "Admin access required" });
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Access required" });
       }
       const allUsers = await storage.getUsers();
       const safeUsers = allUsers.map(({ password, ...u }) => u);
-      res.json(safeUsers);
+      if (currentUser.role === "admin") return res.json(safeUsers);
+      const teamIds = await storage.getTeamMemberIds(currentUser.id);
+      return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch users" });
     }
@@ -239,8 +242,9 @@ export async function registerRoutes(
   app.post("/api/users", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
-      if (!currentUser || currentUser.role !== "admin") {
-        return res.status(403).json({ error: "Admin access required" });
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Access required" });
       }
       const { username, password, name, role, managerId } = req.body;
       if (!username || !password || !name) {
@@ -251,12 +255,15 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Username already exists" });
       }
       const hashedPassword = await bcrypt.hash(password, 10);
+      // NAMs can only create account_managers, always assigned to themselves as manager
+      const assignedRole = currentUser.role === "national_account_manager" ? "account_manager" : (role || "account_manager");
+      const assignedManagerId = currentUser.role === "national_account_manager" ? currentUser.id : (managerId || null);
       const user = await storage.createUser({
         username,
         password: hashedPassword,
         name,
-        role: role || "account_manager",
-        managerId: managerId || null,
+        role: assignedRole,
+        managerId: assignedManagerId,
       });
       const { password: _, ...safeUser } = user;
       res.status(201).json(safeUser);
@@ -268,16 +275,25 @@ export async function registerRoutes(
   app.patch("/api/users/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
-      if (!currentUser || currentUser.role !== "admin") {
-        return res.status(403).json({ error: "Admin access required" });
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Access required" });
+      }
+      // NAMs can only edit users on their own team
+      if (currentUser.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id);
+        if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
+          return res.status(403).json({ error: "Cannot edit this user" });
+        }
       }
       const data: any = {};
       if (req.body.name !== undefined) data.name = req.body.name;
-      if (req.body.role !== undefined) data.role = req.body.role;
-      if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
       if (req.body.username !== undefined) data.username = req.body.username;
-      if (req.body.password) {
-        data.password = await bcrypt.hash(req.body.password, 10);
+      if (req.body.password) data.password = await bcrypt.hash(req.body.password, 10);
+      // Only admins can change roles or managers
+      if (currentUser.role === "admin") {
+        if (req.body.role !== undefined) data.role = req.body.role;
+        if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
       }
       const user = await storage.updateUser(req.params.id, data);
       if (!user) return res.status(404).json({ error: "User not found" });
@@ -291,8 +307,16 @@ export async function registerRoutes(
   app.delete("/api/users/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
-      if (!currentUser || currentUser.role !== "admin") {
-        return res.status(403).json({ error: "Admin access required" });
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Access required" });
+      }
+      // NAMs can only delete users on their own team (not themselves)
+      if (currentUser.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id);
+        if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
+          return res.status(403).json({ error: "Cannot delete this user" });
+        }
       }
       if (req.params.id === currentUser.id) {
         return res.status(400).json({ error: "Cannot delete yourself" });

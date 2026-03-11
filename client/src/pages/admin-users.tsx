@@ -33,7 +33,7 @@ const ROLE_ICONS: Record<string, any> = {
   account_manager: UserCircle,
 };
 
-function UserDialog({ user, users, onClose }: { user?: SafeUser; users: SafeUser[]; onClose: () => void }) {
+function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: SafeUser[]; onClose: () => void; isNAM?: boolean }) {
   const [name, setName] = useState(user?.name || "");
   const [username, setUsername] = useState(user?.username || "");
   const [password, setPassword] = useState("");
@@ -86,33 +86,37 @@ function UserDialog({ user, users, onClose }: { user?: SafeUser; users: SafeUser
         <Label>{user ? "New Password (leave blank to keep)" : "Password"}</Label>
         <Input data-testid="input-user-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required={!user} />
       </div>
-      <div className="space-y-2">
-        <Label>Role</Label>
-        <Select value={role} onValueChange={setRole}>
-          <SelectTrigger data-testid="select-user-role">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="admin">Admin</SelectItem>
-            <SelectItem value="national_account_manager">National Account Manager</SelectItem>
-            <SelectItem value="account_manager">Account Manager</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="space-y-2">
-        <Label>Reports To</Label>
-        <Select value={managerId || "none"} onValueChange={setManagerId}>
-          <SelectTrigger data-testid="select-user-manager">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">None</SelectItem>
-            {managers.filter(m => m.id !== user?.id).map(m => (
-              <SelectItem key={m.id} value={m.id}>{m.name} ({ROLE_LABELS[m.role]})</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {!isNAM && (
+        <>
+          <div className="space-y-2">
+            <Label>Role</Label>
+            <Select value={role} onValueChange={setRole}>
+              <SelectTrigger data-testid="select-user-role">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="admin">Admin</SelectItem>
+                <SelectItem value="national_account_manager">National Account Manager</SelectItem>
+                <SelectItem value="account_manager">Account Manager</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Reports To</Label>
+            <Select value={managerId || "none"} onValueChange={setManagerId}>
+              <SelectTrigger data-testid="select-user-manager">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                {managers.filter(m => m.id !== user?.id).map(m => (
+                  <SelectItem key={m.id} value={m.id}>{m.name} ({ROLE_LABELS[m.role]})</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </>
+      )}
       <Button type="submit" className="w-full" disabled={mutation.isPending} data-testid="button-save-user">
         {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
         {user ? "Update User" : "Create User"}
@@ -141,10 +145,12 @@ export default function AdminUsers() {
     },
   });
 
-  if (currentUser?.role !== "admin") {
+  const isNAM = currentUser?.role === "national_account_manager";
+
+  if (currentUser?.role !== "admin" && !isNAM) {
     return (
       <div className="flex items-center justify-center h-full">
-        <p className="text-muted-foreground">Admin access required</p>
+        <p className="text-muted-foreground">Access required</p>
       </div>
     );
   }
@@ -167,16 +173,17 @@ export default function AdminUsers() {
         <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
           <DialogTrigger asChild>
             <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" data-testid="button-add-user">
-              <Plus className="w-4 h-4 mr-2" /> Add User
+              <Plus className="w-4 h-4 mr-2" /> {isNAM ? "Add Account Manager" : "Add User"}
             </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>{editUser ? "Edit User" : "Add User"}</DialogTitle>
+              <DialogTitle>{editUser ? "Edit User" : isNAM ? "Add Account Manager" : "Add User"}</DialogTitle>
             </DialogHeader>
             <UserDialog
               user={editUser}
               users={users}
+              isNAM={isNAM}
               onClose={() => { setDialogOpen(false); setEditUser(undefined); }}
             />
           </DialogContent>

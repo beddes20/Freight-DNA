@@ -85,16 +85,16 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        {user?.role === "admin" && (
+        {(user?.role === "admin" || user?.role === "national_account_manager") && (
           <SidebarGroup>
-            <SidebarGroupLabel>Admin</SidebarGroupLabel>
+            <SidebarGroupLabel>{user?.role === "admin" ? "Admin" : "Team"}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild isActive={location === "/admin/users"}>
                     <Link href="/admin/users" data-testid="link-admin-users">
                       <Users className="h-4 w-4" />
-                      <span>User Management</span>
+                      <span>{user?.role === "admin" ? "User Management" : "My Team"}</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
