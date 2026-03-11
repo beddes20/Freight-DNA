@@ -549,6 +549,7 @@ export default function RfpAwards() {
   const [deleteAwardTarget, setDeleteAwardTarget] = useState<Award | null>(null);
   const [viewingRfp, setViewingRfp] = useState<Rfp | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [uploadCompanyId, setUploadCompanyId] = useState("");
 
   const { data: rfps, isLoading: rfpsLoading } = useQuery<Rfp[]>({
@@ -592,11 +593,10 @@ export default function RfpAwards() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: async (file: File) => {
-      if (!uploadCompanyId) throw new Error("Please select a company first");
+    mutationFn: async ({ file, companyId }: { file: File; companyId: string }) => {
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("companyId", uploadCompanyId);
+      formData.append("companyId", companyId);
       const response = await fetch("/api/rfps/upload", { method: "POST", body: formData });
       if (!response.ok) {
         const err = await response.json();
@@ -606,6 +606,7 @@ export default function RfpAwards() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      setPendingFile(null);
       toast({
         title: "RFP uploaded successfully",
         description: `Analyzed ${data.analysis.laneCount} lanes from ${data.rfp.fileName}`,
@@ -615,6 +616,14 @@ export default function RfpAwards() {
       toast({ title: "Upload failed", description: error.message, variant: "destructive" });
     },
   });
+
+  const triggerUpload = useCallback((file: File) => {
+    if (!uploadCompanyId) {
+      setPendingFile(file);
+    } else {
+      uploadMutation.mutate({ file, companyId: uploadCompanyId });
+    }
+  }, [uploadCompanyId, uploadMutation]);
 
   const companiesMap = new Map(companies?.map((c) => [c.id, c]) || []);
 
@@ -643,23 +652,23 @@ export default function RfpAwards() {
     setIsDragging(false);
     const file = e.dataTransfer.files[0];
     if (file && (file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv"))) {
-      uploadMutation.mutate(file);
+      triggerUpload(file);
     } else {
       toast({ title: "Invalid file type", description: "Please upload an Excel (.xlsx, .xls) or CSV file", variant: "destructive" });
     }
-  }, [uploadMutation, toast]);
+  }, [triggerUpload, toast]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv")) {
-        uploadMutation.mutate(file);
+        triggerUpload(file);
       } else {
         toast({ title: "Invalid file type", description: "Please upload an Excel (.xlsx, .xls) or CSV file", variant: "destructive" });
       }
     }
     e.target.value = "";
-  }, [uploadMutation, toast]);
+  }, [triggerUpload, toast]);
 
   const handleEditRfp = (rfp: Rfp) => {
     setEditingRfp(rfp);
@@ -788,8 +797,22 @@ export default function RfpAwards() {
                 Drag and drop an Excel or CSV file here to create an RFP with data analysis
               </p>
             </div>
+            {pendingFile && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-sm w-full max-w-md">
+                <FileSpreadsheet className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span className="truncate flex-1 text-amber-800 dark:text-amber-300 font-medium">{pendingFile.name}</span>
+                <button onClick={() => setPendingFile(null)} className="text-amber-500 hover:text-amber-700 shrink-0" data-testid="button-clear-pending-file">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
             <div className="flex items-center gap-3 w-full max-w-md">
-              <Select value={uploadCompanyId} onValueChange={setUploadCompanyId}>
+              <Select value={uploadCompanyId} onValueChange={(val) => {
+                setUploadCompanyId(val);
+                if (pendingFile && val) {
+                  uploadMutation.mutate({ file: pendingFile, companyId: val });
+                }
+              }}>
                 <SelectTrigger className="flex-1" data-testid="select-upload-company">
                   <SelectValue placeholder="Select company for upload" />
                 </SelectTrigger>
@@ -807,12 +830,12 @@ export default function RfpAwards() {
                   accept=".xlsx,.xls,.csv"
                   onChange={handleFileSelect}
                   className="hidden"
-                  disabled={!uploadCompanyId || uploadMutation.isPending}
+                  disabled={uploadMutation.isPending}
                   data-testid="input-file-upload"
                 />
                 <Button
                   variant="outline"
-                  disabled={!uploadCompanyId || uploadMutation.isPending}
+                  disabled={uploadMutation.isPending}
                   asChild
                 >
                   <span className="cursor-pointer">
@@ -822,9 +845,14 @@ export default function RfpAwards() {
                 </Button>
               </label>
             </div>
-            {!uploadCompanyId && (
-              <p className="text-xs text-amber-600 dark:text-amber-400">
-                Select a company above before uploading
+            {pendingFile && !uploadCompanyId && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                File ready — now select a customer above to upload
+              </p>
+            )}
+            {!pendingFile && !uploadCompanyId && (
+              <p className="text-xs text-muted-foreground">
+                You can drop a file first, then choose the customer
               </p>
             )}
           </div>
