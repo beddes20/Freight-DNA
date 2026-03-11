@@ -63,10 +63,10 @@ function ContactCard({ contact, onEdit, level }: ContactCardProps) {
     : null;
 
   const baseConfig: Record<string, { label: string; className: string }> = {
-    "1st": { label: "1st Base", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400" },
-    "2nd": { label: "2nd Base", className: "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-400" },
-    "3rd": { label: "3rd Base", className: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400" },
-    "homerun": { label: "Home Run", className: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400" },
+    "1st": { label: "1st Base", className: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400" },
+    "2nd": { label: "2nd Base", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400" },
+    "3rd": { label: "3rd Base", className: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400" },
+    "homerun": { label: "Home Run", className: "bg-green-700 text-white dark:bg-green-800 dark:text-green-100" },
   };
 
   const baseKey = contact.relationshipBase
