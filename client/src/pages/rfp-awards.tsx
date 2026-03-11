@@ -762,14 +762,16 @@ export default function RfpAwards() {
         </Card>
       </div>
 
-      <Card className={`border-2 border-dashed transition-colors ${isDragging ? "border-primary bg-primary/5" : "border-muted-foreground/25"}`}>
+      <Card
+        className={`border-2 border-dashed transition-colors ${isDragging ? "border-primary bg-primary/5" : "border-muted-foreground/25"}`}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        data-testid="rfp-upload-dropzone"
+      >
         <CardContent className="p-6">
           <div
             className="flex flex-col items-center gap-4"
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            data-testid="rfp-upload-dropzone"
           >
             <div className={`rounded-full p-4 transition-colors ${isDragging ? "bg-primary/10" : uploadMutation.isPending ? "bg-green-100 dark:bg-green-900/30" : "bg-muted"}`}>
               {uploadMutation.isPending ? (
