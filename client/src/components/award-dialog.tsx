@@ -190,7 +190,7 @@ export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {companies?.map((company) => (
+                      {companies?.slice().sort((a, b) => a.name.localeCompare(b.name)).map((company) => (
                         <SelectItem key={company.id} value={company.id}>
                           {company.name}
                         </SelectItem>

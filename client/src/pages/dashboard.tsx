@@ -240,7 +240,7 @@ export default function Dashboard() {
               </div>
             ) : companies && companies.length > 0 ? (
               <div className="space-y-2">
-                {companies.slice(0, 5).map((company) => {
+                {companies.slice().sort((a, b) => a.name.localeCompare(b.name)).slice(0, 5).map((company) => {
                   const companyContacts = contacts?.filter((c) => c.companyId === company.id) || [];
                   return (
                     <Link

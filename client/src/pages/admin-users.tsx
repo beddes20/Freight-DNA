@@ -109,7 +109,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">None</SelectItem>
-                {managers.filter(m => m.id !== user?.id).map(m => (
+                {managers.filter(m => m.id !== user?.id).sort((a, b) => a.name.localeCompare(b.name)).map(m => (
                   <SelectItem key={m.id} value={m.id}>{m.name} ({ROLE_LABELS[m.role]})</SelectItem>
                 ))}
               </SelectContent>
@@ -196,7 +196,7 @@ export default function AdminUsers() {
         </div>
       ) : (
         <div className="grid gap-4">
-          {users.map(u => {
+          {users.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => {
             const RoleIcon = ROLE_ICONS[u.role] || UserCircle;
             const manager = getManager(u.managerId);
             return (

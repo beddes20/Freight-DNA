@@ -192,7 +192,7 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {users.map(u => (
+                        {users.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => (
                           <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                         ))}
                       </SelectContent>

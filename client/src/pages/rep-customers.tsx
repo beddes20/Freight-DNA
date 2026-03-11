@@ -54,9 +54,9 @@ export default function RepCustomers() {
   });
 
   const rep = allUsers.find((u) => u.id === userId);
-  const directReports = allUsers.filter((u) => u.managerId === userId);
+  const directReports = allUsers.filter((u) => u.managerId === userId).sort((a, b) => a.name.localeCompare(b.name));
 
-  const repCompanies = companies.filter((c) => c.assignedTo === userId);
+  const repCompanies = companies.filter((c) => c.assignedTo === userId).sort((a, b) => a.name.localeCompare(b.name));
   const filtered = repCompanies.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase())
   );

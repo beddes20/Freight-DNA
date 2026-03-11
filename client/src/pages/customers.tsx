@@ -49,10 +49,12 @@ export default function Customers() {
     }
   });
 
-  const filteredCompanies = companies?.filter((company) =>
-    company.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    company.industry?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredCompanies = companies
+    ?.filter((company) =>
+      company.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      company.industry?.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const isLoading = companiesLoading;
 
