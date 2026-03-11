@@ -41,7 +41,7 @@ const menuItems = [
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
-  director: "Director",
+  national_account_manager: "National Account Manager",
   account_manager: "Account Manager",
 };
 

@@ -17,19 +17,19 @@ type SafeUser = Omit<User, "password">;
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
-  director: "Director",
+  national_account_manager: "National Account Manager",
   account_manager: "Account Manager",
 };
 
 const ROLE_COLORS: Record<string, string> = {
   admin: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
-  director: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+  national_account_manager: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
   account_manager: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
 };
 
 const ROLE_ICONS: Record<string, any> = {
   admin: Shield,
-  director: ShieldCheck,
+  national_account_manager: ShieldCheck,
   account_manager: UserCircle,
 };
 
@@ -70,7 +70,7 @@ function UserDialog({ user, users, onClose }: { user?: SafeUser; users: SafeUser
     mutation.mutate(data);
   };
 
-  const managers = users.filter(u => u.role === "admin" || u.role === "director");
+  const managers = users.filter(u => u.role === "admin" || u.role === "national_account_manager");
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -94,7 +94,7 @@ function UserDialog({ user, users, onClose }: { user?: SafeUser; users: SafeUser
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="admin">Admin</SelectItem>
-            <SelectItem value="director">Director</SelectItem>
+            <SelectItem value="national_account_manager">National Account Manager</SelectItem>
             <SelectItem value="account_manager">Account Manager</SelectItem>
           </SelectContent>
         </Select>

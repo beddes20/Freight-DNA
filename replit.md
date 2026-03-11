@@ -1,7 +1,7 @@
 # OrgChart CRM - Transportation Brokerage Sales Tool
 
 ## Overview
-A mini CRM application designed for transportation brokerage sales teams to build and manage organizational charts for their customer accounts. The application allows sales reps to track contacts, their reporting structure, lanes/regions they manage, freight spend, and spot bidding processes. Includes separate RFP and Award management with Excel upload and data analysis for RFPs. Features role-based access control (RBAC) with admin, director, and account manager roles.
+A mini CRM application designed for transportation brokerage sales teams to build and manage organizational charts for their customer accounts. The application allows sales reps to track contacts, their reporting structure, lanes/regions they manage, freight spend, and spot bidding processes. Includes separate RFP and Award management with Excel upload and data analysis for RFPs. Features role-based access control (RBAC) with admin, national account manager, and account manager roles.
 
 ## Tech Stack
 - **Frontend**: React with TypeScript, TanStack Query, Wouter routing
@@ -49,7 +49,7 @@ shared/
 
 ### Users
 - id, username (email), password (bcrypt hashed), name
-- role: "admin" | "director" | "account_manager"
+- role: "admin" | "national_account_manager" | "account_manager"
 - managerId (FK to self for team hierarchy)
 
 ### Companies
@@ -80,7 +80,7 @@ shared/
 
 ## RBAC (Role-Based Access Control)
 - **Admin**: Full access to everything; can manage users, assign companies, see all data
-- **Director**: Sees own companies + companies assigned to their direct/indirect reports
+- **National Account Manager**: Sees own companies + companies assigned to their direct/indirect reports (account managers underneath them)
 - **Account Manager**: Sees only companies assigned to them
 - First user to register automatically gets admin role
 - Auth: session-based with PostgreSQL session store
