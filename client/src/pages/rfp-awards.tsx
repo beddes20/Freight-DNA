@@ -575,6 +575,8 @@ export default function RfpAwards() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/research-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
       toast({ title: "RFP deleted successfully" });
       setDeleteRfpTarget(null);
     },
