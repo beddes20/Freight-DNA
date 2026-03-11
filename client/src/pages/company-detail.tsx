@@ -43,6 +43,8 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Repeat2,
+  ArrowUpDown,
+  ChevronsUpDown,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -141,6 +143,7 @@ export default function CompanyDetail() {
   const [contactDefaults, setContactDefaults] = useState<{ lane?: string; region?: string } | undefined>();
   const [researchDialogOpen, setResearchDialogOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<ResearchTask | null>(null);
+  const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "volume", dir: "desc" });
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -461,93 +464,157 @@ export default function CompanyDetail() {
                 </div>
               </div>
 
-              {unresolvedTasks.length > 0 ? (
-                <div className="space-y-2">
-                  {unresolvedTasks.map((task, i) => {
-                    const linkedContact = task.contactId && contacts
-                      ? contacts.find((c) => c.id === task.contactId)
-                      : null;
-                    return (
-                      <div
-                        key={`${task.rfpId}-${task.laneIndex}`}
-                        className="flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors"
-                        data-testid={`lane-task-${i}`}
-                      >
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <TruckIcon className="h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-medium text-sm">{task.origin || task.originState || "—"}</span>
-                              <span className="text-muted-foreground text-sm">→</span>
-                              <span className="font-medium text-sm">{task.destination || task.destinationState || "—"}</span>
-                            </div>
-                            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
-                              <span className="flex items-center gap-1">
-                                <BarChart3 className="h-3 w-3" />
+              {(() => {
+                const fmtLoc = (city: string, state: string) => {
+                  if (!city && !state) return "—";
+                  if (!city) return state;
+                  if (!state) return city;
+                  if (city.toUpperCase().includes(state.toUpperCase())) return city;
+                  return `${city}, ${state}`;
+                };
+
+                const handleLaneSort = (col: string) => {
+                  setLaneSort((prev) =>
+                    prev.col === col
+                      ? { col, dir: prev.dir === "asc" ? "desc" : "asc" }
+                      : { col, dir: col === "volume" ? "desc" : "asc" }
+                  );
+                };
+
+                const SortIcon = ({ col }: { col: string }) => (
+                  laneSort.col === col
+                    ? <ArrowUpDown className={`h-3 w-3 ml-1 inline ${laneSort.dir === "asc" ? "rotate-180" : ""}`} />
+                    : <ChevronsUpDown className="h-3 w-3 ml-1 inline opacity-40" />
+                );
+
+                const sorted = [...unresolvedTasks].sort((a, b) => {
+                  const dir = laneSort.dir === "asc" ? 1 : -1;
+                  switch (laneSort.col) {
+                    case "origin": return dir * fmtLoc(a.origin, a.originState).localeCompare(fmtLoc(b.origin, b.originState));
+                    case "destination": return dir * fmtLoc(a.destination, a.destinationState).localeCompare(fmtLoc(b.destination, b.destinationState));
+                    case "volume": return dir * (a.volume - b.volume);
+                    case "equipment": return dir * (a.equipment || "").localeCompare(b.equipment || "");
+                    case "rfp": return dir * a.rfpTitle.localeCompare(b.rfpTitle);
+                    case "status": return dir * a.status.localeCompare(b.status);
+                    default: return 0;
+                  }
+                });
+
+                if (unresolvedTasks.length === 0) {
+                  return (
+                    <p className="text-sm text-muted-foreground">
+                      All high-volume lanes have been researched.
+                    </p>
+                  );
+                }
+
+                const thClass = "text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide py-2 px-3 cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap";
+
+                return (
+                  <div className="overflow-x-auto rounded-md border">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50 border-b">
+                        <tr>
+                          <th className={thClass} onClick={() => handleLaneSort("origin")}>
+                            Origin <SortIcon col="origin" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("destination")}>
+                            Destination <SortIcon col="destination" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("volume")}>
+                            Volume <SortIcon col="volume" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("equipment")}>
+                            Equipment <SortIcon col="equipment" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("rfp")}>
+                            RFP <SortIcon col="rfp" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("status")}>
+                            Status <SortIcon col="status" />
+                          </th>
+                          <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide py-2 px-3 whitespace-nowrap">
+                            Action
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sorted.map((task, i) => {
+                          const linkedContact = task.contactId && contacts
+                            ? contacts.find((c) => c.id === task.contactId)
+                            : null;
+                          return (
+                            <tr
+                              key={`${task.rfpId}-${task.laneIndex}`}
+                              className="border-b last:border-0 hover:bg-muted/40 transition-colors"
+                              data-testid={`lane-task-${i}`}
+                            >
+                              <td className="py-2 px-3 font-medium">
+                                {fmtLoc(task.origin, task.originState)}
+                              </td>
+                              <td className="py-2 px-3 font-medium">
+                                {fmtLoc(task.destination, task.destinationState)}
+                              </td>
+                              <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">
                                 {Math.round(task.volume).toLocaleString()} / yr
-                              </span>
-                              {task.equipment && (
-                                <span className="flex items-center gap-1">
-                                  <TruckIcon className="h-3 w-3" />
-                                  {task.equipment}
-                                </span>
-                              )}
-                              <span>{task.rfpTitle}</span>
-                              {linkedContact && (
-                                <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
-                                  <Users className="h-3 w-3" />
-                                  {linkedContact.name}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {task.status === "open" ? (
-                            <>
-                              <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                                <Clock className="h-3 w-3 mr-1" />
-                                Open
-                              </Badge>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
-                                onClick={() => handleAssignTask(task)}
-                                data-testid={`button-assign-lane-task-${i}`}
-                              >
-                                <UserPlus className="h-4 w-4 mr-1" />
-                                Assign Lane to Planner
-                              </Button>
-                            </>
-                          ) : (
-                            <>
-                              <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400">
-                                <UserPlus className="h-3 w-3 mr-1" />
-                                Contact Added
-                              </Badge>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400"
-                                onClick={() => markResearchedMutation.mutate(task)}
-                                disabled={markResearchedMutation.isPending}
-                                data-testid={`button-mark-complete-task-${i}`}
-                              >
-                                Mark Complete
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  All high-volume lanes have been researched.
-                </p>
-              )}
+                              </td>
+                              <td className="py-2 px-3 text-muted-foreground">
+                                {task.equipment || "—"}
+                              </td>
+                              <td className="py-2 px-3 text-muted-foreground max-w-[180px] truncate" title={task.rfpTitle}>
+                                {task.rfpTitle}
+                              </td>
+                              <td className="py-2 px-3">
+                                {task.status === "open" ? (
+                                  <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                    <Clock className="h-3 w-3 mr-1" />
+                                    Open
+                                  </Badge>
+                                ) : (
+                                  <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                                    <UserPlus className="h-3 w-3 mr-1" />
+                                    Contact Added
+                                  </Badge>
+                                )}
+                                {linkedContact && (
+                                  <span className="ml-2 text-xs text-green-600 dark:text-green-400">
+                                    {linkedContact.name}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 whitespace-nowrap">
+                                {task.status === "open" ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
+                                    onClick={() => handleAssignTask(task)}
+                                    data-testid={`button-assign-lane-task-${i}`}
+                                  >
+                                    <UserPlus className="h-4 w-4 mr-1" />
+                                    Assign
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400"
+                                    onClick={() => markResearchedMutation.mutate(task)}
+                                    disabled={markResearchedMutation.isPending}
+                                    data-testid={`button-mark-complete-task-${i}`}
+                                  >
+                                    Mark Complete
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         );
