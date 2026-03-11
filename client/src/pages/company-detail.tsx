@@ -67,6 +67,7 @@ interface ResearchTask {
   destinationState: string;
   volume: number;
   rate: string;
+  equipment?: string;
   status: string;
   contactId: string | null;
 }
@@ -474,16 +475,23 @@ export default function CompanyDetail() {
                       >
                         <div className="flex items-center gap-3 min-w-0 flex-1">
                           <TruckIcon className="h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                          <div className="min-w-0">
-                            <p className="font-medium text-sm truncate">{task.lane}</p>
-                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                              {task.laneId && (
-                                <span className="font-mono text-muted-foreground/70">{task.laneId}</span>
-                              )}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-medium text-sm">{task.origin || task.originState || "—"}</span>
+                              <span className="text-muted-foreground text-sm">→</span>
+                              <span className="font-medium text-sm">{task.destination || task.destinationState || "—"}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
                               <span className="flex items-center gap-1">
                                 <BarChart3 className="h-3 w-3" />
-                                {task.volume.toLocaleString()} / yr
+                                {Math.round(task.volume).toLocaleString()} / yr
                               </span>
+                              {task.equipment && (
+                                <span className="flex items-center gap-1">
+                                  <TruckIcon className="h-3 w-3" />
+                                  {task.equipment}
+                                </span>
+                              )}
                               <span>{task.rfpTitle}</span>
                               {linkedContact && (
                                 <span className="flex items-center gap-1 text-green-600 dark:text-green-400">

@@ -95,6 +95,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
   if (!volumeCol) volumeCol = findCol(["weekly volume", "weekly loads", "weekly shipments", "wkly"]);
   const rateCol = findCol(["rate", "price", "cost", "target", "rpm"]);
   let laneCol = findCol(["lane_id", "lane id", "lane name", "lane_name", "lane #", "lane#", "lane"]);
+  const equipmentCol = findCol(["equipment name", "equipment type", "equipment code", "equip name", "equip type", "equipment", "equip", "trailer type", "trailer", "mode"]);
 
   // Fallback: if no volume column found by keyword, auto-detect from column content
   let isWeeklyVolume = false;
@@ -179,12 +180,13 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
       highVolumeLanes.push({
         lane: laneDescription,
         laneId: laneName || "",
-        origin: originCity || oState || "",
-        destination: destCity || dState || "",
+        origin: originCity || rawOrigin || oState || "",
+        destination: destCity || rawDest || dState || "",
         originState: oState,
         destinationState: dState,
         volume: rowVolume,
         rate: rateCol ? String(row[rateCol] || "") : "",
+        equipment: equipmentCol ? String(row[equipmentCol] || "") : "",
         rawRow: row,
       });
     }
@@ -672,6 +674,7 @@ export async function registerRoutes(
             destinationState: lane.destinationState,
             volume: lane.volume,
             rate: lane.rate,
+            equipment: lane.equipment || "",
             status: lane.status || "open",
             contactId: lane.contactId || null,
           });

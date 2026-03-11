@@ -36,6 +36,7 @@ interface ResearchTask {
   destinationState: string;
   volume: number;
   rate: string;
+  equipment?: string;
   status: string;
   contactId: string | null;
 }
@@ -232,17 +233,22 @@ export default function ResearchTasks() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-medium text-sm">{task.lane}</p>
+                          <span className="font-medium text-sm">{task.origin || task.originState || "—"}</span>
+                          <span className="text-muted-foreground text-sm">→</span>
+                          <span className="font-medium text-sm">{task.destination || task.destinationState || "—"}</span>
                           {getStatusBadge(task.status)}
                         </div>
-                        <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
-                          {task.laneId && (
-                            <span className="font-mono text-muted-foreground/70">{task.laneId}</span>
-                          )}
+                        <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1 flex-wrap">
                           <span className="flex items-center gap-1">
                             <BarChart3 className="h-3 w-3" />
-                            {task.volume.toLocaleString()} loads/yr
+                            {Math.round(task.volume).toLocaleString()} loads/yr
                           </span>
+                          {task.equipment && (
+                            <span className="flex items-center gap-1">
+                              <TruckIcon className="h-3 w-3" />
+                              {task.equipment}
+                            </span>
+                          )}
                           {company && (
                             <span className="flex items-center gap-1">
                               <Building2 className="h-3 w-3" />

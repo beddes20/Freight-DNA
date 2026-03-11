@@ -265,6 +265,7 @@ interface HighVolumeLane {
   destinationState: string;
   volume: number;
   rate: string;
+  equipment?: string;
   status?: string;
   contactId?: string;
 }
@@ -366,9 +367,10 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
               <table className="w-full text-sm" data-testid="table-high-volume-lanes">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Lane</th>
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Origin</th>
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Destination</th>
                     <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Volume</th>
-                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Rate</th>
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Equipment</th>
                     <th className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">Status</th>
                     <th className="px-3 py-2 text-right font-medium text-muted-foreground whitespace-nowrap">Action</th>
                   </tr>
@@ -387,14 +389,17 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
                           <TruckIcon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                          <span className="font-medium">{lane.lane}</span>
+                          <span className="font-medium">{lane.origin || lane.originState || "—"}</span>
                         </div>
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        {lane.volume.toLocaleString()} / yr
+                      <td className="px-3 py-2">
+                        <span className="font-medium">{lane.destination || lane.destinationState || "—"}</span>
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">
-                        {lane.rate || "—"}
+                        {Math.round(lane.volume).toLocaleString()} / yr
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                        {lane.equipment || "—"}
                       </td>
                       <td className="px-3 py-2">
                         {getLaneStatusBadge(lane)}
