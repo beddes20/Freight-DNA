@@ -340,6 +340,25 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/team-members", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const allUsers = await storage.getUsers();
+      const safeUsers = allUsers.map(({ password, ...u }) => u);
+      if (currentUser.role === "admin") {
+        return res.json(safeUsers);
+      }
+      if (currentUser.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id);
+        return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
+      }
+      return res.json(safeUsers.filter(u => u.id === currentUser.id));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch team members" });
+    }
+  });
+
   app.post("/api/companies", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
@@ -349,7 +368,19 @@ export async function registerRoutes(
         return res.status(400).json({ error: parsed.error.message });
       }
       const data = { ...parsed.data };
-      if (currentUser.role !== "admin") {
+      if (currentUser.role === "admin") {
+        // admin can assign to anyone — leave assignedTo as-is
+      } else if (currentUser.role === "national_account_manager") {
+        // NAM can assign to themselves or their team members
+        if (data.assignedTo) {
+          const teamIds = await storage.getTeamMemberIds(currentUser.id);
+          if (!teamIds.includes(data.assignedTo)) {
+            data.assignedTo = currentUser.id;
+          }
+        } else {
+          data.assignedTo = currentUser.id;
+        }
+      } else {
         data.assignedTo = currentUser.id;
       }
       const company = await storage.createCompany(data);

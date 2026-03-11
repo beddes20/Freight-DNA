@@ -49,10 +49,12 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
   const { user: currentUser } = useAuth();
   const isEditing = !!company;
   const isAdmin = currentUser?.role === "admin";
+  const isNAM = currentUser?.role === "national_account_manager";
+  const canAssign = isAdmin || isNAM;
 
   const { data: users = [] } = useQuery<SafeUser[]>({
-    queryKey: ["/api/users"],
-    enabled: isAdmin,
+    queryKey: ["/api/team-members"],
+    enabled: canAssign,
   });
 
   const form = useForm<CompanyFormData>({
@@ -176,7 +178,7 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
                 </FormItem>
               )}
             />
-            {isAdmin && users.length > 0 && (
+            {canAssign && users.length > 0 && (
               <FormField
                 control={form.control}
                 name="assignedTo"
