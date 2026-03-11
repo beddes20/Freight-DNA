@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   TruckIcon,
   Search,
@@ -45,6 +46,7 @@ export default function ResearchTasks() {
   const [, navigate] = useLocation();
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "open" | "completed">("all");
+  const [filterCustomer, setFilterCustomer] = useState("all");
   const { toast } = useToast();
   const [researchDialogOpen, setResearchDialogOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<ResearchTask | null>(null);
@@ -81,10 +83,16 @@ export default function ResearchTasks() {
       task.rfpTitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
       companiesMap.get(task.companyId)?.name.toLowerCase().includes(searchQuery.toLowerCase());
 
-    if (filter === "open") return matchesSearch && (task.status === "open");
-    if (filter === "completed") return matchesSearch && (task.status !== "open");
-    return matchesSearch;
+    const matchesCustomer = filterCustomer === "all" || task.companyId === filterCustomer;
+
+    if (filter === "open") return matchesSearch && matchesCustomer && (task.status === "open");
+    if (filter === "completed") return matchesSearch && matchesCustomer && (task.status !== "open");
+    return matchesSearch && matchesCustomer;
   }) || [];
+
+  const uniqueCustomers = Array.from(
+    new Map(tasks?.map(t => [t.companyId, companiesMap.get(t.companyId)]).filter(([, c]) => c) || [])
+  ).sort((a, b) => (a[1]?.name || "").localeCompare(b[1]?.name || ""));
 
   const openCount = tasks?.filter(t => t.status === "open").length || 0;
   const completedCount = tasks?.filter(t => t.status !== "open").length || 0;
@@ -154,8 +162,8 @@ export default function ResearchTasks() {
         </Card>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex flex-col sm:flex-row gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-48 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search tasks..."
@@ -165,6 +173,19 @@ export default function ResearchTasks() {
             data-testid="input-search-tasks"
           />
         </div>
+        <Select value={filterCustomer} onValueChange={setFilterCustomer}>
+          <SelectTrigger className="w-52" data-testid="select-filter-customer">
+            <SelectValue placeholder="All Customers" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Customers</SelectItem>
+            {uniqueCustomers.map(([id, company]) => (
+              <SelectItem key={id as string} value={id as string}>
+                {company!.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <div className="flex gap-2">
           <Button
             variant={filter === "all" ? "default" : "outline"}
