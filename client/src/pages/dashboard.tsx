@@ -159,6 +159,66 @@ export default function Dashboard() {
         ))}
       </div>
 
+      {canSeeTeam && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                National Account Managers
+                {!usersLoading && (
+                  <Badge variant="secondary" className="ml-auto font-normal">{nams.length}</Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {usersLoading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
+                </div>
+              ) : nams.length > 0 ? (
+                <div className="space-y-1 max-h-72 overflow-y-auto">
+                  {nams.map((u) => <UserRow key={u.id} user={u} />)}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  <ShieldCheck className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">No national account managers</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <UserCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+                Account Managers
+                {!usersLoading && (
+                  <Badge variant="secondary" className="ml-auto font-normal">{ams.length}</Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {usersLoading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
+                </div>
+              ) : ams.length > 0 ? (
+                <div className="space-y-1 max-h-72 overflow-y-auto">
+                  {ams.map((u) => <UserRow key={u.id} user={u} />)}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  <UserCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">No account managers</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader className="pb-3">
@@ -268,66 +328,6 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
-
-      {canSeeTeam && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                National Account Managers
-                {!usersLoading && (
-                  <Badge variant="secondary" className="ml-auto font-normal">{nams.length}</Badge>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {usersLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
-                </div>
-              ) : nams.length > 0 ? (
-                <div className="space-y-1 max-h-72 overflow-y-auto">
-                  {nams.map((u) => <UserRow key={u.id} user={u} />)}
-                </div>
-              ) : (
-                <div className="text-center py-8 text-muted-foreground">
-                  <ShieldCheck className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No national account managers</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <UserCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
-                Account Managers
-                {!usersLoading && (
-                  <Badge variant="secondary" className="ml-auto font-normal">{ams.length}</Badge>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {usersLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
-                </div>
-              ) : ams.length > 0 ? (
-                <div className="space-y-1 max-h-72 overflow-y-auto">
-                  {ams.map((u) => <UserRow key={u.id} user={u} />)}
-                </div>
-              ) : (
-                <div className="text-center py-8 text-muted-foreground">
-                  <UserCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No account managers</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
     </div>
   );
 }
