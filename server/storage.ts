@@ -9,6 +9,7 @@ import {
   awards,
   financialUploads,
   appSettings,
+  tasks,
   type User,
   type InsertUser,
   type Company,
@@ -21,6 +22,8 @@ import {
   type InsertAward,
   type FinancialUpload,
   type InsertFinancialUpload,
+  type Task,
+  type InsertTask,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -66,6 +69,13 @@ export interface IStorage {
 
   searchCompanies(query: string): Promise<Company[]>;
   searchUsers(query: string, roles: string[]): Promise<Omit<User, 'password'>[]>;
+
+  getTasks(): Promise<Task[]>;
+  getTasksByCompany(companyId: string): Promise<Task[]>;
+  getTask(id: string): Promise<Task | undefined>;
+  createTask(task: InsertTask): Promise<Task>;
+  updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
+  deleteTask(id: string): Promise<boolean>;
 
   getSetting(key: string): Promise<string | undefined>;
   setSetting(key: string, value: string): Promise<void>;
@@ -276,6 +286,34 @@ export class DatabaseStorage implements IStorage {
         )
       )
     ).limit(10);
+  }
+
+  async getTasks(): Promise<Task[]> {
+    return db.select().from(tasks);
+  }
+
+  async getTasksByCompany(companyId: string): Promise<Task[]> {
+    return db.select().from(tasks).where(eq(tasks.companyId, companyId));
+  }
+
+  async getTask(id: string): Promise<Task | undefined> {
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, id));
+    return task;
+  }
+
+  async createTask(task: InsertTask): Promise<Task> {
+    const [created] = await db.insert(tasks).values(task).returning();
+    return created;
+  }
+
+  async updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined> {
+    const [updated] = await db.update(tasks).set(data).where(eq(tasks.id, id)).returning();
+    return updated;
+  }
+
+  async deleteTask(id: string): Promise<boolean> {
+    const result = await db.delete(tasks).where(eq(tasks.id, id)).returning();
+    return result.length > 0;
   }
 
   async getSetting(key: string): Promise<string | undefined> {

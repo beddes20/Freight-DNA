@@ -120,6 +120,26 @@ export const insertFinancialUploadSchema = createInsertSchema(financialUploads).
 export type InsertFinancialUpload = z.infer<typeof insertFinancialUploadSchema>;
 export type FinancialUpload = typeof financialUploads.$inferSelect;
 
+export const tasks = pgTable("tasks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  notes: text("notes"),
+  status: text("status").notNull().default("open"),
+  dueDate: text("due_date"),
+  assignedTo: varchar("assigned_to").notNull(),
+  assignedBy: varchar("assigned_by").notNull(),
+  companyId: varchar("company_id"),
+  contactId: varchar("contact_id"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertTaskSchema = createInsertSchema(tasks).omit({
+  id: true,
+});
+
+export type InsertTask = z.infer<typeof insertTaskSchema>;
+export type Task = typeof tasks.$inferSelect;
+
 export const appSettings = pgTable("app_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),

@@ -8,7 +8,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -1125,6 +1125,121 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error deleting award:", error);
       res.status(500).json({ error: "Failed to delete award" });
+    }
+  });
+
+  // ── Task Assignment ──────────────────────────────────────────────────────
+
+  app.get("/api/tasks", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const allTasks = await storage.getTasks();
+      if (user.role === "admin") return res.json(allTasks);
+      if (user.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        return res.json(allTasks.filter(t => teamIds.includes(t.assignedTo) || teamIds.includes(t.assignedBy)));
+      }
+      return res.json(allTasks.filter(t => t.assignedTo === user.id || t.assignedBy === user.id));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tasks" });
+    }
+  });
+
+  app.get("/api/tasks/company/:companyId", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(user, req.params.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const companyTasks = await storage.getTasksByCompany(req.params.companyId);
+      res.json(companyTasks);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch company tasks" });
+    }
+  });
+
+  app.post("/api/tasks", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { title, notes, dueDate, assignedTo, companyId, contactId } = req.body;
+      if (!title || typeof title !== "string" || !title.trim()) {
+        return res.status(400).json({ error: "Title is required" });
+      }
+      if (!assignedTo || typeof assignedTo !== "string") {
+        return res.status(400).json({ error: "Assignee is required" });
+      }
+      if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+        return res.status(400).json({ error: "Invalid date format" });
+      }
+      if (companyId && !(await canAccessCompany(user, companyId))) {
+        return res.status(403).json({ error: "Cannot link task to inaccessible company" });
+      }
+      const task = await storage.createTask({
+        title: title.trim(),
+        notes: notes || null,
+        status: "open",
+        dueDate: dueDate || null,
+        assignedTo,
+        assignedBy: user.id,
+        companyId: companyId || null,
+        contactId: contactId || null,
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(task);
+    } catch (error) {
+      console.error("Error creating task:", error);
+      res.status(500).json({ error: "Failed to create task" });
+    }
+  });
+
+  app.patch("/api/tasks/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getTask(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Task not found" });
+      if (existing.assignedTo !== user.id && existing.assignedBy !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Not authorized to edit this task" });
+      }
+      const validStatuses = ["open", "in_progress", "completed"];
+      const data: any = {};
+      if (req.body.title !== undefined) data.title = String(req.body.title).trim();
+      if (req.body.notes !== undefined) data.notes = req.body.notes;
+      if (req.body.status !== undefined) {
+        if (!validStatuses.includes(req.body.status)) {
+          return res.status(400).json({ error: "Invalid status. Must be open, in_progress, or completed" });
+        }
+        data.status = req.body.status;
+      }
+      if (req.body.dueDate !== undefined) {
+        if (req.body.dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(req.body.dueDate)) {
+          return res.status(400).json({ error: "Invalid date format" });
+        }
+        data.dueDate = req.body.dueDate;
+      }
+      const task = await storage.updateTask(req.params.id, data);
+      res.json(task);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update task" });
+    }
+  });
+
+  app.delete("/api/tasks/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getTask(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Task not found" });
+      if (existing.assignedBy !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Only the creator or admin can delete tasks" });
+      }
+      await storage.deleteTask(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete task" });
     }
   });
 

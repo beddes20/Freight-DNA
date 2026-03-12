@@ -67,6 +67,11 @@ import {
   Zap,
   TrendingUp,
   ChevronDown,
+  ClipboardList,
+  Circle,
+  PlayCircle,
+  CheckCircle2,
+  Calendar,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -77,7 +82,8 @@ import { ContactList } from "@/components/contact-list";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Company, Contact, User } from "@shared/schema";
+import { TaskDialog } from "@/components/task-dialog";
+import type { Company, Contact, User, Task } from "@shared/schema";
 
 interface ResearchTask {
   rfpId: string;
@@ -199,6 +205,8 @@ export default function CompanyDetail() {
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState("");
   const [laneMatchMode, setLaneMatchMode] = useState<"deliveries" | "pickups">("deliveries");
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [editingTaskItem, setEditingTaskItem] = useState<Task | undefined>();
   const [lanesCollapsed, setLanesCollapsed] = useState(false);
   const [facilityCoverageCollapsed, setFacilityCoverageCollapsed] = useState(false);
   const [lanePatternsCollapsed, setLanePatternsCollapsed] = useState(false);
@@ -243,6 +251,35 @@ export default function CompanyDetail() {
 
   const { data: laneMatching } = useQuery<LaneMatching>({
     queryKey: ["/api/companies", companyId, "lane-matching"],
+  });
+
+  const { data: companyTasks = [] } = useQuery<Task[]>({
+    queryKey: ["/api/tasks/company", companyId],
+  });
+
+  const { data: teamMembers = [] } = useQuery<Omit<User, "password">[]>({
+    queryKey: ["/api/team-members"],
+  });
+
+  const toggleTaskStatus = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      await apiRequest("PATCH", `/api/tasks/${id}`, { status });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks/company", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+    },
+  });
+
+  const deleteTaskMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/tasks/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks/company", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: "Task deleted" });
+    },
   });
 
   const canReassign = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
@@ -636,6 +673,81 @@ export default function CompanyDetail() {
           )}
         </CardContent>
       </Card>
+
+      {/* Account Tasks */}
+      <Card data-testid="card-company-tasks">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              Tasks
+              {companyTasks.filter(t => t.status !== "completed").length > 0 && (
+                <Badge variant="secondary" className="ml-1 font-normal">{companyTasks.filter(t => t.status !== "completed").length}</Badge>
+              )}
+            </CardTitle>
+            <Button size="sm" variant="outline" className="gap-1" onClick={() => { setEditingTaskItem(undefined); setTaskDialogOpen(true); }} data-testid="button-add-company-task">
+              <Plus className="h-3 w-3" /> Add Task
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {companyTasks.length > 0 ? (
+            <div className="space-y-1">
+              {companyTasks
+                .sort((a, b) => {
+                  if (a.status === "completed" && b.status !== "completed") return 1;
+                  if (a.status !== "completed" && b.status === "completed") return -1;
+                  if (!a.dueDate && !b.dueDate) return 0;
+                  if (!a.dueDate) return 1;
+                  if (!b.dueDate) return -1;
+                  return a.dueDate.localeCompare(b.dueDate);
+                })
+                .map(task => {
+                  const assigneeName = teamMembers.find(u => u.id === task.assignedTo)?.name || "";
+                  const ns = task.status === "open" ? "in_progress" : task.status === "in_progress" ? "completed" : "open";
+                  const dueBadge = (() => {
+                    if (!task.dueDate) return null;
+                    const today = new Date(); today.setHours(0,0,0,0);
+                    const due = new Date(task.dueDate + "T00:00:00");
+                    const diff = Math.round((due.getTime() - today.getTime()) / 86400000);
+                    let color = "bg-muted text-muted-foreground";
+                    if (diff < 0) color = "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
+                    else if (diff === 0) color = "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
+                    else if (diff <= 3) color = "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400";
+                    const label = diff < 0 ? `${Math.abs(diff)}d overdue` : diff === 0 ? "Today" : `${diff}d`;
+                    return <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md font-medium ${color}`}><Calendar className="h-3 w-3" />{label}</span>;
+                  })();
+                  return (
+                    <div key={task.id} className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group ${task.status === "completed" ? "opacity-50" : ""}`} data-testid={`company-task-row-${task.id}`}>
+                      <button onClick={() => toggleTaskStatus.mutate({ id: task.id, status: ns })} className="shrink-0 hover:scale-110 transition-transform" title={`Status: ${task.status}`} data-testid={`button-toggle-company-task-${task.id}`}>
+                        {task.status === "completed" ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : task.status === "in_progress" ? <PlayCircle className="h-4 w-4 text-blue-500" /> : <Circle className="h-4 w-4 text-muted-foreground" />}
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`}>{task.title}</p>
+                        {assigneeName && <p className="text-xs text-muted-foreground">{assigneeName}</p>}
+                      </div>
+                      {dueBadge}
+                      <button onClick={() => { setEditingTaskItem(task); setTaskDialogOpen(true); }} className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs" data-testid={`button-edit-company-task-${task.id}`}>Edit</button>
+                      <button onClick={() => deleteTaskMutation.mutate(task.id)} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-company-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
+                    </div>
+                  );
+                })}
+            </div>
+          ) : (
+            <div className="text-center py-4 text-muted-foreground">
+              <ClipboardList className="h-6 w-6 mx-auto mb-1 opacity-50" />
+              <p className="text-xs">No tasks for this account</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <TaskDialog
+        open={taskDialogOpen}
+        onOpenChange={setTaskDialogOpen}
+        companyId={companyId}
+        editingTask={editingTaskItem}
+      />
 
       {/* Transfer Account Dialog */}
       <Dialog open={transferOpen} onOpenChange={setTransferOpen}>

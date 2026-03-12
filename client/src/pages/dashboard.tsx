@@ -1,16 +1,57 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp, ShieldCheck, UserCircle } from "lucide-react";
+import {
+  Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp,
+  ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
+  CheckCircle2, Calendar, Trash2,
+} from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import type { Company, Contact, User } from "@shared/schema";
+import { useToast } from "@/hooks/use-toast";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { TaskDialog } from "@/components/task-dialog";
+import type { Company, Contact, Task, User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
 
+function dueDateBadge(dueDate: string | null) {
+  if (!dueDate) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(dueDate + "T00:00:00");
+  const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
+
+  let color = "bg-muted text-muted-foreground";
+  if (diffDays < 0) color = "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
+  else if (diffDays === 0) color = "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
+  else if (diffDays <= 3) color = "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400";
+
+  const label = diffDays < 0 ? `${Math.abs(diffDays)}d overdue` : diffDays === 0 ? "Today" : `${diffDays}d`;
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md font-medium ${color}`}>
+      <Calendar className="h-3 w-3" />
+      {label}
+    </span>
+  );
+}
+
+const statusIcon = (status: string) => {
+  if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+  if (status === "in_progress") return <PlayCircle className="h-4 w-4 text-blue-500" />;
+  return <Circle className="h-4 w-4 text-muted-foreground" />;
+};
+
+const nextStatus = (s: string) => s === "open" ? "in_progress" : s === "in_progress" ? "completed" : "open";
+
 export default function Dashboard() {
   const { user: currentUser } = useAuth();
+  const { toast } = useToast();
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | undefined>();
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -20,13 +61,58 @@ export default function Dashboard() {
     queryKey: ["/api/contacts"],
   });
 
+  const { data: allTasks = [], isLoading: tasksLoading } = useQuery<Task[]>({
+    queryKey: ["/api/tasks"],
+  });
+
   const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/users"],
     enabled: canSeeTeam,
   });
 
+  const { data: teamMembers = [] } = useQuery<SafeUser[]>({
+    queryKey: ["/api/team-members"],
+  });
+
   const isLoading = companiesLoading || contactsLoading;
+
+  const myTasks = allTasks
+    .filter(t => t.assignedTo === currentUser?.id)
+    .sort((a, b) => {
+      if (a.status === "completed" && b.status !== "completed") return 1;
+      if (a.status !== "completed" && b.status === "completed") return -1;
+      if (!a.dueDate && !b.dueDate) return 0;
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return a.dueDate.localeCompare(b.dueDate);
+    });
+
+  const openTasks = myTasks.filter(t => t.status !== "completed");
+  const completedCount = myTasks.filter(t => t.status === "completed").length;
+  const displayTasks = openTasks.slice(0, 10);
+
+  const toggleStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      await apiRequest("PATCH", `/api/tasks/${id}`, { status });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/tasks/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: "Task deleted" });
+    },
+  });
+
+  const getUserName = (userId: string) => teamMembers.find(u => u.id === userId)?.name || "";
+  const getCompanyName = (companyId: string | null) => companyId ? companies?.find(c => c.id === companyId)?.name || "" : "";
 
   const totalFreightSpend = contacts?.reduce((acc, c) => {
     return acc + (c.freightSpend ? parseFloat(c.freightSpend) : 0);
@@ -117,6 +203,101 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
+
+      <Card data-testid="card-my-tasks">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              My Tasks
+              {!tasksLoading && openTasks.length > 0 && (
+                <Badge variant="secondary" className="ml-1 font-normal">{openTasks.length}</Badge>
+              )}
+            </CardTitle>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1"
+              onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
+              data-testid="button-add-task"
+            >
+              <Plus className="h-3 w-3" /> Add Task
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {tasksLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
+            </div>
+          ) : displayTasks.length > 0 ? (
+            <div className="space-y-1">
+              {displayTasks.map(task => {
+                const companyName = getCompanyName(task.companyId);
+                const assignerName = getUserName(task.assignedBy);
+                return (
+                  <div
+                    key={task.id}
+                    className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group ${task.status === "completed" ? "opacity-50" : ""}`}
+                    data-testid={`task-row-${task.id}`}
+                  >
+                    <button
+                      onClick={() => toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) })}
+                      className="shrink-0 hover:scale-110 transition-transform"
+                      title={`Status: ${task.status}. Click to change.`}
+                      data-testid={`button-toggle-status-${task.id}`}
+                    >
+                      {statusIcon(task.status)}
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`}
+                         data-testid={`text-task-title-${task.id}`}>
+                        {task.title}
+                      </p>
+                      <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                        {companyName && (
+                          <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`}>
+                            {companyName}
+                          </Link>
+                        )}
+                        {assignerName && task.assignedBy !== currentUser?.id && (
+                          <span className="text-xs text-muted-foreground">from {assignerName}</span>
+                        )}
+                      </div>
+                    </div>
+                    {dueDateBadge(task.dueDate)}
+                    <button
+                      onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
+                      className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs"
+                      data-testid={`button-edit-task-${task.id}`}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => deleteMutation.mutate(task.id)}
+                      className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                      data-testid={`button-delete-task-${task.id}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+              {completedCount > 0 && (
+                <p className="text-xs text-muted-foreground pt-2 pl-3" data-testid="text-completed-count">
+                  {completedCount} completed task{completedCount !== 1 ? "s" : ""}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="text-center py-6 text-muted-foreground">
+              <ClipboardList className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No tasks yet</p>
+              <p className="text-xs mt-1">Click "Add Task" to create your first one</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
@@ -316,6 +497,12 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <TaskDialog
+        open={taskDialogOpen}
+        onOpenChange={setTaskDialogOpen}
+        editingTask={editingTask}
+      />
     </div>
   );
 }
