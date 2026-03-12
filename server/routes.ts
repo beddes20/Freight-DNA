@@ -1183,6 +1183,25 @@ export async function registerRoutes(
       if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
         return res.status(400).json({ error: "Invalid date format" });
       }
+      const allUsers = await storage.getUsers();
+      let assignableIds: Set<string>;
+      if (user.role === "admin") {
+        assignableIds = new Set(allUsers.map(u => u.id));
+      } else if (user.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        assignableIds = new Set(teamIds);
+      } else {
+        assignableIds = new Set([user.id]);
+        if (user.managerId) {
+          assignableIds.add(user.managerId);
+          allUsers.forEach(u => {
+            if (u.managerId === user.managerId) assignableIds.add(u.id);
+          });
+        }
+      }
+      if (!assignableIds.has(assignedTo)) {
+        return res.status(403).json({ error: "Cannot assign task to that user" });
+      }
       if (companyId && !(await canAccessCompany(user, companyId))) {
         return res.status(403).json({ error: "Cannot link task to inaccessible company" });
       }
