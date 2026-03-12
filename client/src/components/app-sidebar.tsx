@@ -111,6 +111,24 @@ export function AppSidebar() {
                         </SidebarMenuItem>
                       </SidebarMenu>
                     )}
+                    {item.title === "Buckets" && (
+                      <SidebarMenu className="ml-4 mt-0.5">
+                        <SidebarMenuItem>
+                          <SidebarMenuButton asChild>
+                            <a
+                              href="https://valuetruck-my.sharepoint.com/:p:/r/personal/ben_beddes_valuetruck_com/_layouts/15/Doc2.aspx?action=edit&sourcedoc=%7B088c48cc-a345-4d1a-9947-b49d3cd7112c%7D&wdOrigin=TEAMS-MAGLEV.undefined_ns.rwc&wdExp=TEAMS-TREATMENT&wdhostclicktime=1749156731495&web=1"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              data-testid="link-buckets-doc"
+                            >
+                              <FileText className="h-3.5 w-3.5" />
+                              <span className="text-xs">Buckets Doc</span>
+                              <ExternalLink className="h-3 w-3 ml-auto opacity-50" />
+                            </a>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      </SidebarMenu>
+                    )}
                   </SidebarMenuItem>
                 );
               })}
