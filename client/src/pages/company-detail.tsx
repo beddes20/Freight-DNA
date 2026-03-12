@@ -64,6 +64,8 @@ import {
   Eye,
   EyeOff,
   UserCheck,
+  Zap,
+  TrendingUp,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -149,6 +151,27 @@ interface LanePatterns {
   stateCorridors: StateCorridor[];
 }
 
+interface LaneMatch {
+  rfpTitle: string;
+  rfpId: string;
+  customerCity: string;
+  customerState: string;
+  customerLane: string;
+  customerVolume: number;
+  ourCity: string;
+  ourState: string;
+  distance: number;
+  weeklyLoads: number;
+  totalLoads: number;
+}
+
+interface LaneMatching {
+  ourDeliveriesToTheirPickups: LaneMatch[];
+  theirDeliveriesToOurPickups: LaneMatch[];
+  hasHistoricalData: boolean;
+  hasRfpData: boolean;
+}
+
 export default function CompanyDetail() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -174,6 +197,7 @@ export default function CompanyDetail() {
   const [showPortalPassword, setShowPortalPassword] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState("");
+  const [laneMatchMode, setLaneMatchMode] = useState<"deliveries" | "pickups">("deliveries");
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -210,6 +234,10 @@ export default function CompanyDetail() {
 
   const { data: lanePatterns } = useQuery<LanePatterns>({
     queryKey: ["/api/companies", companyId, "lane-patterns"],
+  });
+
+  const { data: laneMatching } = useQuery<LaneMatching>({
+    queryKey: ["/api/companies", companyId, "lane-matching"],
   });
 
   const canReassign = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
@@ -1121,6 +1149,127 @@ export default function CompanyDetail() {
                 )}
               </TabsContent>
             </Tabs>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Lane Matching Portlet ─────────────────────────────────────────── */}
+      {laneMatching && (laneMatching.hasHistoricalData || laneMatching.hasRfpData) && (
+        <Card data-testid="card-lane-matching">
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Zap className="h-5 w-5 text-yellow-500" />
+                <h2 className="text-base font-medium">Lane Matching</h2>
+                <Badge variant="secondary" className="text-xs">75-mi radius</Badge>
+              </div>
+              <div className="flex rounded-lg border overflow-hidden text-sm">
+                <button
+                  onClick={() => setLaneMatchMode("deliveries")}
+                  className={`px-3 py-1.5 flex items-center gap-1.5 transition-colors ${laneMatchMode === "deliveries" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
+                  data-testid="btn-match-deliveries"
+                >
+                  <ArrowDownToLine className="h-3.5 w-3.5" />
+                  Our Deliveries → Their Pickups
+                </button>
+                <button
+                  onClick={() => setLaneMatchMode("pickups")}
+                  className={`px-3 py-1.5 flex items-center gap-1.5 transition-colors border-l ${laneMatchMode === "pickups" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
+                  data-testid="btn-match-pickups"
+                >
+                  <ArrowUpFromLine className="h-3.5 w-3.5" />
+                  Their Deliveries → Our Pickups
+                </button>
+              </div>
+            </div>
+
+            {laneMatchMode === "deliveries" ? (
+              <>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Where we already drop freight near this customer's RFP pickup origins — we have trucks in these areas that could serve their lanes.
+                </p>
+                {!laneMatching.hasHistoricalData ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">Upload historical dispatch data on the Historical Data page to see matches.</p>
+                ) : !laneMatching.hasRfpData ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">Upload an RFP with lane data for this company to see matches.</p>
+                ) : laneMatching.ourDeliveriesToTheirPickups.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">No matches found within 75 miles.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {laneMatching.ourDeliveriesToTheirPickups.slice(0, 20).map((m, i) => (
+                      <div key={i} className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/40 transition-colors" data-testid={`match-delivery-${i}`}>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{m.customerLane}</p>
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            <span className="text-xs text-muted-foreground">Customer pickup:</span>
+                            <span className="text-xs font-medium">{m.customerCity}, {m.customerState}</span>
+                            <ArrowRightLeft className="h-3 w-3 text-muted-foreground" />
+                            <span className="text-xs text-muted-foreground">We deliver to:</span>
+                            <span className="text-xs font-medium">{m.ourCity}, {m.ourState}</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 shrink-0">
+                          <Badge variant={m.distance < 25 ? "default" : "secondary"} className="text-xs">
+                            {m.distance === 0 ? "Exact match" : `${m.distance} mi`}
+                          </Badge>
+                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                            <TrendingUp className="h-3 w-3" />
+                            {m.weeklyLoads}/wk · {m.customerVolume.toLocaleString()} vol
+                          </div>
+                          <span className="text-xs text-muted-foreground truncate max-w-28">{m.rfpTitle}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {laneMatching.ourDeliveriesToTheirPickups.length > 20 && (
+                      <p className="text-xs text-muted-foreground text-center pt-1">+{laneMatching.ourDeliveriesToTheirPickups.length - 20} more matches</p>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Where this customer needs deliveries near our existing freight pickup locations — potential backhaul opportunities for us.
+                </p>
+                {!laneMatching.hasHistoricalData ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">Upload historical dispatch data on the Historical Data page to see matches.</p>
+                ) : !laneMatching.hasRfpData ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">Upload an RFP with lane data for this company to see matches.</p>
+                ) : laneMatching.theirDeliveriesToOurPickups.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">No matches found within 75 miles.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {laneMatching.theirDeliveriesToOurPickups.slice(0, 20).map((m, i) => (
+                      <div key={i} className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/40 transition-colors" data-testid={`match-pickup-${i}`}>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{m.customerLane}</p>
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            <span className="text-xs text-muted-foreground">Customer delivery:</span>
+                            <span className="text-xs font-medium">{m.customerCity}, {m.customerState}</span>
+                            <ArrowRightLeft className="h-3 w-3 text-muted-foreground" />
+                            <span className="text-xs text-muted-foreground">We pick up at:</span>
+                            <span className="text-xs font-medium">{m.ourCity}, {m.ourState}</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 shrink-0">
+                          <Badge variant={m.distance < 25 ? "default" : "secondary"} className="text-xs">
+                            {m.distance === 0 ? "Exact match" : `${m.distance} mi`}
+                          </Badge>
+                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                            <TrendingUp className="h-3 w-3" />
+                            {m.weeklyLoads}/wk · {m.customerVolume.toLocaleString()} vol
+                          </div>
+                          <span className="text-xs text-muted-foreground truncate max-w-28">{m.rfpTitle}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {laneMatching.theirDeliveriesToOurPickups.length > 20 && (
+                      <p className="text-xs text-muted-foreground text-center pt-1">+{laneMatching.theirDeliveriesToOurPickups.length - 20} more matches</p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
           </CardContent>
         </Card>
       )}

@@ -1720,5 +1720,120 @@ export async function registerRoutes(
     }
   });
 
+  // ── Lane Matching (company-specific: our history vs their RFP lanes) ─────────
+  app.get("/api/companies/:id/lane-matching", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.params.id;
+      const uploads = await storage.getFinancialUploads();
+      const allRfps = await storage.getRfps();
+
+      // Build geocoded frequency maps for our deliveries (consignee) and pickups (shipper)
+      const ourDeliveryMap: Record<string, { city: string; state: string; count: number; lat: number; lng: number }> = {};
+      const ourPickupMap: Record<string, { city: string; state: string; count: number; lat: number; lng: number }> = {};
+
+      for (const upload of uploads) {
+        const rows: any[] = Array.isArray((upload as any).rows) ? (upload as any).rows : [];
+        for (const row of rows) {
+          const dc = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
+          const ds = (row["Consignee state"] || row["consignee_state"] || "").toString().trim();
+          if (dc) {
+            const k = `${dc}|${ds}`;
+            if (!ourDeliveryMap[k]) {
+              const coords = geocodeCity(dc, ds);
+              if (coords) ourDeliveryMap[k] = { city: dc, state: ds, count: 0, lat: coords[0], lng: coords[1] };
+            }
+            if (ourDeliveryMap[k]) ourDeliveryMap[k].count++;
+          }
+          const oc = (row["Shipper city"] || row["shipper_city"] || "").toString().trim();
+          const os = (row["Shipper state"] || row["shipper_state"] || "").toString().trim();
+          if (oc) {
+            const k = `${oc}|${os}`;
+            if (!ourPickupMap[k]) {
+              const coords = geocodeCity(oc, os);
+              if (coords) ourPickupMap[k] = { city: oc, state: os, count: 0, lat: coords[0], lng: coords[1] };
+            }
+            if (ourPickupMap[k]) ourPickupMap[k].count++;
+          }
+        }
+      }
+
+      const ourDeliveries = Object.values(ourDeliveryMap);
+      const ourPickups = Object.values(ourPickupMap);
+      const RADIUS_MILES = 75;
+      const ourDeliveriesToTheirPickups: any[] = [];
+      const theirDeliveriesToOurPickups: any[] = [];
+
+      for (const rfp of allRfps) {
+        if (rfp.companyId !== companyId) continue;
+        const fd = rfp.fileData as { highVolumeLanes?: any[] } | null;
+        if (!fd?.highVolumeLanes) continue;
+        for (const lane of fd.highVolumeLanes) {
+          const origCity = (lane.origin || "").toString().trim();
+          const origState = (lane.originState || "").toString().trim();
+          const destCity = (lane.destination || "").toString().trim();
+          const destState = (lane.destinationState || "").toString().trim();
+          const volume = lane.volume ?? 0;
+          const laneStr = `${origCity}${origState ? `, ${origState}` : ""} → ${destCity}${destState ? `, ${destState}` : ""}`;
+
+          // Mode A: Our deliveries vs their pickup (RFP origin)
+          if (origCity) {
+            const coords = geocodeCity(origCity, origState);
+            if (coords) {
+              for (const d of ourDeliveries) {
+                const dist = haversineDistance(coords[0], coords[1], d.lat, d.lng);
+                if (dist <= RADIUS_MILES) {
+                  ourDeliveriesToTheirPickups.push({
+                    rfpTitle: rfp.title, rfpId: rfp.id,
+                    customerCity: origCity, customerState: origState, customerLane: laneStr, customerVolume: volume,
+                    ourCity: d.city, ourState: d.state,
+                    distance: Math.round(dist * 10) / 10,
+                    weeklyLoads: Math.round(d.count / 52 * 10) / 10,
+                    totalLoads: d.count,
+                  });
+                }
+              }
+            }
+          }
+
+          // Mode B: Their deliveries (RFP destination) vs our pickups
+          if (destCity) {
+            const coords = geocodeCity(destCity, destState);
+            if (coords) {
+              for (const p of ourPickups) {
+                const dist = haversineDistance(coords[0], coords[1], p.lat, p.lng);
+                if (dist <= RADIUS_MILES) {
+                  theirDeliveriesToOurPickups.push({
+                    rfpTitle: rfp.title, rfpId: rfp.id,
+                    customerCity: destCity, customerState: destState, customerLane: laneStr, customerVolume: volume,
+                    ourCity: p.city, ourState: p.state,
+                    distance: Math.round(dist * 10) / 10,
+                    weeklyLoads: Math.round(p.count / 52 * 10) / 10,
+                    totalLoads: p.count,
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+
+      const dedup = (arr: any[], keyFn: (x: any) => string) => {
+        const seen = new Set<string>();
+        return arr.filter(x => { const k = keyFn(x); if (seen.has(k)) return false; seen.add(k); return true; })
+          .sort((a, b) => b.customerVolume - a.customerVolume || a.distance - b.distance);
+      };
+
+      res.json({
+        ourDeliveriesToTheirPickups: dedup(ourDeliveriesToTheirPickups, x => `${x.customerCity}|${x.ourCity}|${x.rfpId}`),
+        theirDeliveriesToOurPickups: dedup(theirDeliveriesToOurPickups, x => `${x.customerCity}|${x.ourCity}|${x.rfpId}`),
+        hasHistoricalData: ourDeliveries.length > 0 || ourPickups.length > 0,
+        hasRfpData: allRfps.some(r => r.companyId === companyId && (r.fileData as any)?.highVolumeLanes?.length > 0),
+      });
+    } catch (err) {
+      console.error("Lane matching error:", err);
+      res.status(500).json({ error: "Failed to compute lane matching" });
+    }
+  });
+
   return httpServer;
 }
