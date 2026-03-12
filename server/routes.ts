@@ -10,7 +10,7 @@ import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } f
 import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema } from "@shared/schema";
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 const zipCodeMap: Record<string, string> = JSON.parse(
   readFileSync(join(process.cwd(), "server", "zipcodes.json"), "utf-8")
@@ -1911,6 +1911,16 @@ export async function registerRoutes(
       console.error("Lane matching error:", err);
       res.status(500).json({ error: "Failed to compute lane matching" });
     }
+  });
+
+  app.use((err: any, _req: any, res: any, next: any) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "File is too large. Maximum size is 50MB." });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    next(err);
   });
 
   return httpServer;

@@ -167,8 +167,8 @@ export default function Financials() {
       queryClient.invalidateQueries({ queryKey: ["/api/financials/uploads"] });
       toast({ title: "Upload successful", description: "Financial data has been updated." });
     },
-    onError: () => {
-      toast({ title: "Upload failed", description: "Please try again.", variant: "destructive" });
+    onError: (error: Error) => {
+      toast({ title: "Upload failed", description: error.message || "Please try again.", variant: "destructive" });
     },
   });
 
