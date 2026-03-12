@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp, Target, ShieldCheck, UserCircle } from "lucide-react";
+import { Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp, ShieldCheck, UserCircle } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import type { Company, Contact, User } from "@shared/schema";
 
@@ -117,22 +117,6 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
-      <div className="rounded-xl p-6 sm:p-8 text-white" style={{ background: "linear-gradient(135deg, #001AB3 0%, #044ad3 60%, #2868ff 100%)" }}>
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-xl sm:text-2xl font-bold" data-testid="text-dashboard-title">
-              Welcome back
-            </h1>
-            <p className="text-blue-100 mt-1 text-sm sm:text-base">
-              Your transportation brokerage sales dashboard
-            </p>
-          </div>
-          <div className="hidden sm:flex items-center gap-2 rounded-lg bg-white/15 backdrop-blur-sm px-3 py-2">
-            <Target className="h-4 w-4" />
-            <span className="text-sm font-medium">{companies?.length || 0} Active Accounts</span>
-          </div>
-        </div>
-      </div>
 
       <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
