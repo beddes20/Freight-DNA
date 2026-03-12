@@ -10,6 +10,8 @@ A mini CRM application designed for transportation brokerage sales teams to buil
 - **Styling**: Tailwind CSS with shadcn/ui components
 - **Auth**: express-session + connect-pg-simple + bcrypt (email/password login)
 - **File Processing**: xlsx (SheetJS) for Excel/CSV parsing, multer for file uploads
+- **Mapping**: Leaflet (direct, no react-leaflet) with dynamic import for interactive delivery heatmap
+- **Geocoding**: Custom `server/geocoding.ts` with ~600+ US city coordinates + state centers + haversine distance
 
 ## Project Structure
 ```
@@ -114,6 +116,7 @@ shared/
 20. **Historical Data Page**: `/historical-data` — delivery destination frequency ranked by weekly load count; "hot zones" (5+ loads/week) highlighted in orange; summary stats (total loads, unique destinations, hot zone count); search filter. Admin/NAM only.
 21. **Top Opportunities Page**: `/top-opportunities` — intelligent opportunity engine that cross-references delivery destinations (where we drop trucks) against RFP lane origins (where shippers need pickups); each opportunity card shows destination, weekly frequency, and all matched RFP lanes (company, RFP title, lane corridor, volume, rate, equipment); visible to all users.
 22. **Global Search**: Search bar in top header searches across accounts (companies), account managers, and NAMs by name; live dropdown grouped by type; navigates to company detail or rep page on selection; debounced with abort on new keystroke.
+23. **Historical Data Tabs**: Historical Data page has 4 tabs — (1) Overview: hot zones + all destinations ranked by avg weekly loads; (2) Lane Corridors: top origin→destination pairs from dispatch data sorted by total loads, searchable table; (3) Density Map: interactive Leaflet map with blue circles (deliveries) and green circles (pickups) scaled by volume; (4) Proximity Matches: delivery zones within 75 miles of customer RFP pickup origins, expandable zone cards showing matched companies/RFPs with exact distance and assigned rep.
 
 ## UI Components
 - `client/src/components/confetti.tsx` - Confetti celebration animation (useConfetti hook)
@@ -166,6 +169,9 @@ shared/
 - `GET /api/companies/:id/facility-coverage` - Facility coverage gap analysis for a company
 - `GET /api/companies/:id/lane-patterns` - Lane pattern analysis (corridors, hubs, state corridors)
 - `GET /api/historical-data-summary` - Delivery destination density (weekly load counts, hot zones) from all financial_uploads
+- `GET /api/historical-lane-corridors` - Top origin→destination pairs ranked by load count (max 200)
+- `GET /api/historical-heatmap` - Geocoded delivery and pickup density points for map rendering
+- `GET /api/proximity-matches` - Delivery zones within 75 miles of customer RFP pickup origins with company/rep info
 - `GET /api/opportunities` - Cross-reference hot delivery destinations vs RFP lane origins; returns matched opportunity cards sorted by delivery frequency
 - `GET /api/search?q=` - Global search across companies and users (AM/NAM roles)
 

@@ -7,6 +7,7 @@ import XLSX from "xlsx";
 import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
+import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -1571,6 +1572,145 @@ export async function registerRoutes(
       res.json(opportunities);
     } catch (error) {
       res.status(500).json({ error: "Failed to compute opportunities" });
+    }
+  });
+
+  // ── Lane Corridors ────────────────────────────────────────────────────────────
+  app.get("/api/historical-lane-corridors", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploads();
+      const corridorMap: Record<string, { origin: string; destination: string; originCity: string; originState: string; destCity: string; destState: string; loads: number }> = {};
+      for (const upload of uploads) {
+        const rows: any[] = (upload as any).rows ?? [];
+        for (const row of rows) {
+          const oc = (row["Shipper city"] || row["shipper_city"] || row["Origin City"] || "").toString().trim();
+          const os = (row["Shipper state"] || row["shipper_state"] || row["Origin State"] || "").toString().trim();
+          const dc = (row["Consignee city"] || row["consignee_city"] || row["Dest City"] || "").toString().trim();
+          const ds = (row["Consignee state"] || row["consignee_state"] || row["Dest State"] || "").toString().trim();
+          if (!oc || !dc) continue;
+          const key = `${oc}|${os}→${dc}|${ds}`;
+          if (!corridorMap[key]) {
+            corridorMap[key] = { origin: `${oc}, ${os}`, destination: `${dc}, ${ds}`, originCity: oc, originState: os, destCity: dc, destState: ds, loads: 0 };
+          }
+          corridorMap[key].loads++;
+        }
+      }
+      const corridors = Object.values(corridorMap).sort((a, b) => b.loads - a.loads).slice(0, 200);
+      res.json(corridors);
+    } catch (err) {
+      console.error("Lane corridors error:", err);
+      res.status(500).json({ error: "Failed to compute lane corridors" });
+    }
+  });
+
+  // ── Heatmap Data ─────────────────────────────────────────────────────────────
+  app.get("/api/historical-heatmap", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploads();
+      const deliveries: Record<string, { city: string; state: string; count: number }> = {};
+      const pickups: Record<string, { city: string; state: string; count: number }> = {};
+      for (const upload of uploads) {
+        const rows: any[] = (upload as any).rows ?? [];
+        for (const row of rows) {
+          const dc = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
+          const ds = (row["Consignee state"] || row["consignee_state"] || "").toString().trim();
+          const oc = (row["Shipper city"] || row["shipper_city"] || "").toString().trim();
+          const os = (row["Shipper state"] || row["shipper_state"] || "").toString().trim();
+          if (dc) { const k = `${dc}|${ds}`; if (!deliveries[k]) deliveries[k] = { city: dc, state: ds, count: 0 }; deliveries[k].count++; }
+          if (oc) { const k = `${oc}|${os}`; if (!pickups[k]) pickups[k] = { city: oc, state: os, count: 0 }; pickups[k].count++; }
+        }
+      }
+      const geocode = (items: Record<string, { city: string; state: string; count: number }>) =>
+        Object.values(items).map(i => {
+          const coords = geocodeCity(i.city, i.state);
+          if (!coords) return null;
+          return { city: i.city, state: i.state, lat: coords[0], lng: coords[1], count: i.count };
+        }).filter(Boolean).sort((a: any, b: any) => b.count - a.count).slice(0, 300);
+      res.json({ deliveries: geocode(deliveries), pickups: geocode(pickups) });
+    } catch (err) {
+      console.error("Heatmap error:", err);
+      res.status(500).json({ error: "Failed to compute heatmap" });
+    }
+  });
+
+  // ── Proximity Matches (75-mile delivery zones vs RFP pickup origins) ────────
+  app.get("/api/proximity-matches", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploads();
+      const rfps = await storage.getRfps();
+      const companies = await storage.getCompanies();
+      const users = await storage.getUsers();
+
+      const companyMap = Object.fromEntries(companies.map((c: any) => [c.id, c]));
+      const userMap = Object.fromEntries(users.map((u: any) => [u.id, u.name]));
+
+      // Build delivery zone frequency
+      const deliveryMap: Record<string, { city: string; state: string; count: number }> = {};
+      for (const upload of uploads) {
+        const rows: any[] = (upload as any).rows ?? [];
+        for (const row of rows) {
+          const c = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
+          const s = (row["Consignee state"] || row["consignee_state"] || "").toString().trim();
+          if (!c) continue;
+          const k = `${c}|${s}`;
+          if (!deliveryMap[k]) deliveryMap[k] = { city: c, state: s, count: 0 };
+          deliveryMap[k].count++;
+        }
+      }
+      const deliveryZones = Object.values(deliveryMap)
+        .map(d => { const coords = geocodeCity(d.city, d.state); return coords ? { ...d, lat: coords[0], lng: coords[1] } : null; })
+        .filter(Boolean)
+        .sort((a: any, b: any) => b.count - a.count)
+        .slice(0, 100) as Array<{ city: string; state: string; count: number; lat: number; lng: number }>;
+
+      // Build RFP high-volume lane origins
+      type LaneCandidate = { companyId: string; companyName: string; rfpId: string; rfpTitle: string; origin: string; destination: string; volume: number; assignedUserId: string; lat: number; lng: number };
+      const laneCandidates: LaneCandidate[] = [];
+      for (const rfp of rfps) {
+        const fd = rfp.fileData as { highVolumeLanes?: any[] } | null;
+        if (!fd?.highVolumeLanes) continue;
+        const company = companyMap[rfp.companyId];
+        const companyName = company?.name || rfp.companyId;
+        const assignedUserId = company?.assignedTo || "";
+        for (const lane of fd.highVolumeLanes) {
+          const originCity = (lane.origin || "").toString().trim();
+          const originState = (lane.originState || "").toString().trim();
+          const destCity = (lane.destination || "").toString().trim();
+          const destState = (lane.destinationState || "").toString().trim();
+          if (!originCity && !originState) continue;
+          const coords = geocodeCity(originCity, originState);
+          if (!coords) continue;
+          laneCandidates.push({
+            companyId: rfp.companyId,
+            companyName,
+            rfpId: rfp.id,
+            rfpTitle: rfp.title,
+            origin: originCity ? `${originCity}${originState ? `, ${originState}` : ""}` : originState,
+            destination: destCity ? `${destCity}${destState ? `, ${destState}` : ""}` : destState,
+            volume: lane.volume ?? 0,
+            assignedUserId,
+            lat: coords[0],
+            lng: coords[1],
+          });
+        }
+      }
+
+      const RADIUS_MILES = 75;
+      const results = deliveryZones.map(zone => {
+        const matches = laneCandidates
+          .map(lane => {
+            const dist = haversineDistance(zone.lat, zone.lng, lane.lat, lane.lng);
+            return dist <= RADIUS_MILES ? { ...lane, distance: Math.round(dist * 10) / 10, assignedName: userMap[lane.assignedUserId] || "Unassigned" } : null;
+          })
+          .filter(Boolean)
+          .sort((a: any, b: any) => a.distance - b.distance);
+        return { zone: `${zone.city}, ${zone.state}`, city: zone.city, state: zone.state, lat: zone.lat, lng: zone.lng, weeklyLoads: Math.round(zone.count / 52 * 10) / 10, totalLoads: zone.count, matchCount: matches.length, matches };
+      }).filter(r => r.matchCount > 0).sort((a, b) => b.matchCount - a.matchCount);
+
+      res.json(results);
+    } catch (err) {
+      console.error("Proximity matches error:", err);
+      res.status(500).json({ error: "Failed to compute proximity matches" });
     }
   });
 
