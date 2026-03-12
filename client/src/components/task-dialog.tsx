@@ -41,6 +41,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask }: TaskD
   const [notes, setNotes] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
+  const [status, setStatus] = useState("open");
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
@@ -59,12 +60,14 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask }: TaskD
         setNotes(editingTask.notes || "");
         setDueDate(editingTask.dueDate || "");
         setAssignedTo(editingTask.assignedTo);
+        setStatus(editingTask.status);
         setSelectedCompanyId(editingTask.companyId || "");
       } else {
         setTitle("");
         setNotes("");
         setDueDate("");
         setAssignedTo(user?.id || "");
+        setStatus("open");
         setSelectedCompanyId(companyId || "");
       }
     }
@@ -97,6 +100,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask }: TaskD
         title,
         notes: notes || null,
         dueDate: dueDate || null,
+        status,
       });
     },
     onSuccess: () => {
@@ -167,7 +171,21 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask }: TaskD
               />
             </div>
 
-            {!editingTask && (
+            {editingTask ? (
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={status} onValueChange={setStatus}>
+                  <SelectTrigger data-testid="select-task-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="open">Open</SelectItem>
+                    <SelectItem value="in_progress">In Progress</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
               <div className="space-y-2">
                 <Label>Assign To</Label>
                 <Select value={assignedTo} onValueChange={setAssignedTo}>

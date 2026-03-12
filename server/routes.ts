@@ -403,7 +403,14 @@ export async function registerRoutes(
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
       }
-      return res.json(safeUsers.filter(u => u.id === currentUser.id));
+      const visibleIds = new Set<string>([currentUser.id]);
+      if (currentUser.managerId) {
+        visibleIds.add(currentUser.managerId);
+        allUsers.forEach(u => {
+          if (u.managerId === currentUser.managerId) visibleIds.add(u.id);
+        });
+      }
+      return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch team members" });
     }

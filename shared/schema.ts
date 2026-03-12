@@ -126,10 +126,10 @@ export const tasks = pgTable("tasks", {
   notes: text("notes"),
   status: text("status").notNull().default("open"),
   dueDate: text("due_date"),
-  assignedTo: varchar("assigned_to").notNull(),
-  assignedBy: varchar("assigned_by").notNull(),
-  companyId: varchar("company_id"),
-  contactId: varchar("contact_id"),
+  assignedTo: varchar("assigned_to").notNull().references(() => users.id),
+  assignedBy: varchar("assigned_by").notNull().references(() => users.id),
+  companyId: varchar("company_id").references(() => companies.id),
+  contactId: varchar("contact_id").references(() => contacts.id),
   createdAt: text("created_at").notNull(),
 });
 
