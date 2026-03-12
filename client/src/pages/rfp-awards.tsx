@@ -357,8 +357,11 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
   const [researchDialogOpen, setResearchDialogOpen] = useState(false);
   const [selectedLane, setSelectedLane] = useState<HighVolumeLane | null>(null);
   const [selectedLaneIndex, setSelectedLaneIndex] = useState(0);
-  const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "volume", dir: "desc" });
+  const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "origin", dir: "asc" });
   const [hvLanesCollapsed, setHvLanesCollapsed] = useState(false);
+  const [dataViewerCollapsed, setDataViewerCollapsed] = useState(false);
+  const [rfpFacilityCoverageCollapsed, setRfpFacilityCoverageCollapsed] = useState(false);
+  const [rfpLanePatternsCollapsed, setRfpLanePatternsCollapsed] = useState(false);
   const [findPlannerFacility, setFindPlannerFacility] = useState<Facility | null>(null);
   const [assignExistingContactId, setAssignExistingContactId] = useState("");
 
@@ -636,20 +639,30 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
       <Card className="border-2 border-primary/20">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-base flex items-center gap-2">
-                <BarChart3 className="h-4 w-4" />
-                {rfp.title} - Spreadsheet Data
-              </CardTitle>
-              <p className="text-sm text-muted-foreground mt-1">
-                {rfp.fileName} - {rows.length} rows
-              </p>
+            <button
+              onClick={() => setDataViewerCollapsed(c => !c)}
+              className="flex-1 flex items-start gap-0 text-left group"
+              data-testid="btn-toggle-data-viewer"
+            >
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4" />
+                  {rfp.title} - Spreadsheet Data
+                </CardTitle>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {rfp.fileName} - {rows.length} rows
+                </p>
+              </div>
+            </button>
+            <div className="flex items-center gap-1">
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${dataViewerCollapsed ? "-rotate-90" : ""}`} />
+              <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-data-viewer">
+                <X className="h-4 w-4" />
+              </Button>
             </div>
-            <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-data-viewer">
-              <X className="h-4 w-4" />
-            </Button>
           </div>
 
+          {!dataViewerCollapsed && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
             {rfp.laneCount && rfp.laneCount > 0 && (
               <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
@@ -688,8 +701,9 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
               </div>
             )}
           </div>
+          )}
         </CardHeader>
-        {rows.length > 0 && (
+        {!dataViewerCollapsed && rows.length > 0 && (
           <CardContent className="pt-0">
             <div className="overflow-x-auto rounded-md border">
               <table className="w-full text-sm" data-testid="table-rfp-data">
@@ -726,8 +740,12 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
 
       {facilityCoverage && facilityCoverage.facilities.length > 0 && (
         <Card data-testid="card-facility-coverage-viewer">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between mb-3">
+          <CardHeader className="pb-3">
+            <button
+              onClick={() => setRfpFacilityCoverageCollapsed(c => !c)}
+              className="w-full flex items-center justify-between group"
+              data-testid="btn-toggle-rfp-facility-coverage"
+            >
               <div className="flex items-center gap-2">
                 <MapPin className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                 <h2 className="text-base font-medium">Facility Coverage</h2>
@@ -745,8 +763,12 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                     {facilityCoverage.summary.covered} covered
                   </Badge>
                 )}
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${rfpFacilityCoverageCollapsed ? "-rotate-90" : ""}`} />
               </div>
-            </div>
+            </button>
+          </CardHeader>
+          {!rfpFacilityCoverageCollapsed && (
+          <CardContent className="pt-0">
             <div className="space-y-2">
               {facilityCoverage.facilities.map((f, i) => (
                 <div
@@ -813,16 +835,27 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
               ))}
             </div>
           </CardContent>
+          )}
         </Card>
       )}
 
       {lanePatterns && (lanePatterns.topCorridors.length > 0 || lanePatterns.hubs.length > 0 || lanePatterns.stateCorridors.length > 0) && (
         <Card data-testid="card-lane-patterns-viewer">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Route className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-              <h2 className="text-base font-medium">Lane Patterns</h2>
-            </div>
+          <CardHeader className="pb-3">
+            <button
+              onClick={() => setRfpLanePatternsCollapsed(c => !c)}
+              className="w-full flex items-center justify-between group"
+              data-testid="btn-toggle-rfp-lane-patterns"
+            >
+              <div className="flex items-center gap-2">
+                <Route className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                <h2 className="text-base font-medium">Lane Patterns</h2>
+              </div>
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${rfpLanePatternsCollapsed ? "-rotate-90" : ""}`} />
+            </button>
+          </CardHeader>
+          {!rfpLanePatternsCollapsed && (
+          <CardContent className="pt-0">
             <Tabs defaultValue="corridors" className="w-full">
               <TabsList className="w-full grid grid-cols-3">
                 <TabsTrigger value="corridors">
@@ -979,6 +1012,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
               </TabsContent>
             </Tabs>
           </CardContent>
+          )}
         </Card>
       )}
 

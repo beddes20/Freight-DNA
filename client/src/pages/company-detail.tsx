@@ -188,7 +188,7 @@ export default function CompanyDetail() {
   const [contactDefaults, setContactDefaults] = useState<{ lane?: string; region?: string } | undefined>();
   const [researchDialogOpen, setResearchDialogOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<ResearchTask | null>(null);
-  const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "volume", dir: "desc" });
+  const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "origin", dir: "asc" });
   const [findPlannerFacility, setFindPlannerFacility] = useState<Facility | null>(null);
   const [assignExistingContactId, setAssignExistingContactId] = useState<string>("");
   const [portalEdit, setPortalEdit] = useState(false);
@@ -200,6 +200,9 @@ export default function CompanyDetail() {
   const [transferTo, setTransferTo] = useState("");
   const [laneMatchMode, setLaneMatchMode] = useState<"deliveries" | "pickups">("deliveries");
   const [lanesCollapsed, setLanesCollapsed] = useState(false);
+  const [facilityCoverageCollapsed, setFacilityCoverageCollapsed] = useState(false);
+  const [lanePatternsCollapsed, setLanePatternsCollapsed] = useState(false);
+  const [laneMatchingCollapsed, setLaneMatchingCollapsed] = useState(false);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -897,8 +900,12 @@ export default function CompanyDetail() {
 
       {facilityCoverage && facilityCoverage.facilities.length > 0 && (
         <Card data-testid="card-facility-coverage">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between mb-3">
+          <CardHeader className="pb-3">
+            <button
+              onClick={() => setFacilityCoverageCollapsed(c => !c)}
+              className="w-full flex items-center justify-between group"
+              data-testid="btn-toggle-facility-coverage"
+            >
               <div className="flex items-center gap-2">
                 <MapPin className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                 <h2 className="text-base font-medium">
@@ -918,9 +925,12 @@ export default function CompanyDetail() {
                     {facilityCoverage.summary.covered} covered
                   </Badge>
                 )}
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${facilityCoverageCollapsed ? "-rotate-90" : ""}`} />
               </div>
-            </div>
-
+            </button>
+          </CardHeader>
+          {!facilityCoverageCollapsed && (
+          <CardContent className="pt-0">
             <div className="space-y-2">
               {facilityCoverage.facilities.map((f, i) => (
                 <div
@@ -988,17 +998,27 @@ export default function CompanyDetail() {
               ))}
             </div>
           </CardContent>
+          )}
         </Card>
       )}
 
       {lanePatterns && (lanePatterns.topCorridors.length > 0 || lanePatterns.hubs.length > 0 || lanePatterns.stateCorridors.length > 0) && (
         <Card data-testid="card-lane-patterns">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Route className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-              <h2 className="text-base font-medium">Lane Patterns</h2>
-            </div>
-
+          <CardHeader className="pb-3">
+            <button
+              onClick={() => setLanePatternsCollapsed(c => !c)}
+              className="w-full flex items-center justify-between group"
+              data-testid="btn-toggle-lane-patterns"
+            >
+              <div className="flex items-center gap-2">
+                <Route className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                <h2 className="text-base font-medium">Lane Patterns</h2>
+              </div>
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${lanePatternsCollapsed ? "-rotate-90" : ""}`} />
+            </button>
+          </CardHeader>
+          {!lanePatternsCollapsed && (
+          <CardContent className="pt-0">
             <Tabs defaultValue="corridors" className="w-full">
               <TabsList className="w-full grid grid-cols-3">
                 <TabsTrigger value="corridors" data-testid="tab-top-corridors">
@@ -1157,19 +1177,30 @@ export default function CompanyDetail() {
               </TabsContent>
             </Tabs>
           </CardContent>
+          )}
         </Card>
       )}
 
       {/* ── Lane Matching Portlet ─────────────────────────────────────────── */}
       {laneMatching && (laneMatching.hasHistoricalData || laneMatching.hasRfpData) && (
         <Card data-testid="card-lane-matching">
-          <CardContent className="p-5">
-            <div className="flex items-center justify-between mb-4">
+          <CardHeader className="pb-3">
+            <button
+              onClick={() => setLaneMatchingCollapsed(c => !c)}
+              className="w-full flex items-center justify-between group"
+              data-testid="btn-toggle-lane-matching"
+            >
               <div className="flex items-center gap-2">
                 <Zap className="h-5 w-5 text-yellow-500" />
                 <h2 className="text-base font-medium">Lane Matching</h2>
                 <Badge variant="secondary" className="text-xs">75-mi radius</Badge>
               </div>
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${laneMatchingCollapsed ? "-rotate-90" : ""}`} />
+            </button>
+          </CardHeader>
+          {!laneMatchingCollapsed && (
+          <CardContent className="pt-0">
+            <div className="flex items-center justify-end mb-4">
               <div className="flex rounded-lg border overflow-hidden text-sm">
                 <button
                   onClick={() => setLaneMatchMode("deliveries")}
@@ -1278,6 +1309,7 @@ export default function CompanyDetail() {
               </>
             )}
           </CardContent>
+          )}
         </Card>
       )}
 
