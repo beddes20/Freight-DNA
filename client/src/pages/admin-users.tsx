@@ -20,6 +20,7 @@ const ROLE_LABELS: Record<string, string> = {
   director: "Director",
   national_account_manager: "National Account Manager",
   account_manager: "Account Manager",
+  sales: "Sales",
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -27,6 +28,7 @@ const ROLE_COLORS: Record<string, string> = {
   director: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200",
   national_account_manager: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
   account_manager: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+  sales: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
 };
 
 const ROLE_ICONS: Record<string, any> = {
@@ -34,6 +36,7 @@ const ROLE_ICONS: Record<string, any> = {
   director: Crown,
   national_account_manager: ShieldCheck,
   account_manager: UserCircle,
+  sales: UserCircle,
 };
 
 function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: SafeUser[]; onClose: () => void; isNAM?: boolean }) {
@@ -102,6 +105,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
                 <SelectItem value="director">Director</SelectItem>
                 <SelectItem value="national_account_manager">National Account Manager</SelectItem>
                 <SelectItem value="account_manager">Account Manager</SelectItem>
+                <SelectItem value="sales">Sales</SelectItem>
               </SelectContent>
             </Select>
           </div>
