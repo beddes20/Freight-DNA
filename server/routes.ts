@@ -1234,7 +1234,11 @@ export async function registerRoutes(
       }
       const validStatuses = ["open", "in_progress", "completed"];
       const data: any = {};
-      if (req.body.title !== undefined) data.title = String(req.body.title).trim();
+      if (req.body.title !== undefined) {
+        const trimmed = String(req.body.title).trim();
+        if (!trimmed) return res.status(400).json({ error: "Title cannot be empty" });
+        data.title = trimmed;
+      }
       if (req.body.notes !== undefined) data.notes = req.body.notes;
       if (req.body.status !== undefined) {
         if (!validStatuses.includes(req.body.status)) {
