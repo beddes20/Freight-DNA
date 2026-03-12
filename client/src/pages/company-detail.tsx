@@ -66,6 +66,7 @@ import {
   UserCheck,
   Zap,
   TrendingUp,
+  ChevronDown,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -198,6 +199,7 @@ export default function CompanyDetail() {
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState("");
   const [laneMatchMode, setLaneMatchMode] = useState<"deliveries" | "pickups">("deliveries");
+  const [lanesCollapsed, setLanesCollapsed] = useState(false);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -711,7 +713,11 @@ export default function CompanyDetail() {
         return (
           <Card className="border-2 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-lanes-needing-contacts">
             <CardContent className="p-4">
-              <div className="flex items-center justify-between mb-3">
+              <button
+                onClick={() => setLanesCollapsed(c => !c)}
+                className="w-full flex items-center justify-between mb-3 group"
+                data-testid="btn-toggle-lanes"
+              >
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
                   <h2 className="text-base font-medium text-amber-700 dark:text-amber-400">
@@ -729,10 +735,11 @@ export default function CompanyDetail() {
                       {openTasks.length} open
                     </Badge>
                   )}
+                  <ChevronDown className={`h-4 w-4 text-amber-600 dark:text-amber-400 transition-transform duration-200 ${lanesCollapsed ? "-rotate-90" : ""}`} />
                 </div>
-              </div>
+              </button>
 
-              {(() => {
+              {!lanesCollapsed && (() => {
                 const fmtLoc = (city: string, state: string) => {
                   if (!city && !state) return "—";
                   if (!city) return state;
