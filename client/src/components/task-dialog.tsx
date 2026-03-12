@@ -33,15 +33,22 @@ interface LaneDataAttachment {
   items: any[];
 }
 
+interface PrefillData {
+  title: string;
+  notes?: string;
+  attachedLaneData?: any[];
+}
+
 interface TaskDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   companyId?: string;
   editingTask?: Task;
   forwardingTask?: Task;
+  prefillData?: PrefillData;
 }
 
-export function TaskDialog({ open, onOpenChange, companyId, editingTask, forwardingTask }: TaskDialogProps) {
+export function TaskDialog({ open, onOpenChange, companyId, editingTask, forwardingTask, prefillData }: TaskDialogProps) {
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -70,7 +77,18 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
 
   useEffect(() => {
     if (open) {
-      if (forwardingTask) {
+      if (prefillData) {
+        setTitle(prefillData.title);
+        setNotes(prefillData.notes || "");
+        setDueDate("");
+        setAssignedTo(user?.id || "");
+        setStatus("open");
+        setSelectedCompanyId(companyId || "");
+        setAttachExpanded(false);
+        setSelectedTypes(new Set());
+        setSnapshotData([]);
+        setSelectedItems({});
+      } else if (forwardingTask) {
         setTitle(forwardingTask.title);
         setNotes("");
         setDueDate(forwardingTask.dueDate || "");
@@ -105,7 +123,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
         setSelectedItems({});
       }
     }
-  }, [open, editingTask, forwardingTask, companyId, user?.id]);
+  }, [open, editingTask, forwardingTask, prefillData, companyId, user?.id]);
 
   const toggleType = (type: string) => {
     setSelectedTypes(prev => {
@@ -164,6 +182,9 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
   };
 
   const buildAttachedLaneData = (): LaneDataAttachment[] | null => {
+    if (prefillData?.attachedLaneData && prefillData.attachedLaneData.length > 0) {
+      return prefillData.attachedLaneData as LaneDataAttachment[];
+    }
     if (forwardingTask && forwardingTask.attachedLaneData) {
       return forwardingTask.attachedLaneData as LaneDataAttachment[];
     }
@@ -254,14 +275,14 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
     { value: "lane_matching", label: "Lane Matching" },
   ];
 
-  const showAttachSection = !editingTask && (effectiveCompanyId && effectiveCompanyId !== "none");
+  const showAttachSection = !editingTask && !prefillData && (effectiveCompanyId && effectiveCompanyId !== "none");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle data-testid="text-task-dialog-title">
-            {forwardingTask ? "Forward Task" : editingTask ? "Edit Task" : "New Task"}
+            {prefillData ? "Force Task from Lane" : forwardingTask ? "Forward Task" : editingTask ? "Edit Task" : "New Task"}
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -433,7 +454,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
             </Button>
             <Button type="submit" disabled={isPending || (forwardingTask ? !assignedTo : (!title.trim() || (!editingTask && !assignedTo)))} data-testid="button-task-save">
               {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              {forwardingTask ? "Forward Task" : editingTask ? "Save Changes" : "Create Task"}
+              {prefillData ? "Create Task" : forwardingTask ? "Forward Task" : editingTask ? "Save Changes" : "Create Task"}
             </Button>
           </DialogFooter>
         </form>

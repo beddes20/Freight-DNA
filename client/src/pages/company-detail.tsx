@@ -210,6 +210,7 @@ export default function CompanyDetail() {
   const [laneMatchMode, setLaneMatchMode] = useState<"deliveries" | "pickups">("deliveries");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<Task | undefined>();
+  const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[] } | undefined>();
   const [lanesCollapsed, setLanesCollapsed] = useState(false);
   const [facilityCoverageCollapsed, setFacilityCoverageCollapsed] = useState(false);
   const [lanePatternsCollapsed, setLanePatternsCollapsed] = useState(false);
@@ -742,7 +743,7 @@ export default function CompanyDetail() {
                 <Badge variant="secondary" className="ml-1 font-normal">{companyTasks.filter(t => t.status !== "completed").length}</Badge>
               )}
             </CardTitle>
-            <Button size="sm" variant="outline" className="gap-1" onClick={() => { setEditingTaskItem(undefined); setTaskDialogOpen(true); }} data-testid="button-add-company-task">
+            <Button size="sm" variant="outline" className="gap-1" onClick={() => { setEditingTaskItem(undefined); setForceLanePrefill(undefined); setTaskDialogOpen(true); }} data-testid="button-add-company-task">
               <Plus className="h-3 w-3" /> Add Task
             </Button>
           </div>
@@ -783,7 +784,7 @@ export default function CompanyDetail() {
                         {assigneeName && <p className="text-xs text-muted-foreground">{assigneeName}</p>}
                       </div>
                       {dueBadge}
-                      <button onClick={() => { setEditingTaskItem(task); setTaskDialogOpen(true); }} className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs" data-testid={`button-edit-company-task-${task.id}`}>Edit</button>
+                      <button onClick={() => { setEditingTaskItem(task); setForceLanePrefill(undefined); setTaskDialogOpen(true); }} className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs" data-testid={`button-edit-company-task-${task.id}`}>Edit</button>
                       <button onClick={() => deleteTaskMutation.mutate(task.id)} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-company-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
                     </div>
                   );
@@ -914,9 +915,13 @@ export default function CompanyDetail() {
 
       <TaskDialog
         open={taskDialogOpen}
-        onOpenChange={setTaskDialogOpen}
+        onOpenChange={(open) => {
+          setTaskDialogOpen(open);
+          if (!open) setForceLanePrefill(undefined);
+        }}
         companyId={companyId}
         editingTask={editingTaskItem}
+        prefillData={forceLanePrefill}
       />
 
       <CalloutDialog
@@ -1151,29 +1156,67 @@ export default function CompanyDetail() {
                                 )}
                               </td>
                               <td className="py-2 px-3 whitespace-nowrap">
-                                {task.status === "open" ? (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
-                                    onClick={() => handleAssignTask(task)}
-                                    data-testid={`button-assign-lane-task-${i}`}
-                                  >
-                                    <UserPlus className="h-4 w-4 mr-1" />
-                                    Assign
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400"
-                                    onClick={() => markResearchedMutation.mutate(task)}
-                                    disabled={markResearchedMutation.isPending}
-                                    data-testid={`button-mark-complete-task-${i}`}
-                                  >
-                                    Mark Complete
-                                  </Button>
-                                )}
+                                <div className="flex items-center gap-2">
+                                  {task.status === "open" ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
+                                      onClick={() => handleAssignTask(task)}
+                                      data-testid={`button-assign-lane-task-${i}`}
+                                    >
+                                      <UserPlus className="h-4 w-4 mr-1" />
+                                      Assign
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400"
+                                      onClick={() => markResearchedMutation.mutate(task)}
+                                      disabled={markResearchedMutation.isPending}
+                                      data-testid={`button-mark-complete-task-${i}`}
+                                    >
+                                      Mark Complete
+                                    </Button>
+                                  )}
+                                  {canReassign && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-400"
+                                      onClick={() => {
+                                        const laneName = `${task.origin}${task.originState ? `, ${task.originState}` : ""} → ${task.destination}${task.destinationState ? `, ${task.destinationState}` : ""}`;
+                                        setForceLanePrefill({
+                                          title: `Research lane: ${laneName}`,
+                                          notes: `RFP: ${task.rfpTitle}\nVolume: ${Math.round(task.volume).toLocaleString()} loads/yr${task.rate ? `\nRate: ${task.rate}` : ""}${task.equipment ? `\nEquipment: ${task.equipment}` : ""}`,
+                                          attachedLaneData: [{
+                                            type: "action_required",
+                                            label: "Action Required Lanes",
+                                            items: [{
+                                              lane: laneName,
+                                              laneId: task.laneId,
+                                              origin: task.origin,
+                                              originState: task.originState,
+                                              destination: task.destination,
+                                              destinationState: task.destinationState,
+                                              volume: task.volume,
+                                              rate: task.rate,
+                                              equipment: task.equipment,
+                                              rfpTitle: task.rfpTitle,
+                                            }],
+                                          }],
+                                        });
+                                        setEditingTaskItem(undefined);
+                                        setTaskDialogOpen(true);
+                                      }}
+                                      data-testid={`button-force-task-lane-${i}`}
+                                    >
+                                      <ClipboardList className="h-4 w-4 mr-1" />
+                                      Force Task
+                                    </Button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
