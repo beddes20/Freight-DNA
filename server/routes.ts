@@ -8,7 +8,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -1280,77 +1280,87 @@ export async function registerRoutes(
     }
   });
 
-  // ── Feed Posts (Trends / Growth / Ideas) ─────────────────────────────────
+  // ── Callouts ─────────────────────────────────────────────────────────────
 
-  app.get("/api/feed-posts", async (req, res) => {
+  app.get("/api/callouts", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role === "admin") {
-        return res.json(await storage.getFeedPosts());
-      }
-      let visibleIds: string[];
-      if (user.role === "director" || user.role === "national_account_manager") {
-        visibleIds = await storage.getTeamMemberIds(user.id);
-      } else {
-        const ids = new Set<string>([user.id]);
-        if (user.managerId) {
-          ids.add(user.managerId);
-          const allUsers = await storage.getUsers();
-          allUsers.forEach(u => {
-            if (u.managerId === user.managerId) ids.add(u.id);
-          });
-        }
-        visibleIds = Array.from(ids);
-      }
-      return res.json(await storage.getFeedPosts(visibleIds));
+      const allCallouts = await storage.getCallouts();
+      const visibleIds = await getVisibleCompanyIds(user);
+      const filtered = visibleIds === null
+        ? allCallouts
+        : allCallouts.filter(c => !c.companyId || visibleIds.includes(c.companyId));
+      res.json(filtered);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch feed posts" });
+      res.status(500).json({ error: "Failed to fetch callouts" });
     }
   });
 
-  app.post("/api/feed-posts", async (req, res) => {
+  app.get("/api/callouts/company/:companyId", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { content, category } = req.body;
-      if (!content || typeof content !== "string" || !content.trim()) {
-        return res.status(400).json({ error: "Content is required" });
+      if (!(await canAccessCompany(user, req.params.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
       }
-      const trimmed = content.trim();
-      if (trimmed.length > 500) {
-        return res.status(400).json({ error: "Content must be 500 characters or less" });
+      const companyCallouts = await storage.getCalloutsByCompany(req.params.companyId);
+      res.json(companyCallouts);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch company callouts" });
+    }
+  });
+
+  app.post("/api/callouts", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { title, body, tag, companyId, parentId } = req.body;
+      if (!title || typeof title !== "string" || !title.trim()) {
+        return res.status(400).json({ error: "Title is required" });
       }
-      const validCategories = ["trend", "growth", "idea"];
-      if (!category || !validCategories.includes(category)) {
-        return res.status(400).json({ error: "Category must be trend, growth, or idea" });
+      const validTags = ["Trend", "Callout", "Idea"];
+      if (tag && !validTags.includes(tag)) {
+        return res.status(400).json({ error: "Invalid tag" });
       }
-      const post = await storage.createFeedPost({
-        content: trimmed,
-        category,
+      if (parentId) {
+        const parent = await storage.getCallout(parentId);
+        if (!parent) return res.status(404).json({ error: "Parent callout not found" });
+      }
+      if (companyId) {
+        if (!(await canAccessCompany(user, companyId))) {
+          return res.status(403).json({ error: "Cannot link callout to inaccessible company" });
+        }
+      }
+      const callout = await storage.createCallout({
+        title: title.trim(),
+        body: body || null,
+        tag: tag || null,
+        companyId: companyId || null,
         authorId: user.id,
+        parentId: parentId || null,
         createdAt: new Date().toISOString(),
       });
-      res.status(201).json(post);
+      res.status(201).json(callout);
     } catch (error) {
-      console.error("Error creating feed post:", error);
-      res.status(500).json({ error: "Failed to create feed post" });
+      console.error("Error creating callout:", error);
+      res.status(500).json({ error: "Failed to create callout" });
     }
   });
 
-  app.delete("/api/feed-posts/:id", async (req, res) => {
+  app.delete("/api/callouts/:id", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getFeedPost(req.params.id);
-      if (!existing) return res.status(404).json({ error: "Post not found" });
-      if (existing.authorId !== user.id && user.role !== "admin") {
-        return res.status(403).json({ error: "Not authorized to delete this post" });
+      const callout = await storage.getCallout(req.params.id);
+      if (!callout) return res.status(404).json({ error: "Callout not found" });
+      if (callout.authorId !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Only the author or admin can delete callouts" });
       }
-      await storage.deleteFeedPost(req.params.id);
+      await storage.deleteCallout(req.params.id);
       res.status(204).send();
     } catch (error) {
-      res.status(500).json({ error: "Failed to delete feed post" });
+      res.status(500).json({ error: "Failed to delete callout" });
     }
   });
 

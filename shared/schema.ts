@@ -147,20 +147,23 @@ export const insertTaskSchema = createInsertSchema(tasks).omit({
 export type InsertTask = z.infer<typeof insertTaskSchema>;
 export type Task = typeof tasks.$inferSelect;
 
-export const feedPosts = pgTable("feed_posts", {
+export const callouts = pgTable("callouts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  content: text("content").notNull(),
-  category: text("category").notNull().default("idea"),
-  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  body: text("body"),
+  tag: text("tag"),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  authorId: varchar("author_id").notNull().references(() => users.id),
+  parentId: varchar("parent_id"),
   createdAt: text("created_at").notNull(),
 });
 
-export const insertFeedPostSchema = createInsertSchema(feedPosts).omit({
+export const insertCalloutSchema = createInsertSchema(callouts).omit({
   id: true,
 });
 
-export type InsertFeedPost = z.infer<typeof insertFeedPostSchema>;
-export type FeedPost = typeof feedPosts.$inferSelect;
+export type InsertCallout = z.infer<typeof insertCalloutSchema>;
+export type Callout = typeof callouts.$inferSelect;
 
 export const appSettings = pgTable("app_settings", {
   key: text("key").primaryKey(),

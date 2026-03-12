@@ -36,7 +36,7 @@ The application utilizes a modern, responsive design built with React, TypeScrip
     - **Global Search**: A live, debounced search across companies and users.
     - **OneDrive Sync**: For financial uploads, allowing direct fetching of Excel files from a specified OneDrive share link, eliminating manual upload.
     - **Task Assignment**: Create, assign, and track tasks with status cycling (open → in_progress → completed), due dates with color-coded badges (red=overdue, amber=today, yellow=soon), link to accounts. "My Tasks" portlet on dashboard; per-account tasks portlet on company detail page.
-    - **Trends / Growth / Ideas Feed**: Team communication portlet on dashboard. Users post categorized thoughts (Trend/Growth/Idea) visible to their RBAC-scoped team. Reverse-chronological feed with category badges, author attribution, relative timestamps, and delete capability.
+    - **Callouts / Trends Feed**: Shared communication feed where all users can post trends, callouts, and ideas. Posts can optionally be linked to a company account and tagged (Trend/Callout/Idea). Threaded replies under each post. Dashboard portlet shows recent callouts across all users; company detail portlet shows callouts tied to that specific account. Authors and admins can delete callouts and replies.
 
 ## External Dependencies
 - **PostgreSQL**: Primary database for all application data and session storage.

@@ -72,6 +72,8 @@ import {
   PlayCircle,
   CheckCircle2,
   Calendar,
+  Megaphone,
+  MessageSquare,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -83,7 +85,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
-import type { Company, Contact, User, Task } from "@shared/schema";
+import { CalloutDialog } from "@/components/callout-dialog";
+import type { Company, Contact, User, Task, Callout } from "@shared/schema";
 
 interface ResearchTask {
   rfpId: string;
@@ -211,6 +214,9 @@ export default function CompanyDetail() {
   const [facilityCoverageCollapsed, setFacilityCoverageCollapsed] = useState(false);
   const [lanePatternsCollapsed, setLanePatternsCollapsed] = useState(false);
   const [laneMatchingCollapsed, setLaneMatchingCollapsed] = useState(false);
+  const [calloutDialogOpen, setCalloutDialogOpen] = useState(false);
+  const [calloutReplyTo, setCalloutReplyTo] = useState<{ id: string; title: string } | undefined>();
+  const [expandedCallouts, setExpandedCallouts] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -260,6 +266,57 @@ export default function CompanyDetail() {
   const { data: teamMembers = [] } = useQuery<Omit<User, "password">[]>({
     queryKey: ["/api/team-members"],
   });
+
+  const { data: companyCallouts = [] } = useQuery<Callout[]>({
+    queryKey: ["/api/callouts/company", companyId],
+  });
+
+  const deleteCalloutMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/callouts/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/callouts/company", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/callouts"] });
+      toast({ title: "Callout deleted" });
+    },
+  });
+
+  const topLevelCompanyCallouts = companyCallouts
+    .filter(c => !c.parentId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  const companyCalloutRepliesFor = (parentId: string) =>
+    companyCallouts
+      .filter(c => c.parentId === parentId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  const toggleCalloutExpanded = (id: string) => {
+    setExpandedCallouts(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const getCalloutAuthorName = (authorId: string) => teamMembers.find(u => u.id === authorId)?.name || "Unknown";
+
+  const calloutTagColors: Record<string, string> = {
+    Trend: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+    Callout: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
+    Idea: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400",
+  };
+
+  const formatCalloutTime = (iso: string) => {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  };
 
   const toggleTaskStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
@@ -741,11 +798,133 @@ export default function CompanyDetail() {
         </CardContent>
       </Card>
 
+      {/* Account Callouts */}
+      <Card data-testid="card-company-callouts">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Megaphone className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+              Callouts
+              {topLevelCompanyCallouts.length > 0 && (
+                <Badge variant="secondary" className="ml-1 font-normal">{topLevelCompanyCallouts.length}</Badge>
+              )}
+            </CardTitle>
+            <Button size="sm" variant="outline" className="gap-1" onClick={() => { setCalloutReplyTo(undefined); setCalloutDialogOpen(true); }} data-testid="button-add-company-callout">
+              <Plus className="h-3 w-3" /> Add Callout
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {topLevelCompanyCallouts.length > 0 ? (
+            <div className="space-y-1">
+              {topLevelCompanyCallouts.map(callout => {
+                const replies = companyCalloutRepliesFor(callout.id);
+                const isExpanded = expandedCallouts.has(callout.id);
+                return (
+                  <div key={callout.id} data-testid={`company-callout-row-${callout.id}`}>
+                    <div className="flex items-start gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group">
+                      <Megaphone className="h-4 w-4 mt-0.5 text-orange-500 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-medium">{callout.title}</p>
+                          {callout.tag && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${calloutTagColors[callout.tag] || "bg-muted text-muted-foreground"}`}>
+                              {callout.tag}
+                            </span>
+                          )}
+                        </div>
+                        {callout.body && (
+                          <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{callout.body}</p>
+                        )}
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-xs text-muted-foreground">{getCalloutAuthorName(callout.authorId)}</span>
+                          <span className="text-xs text-muted-foreground/50">·</span>
+                          <span className="text-xs text-muted-foreground">{formatCalloutTime(callout.createdAt)}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {replies.length > 0 && (
+                          <button
+                            onClick={() => toggleCalloutExpanded(callout.id)}
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors px-1"
+                            data-testid={`button-toggle-company-callout-replies-${callout.id}`}
+                          >
+                            <MessageSquare className="h-3 w-3" />
+                            {replies.length}
+                            <ChevronDown className={`h-3 w-3 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => { setCalloutReplyTo({ id: callout.id, title: callout.title }); setCalloutDialogOpen(true); }}
+                          className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs px-1"
+                          data-testid={`button-reply-company-callout-${callout.id}`}
+                        >
+                          Reply
+                        </button>
+                        {(callout.authorId === currentUser?.id || currentUser?.role === "admin") && (
+                          <button
+                            onClick={() => deleteCalloutMutation.mutate(callout.id)}
+                            className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                            data-testid={`button-delete-company-callout-${callout.id}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {isExpanded && replies.length > 0 && (
+                      <div className="ml-7 pl-3 border-l-2 border-muted space-y-1 mb-2">
+                        {replies.map(reply => (
+                          <div key={reply.id} className="flex items-start gap-2 p-2 rounded-md hover:bg-muted/30 transition-all group/reply" data-testid={`company-callout-reply-${reply.id}`}>
+                            <MessageSquare className="h-3 w-3 mt-0.5 text-muted-foreground shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium">{reply.title}</p>
+                              {reply.body && <p className="text-xs text-muted-foreground mt-0.5">{reply.body}</p>}
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-xs text-muted-foreground">{getCalloutAuthorName(reply.authorId)}</span>
+                                <span className="text-xs text-muted-foreground/50">·</span>
+                                <span className="text-xs text-muted-foreground">{formatCalloutTime(reply.createdAt)}</span>
+                              </div>
+                            </div>
+                            {(reply.authorId === currentUser?.id || currentUser?.role === "admin") && (
+                              <button
+                                onClick={() => deleteCalloutMutation.mutate(reply.id)}
+                                className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/reply:opacity-100 transition-opacity"
+                                data-testid={`button-delete-company-callout-reply-${reply.id}`}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-4 text-muted-foreground">
+              <Megaphone className="h-6 w-6 mx-auto mb-1 opacity-50" />
+              <p className="text-xs">No callouts yet — add one to share trends or ideas about this account</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <TaskDialog
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
         companyId={companyId}
         editingTask={editingTaskItem}
+      />
+
+      <CalloutDialog
+        open={calloutDialogOpen}
+        onOpenChange={setCalloutDialogOpen}
+        companyId={companyId}
+        parentId={calloutReplyTo?.id}
+        parentTitle={calloutReplyTo?.title}
       />
 
       {/* Transfer Account Dialog */}

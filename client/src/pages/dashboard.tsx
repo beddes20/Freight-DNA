@@ -5,17 +5,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp,
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
-  CheckCircle2, Calendar, Trash2, Lightbulb, Send, Loader2,
+  CheckCircle2, Calendar, Trash2, Megaphone, MessageSquare, ChevronDown,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
-import type { Company, Contact, Task, User, FeedPost } from "@shared/schema";
+import { CalloutDialog } from "@/components/callout-dialog";
+import type { Company, Contact, Task, User, Callout } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
 
@@ -47,33 +47,14 @@ const statusIcon = (status: string) => {
 
 const nextStatus = (s: string) => s === "open" ? "in_progress" : s === "in_progress" ? "completed" : "open";
 
-function relativeTime(isoString: string): string {
-  const now = Date.now();
-  const then = new Date(isoString).getTime();
-  const diffSec = Math.floor((now - then) / 1000);
-  if (diffSec < 60) return "just now";
-  const mins = Math.floor(diffSec / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(isoString).toLocaleDateString();
-}
-
-const categoryMeta: Record<string, { label: string; emoji: string; color: string }> = {
-  trend: { label: "Trend", emoji: "📈", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
-  growth: { label: "Growth", emoji: "💰", color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
-  idea: { label: "Idea", emoji: "💡", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
-};
-
 export default function Dashboard() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>();
-  const [feedContent, setFeedContent] = useState("");
-  const [feedCategory, setFeedCategory] = useState<"trend" | "growth" | "idea">("idea");
+  const [calloutDialogOpen, setCalloutDialogOpen] = useState(false);
+  const [replyTo, setReplyTo] = useState<{ id: string; title: string } | undefined>();
+  const [expandedCallouts, setExpandedCallouts] = useState<Set<string>>(new Set());
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -97,34 +78,56 @@ export default function Dashboard() {
     queryKey: ["/api/team-members"],
   });
 
-  const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPost[]>({
-    queryKey: ["/api/feed-posts"],
+  const { data: allCallouts = [], isLoading: calloutsLoading } = useQuery<Callout[]>({
+    queryKey: ["/api/callouts"],
   });
 
-  const createPostMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("POST", "/api/feed-posts", {
-        content: feedContent.trim(),
-        category: feedCategory,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/feed-posts"] });
-      setFeedContent("");
-    },
-    onError: (err: any) => {
-      toast({ title: err?.message || "Failed to create post", variant: "destructive" });
-    },
-  });
-
-  const deletePostMutation = useMutation({
+  const deleteCalloutMutation = useMutation({
     mutationFn: async (id: string) => {
-      await apiRequest("DELETE", `/api/feed-posts/${id}`);
+      await apiRequest("DELETE", `/api/callouts/${id}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/feed-posts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/callouts"] });
+      toast({ title: "Callout deleted" });
     },
   });
+
+  const topLevelCallouts = allCallouts
+    .filter(c => !c.parentId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 10);
+
+  const repliesFor = (parentId: string) =>
+    allCallouts
+      .filter(c => c.parentId === parentId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  const toggleExpanded = (id: string) => {
+    setExpandedCallouts(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const getAuthorName = (authorId: string) => teamMembers.find(u => u.id === authorId)?.name || "Unknown";
+
+  const tagColors: Record<string, string> = {
+    Trend: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+    Callout: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
+    Idea: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400",
+  };
+
+  const formatTimeAgo = (iso: string) => {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  };
 
   const isLoading = companiesLoading || contactsLoading;
 
@@ -350,110 +353,134 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      <Card data-testid="card-feed">
+      <Card data-testid="card-callouts">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Lightbulb className="h-4 w-4 text-amber-500" />
-            Trends · Growth · Ideas
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Megaphone className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+              Callouts
+              {!calloutsLoading && topLevelCallouts.length > 0 && (
+                <Badge variant="secondary" className="ml-1 font-normal">{topLevelCallouts.length}</Badge>
+              )}
+            </CardTitle>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1"
+              onClick={() => { setReplyTo(undefined); setCalloutDialogOpen(true); }}
+              data-testid="button-add-callout"
+            >
+              <Plus className="h-3 w-3" /> Add Callout
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3 mb-4">
-            <div className="flex gap-2">
-              {(["trend", "growth", "idea"] as const).map(cat => {
-                const m = categoryMeta[cat];
-                const active = feedCategory === cat;
-                return (
-                  <button
-                    key={cat}
-                    onClick={() => setFeedCategory(cat)}
-                    className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${
-                      active
-                        ? m.color + " border-transparent"
-                        : "bg-muted/50 text-muted-foreground border-transparent hover:border-border"
-                    }`}
-                    data-testid={`button-feed-category-${cat}`}
-                  >
-                    {m.emoji} {m.label}
-                  </button>
-                );
-              })}
-            </div>
-            <Textarea
-              value={feedContent}
-              onChange={e => {
-                setFeedContent(e.target.value);
-                e.target.style.height = "auto";
-                e.target.style.height = e.target.scrollHeight + "px";
-              }}
-              placeholder="Share a trend, growth opportunity, or idea with the team..."
-              rows={2}
-              className="resize-none min-h-[56px]"
-              data-testid="input-feed-content"
-            />
-            <div className="flex items-center justify-between">
-              <span className={`text-xs ${feedContent.trim().length > 500 ? "text-destructive" : "text-muted-foreground"}`}>
-                {feedContent.trim().length}/500
-              </span>
-              <Button
-                size="sm"
-                className="gap-1"
-                disabled={!feedContent.trim() || feedContent.trim().length > 500 || createPostMutation.isPending}
-                onClick={() => createPostMutation.mutate()}
-                data-testid="button-feed-share"
-              >
-                {createPostMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-                Share
-              </Button>
-            </div>
-          </div>
-
-          {feedLoading ? (
+          {calloutsLoading ? (
             <div className="space-y-3">
-              {[1, 2, 3].map(i => <Skeleton key={i} className="h-16 w-full" />)}
+              {[1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full" />)}
             </div>
-          ) : feedPosts.length > 0 ? (
-            <div className="space-y-2 border-t pt-3">
-              {feedPosts.slice(0, 20).map(post => {
-                const m = categoryMeta[post.category] || categoryMeta.idea;
-                const authorName = teamMembers.find(u => u.id === post.authorId)?.name || "Unknown";
-                const isOwn = post.authorId === currentUser?.id;
-                const canDelete = isOwn || currentUser?.role === "admin";
+          ) : topLevelCallouts.length > 0 ? (
+            <div className="space-y-1">
+              {topLevelCallouts.map(callout => {
+                const replies = repliesFor(callout.id);
+                const isExpanded = expandedCallouts.has(callout.id);
+                const companyName = callout.companyId ? companies?.find(c => c.id === callout.companyId)?.name : null;
                 return (
-                  <div
-                    key={post.id}
-                    className="p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group"
-                    data-testid={`feed-post-${post.id}`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium shrink-0 mt-0.5 ${m.color}`}>
-                        {m.emoji} {m.label}
-                      </span>
+                  <div key={callout.id} data-testid={`callout-row-${callout.id}`}>
+                    <div className="flex items-start gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group">
+                      <Megaphone className="h-4 w-4 mt-0.5 text-orange-500 shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm whitespace-pre-wrap break-words" data-testid={`text-feed-content-${post.id}`}>{post.content}</p>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {authorName} · {relativeTime(post.createdAt)}
-                        </p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-medium" data-testid={`text-callout-title-${callout.id}`}>{callout.title}</p>
+                          {callout.tag && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${tagColors[callout.tag] || "bg-muted text-muted-foreground"}`} data-testid={`badge-callout-tag-${callout.id}`}>
+                              {callout.tag}
+                            </span>
+                          )}
+                        </div>
+                        {callout.body && (
+                          <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{callout.body}</p>
+                        )}
+                        <div className="flex items-center gap-2 flex-wrap mt-1">
+                          <span className="text-xs text-muted-foreground">{getAuthorName(callout.authorId)}</span>
+                          <span className="text-xs text-muted-foreground/50">·</span>
+                          <span className="text-xs text-muted-foreground">{formatTimeAgo(callout.createdAt)}</span>
+                          {companyName && (
+                            <>
+                              <span className="text-xs text-muted-foreground/50">·</span>
+                              <Link href={`/companies/${callout.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-callout-company-${callout.id}`}>
+                                {companyName}
+                              </Link>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      {canDelete && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        {replies.length > 0 && (
+                          <button
+                            onClick={() => toggleExpanded(callout.id)}
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors px-1"
+                            data-testid={`button-toggle-replies-${callout.id}`}
+                          >
+                            <MessageSquare className="h-3 w-3" />
+                            {replies.length}
+                            <ChevronDown className={`h-3 w-3 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                          </button>
+                        )}
                         <button
-                          onClick={() => deletePostMutation.mutate(post.id)}
-                          className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                          data-testid={`button-delete-feed-${post.id}`}
+                          onClick={() => { setReplyTo({ id: callout.id, title: callout.title }); setCalloutDialogOpen(true); }}
+                          className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs px-1"
+                          data-testid={`button-reply-callout-${callout.id}`}
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          Reply
                         </button>
-                      )}
+                        {(callout.authorId === currentUser?.id || currentUser?.role === "admin") && (
+                          <button
+                            onClick={() => deleteCalloutMutation.mutate(callout.id)}
+                            className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                            data-testid={`button-delete-callout-${callout.id}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
+                    {isExpanded && replies.length > 0 && (
+                      <div className="ml-7 pl-3 border-l-2 border-muted space-y-1 mb-2">
+                        {replies.map(reply => (
+                          <div key={reply.id} className="flex items-start gap-2 p-2 rounded-md hover:bg-muted/30 transition-all group/reply" data-testid={`callout-reply-${reply.id}`}>
+                            <MessageSquare className="h-3 w-3 mt-0.5 text-muted-foreground shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium">{reply.title}</p>
+                              {reply.body && <p className="text-xs text-muted-foreground mt-0.5">{reply.body}</p>}
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-xs text-muted-foreground">{getAuthorName(reply.authorId)}</span>
+                                <span className="text-xs text-muted-foreground/50">·</span>
+                                <span className="text-xs text-muted-foreground">{formatTimeAgo(reply.createdAt)}</span>
+                              </div>
+                            </div>
+                            {(reply.authorId === currentUser?.id || currentUser?.role === "admin") && (
+                              <button
+                                onClick={() => deleteCalloutMutation.mutate(reply.id)}
+                                className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/reply:opacity-100 transition-opacity"
+                                data-testid={`button-delete-reply-${reply.id}`}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           ) : (
-            <div className="text-center py-6 text-muted-foreground border-t pt-6">
-              <Lightbulb className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">No posts yet.</p>
-              <p className="text-xs mt-1">Share the first trend, growth tip, or idea with your team.</p>
+            <div className="text-center py-6 text-muted-foreground">
+              <Megaphone className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No callouts yet</p>
+              <p className="text-xs mt-1">Share trends, callouts, and ideas with your team</p>
             </div>
           )}
         </CardContent>
@@ -662,6 +689,13 @@ export default function Dashboard() {
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
         editingTask={editingTask}
+      />
+
+      <CalloutDialog
+        open={calloutDialogOpen}
+        onOpenChange={setCalloutDialogOpen}
+        parentId={replyTo?.id}
+        parentTitle={replyTo?.title}
       />
     </div>
   );

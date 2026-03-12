@@ -10,7 +10,7 @@ import {
   financialUploads,
   appSettings,
   tasks,
-  feedPosts,
+  callouts,
   type User,
   type InsertUser,
   type Company,
@@ -25,8 +25,8 @@ import {
   type InsertFinancialUpload,
   type Task,
   type InsertTask,
-  type FeedPost,
-  type InsertFeedPost,
+  type Callout,
+  type InsertCallout,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -80,10 +80,11 @@ export interface IStorage {
   updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
 
-  getFeedPosts(visibleAuthorIds?: string[]): Promise<FeedPost[]>;
-  createFeedPost(post: InsertFeedPost): Promise<FeedPost>;
-  getFeedPost(id: string): Promise<FeedPost | undefined>;
-  deleteFeedPost(id: string): Promise<boolean>;
+  getCallouts(): Promise<Callout[]>;
+  getCalloutsByCompany(companyId: string): Promise<Callout[]>;
+  getCallout(id: string): Promise<Callout | undefined>;
+  createCallout(callout: InsertCallout): Promise<Callout>;
+  deleteCallout(id: string): Promise<boolean>;
 
   getSetting(key: string): Promise<string | undefined>;
   setSetting(key: string, value: string): Promise<void>;
@@ -327,28 +328,27 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  async getFeedPosts(visibleAuthorIds?: string[]): Promise<FeedPost[]> {
-    if (visibleAuthorIds) {
-      return db.select().from(feedPosts)
-        .where(inArray(feedPosts.authorId, visibleAuthorIds))
-        .orderBy(desc(feedPosts.createdAt))
-        .limit(30);
-    }
-    return db.select().from(feedPosts).orderBy(desc(feedPosts.createdAt)).limit(30);
+  async getCallouts(): Promise<Callout[]> {
+    return db.select().from(callouts);
   }
 
-  async createFeedPost(post: InsertFeedPost): Promise<FeedPost> {
-    const [created] = await db.insert(feedPosts).values(post).returning();
+  async getCalloutsByCompany(companyId: string): Promise<Callout[]> {
+    return db.select().from(callouts).where(eq(callouts.companyId, companyId));
+  }
+
+  async getCallout(id: string): Promise<Callout | undefined> {
+    const [callout] = await db.select().from(callouts).where(eq(callouts.id, id));
+    return callout;
+  }
+
+  async createCallout(callout: InsertCallout): Promise<Callout> {
+    const [created] = await db.insert(callouts).values(callout).returning();
     return created;
   }
 
-  async getFeedPost(id: string): Promise<FeedPost | undefined> {
-    const [post] = await db.select().from(feedPosts).where(eq(feedPosts.id, id));
-    return post;
-  }
-
-  async deleteFeedPost(id: string): Promise<boolean> {
-    const result = await db.delete(feedPosts).where(eq(feedPosts.id, id)).returning();
+  async deleteCallout(id: string): Promise<boolean> {
+    await db.delete(callouts).where(eq(callouts.parentId, id));
+    const result = await db.delete(callouts).where(eq(callouts.id, id)).returning();
     return result.length > 0;
   }
 
