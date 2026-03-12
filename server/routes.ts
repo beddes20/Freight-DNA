@@ -8,7 +8,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -237,11 +237,11 @@ export async function registerRoutes(
       if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [] });
       const [matchedCompanies, matchedUsers] = await Promise.all([
         storage.searchCompanies(q),
-        storage.searchUsers(q, ["account_manager", "national_account_manager"]),
+        storage.searchUsers(q, ["account_manager", "national_account_manager", "director"]),
       ]);
       const accounts = matchedCompanies.map(c => ({ id: c.id, name: c.name }));
       const accountManagers = matchedUsers.filter(u => u.role === "account_manager");
-      const nationalAccountManagers = matchedUsers.filter(u => u.role === "national_account_manager");
+      const nationalAccountManagers = matchedUsers.filter(u => u.role === "national_account_manager" || u.role === "director");
       res.json({ accounts, accountManagers, nationalAccountManagers });
     } catch (error) {
       res.status(500).json({ error: "Search failed" });
@@ -252,7 +252,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
         return res.status(403).json({ error: "Access required" });
       }
       const allUsers = await storage.getUsers();
@@ -269,7 +269,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
         return res.status(403).json({ error: "Access required" });
       }
       const { username, password, name, role, managerId } = req.body;
@@ -281,9 +281,13 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Username already exists" });
       }
       const hashedPassword = await bcrypt.hash(password, 10);
-      // NAMs can only create account_managers, always assigned to themselves as manager
-      const assignedRole = currentUser.role === "national_account_manager" ? "account_manager" : (role || "account_manager");
-      const assignedManagerId = currentUser.role === "national_account_manager" ? currentUser.id : (managerId || null);
+      const isNamOrDirector = currentUser.role === "national_account_manager" || currentUser.role === "director";
+      const requestedRole = role || "account_manager";
+      if (!userRoles.includes(requestedRole)) {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+      const assignedRole = isNamOrDirector ? "account_manager" : requestedRole;
+      const assignedManagerId = isNamOrDirector ? currentUser.id : (managerId || null);
       const user = await storage.createUser({
         username,
         password: hashedPassword,
@@ -302,11 +306,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
         return res.status(403).json({ error: "Access required" });
       }
-      // NAMs can only edit users on their own team
-      if (currentUser.role === "national_account_manager") {
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
           return res.status(403).json({ error: "Cannot edit this user" });
@@ -316,9 +319,13 @@ export async function registerRoutes(
       if (req.body.name !== undefined) data.name = req.body.name;
       if (req.body.username !== undefined) data.username = req.body.username;
       if (req.body.password) data.password = await bcrypt.hash(req.body.password, 10);
-      // Only admins can change roles or managers
       if (currentUser.role === "admin") {
-        if (req.body.role !== undefined) data.role = req.body.role;
+        if (req.body.role !== undefined) {
+          if (!userRoles.includes(req.body.role)) {
+            return res.status(400).json({ error: "Invalid role" });
+          }
+          data.role = req.body.role;
+        }
         if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
       }
       const user = await storage.updateUser(req.params.id, data);
@@ -334,11 +341,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
         return res.status(403).json({ error: "Access required" });
       }
-      // NAMs can only delete users on their own team (not themselves)
-      if (currentUser.role === "national_account_manager") {
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
           return res.status(403).json({ error: "Cannot delete this user" });
@@ -399,7 +405,7 @@ export async function registerRoutes(
       if (currentUser.role === "admin") {
         return res.json(safeUsers);
       }
-      if (currentUser.role === "national_account_manager") {
+      if (currentUser.role === "director" || currentUser.role === "national_account_manager") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
       }
@@ -427,8 +433,7 @@ export async function registerRoutes(
       const data = { ...parsed.data };
       if (currentUser.role === "admin") {
         // admin can assign to anyone — leave assignedTo as-is
-      } else if (currentUser.role === "national_account_manager") {
-        // NAM can assign to themselves or their team members
+      } else if (currentUser.role === "director" || currentUser.role === "national_account_manager") {
         if (data.assignedTo) {
           const teamIds = await storage.getTeamMemberIds(currentUser.id);
           if (!teamIds.includes(data.assignedTo)) {
@@ -481,12 +486,12 @@ export async function registerRoutes(
       if (!(await canAccessCompany(currentUser, req.params.id))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
-        return res.status(403).json({ error: "Only admins and NAMs can reassign accounts" });
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Only admins, directors and NAMs can reassign accounts" });
       }
       const { assignedTo } = req.body;
       if (!assignedTo) return res.status(400).json({ error: "assignedTo is required" });
-      if (currentUser.role === "national_account_manager") {
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         if (!teamIds.includes(assignedTo)) {
           return res.status(403).json({ error: "Can only assign to team members" });
@@ -1143,7 +1148,7 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const allTasks = await storage.getTasks();
       if (user.role === "admin") return res.json(allTasks);
-      if (user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         return res.json(allTasks.filter(t => teamIds.includes(t.assignedTo) || teamIds.includes(t.assignedBy)));
       }
@@ -1187,7 +1192,7 @@ export async function registerRoutes(
       let assignableIds: Set<string>;
       if (user.role === "admin") {
         assignableIds = new Set(allUsers.map(u => u.id));
-      } else if (user.role === "national_account_manager") {
+      } else if (user.role === "director" || user.role === "national_account_manager") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         assignableIds = new Set(teamIds);
       } else {
@@ -1285,7 +1290,7 @@ export async function registerRoutes(
         return res.json(await storage.getFeedPosts());
       }
       let visibleIds: string[];
-      if (user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager") {
         visibleIds = await storage.getTeamMemberIds(user.id);
       } else {
         const ids = new Set<string>([user.id]);
@@ -1355,7 +1360,7 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role !== "admin" && user.role !== "national_account_manager") {
+      if (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager") {
         return res.status(403).json({ error: "Forbidden" });
       }
 
@@ -1370,7 +1375,7 @@ export async function registerRoutes(
       }
       allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
-      if (user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
@@ -1444,7 +1449,7 @@ export async function registerRoutes(
       }
       allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
-      if (user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
@@ -1592,7 +1597,7 @@ export async function registerRoutes(
   app.get("/api/financials", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
-      if (!user || (user.role !== "admin" && user.role !== "national_account_manager")) {
+      if (!user || (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager")) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const upload = await storage.getLatestFinancialUpload();
@@ -1600,7 +1605,7 @@ export async function registerRoutes(
 
       let rows = ((upload.rows as any[]) || []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
-      if (user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());

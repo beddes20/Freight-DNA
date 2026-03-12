@@ -126,13 +126,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTeamMemberIds(userId: string): Promise<string[]> {
-    const directReports = await db.select().from(users).where(eq(users.managerId, userId));
     const ids = [userId];
-    for (const report of directReports) {
-      ids.push(report.id);
-      const subReports = await db.select().from(users).where(eq(users.managerId, report.id));
-      for (const sub of subReports) {
-        ids.push(sub.id);
+    const queue = [userId];
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const directReports = await db.select().from(users).where(eq(users.managerId, currentId));
+      for (const report of directReports) {
+        if (!ids.includes(report.id)) {
+          ids.push(report.id);
+          queue.push(report.id);
+        }
       }
     }
     return ids;

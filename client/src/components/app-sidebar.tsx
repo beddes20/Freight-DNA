@@ -62,6 +62,7 @@ const externalItems = [
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
+  director: "Director",
   national_account_manager: "National Account Manager",
   account_manager: "Account Manager",
 };
@@ -120,7 +121,7 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        {(user?.role === "admin" || user?.role === "national_account_manager") && (
+        {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager") && (
           <SidebarGroup>
             <SidebarGroupLabel>{user?.role === "admin" ? "Admin" : "Team"}</SidebarGroupLabel>
             <SidebarGroupContent>

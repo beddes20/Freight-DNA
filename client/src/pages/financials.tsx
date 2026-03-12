@@ -94,7 +94,8 @@ export default function Financials() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const isAdminOrNam = user?.role === "admin" || user?.role === "national_account_manager";
+  const isAdminOrNam = user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager";
+  const canSyncOneDrive = user?.role === "admin" || user?.role === "national_account_manager";
 
   const [oneDriveUrlInput, setOneDriveUrlInput] = useState("");
   const [editingUrl, setEditingUrl] = useState(false);
@@ -110,7 +111,7 @@ export default function Financials() {
 
   const { data: oneDriveSetting } = useQuery<{ url: string }>({
     queryKey: ["/api/settings/onedrive-url"],
-    enabled: isAdminOrNam,
+    enabled: canSyncOneDrive,
   });
 
   const saveUrlMutation = useMutation({
@@ -254,7 +255,7 @@ export default function Financials() {
         </div>
       </div>
 
-      {isAdminOrNam && oneDriveSetting && (
+      {canSyncOneDrive && oneDriveSetting && (
         <Card className="border-blue-200 dark:border-blue-800/50 bg-gradient-to-r from-blue-50/50 to-white dark:from-blue-950/20 dark:to-card">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
@@ -324,7 +325,7 @@ export default function Financials() {
               </div>
             </div>
 
-            {isAdminOrNam && oneDriveSetting.url && (
+            {canSyncOneDrive && oneDriveSetting.url && (
               <Button
                 onClick={() => syncMutation.mutate()}
                 disabled={syncMutation.isPending}

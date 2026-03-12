@@ -49,7 +49,7 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
   const { user: currentUser } = useAuth();
   const isEditing = !!company;
   const isAdmin = currentUser?.role === "admin";
-  const isNAM = currentUser?.role === "national_account_manager";
+  const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director";
   const canAssign = isAdmin || isNAM;
 
   const { data: users = [] } = useQuery<SafeUser[]>({

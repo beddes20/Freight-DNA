@@ -282,7 +282,7 @@ export default function CompanyDetail() {
     },
   });
 
-  const canReassign = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
+  const canReassign = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager";
   const { data: assignableUsers = [] } = useQuery<Omit<User, "password">[]>({
     queryKey: ["/api/users"],
     enabled: canReassign,
@@ -766,7 +766,7 @@ export default function CompanyDetail() {
               <SelectContent>
                 {assignableUsers.map(u => (
                   <SelectItem key={u.id} value={u.id} data-testid={`option-transfer-${u.id}`}>
-                    {u.name} ({u.role === "admin" ? "Admin" : u.role === "national_account_manager" ? "NAM" : "AM"})
+                    {u.name} ({u.role === "admin" ? "Admin" : u.role === "director" ? "Director" : u.role === "national_account_manager" ? "NAM" : "AM"})
                   </SelectItem>
                 ))}
               </SelectContent>

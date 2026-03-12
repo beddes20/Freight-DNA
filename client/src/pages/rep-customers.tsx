@@ -22,12 +22,14 @@ type SafeUser = Omit<User, "password">;
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
+  director: "Director",
   national_account_manager: "National Account Manager",
   account_manager: "Account Manager",
 };
 
 const ROLE_COLORS: Record<string, string> = {
   admin: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
+  director: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
   national_account_manager: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
   account_manager: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300",
 };
@@ -122,7 +124,7 @@ export default function RepCustomers() {
             <p className="text-blue-200 text-sm mt-0.5">{rep.username}</p>
             <div className="mt-2 flex items-center gap-2">
               <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-medium text-white">
-                {rep.role === "national_account_manager" ? (
+                {rep.role === "director" || rep.role === "national_account_manager" ? (
                   <ShieldCheck className="h-3 w-3" />
                 ) : (
                   <UserCircle className="h-3 w-3" />

@@ -87,7 +87,7 @@ export default function Dashboard() {
     queryKey: ["/api/tasks"],
   });
 
-  const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
+  const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager";
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/users"],
     enabled: canSeeTeam,
@@ -208,7 +208,7 @@ export default function Dashboard() {
     },
   ];
 
-  const nams = allUsers.filter((u) => u.role === "national_account_manager");
+  const nams = allUsers.filter((u) => u.role === "national_account_manager" || u.role === "director");
   const ams = allUsers.filter((u) => u.role === "account_manager");
 
   const companyCountFor = (userId: string) =>
