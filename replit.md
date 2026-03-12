@@ -33,7 +33,10 @@ client/src/
   │   ├── customers.tsx       # Customer listing with contact counts and research task badges
   │   ├── login.tsx           # Login/register page
   │   ├── rfp-awards.tsx      # RFP & Awards page with Excel upload
-  │   └── research-tasks.tsx  # Research tasks overview page
+  │   ├── research-tasks.tsx  # Research tasks overview page
+  │   ├── financials.tsx      # Numbers page: financial KPIs + upload management (admin/NAM only)
+  │   ├── historical-data.tsx # Historical Data page: delivery density by city/state, hot zones (admin/NAM only)
+  │   └── top-opportunities.tsx # Top Opportunities page: matched RFP lanes vs hot delivery destinations (all users)
   └── App.tsx                 # Main app with routing + auth gating
 
 server/
@@ -108,6 +111,9 @@ shared/
 17. **Authentication**: Email/password login with session persistence; login/register page with gradient branding
 18. **Account Transfer**: Company detail page has "Transfer Account" button (visible to admins and NAMs); opens dialog to reassign company to another user; admins can assign to anyone, NAMs can only assign within their team
 19. **Customer Portal Information**: Company detail page shows a portal info card (URL, username, password) near the top action buttons; inline editable with password reveal toggle; stored in DB
+20. **Historical Data Page**: `/historical-data` — delivery destination frequency ranked by weekly load count; "hot zones" (5+ loads/week) highlighted in orange; summary stats (total loads, unique destinations, hot zone count); search filter. Admin/NAM only.
+21. **Top Opportunities Page**: `/top-opportunities` — intelligent opportunity engine that cross-references delivery destinations (where we drop trucks) against RFP lane origins (where shippers need pickups); each opportunity card shows destination, weekly frequency, and all matched RFP lanes (company, RFP title, lane corridor, volume, rate, equipment); visible to all users.
+22. **Global Search**: Search bar in top header searches across accounts (companies), account managers, and NAMs by name; live dropdown grouped by type; navigates to company detail or rep page on selection; debounced with abort on new keystroke.
 
 ## UI Components
 - `client/src/components/confetti.tsx` - Confetti celebration animation (useConfetti hook)
@@ -159,6 +165,9 @@ shared/
 - `GET /api/research-tasks` - Get visible research tasks across all RFPs
 - `GET /api/companies/:id/facility-coverage` - Facility coverage gap analysis for a company
 - `GET /api/companies/:id/lane-patterns` - Lane pattern analysis (corridors, hubs, state corridors)
+- `GET /api/historical-data-summary` - Delivery destination density (weekly load counts, hot zones) from all financial_uploads
+- `GET /api/opportunities` - Cross-reference hot delivery destinations vs RFP lane origins; returns matched opportunity cards sorted by delivery frequency
+- `GET /api/search?q=` - Global search across companies and users (AM/NAM roles)
 
 ## Development
 - Run `npm run dev` to start the development server

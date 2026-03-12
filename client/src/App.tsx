@@ -18,6 +18,8 @@ import LoginPage from "@/pages/login";
 import AdminUsers from "@/pages/admin-users";
 import RepCustomers from "@/pages/rep-customers";
 import Financials from "@/pages/financials";
+import HistoricalData from "@/pages/historical-data";
+import TopOpportunities from "@/pages/top-opportunities";
 
 function Router() {
   return (
@@ -30,6 +32,8 @@ function Router() {
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/reps/:userId" component={RepCustomers} />
       <Route path="/financials" component={Financials} />
+      <Route path="/historical-data" component={HistoricalData} />
+      <Route path="/top-opportunities" component={TopOpportunities} />
       <Route component={NotFound} />
     </Switch>
   );

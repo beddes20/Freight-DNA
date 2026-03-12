@@ -1206,5 +1206,137 @@ export async function registerRoutes(
     }
   });
 
+  // ── Historical Data & Opportunities ─────────────────────────────────────────
+
+  function getWeekKey(date: Date): string {
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+  }
+
+  app.get("/api/historical-data-summary", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploads();
+      const allRows = uploads.flatMap(u => (u.rows as any[]) || []);
+      const destWeekly: Record<string, Record<string, number>> = {};
+      const destMeta: Record<string, { city: string; state: string }> = {};
+      for (const row of allRows) {
+        const city = String(row["Consignee city"] || "").trim();
+        const state = String(row["Consignee state"] || "").trim();
+        const dateStr = String(row["Date ordered"] || "").trim();
+        if (!city || !state) continue;
+        const key = `${city.toLowerCase()}||${state.toLowerCase()}`;
+        if (!destWeekly[key]) { destWeekly[key] = {}; destMeta[key] = { city, state }; }
+        if (dateStr) {
+          const d = new Date(dateStr);
+          if (!isNaN(d.getTime())) {
+            const wk = getWeekKey(d);
+            destWeekly[key][wk] = (destWeekly[key][wk] || 0) + 1;
+          }
+        }
+      }
+      const summary = Object.entries(destWeekly).map(([key, weeks]) => {
+        const counts = Object.values(weeks);
+        const totalLoads = counts.reduce((a, b) => a + b, 0);
+        const avgWeekly = counts.length > 0 ? totalLoads / counts.length : 0;
+        const maxWeekly = counts.length > 0 ? Math.max(...counts) : 0;
+        const { city, state } = destMeta[key];
+        return {
+          destination: `${city}, ${state}`,
+          city, state, totalLoads,
+          avgWeekly: Math.round(avgWeekly * 10) / 10,
+          maxWeekly,
+          weekCount: counts.length,
+          isHotZone: maxWeekly >= 5,
+        };
+      }).sort((a, b) => b.avgWeekly - a.avgWeekly);
+      res.json({ summary, totalRows: allRows.length, uploadCount: uploads.length });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to compute historical summary" });
+    }
+  });
+
+  app.get("/api/opportunities", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const uploads = await storage.getFinancialUploads();
+      const allRows = uploads.flatMap(u => (u.rows as any[]) || []);
+      const destWeekly: Record<string, Record<string, number>> = {};
+      const destMeta: Record<string, { city: string; state: string }> = {};
+      for (const row of allRows) {
+        const city = String(row["Consignee city"] || "").trim();
+        const state = String(row["Consignee state"] || "").trim();
+        const dateStr = String(row["Date ordered"] || "").trim();
+        if (!city || !state) continue;
+        const key = `${city.toLowerCase()}||${state.toLowerCase()}`;
+        if (!destWeekly[key]) { destWeekly[key] = {}; destMeta[key] = { city, state }; }
+        if (dateStr) {
+          const d = new Date(dateStr);
+          if (!isNaN(d.getTime())) {
+            const wk = getWeekKey(d);
+            destWeekly[key][wk] = (destWeekly[key][wk] || 0) + 1;
+          }
+        }
+      }
+      const hotDests = Object.entries(destWeekly).map(([key, weeks]) => {
+        const counts = Object.values(weeks);
+        const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+        const max = Math.max(...counts);
+        return { key, ...destMeta[key], avgWeekly: avg, maxWeekly: max };
+      }).filter(d => d.maxWeekly >= 5).sort((a, b) => b.avgWeekly - a.avgWeekly);
+      const allRfps = await storage.getRfps();
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      const visibleRfps = visibleIds === null ? allRfps : allRfps.filter(r => r.companyId && visibleIds.includes(r.companyId));
+      const allCompanies = await storage.getCompanies();
+      const visibleCompanies = visibleIds === null ? allCompanies : allCompanies.filter(c => visibleIds.includes(c.id));
+      const companyMap = new Map(visibleCompanies.map(c => [c.id, c.name]));
+      const opportunities: any[] = [];
+      for (const hot of hotDests) {
+        const matches: any[] = [];
+        for (const rfp of visibleRfps) {
+          const fileData = rfp.fileData as any;
+          if (!fileData?.highVolumeLanes?.length) continue;
+          for (const lane of fileData.highVolumeLanes) {
+            const laneOrigin = String(lane.origin || "").trim().toLowerCase();
+            const laneState = String(lane.originState || "").trim().toLowerCase();
+            const hotCity = hot.city.toLowerCase();
+            const hotState = hot.state.toLowerCase();
+            if (!laneOrigin) continue;
+            const cityMatch = laneOrigin.includes(hotCity) || hotCity.includes(laneOrigin);
+            const stateMatch = !laneState || !hotState || laneState === hotState || laneState.startsWith(hotState.slice(0, 2)) || hotState.startsWith(laneState.slice(0, 2));
+            if (cityMatch && stateMatch) {
+              matches.push({
+                companyId: rfp.companyId,
+                companyName: companyMap.get(rfp.companyId || "") || "Unknown",
+                rfpId: rfp.id,
+                rfpTitle: rfp.title,
+                lane: `${lane.origin || ""}${lane.originState ? ", " + lane.originState : ""} → ${lane.destination || ""}${lane.destinationState ? ", " + lane.destinationState : ""}`,
+                volume: lane.volume,
+                rate: lane.rate,
+                equipment: lane.equipment,
+              });
+            }
+          }
+        }
+        if (matches.length > 0) {
+          opportunities.push({
+            destination: `${hot.city}, ${hot.state}`,
+            city: hot.city, state: hot.state,
+            weeklyLoadCount: Math.round(hot.avgWeekly * 10) / 10,
+            maxWeekly: hot.maxWeekly,
+            matches,
+          });
+        }
+      }
+      res.json(opportunities);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to compute opportunities" });
+    }
+  });
+
   return httpServer;
 }

@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3 } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -37,6 +37,11 @@ const menuItems = [
     title: "Research Tasks",
     url: "/research-tasks",
     icon: ClipboardList,
+  },
+  {
+    title: "Top Opportunities",
+    url: "/top-opportunities",
+    icon: Zap,
   },
 ];
 
@@ -101,7 +106,15 @@ export function AppSidebar() {
                   <SidebarMenuButton asChild isActive={location === "/financials"}>
                     <Link href="/financials" data-testid="link-financials">
                       <BarChart3 className="h-4 w-4" />
-                      <span>Numbers & Historical Data</span>
+                      <span>Numbers</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location === "/historical-data"}>
+                    <Link href="/historical-data" data-testid="link-historical-data">
+                      <History className="h-4 w-4" />
+                      <span>Historical Data</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
