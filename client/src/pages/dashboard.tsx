@@ -158,10 +158,6 @@ export default function Dashboard() {
   const handleSubmitFeed = () => {
     const trimmed = feedContent.trim();
     if (!trimmed) return;
-    if (trimmed.length > 500) {
-      toast({ title: "Post too long (max 500 chars)", variant: "destructive" });
-      return;
-    }
     createFeedPostMutation.mutate({ content: trimmed, category: feedCategory });
   };
 
@@ -404,7 +400,7 @@ export default function Dashboard() {
       <Card data-testid="card-feed">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            <Lightbulb className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             Trends / Growth / Ideas
             {!feedLoading && feedPosts.length > 0 && (
               <Badge variant="secondary" className="ml-1 font-normal">{feedPosts.length}</Badge>
@@ -438,13 +434,9 @@ export default function Dashboard() {
               onKeyDown={handleFeedKeyDown}
               placeholder="Share a trend, growth win, or idea… Type @ to mention someone (Ctrl+Enter to post)"
               className="resize-none text-sm min-h-[72px]"
-              maxLength={500}
               data-testid="textarea-feed-content"
             />
-            <div className="flex items-center justify-between mt-1.5">
-              <span className={`text-xs ${feedContent.length > 450 ? "text-amber-500" : "text-muted-foreground"}`}>
-                {feedContent.length}/500
-              </span>
+            <div className="flex items-center justify-end mt-1.5">
               <Button
                 size="sm"
                 className="gap-1"
