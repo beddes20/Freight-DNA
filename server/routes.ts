@@ -1275,6 +1275,77 @@ export async function registerRoutes(
     }
   });
 
+  // ── Feed Posts (Trends / Growth / Ideas) ─────────────────────────────────
+
+  app.get("/api/feed-posts", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const allPosts = await storage.getFeedPosts();
+      if (user.role === "admin") return res.json(allPosts);
+      if (user.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        return res.json(allPosts.filter(p => teamIds.includes(p.authorId)));
+      }
+      const visibleIds = new Set<string>([user.id]);
+      if (user.managerId) {
+        visibleIds.add(user.managerId);
+        const allUsers = await storage.getUsers();
+        allUsers.forEach(u => {
+          if (u.managerId === user.managerId) visibleIds.add(u.id);
+        });
+      }
+      return res.json(allPosts.filter(p => visibleIds.has(p.authorId)));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch feed posts" });
+    }
+  });
+
+  app.post("/api/feed-posts", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { content, category } = req.body;
+      if (!content || typeof content !== "string" || !content.trim()) {
+        return res.status(400).json({ error: "Content is required" });
+      }
+      const trimmed = content.trim();
+      if (trimmed.length > 500) {
+        return res.status(400).json({ error: "Content must be 500 characters or less" });
+      }
+      const validCategories = ["trend", "growth", "idea"];
+      if (!category || !validCategories.includes(category)) {
+        return res.status(400).json({ error: "Category must be trend, growth, or idea" });
+      }
+      const post = await storage.createFeedPost({
+        content: trimmed,
+        category,
+        authorId: user.id,
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(post);
+    } catch (error) {
+      console.error("Error creating feed post:", error);
+      res.status(500).json({ error: "Failed to create feed post" });
+    }
+  });
+
+  app.delete("/api/feed-posts/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getFeedPost(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Post not found" });
+      if (existing.authorId !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Not authorized to delete this post" });
+      }
+      await storage.deleteFeedPost(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete feed post" });
+    }
+  });
+
   // ── Financial Data ─────────────────────────────────────────────────────────
 
   app.get("/api/historical-data", requireAuth, async (req, res) => {

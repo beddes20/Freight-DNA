@@ -5,16 +5,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp,
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
-  CheckCircle2, Calendar, Trash2,
+  CheckCircle2, Calendar, Trash2, Lightbulb, Send, Loader2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
-import type { Company, Contact, Task, User } from "@shared/schema";
+import type { Company, Contact, Task, User, FeedPost } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
 
@@ -46,11 +47,33 @@ const statusIcon = (status: string) => {
 
 const nextStatus = (s: string) => s === "open" ? "in_progress" : s === "in_progress" ? "completed" : "open";
 
+function relativeTime(isoString: string): string {
+  const now = Date.now();
+  const then = new Date(isoString).getTime();
+  const diffSec = Math.floor((now - then) / 1000);
+  if (diffSec < 60) return "just now";
+  const mins = Math.floor(diffSec / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(isoString).toLocaleDateString();
+}
+
+const categoryMeta: Record<string, { label: string; emoji: string; color: string }> = {
+  trend: { label: "Trend", emoji: "📈", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
+  growth: { label: "Growth", emoji: "💰", color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
+  idea: { label: "Idea", emoji: "💡", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" },
+};
+
 export default function Dashboard() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>();
+  const [feedContent, setFeedContent] = useState("");
+  const [feedCategory, setFeedCategory] = useState<"trend" | "growth" | "idea">("idea");
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -72,6 +95,35 @@ export default function Dashboard() {
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
+  });
+
+  const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPost[]>({
+    queryKey: ["/api/feed-posts"],
+  });
+
+  const createPostMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/feed-posts", {
+        content: feedContent.trim(),
+        category: feedCategory,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/feed-posts"] });
+      setFeedContent("");
+    },
+    onError: (err: any) => {
+      toast({ title: err?.message || "Failed to create post", variant: "destructive" });
+    },
+  });
+
+  const deletePostMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/feed-posts/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/feed-posts"] });
+    },
   });
 
   const isLoading = companiesLoading || contactsLoading;
@@ -293,6 +345,111 @@ export default function Dashboard() {
               <ClipboardList className="h-8 w-8 mx-auto mb-2 opacity-50" />
               <p className="text-sm">No tasks yet</p>
               <p className="text-xs mt-1">Click "Add Task" to create your first one</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card data-testid="card-feed">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Lightbulb className="h-4 w-4 text-amber-500" />
+            Trends · Growth · Ideas
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3 mb-4">
+            <div className="flex gap-2">
+              {(["trend", "growth", "idea"] as const).map(cat => {
+                const m = categoryMeta[cat];
+                const active = feedCategory === cat;
+                return (
+                  <button
+                    key={cat}
+                    onClick={() => setFeedCategory(cat)}
+                    className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${
+                      active
+                        ? m.color + " border-transparent"
+                        : "bg-muted/50 text-muted-foreground border-transparent hover:border-border"
+                    }`}
+                    data-testid={`button-feed-category-${cat}`}
+                  >
+                    {m.emoji} {m.label}
+                  </button>
+                );
+              })}
+            </div>
+            <Textarea
+              value={feedContent}
+              onChange={e => setFeedContent(e.target.value)}
+              placeholder="Share a trend, growth opportunity, or idea with the team..."
+              rows={2}
+              className="resize-none"
+              data-testid="input-feed-content"
+            />
+            <div className="flex items-center justify-between">
+              <span className={`text-xs ${feedContent.trim().length > 500 ? "text-destructive" : "text-muted-foreground"}`}>
+                {feedContent.trim().length}/500
+              </span>
+              <Button
+                size="sm"
+                className="gap-1"
+                disabled={!feedContent.trim() || feedContent.trim().length > 500 || createPostMutation.isPending}
+                onClick={() => createPostMutation.mutate()}
+                data-testid="button-feed-share"
+              >
+                {createPostMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                Share
+              </Button>
+            </div>
+          </div>
+
+          {feedLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map(i => <Skeleton key={i} className="h-16 w-full" />)}
+            </div>
+          ) : feedPosts.length > 0 ? (
+            <div className="space-y-2 border-t pt-3">
+              {feedPosts.slice(0, 20).map(post => {
+                const m = categoryMeta[post.category] || categoryMeta.idea;
+                const authorName = teamMembers.find(u => u.id === post.authorId)?.name || "Unknown";
+                const isOwn = post.authorId === currentUser?.id;
+                const canDelete = isOwn || currentUser?.role === "admin";
+                return (
+                  <div
+                    key={post.id}
+                    className="p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group"
+                    data-testid={`feed-post-${post.id}`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium shrink-0 mt-0.5 ${m.color}`}>
+                        {m.emoji} {m.label}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm whitespace-pre-wrap break-words" data-testid={`text-feed-content-${post.id}`}>{post.content}</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {authorName} · {relativeTime(post.createdAt)}
+                        </p>
+                      </div>
+                      {canDelete && (
+                        <button
+                          onClick={() => deletePostMutation.mutate(post.id)}
+                          className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                          data-testid={`button-delete-feed-${post.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-6 text-muted-foreground border-t pt-6">
+              <Lightbulb className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No posts yet.</p>
+              <p className="text-xs mt-1">Share the first trend, growth tip, or idea with your team.</p>
             </div>
           )}
         </CardContent>

@@ -1,4 +1,4 @@
-import { eq, inArray, ilike, or, and } from "drizzle-orm";
+import { eq, inArray, ilike, or, and, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -10,6 +10,7 @@ import {
   financialUploads,
   appSettings,
   tasks,
+  feedPosts,
   type User,
   type InsertUser,
   type Company,
@@ -24,6 +25,8 @@ import {
   type InsertFinancialUpload,
   type Task,
   type InsertTask,
+  type FeedPost,
+  type InsertFeedPost,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -76,6 +79,11 @@ export interface IStorage {
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
+
+  getFeedPosts(): Promise<FeedPost[]>;
+  createFeedPost(post: InsertFeedPost): Promise<FeedPost>;
+  getFeedPost(id: string): Promise<FeedPost | undefined>;
+  deleteFeedPost(id: string): Promise<boolean>;
 
   getSetting(key: string): Promise<string | undefined>;
   setSetting(key: string, value: string): Promise<void>;
@@ -313,6 +321,25 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTask(id: string): Promise<boolean> {
     const result = await db.delete(tasks).where(eq(tasks.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getFeedPosts(): Promise<FeedPost[]> {
+    return db.select().from(feedPosts).orderBy(desc(feedPosts.createdAt)).limit(30);
+  }
+
+  async createFeedPost(post: InsertFeedPost): Promise<FeedPost> {
+    const [created] = await db.insert(feedPosts).values(post).returning();
+    return created;
+  }
+
+  async getFeedPost(id: string): Promise<FeedPost | undefined> {
+    const [post] = await db.select().from(feedPosts).where(eq(feedPosts.id, id));
+    return post;
+  }
+
+  async deleteFeedPost(id: string): Promise<boolean> {
+    const result = await db.delete(feedPosts).where(eq(feedPosts.id, id)).returning();
     return result.length > 0;
   }
 
