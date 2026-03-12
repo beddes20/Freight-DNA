@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, FileText, ExternalLink } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -93,6 +93,24 @@ export function AppSidebar() {
                         <span>{item.title}</span>
                       </Link>
                     </SidebarMenuButton>
+                    {item.title === "Playbook" && (
+                      <SidebarMenu className="ml-4 mt-0.5">
+                        <SidebarMenuItem>
+                          <SidebarMenuButton asChild>
+                            <a
+                              href="https://valuetruck-my.sharepoint.com/:w:/p/ben_beddes/IQAxq4cjYozxTJHB-zYcZtBnAYWpGDvcP6Qj_AW6ULA_Oq8?rtime=s9jxtGeA3kg&ovuser=99d7bd71-9046-4915-be1c-3aae2baf1645%2Cben.beddes%40valuetruck.com&clickparams=eyJBcHBOYW1lIjoiVGVhbXMtRGVza3RvcCIsIkFwcFZlcnNpb24iOiI0OS8yNjAyMDEwMTEyMCIsIkhhc0ZlZGVyYXRlZFVzZXIiOmZhbHNlfQ%3D%3D"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              data-testid="link-sales-playbook-doc"
+                            >
+                              <FileText className="h-3.5 w-3.5" />
+                              <span className="text-xs">Sales Playbook Doc</span>
+                              <ExternalLink className="h-3 w-3 ml-auto opacity-50" />
+                            </a>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      </SidebarMenu>
+                    )}
                   </SidebarMenuItem>
                 );
               })}
