@@ -31,10 +31,19 @@ export default defineConfig({
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
   },
+  optimizeDeps: {
+    exclude: ["leaflet.heat"],
+  },
   server: {
     fs: {
       strict: true,
       deny: ["**/.*"],
+      allow: [
+        path.resolve(import.meta.dirname, "client"),
+        path.resolve(import.meta.dirname, "shared"),
+        path.resolve(import.meta.dirname, "attached_assets"),
+        path.resolve(import.meta.dirname, "node_modules"),
+      ],
     },
   },
 });

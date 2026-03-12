@@ -31,13 +31,18 @@ type MapMode = "inbound" | "both" | "outbound";
 function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
-  const deliveryLayerRef = useRef<any>(null);
-  const pickupLayerRef = useRef<any>(null);
+  const deliveryHeatRef = useRef<any>(null);
+  const pickupHeatRef = useRef<any>(null);
+  const deliveryDotsRef = useRef<any>(null);
+  const pickupDotsRef = useRef<any>(null);
 
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
 
     import("leaflet").then((L) => {
+      (window as any).L = L;
+      return import("leaflet.heat").then(() => L);
+    }).then((L) => {
       if (!mapRef.current || mapInstanceRef.current) return;
 
       delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -51,59 +56,81 @@ function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
         maxZoom: 18,
       }).addTo(map);
 
+      const heatGradient = { 0.15: "#0000ff", 0.3: "#6a5acd", 0.45: "#00bfff", 0.6: "#00ff80", 0.75: "#ffff00", 0.9: "#ff8c00", 1.0: "#ff0000" };
+
       const maxDeliv = Math.max(...data.deliveries.map(d => d.count), 1);
-      const maxPickup = Math.max(...data.pickups.map(p => p.count), 1);
+      const deliveryHeatPoints: [number, number, number][] = data.deliveries.map(pt => [pt.lat, pt.lng, pt.count / maxDeliv]);
+      const deliveryHeat = (L as any).heatLayer(deliveryHeatPoints, {
+        radius: 35, blur: 25, maxZoom: 10, max: 1.0, gradient: heatGradient,
+      });
+      deliveryHeatRef.current = deliveryHeat;
 
-      const deliveryLayer = L.layerGroup();
+      const deliveryDots = L.layerGroup();
       data.deliveries.forEach(pt => {
-        const radius = Math.max(6, Math.sqrt(pt.count / maxDeliv) * 30);
-        const opacity = 0.3 + (pt.count / maxDeliv) * 0.55;
         L.circleMarker([pt.lat, pt.lng], {
-          radius, color: "#1e40af", fillColor: "#3b82f6", fillOpacity: opacity, weight: 1.5, opacity: 0.8,
-        }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>📦 ${pt.count.toLocaleString()} deliveries`, { sticky: true }).addTo(deliveryLayer);
+          radius: 3, color: "#6b7280", fillColor: "#9ca3af", fillOpacity: 0.7, weight: 1, opacity: 0.6,
+        }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>📦 ${pt.count.toLocaleString()} deliveries`, { sticky: true }).addTo(deliveryDots);
       });
-      deliveryLayerRef.current = deliveryLayer;
+      deliveryDotsRef.current = deliveryDots;
 
-      const pickupLayer = L.layerGroup();
+      const maxPickup = Math.max(...data.pickups.map(p => p.count), 1);
+      const pickupHeatPoints: [number, number, number][] = data.pickups.map(pt => [pt.lat, pt.lng, pt.count / maxPickup]);
+      const pickupHeat = (L as any).heatLayer(pickupHeatPoints, {
+        radius: 30, blur: 20, maxZoom: 10, max: 1.0, gradient: heatGradient,
+      });
+      pickupHeatRef.current = pickupHeat;
+
+      const pickupDots = L.layerGroup();
       data.pickups.forEach(pt => {
-        const radius = Math.max(5, Math.sqrt(pt.count / maxPickup) * 22);
-        const opacity = 0.25 + (pt.count / maxPickup) * 0.5;
         L.circleMarker([pt.lat, pt.lng], {
-          radius, color: "#15803d", fillColor: "#22c55e", fillOpacity: opacity, weight: 1.5, opacity: 0.8,
-        }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>🚚 ${pt.count.toLocaleString()} pickups`, { sticky: true }).addTo(pickupLayer);
+          radius: 3, color: "#6b7280", fillColor: "#9ca3af", fillOpacity: 0.7, weight: 1, opacity: 0.6,
+        }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>🚚 ${pt.count.toLocaleString()} pickups`, { sticky: true }).addTo(pickupDots);
       });
-      pickupLayerRef.current = pickupLayer;
+      pickupDotsRef.current = pickupDots;
 
-      deliveryLayer.addTo(map);
-      pickupLayer.addTo(map);
+      deliveryHeat.addTo(map);
+      deliveryDots.addTo(map);
+      pickupHeat.addTo(map);
+      pickupDots.addTo(map);
     });
 
     return () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
-        deliveryLayerRef.current = null;
-        pickupLayerRef.current = null;
+        deliveryHeatRef.current = null;
+        pickupHeatRef.current = null;
+        deliveryDotsRef.current = null;
+        pickupDotsRef.current = null;
       }
     };
   }, [data]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
-    const dl = deliveryLayerRef.current;
-    const pl = pickupLayerRef.current;
-    if (!map || !dl || !pl) return;
+    const dh = deliveryHeatRef.current;
+    const ph = pickupHeatRef.current;
+    const dd = deliveryDotsRef.current;
+    const pd = pickupDotsRef.current;
+    if (!map || !dh || !ph || !dd || !pd) return;
 
-    if (mode === "inbound" || mode === "both") {
-      if (!map.hasLayer(dl)) dl.addTo(map);
+    const showInbound = mode === "inbound" || mode === "both";
+    const showOutbound = mode === "outbound" || mode === "both";
+
+    if (showInbound) {
+      if (!map.hasLayer(dh)) dh.addTo(map);
+      if (!map.hasLayer(dd)) dd.addTo(map);
     } else {
-      if (map.hasLayer(dl)) dl.remove();
+      if (map.hasLayer(dh)) map.removeLayer(dh);
+      if (map.hasLayer(dd)) dd.remove();
     }
 
-    if (mode === "outbound" || mode === "both") {
-      if (!map.hasLayer(pl)) pl.addTo(map);
+    if (showOutbound) {
+      if (!map.hasLayer(ph)) ph.addTo(map);
+      if (!map.hasLayer(pd)) pd.addTo(map);
     } else {
-      if (map.hasLayer(pl)) pl.remove();
+      if (map.hasLayer(ph)) map.removeLayer(ph);
+      if (map.hasLayer(pd)) pd.remove();
     }
   }, [mode]);
 
@@ -122,7 +149,10 @@ function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
             <span className="text-muted-foreground">Outbound (pickups) — {data.pickups.length} cities</span>
           </div>
         )}
-        <div className="text-muted-foreground">Circle size = relative volume</div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-20 h-3 rounded-sm" style={{ background: "linear-gradient(90deg, #0000ff, #6a5acd, #00bfff, #00ff80, #ffff00, #ff8c00, #ff0000)" }} />
+          <span className="text-muted-foreground text-xs">Low → High density</span>
+        </div>
       </div>
       <div ref={mapRef} style={{ height: 520, width: "100%", borderRadius: 8, zIndex: 0 }} className="border" data-testid="map-heatmap" />
     </div>
