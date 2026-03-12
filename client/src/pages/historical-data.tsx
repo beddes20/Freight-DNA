@@ -90,8 +90,8 @@ function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
       const pickupGroup = L.layerGroup([pickupHeat, pickupDots]);
       pickupLayerRef.current = pickupGroup;
 
-      deliveryGroup.addTo(map);
-      pickupGroup.addTo(map);
+      if (mode === "inbound" || mode === "both") deliveryGroup.addTo(map);
+      if (mode === "outbound" || mode === "both") pickupGroup.addTo(map);
     });
 
     return () => {
