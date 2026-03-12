@@ -1142,6 +1142,7 @@ export async function registerRoutes(
           allRows.push(...(upload.rows as any[]));
         }
       }
+      allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
       if (user.role === "national_account_manager") {
         const teamIds = await storage.getTeamMemberIds(user.id);
@@ -1215,6 +1216,7 @@ export async function registerRoutes(
           allRows.push(...(upload.rows as any[]));
         }
       }
+      allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
       if (user.role === "national_account_manager") {
         const teamIds = await storage.getTeamMemberIds(user.id);
@@ -1370,7 +1372,7 @@ export async function registerRoutes(
       const upload = await storage.getLatestFinancialUpload();
       if (!upload) return res.json(null);
 
-      let rows = (upload.rows as any[]) || [];
+      let rows = ((upload.rows as any[]) || []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
       if (user.role === "national_account_manager") {
         const teamIds = await storage.getTeamMemberIds(user.id);
@@ -1457,7 +1459,7 @@ export async function registerRoutes(
   app.get("/api/historical-data-summary", requireAuth, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploads();
-      const allRows = uploads.flatMap(u => (u.rows as any[]) || []);
+      const allRows = uploads.flatMap(u => (u.rows as any[]) || []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
       const destWeekly: Record<string, Record<string, number>> = {};
       const destMeta: Record<string, { city: string; state: string }> = {};
       for (const row of allRows) {
@@ -1501,7 +1503,7 @@ export async function registerRoutes(
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const uploads = await storage.getFinancialUploads();
-      const allRows = uploads.flatMap(u => (u.rows as any[]) || []);
+      const allRows = uploads.flatMap(u => (u.rows as any[]) || []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
       const destWeekly: Record<string, Record<string, number>> = {};
       const destMeta: Record<string, { city: string; state: string }> = {};
       for (const row of allRows) {
@@ -1581,7 +1583,7 @@ export async function registerRoutes(
       const uploads = await storage.getFinancialUploads();
       const corridorMap: Record<string, { origin: string; destination: string; originCity: string; originState: string; destCity: string; destState: string; loads: number }> = {};
       for (const upload of uploads) {
-        const rows: any[] = (upload as any).rows ?? [];
+        const rows: any[] = ((upload as any).rows ?? []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
         for (const row of rows) {
           const oc = (row["Shipper city"] || row["shipper_city"] || row["Origin City"] || "").toString().trim();
           const os = (row["Shipper state"] || row["shipper_state"] || row["Origin State"] || "").toString().trim();
@@ -1612,7 +1614,7 @@ export async function registerRoutes(
       const pickups: Record<string, { city: string; state: string; count: number }> = {};
       let totalRows = 0;
       for (const upload of uploads) {
-        const rows: any[] = Array.isArray((upload as any).rows) ? (upload as any).rows : [];
+        const rows: any[] = (Array.isArray((upload as any).rows) ? (upload as any).rows : []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
         totalRows += rows.length;
         for (const row of rows) {
           const dc = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
@@ -1653,7 +1655,7 @@ export async function registerRoutes(
       // Build delivery zone frequency
       const deliveryMap: Record<string, { city: string; state: string; count: number }> = {};
       for (const upload of uploads) {
-        const rows: any[] = (upload as any).rows ?? [];
+        const rows: any[] = ((upload as any).rows ?? []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
         for (const row of rows) {
           const c = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
           const s = (row["Consignee state"] || row["consignee_state"] || "").toString().trim();
@@ -1732,7 +1734,7 @@ export async function registerRoutes(
       const ourPickupMap: Record<string, { city: string; state: string; count: number; lat: number; lng: number }> = {};
 
       for (const upload of uploads) {
-        const rows: any[] = Array.isArray((upload as any).rows) ? (upload as any).rows : [];
+        const rows: any[] = (Array.isArray((upload as any).rows) ? (upload as any).rows : []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
         for (const row of rows) {
           const dc = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
           const ds = (row["Consignee state"] || row["consignee_state"] || "").toString().trim();
