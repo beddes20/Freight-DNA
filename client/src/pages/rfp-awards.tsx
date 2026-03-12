@@ -641,7 +641,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
           <div className="flex items-center justify-between">
             <button
               onClick={() => setDataViewerCollapsed(c => !c)}
-              className="flex-1 flex items-start gap-0 text-left group"
+              className="flex-1 flex items-start justify-between text-left group"
               data-testid="btn-toggle-data-viewer"
             >
               <div>
@@ -653,13 +653,11 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                   {rfp.fileName} - {rows.length} rows
                 </p>
               </div>
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 mt-1 ${dataViewerCollapsed ? "-rotate-90" : ""}`} />
             </button>
-            <div className="flex items-center gap-1">
-              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${dataViewerCollapsed ? "-rotate-90" : ""}`} />
-              <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-data-viewer">
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+            <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-data-viewer" className="ml-1">
+              <X className="h-4 w-4" />
+            </Button>
           </div>
 
           {!dataViewerCollapsed && (
