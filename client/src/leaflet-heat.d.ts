@@ -1,30 +1,19 @@
-declare module "leaflet.heat" {
-  import * as L from "leaflet";
-  namespace HeatLayer {
-    interface Options {
-      minOpacity?: number;
-      maxZoom?: number;
-      max?: number;
-      radius?: number;
-      blur?: number;
-      gradient?: Record<number, string>;
-    }
+import * as L from "leaflet";
+
+declare module "leaflet" {
+  interface HeatLayerOptions {
+    minOpacity?: number;
+    maxZoom?: number;
+    max?: number;
+    radius?: number;
+    blur?: number;
+    gradient?: Record<number, string>;
   }
+
   function heatLayer(
     latlngs: Array<[number, number, number?]>,
-    options?: HeatLayer.Options
+    options?: HeatLayerOptions
   ): L.Layer;
 }
-declare namespace L {
-  function heatLayer(
-    latlngs: Array<[number, number, number?]>,
-    options?: {
-      minOpacity?: number;
-      maxZoom?: number;
-      max?: number;
-      radius?: number;
-      blur?: number;
-      gradient?: Record<number, string>;
-    }
-  ): L.Layer;
-}
+
+declare module "leaflet.heat" {}

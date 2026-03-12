@@ -1,4 +1,5 @@
 import "leaflet/dist/leaflet.css";
+import type * as L from "leaflet";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
@@ -30,22 +31,21 @@ type MapMode = "inbound" | "both" | "outbound";
 
 function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const deliveryHeatRef = useRef<any>(null);
-  const pickupHeatRef = useRef<any>(null);
-  const deliveryDotsRef = useRef<any>(null);
-  const pickupDotsRef = useRef<any>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const deliveryLayerRef = useRef<L.LayerGroup | null>(null);
+  const pickupLayerRef = useRef<L.LayerGroup | null>(null);
 
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
 
-    import("leaflet").then((L) => {
-      (window as any).L = L;
-      return import("leaflet.heat").then(() => L);
+    import("leaflet").then((leaflet) => {
+      const w = window as Window & { L?: typeof leaflet };
+      w.L = leaflet;
+      return import("leaflet.heat").then(() => leaflet);
     }).then((L) => {
       if (!mapRef.current || mapInstanceRef.current) return;
 
-      delete (L.Icon.Default.prototype as any)._getIconUrl;
+      delete (L.Icon.Default.prototype as Record<string, unknown>)._getIconUrl;
       L.Icon.Default.mergeOptions({ iconUrl: "", shadowUrl: "" });
 
       const map = L.map(mapRef.current, { center: [39.5, -98.35], zoom: 4, zoomControl: true });
@@ -60,77 +60,69 @@ function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
 
       const maxDeliv = Math.max(...data.deliveries.map(d => d.count), 1);
       const deliveryHeatPoints: [number, number, number][] = data.deliveries.map(pt => [pt.lat, pt.lng, pt.count / maxDeliv]);
-      const deliveryHeat = (L as any).heatLayer(deliveryHeatPoints, {
+      const deliveryHeat = L.heatLayer(deliveryHeatPoints, {
         radius: 35, blur: 25, maxZoom: 10, max: 1.0, gradient: heatGradient,
       });
-      deliveryHeatRef.current = deliveryHeat;
 
       const deliveryDots = L.layerGroup();
       data.deliveries.forEach(pt => {
         L.circleMarker([pt.lat, pt.lng], {
-          radius: 3, color: "#6b7280", fillColor: "#9ca3af", fillOpacity: 0.7, weight: 1, opacity: 0.6,
+          radius: 3, color: "#6b7280", fill: false, weight: 1, opacity: 0.6,
         }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>📦 ${pt.count.toLocaleString()} deliveries`, { sticky: true }).addTo(deliveryDots);
       });
-      deliveryDotsRef.current = deliveryDots;
+
+      const deliveryGroup = L.layerGroup([deliveryHeat, deliveryDots]);
+      deliveryLayerRef.current = deliveryGroup;
 
       const maxPickup = Math.max(...data.pickups.map(p => p.count), 1);
       const pickupHeatPoints: [number, number, number][] = data.pickups.map(pt => [pt.lat, pt.lng, pt.count / maxPickup]);
-      const pickupHeat = (L as any).heatLayer(pickupHeatPoints, {
+      const pickupHeat = L.heatLayer(pickupHeatPoints, {
         radius: 30, blur: 20, maxZoom: 10, max: 1.0, gradient: heatGradient,
       });
-      pickupHeatRef.current = pickupHeat;
 
       const pickupDots = L.layerGroup();
       data.pickups.forEach(pt => {
         L.circleMarker([pt.lat, pt.lng], {
-          radius: 3, color: "#6b7280", fillColor: "#9ca3af", fillOpacity: 0.7, weight: 1, opacity: 0.6,
+          radius: 3, color: "#6b7280", fill: false, weight: 1, opacity: 0.6,
         }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>🚚 ${pt.count.toLocaleString()} pickups`, { sticky: true }).addTo(pickupDots);
       });
-      pickupDotsRef.current = pickupDots;
 
-      deliveryHeat.addTo(map);
-      deliveryDots.addTo(map);
-      pickupHeat.addTo(map);
-      pickupDots.addTo(map);
+      const pickupGroup = L.layerGroup([pickupHeat, pickupDots]);
+      pickupLayerRef.current = pickupGroup;
+
+      deliveryGroup.addTo(map);
+      pickupGroup.addTo(map);
     });
 
     return () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
-        deliveryHeatRef.current = null;
-        pickupHeatRef.current = null;
-        deliveryDotsRef.current = null;
-        pickupDotsRef.current = null;
+        deliveryLayerRef.current = null;
+        pickupLayerRef.current = null;
       }
     };
   }, [data]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
-    const dh = deliveryHeatRef.current;
-    const ph = pickupHeatRef.current;
-    const dd = deliveryDotsRef.current;
-    const pd = pickupDotsRef.current;
-    if (!map || !dh || !ph || !dd || !pd) return;
+    const dl = deliveryLayerRef.current;
+    const pl = pickupLayerRef.current;
+    if (!map || !dl || !pl) return;
 
     const showInbound = mode === "inbound" || mode === "both";
     const showOutbound = mode === "outbound" || mode === "both";
 
     if (showInbound) {
-      if (!map.hasLayer(dh)) dh.addTo(map);
-      if (!map.hasLayer(dd)) dd.addTo(map);
+      if (!map.hasLayer(dl)) dl.addTo(map);
     } else {
-      if (map.hasLayer(dh)) map.removeLayer(dh);
-      if (map.hasLayer(dd)) dd.remove();
+      if (map.hasLayer(dl)) dl.remove();
     }
 
     if (showOutbound) {
-      if (!map.hasLayer(ph)) ph.addTo(map);
-      if (!map.hasLayer(pd)) pd.addTo(map);
+      if (!map.hasLayer(pl)) pl.addTo(map);
     } else {
-      if (map.hasLayer(ph)) map.removeLayer(ph);
-      if (map.hasLayer(pd)) pd.remove();
+      if (map.hasLayer(pl)) pl.remove();
     }
   }, [mode]);
 
