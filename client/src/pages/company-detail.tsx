@@ -736,7 +736,7 @@ export default function CompanyDetail() {
           ) : (
             <div className="text-center py-4 text-muted-foreground">
               <ClipboardList className="h-6 w-6 mx-auto mb-1 opacity-50" />
-              <p className="text-xs">No tasks for this account</p>
+              <p className="text-xs">No tasks yet — add one to track follow-ups for this account</p>
             </div>
           )}
         </CardContent>

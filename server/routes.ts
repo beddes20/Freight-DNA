@@ -1171,13 +1171,15 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { title, notes, dueDate, assignedTo, companyId, contactId } = req.body;
+      const { title, notes, status, dueDate, assignedTo, companyId, contactId } = req.body;
       if (!title || typeof title !== "string" || !title.trim()) {
         return res.status(400).json({ error: "Title is required" });
       }
       if (!assignedTo || typeof assignedTo !== "string") {
         return res.status(400).json({ error: "Assignee is required" });
       }
+      const validStatuses = ["open", "in_progress", "completed"];
+      const taskStatus = status && validStatuses.includes(status) ? status : "open";
       if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
         return res.status(400).json({ error: "Invalid date format" });
       }
@@ -1187,7 +1189,7 @@ export async function registerRoutes(
       const task = await storage.createTask({
         title: title.trim(),
         notes: notes || null,
-        status: "open",
+        status: taskStatus,
         dueDate: dueDate || null,
         assignedTo,
         assignedBy: user.id,
