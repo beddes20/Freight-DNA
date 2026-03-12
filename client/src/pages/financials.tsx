@@ -187,7 +187,7 @@ export default function Financials() {
           <div>
             <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
               <BarChart3 className="h-6 w-6" />
-              Numbers & Historical Data
+              Numbers
             </h1>
             <p className="text-blue-200 mt-1 text-sm">
               {financialData ? `${financialData.rowCount.toLocaleString()} total records · ${financialData.fileName}` : "Upload your Excel data to get started"}

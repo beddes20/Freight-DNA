@@ -1124,6 +1124,242 @@ export async function registerRoutes(
 
   // ── Financial Data ─────────────────────────────────────────────────────────
 
+  app.get("/api/historical-data", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "admin" && user.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const uploads = await storage.getFinancialUploads();
+      if (uploads.length === 0) return res.json([]);
+
+      let allRows: any[] = [];
+      for (const upload of uploads) {
+        if (Array.isArray(upload.rows)) {
+          allRows.push(...(upload.rows as any[]));
+        }
+      }
+
+      if (user.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
+        const teamNames = teamUsers.map(u => u.name.toLowerCase());
+        allRows = allRows.filter((r: any) => {
+          const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
+          return teamNames.some(n => op.includes(n) || n.includes(op));
+        });
+      }
+
+      const byDestWeek = new Map<string, Map<string, number>>();
+      for (const row of allRows) {
+        const city = (row["Consignee city"] || "").trim();
+        const state = (row["Consignee state"] || "").trim();
+        if (!city && !state) continue;
+        const location = city && state ? `${city}, ${state}` : city || state;
+
+        let week = "unknown";
+        try {
+          const d = new Date(row["Date ordered"] || "");
+          if (!isNaN(d.getTime())) {
+            const year = d.getFullYear();
+            const startOfYear = new Date(year, 0, 1);
+            const weekNum = Math.ceil(((d.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getDay() + 1) / 7);
+            week = `${year}-W${weekNum}`;
+          }
+        } catch {}
+
+        if (!byDestWeek.has(location)) byDestWeek.set(location, new Map());
+        const weekMap = byDestWeek.get(location)!;
+        weekMap.set(week, (weekMap.get(week) || 0) + 1);
+      }
+
+      const summaries: { location: string; totalLoads: number; weekCount: number; avgWeeklyLoads: number; peakWeeklyLoads: number; isHotZone: boolean }[] = [];
+      for (const [location, weekMap] of byDestWeek) {
+        const weekValues = Array.from(weekMap.values());
+        const totalLoads = weekValues.reduce((a: number, b: number) => a + b, 0);
+        const weekCount = weekMap.size;
+        const avgWeeklyLoads = weekCount > 0 ? Math.round((totalLoads / weekCount) * 10) / 10 : 0;
+        const peakWeeklyLoads = Math.max(...weekValues);
+        summaries.push({
+          location,
+          totalLoads,
+          weekCount,
+          avgWeeklyLoads,
+          peakWeeklyLoads,
+          isHotZone: peakWeeklyLoads >= 5,
+        });
+      }
+
+      summaries.sort((a, b) => b.avgWeeklyLoads - a.avgWeeklyLoads);
+      res.json(summaries);
+    } catch (error) {
+      console.error("Error computing historical data:", error);
+      res.status(500).json({ error: "Failed to compute historical data" });
+    }
+  });
+
+  app.get("/api/opportunities", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const uploads = await storage.getFinancialUploads();
+      if (uploads.length === 0) return res.json([]);
+
+      let allRows: any[] = [];
+      for (const upload of uploads) {
+        if (Array.isArray(upload.rows)) {
+          allRows.push(...(upload.rows as any[]));
+        }
+      }
+
+      if (user.role === "national_account_manager") {
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
+        const teamNames = teamUsers.map(u => u.name.toLowerCase());
+        allRows = allRows.filter((r: any) => {
+          const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
+          return teamNames.some(n => op.includes(n) || n.includes(op));
+        });
+      } else if (user.role === "account_manager") {
+        const userName = user.name.toLowerCase();
+        allRows = allRows.filter((r: any) => {
+          const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
+          return op.includes(userName) || userName.includes(op);
+        });
+      }
+
+      const byDestWeek = new Map<string, Map<string, number>>();
+      for (const row of allRows) {
+        const city = (row["Consignee city"] || "").trim();
+        const state = (row["Consignee state"] || "").trim();
+        if (!city && !state) continue;
+        const location = city && state ? `${city}, ${state}` : city || state;
+
+        let week = "unknown";
+        try {
+          const d = new Date(row["Date ordered"] || "");
+          if (!isNaN(d.getTime())) {
+            const year = d.getFullYear();
+            const startOfYear = new Date(year, 0, 1);
+            const weekNum = Math.ceil(((d.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getDay() + 1) / 7);
+            week = `${year}-W${weekNum}`;
+          }
+        } catch {}
+
+        if (!byDestWeek.has(location)) byDestWeek.set(location, new Map());
+        const weekMap = byDestWeek.get(location)!;
+        weekMap.set(week, (weekMap.get(week) || 0) + 1);
+      }
+
+      const hotDestinations: { location: string; peakWeekly: number; avgWeekly: number }[] = [];
+      for (const [location, weekMap] of byDestWeek) {
+        const weekValues = Array.from(weekMap.values());
+        const totalLoads = weekValues.reduce((a: number, b: number) => a + b, 0);
+        const weekCount = weekMap.size;
+        const avgWeekly = weekCount > 0 ? totalLoads / weekCount : 0;
+        const peakWeekly = Math.max(...weekValues);
+        if (peakWeekly >= 5) {
+          hotDestinations.push({
+            location,
+            peakWeekly,
+            avgWeekly: Math.round(avgWeekly * 10) / 10,
+          });
+        }
+      }
+
+      hotDestinations.sort((a, b) => b.peakWeekly - a.peakWeekly);
+
+      if (hotDestinations.length === 0) {
+        return res.json([]);
+      }
+
+      const visibleIds = await getVisibleCompanyIds(user);
+      let allRfps = await storage.getRfps();
+      if (visibleIds !== null) {
+        allRfps = allRfps.filter(r => visibleIds.includes(r.companyId));
+      }
+      const allCompanies = await storage.getCompanies();
+      const companyMap = new Map(allCompanies.map(c => [c.id, c]));
+
+      const hotLocationSet = new Map<string, { peakWeekly: number; avgWeekly: number }>();
+      for (const hd of hotDestinations) {
+        hotLocationSet.set(hd.location.toLowerCase(), { peakWeekly: hd.peakWeekly, avgWeekly: hd.avgWeekly });
+      }
+
+      const results: {
+        destination: string;
+        weeklyLoadCount: number;
+        avgWeeklyLoadCount: number;
+        matches: {
+          companyId: string;
+          companyName: string;
+          rfpId: string;
+          rfpTitle: string;
+          lane: string;
+          volume: number;
+          rate: string;
+          equipment: string;
+        }[];
+      }[] = [];
+
+      const destMatchMap = new Map<string, typeof results[0]>();
+
+      for (const rfp of allRfps) {
+        const fileData = rfp.fileData as any;
+        if (!fileData || !Array.isArray(fileData.highVolumeLanes)) continue;
+
+        const company = companyMap.get(rfp.companyId);
+        const companyName = company?.name || "Unknown";
+
+        for (const lane of fileData.highVolumeLanes) {
+          const originCity = (lane.origin || "").trim();
+          const originState = (lane.originState || "").trim();
+          if (!originCity && !originState) continue;
+
+          const originLocation = originCity && originState
+            ? `${originCity}, ${originState}`
+            : originCity || originState;
+
+          const stats = hotLocationSet.get(originLocation.toLowerCase());
+          if (!stats) continue;
+
+          if (!destMatchMap.has(originLocation.toLowerCase())) {
+            const entry = {
+              destination: originLocation,
+              weeklyLoadCount: stats.peakWeekly,
+              avgWeeklyLoadCount: stats.avgWeekly,
+              matches: [] as typeof results[0]["matches"],
+            };
+            destMatchMap.set(originLocation.toLowerCase(), entry);
+          }
+
+          const entry = destMatchMap.get(originLocation.toLowerCase())!;
+          entry.matches.push({
+            companyId: rfp.companyId,
+            companyName,
+            rfpId: rfp.id,
+            rfpTitle: rfp.title,
+            lane: lane.lane || `${originCity}, ${originState} → ${lane.destination || ""}${lane.destinationState ? `, ${lane.destinationState}` : ""}`,
+            volume: lane.volume || 0,
+            rate: lane.rate || "",
+            equipment: lane.equipment || "",
+          });
+        }
+      }
+
+      const finalResults = Array.from(destMatchMap.values());
+      finalResults.sort((a, b) => b.weeklyLoadCount - a.weeklyLoadCount);
+
+      res.json(finalResults);
+    } catch (error) {
+      console.error("Error computing opportunities:", error);
+      res.status(500).json({ error: "Failed to compute opportunities" });
+    }
+  });
+
   app.get("/api/financials", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
