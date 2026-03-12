@@ -155,7 +155,7 @@ function RfpCard({ rfp, company, onEdit, onDelete, onViewData }: RfpCardProps) {
         </div>
 
         <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t">
-          {rfp.fileData && (
+          {!!rfp.fileData && (
             <Button
               size="sm"
               variant="ghost"

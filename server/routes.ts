@@ -479,7 +479,9 @@ export async function registerRoutes(
           return res.status(403).json({ error: "Can only assign to team members" });
         }
       }
-      const company = await storage.updateCompany(req.params.id, { assignedTo });
+      const existing = await storage.getCompany(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Company not found" });
+      const company = await storage.updateCompany(req.params.id, { ...existing, assignedTo });
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);
     } catch (error) {
@@ -1197,7 +1199,7 @@ export async function registerRoutes(
       if (!user || user.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
-      await storage.deleteFinancialUpload(req.params.id);
+      await storage.deleteFinancialUpload(req.params.id as string);
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete upload" });

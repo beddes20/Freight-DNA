@@ -91,7 +91,10 @@ export default function ResearchTasks() {
   }) || [];
 
   const uniqueCustomers = Array.from(
-    new Map(tasks?.map(t => [t.companyId, companiesMap.get(t.companyId)]).filter(([, c]) => c) || [])
+    new Map(
+      (tasks?.map(t => [t.companyId, companiesMap.get(t.companyId)] as [string, Company | undefined])
+        .filter((pair): pair is [string, Company] => !!pair[1]) || [])
+    )
   ).sort((a, b) => (a[1]?.name || "").localeCompare(b[1]?.name || ""));
 
   const openCount = tasks?.filter(t => t.status === "open").length || 0;
