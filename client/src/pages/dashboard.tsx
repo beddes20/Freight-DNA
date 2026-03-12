@@ -176,6 +176,7 @@ export default function Dashboard() {
     return `${days}d ago`;
   };
 
+
   const isLoading = companiesLoading || contactsLoading;
 
   const myTasks = allTasks

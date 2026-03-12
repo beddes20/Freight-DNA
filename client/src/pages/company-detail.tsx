@@ -86,7 +86,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import { CalloutDialog } from "@/components/callout-dialog";
-import type { Company, Contact, User, Task, Callout } from "@shared/schema";
+import type { Company, Contact, User, Task, Callout, CalloutReaction } from "@shared/schema";
 
 interface ResearchTask {
   rfpId: string;
@@ -318,6 +318,30 @@ export default function CompanyDetail() {
     const days = Math.floor(hrs / 24);
     return `${days}d ago`;
   };
+
+  const REACTION_EMOJIS = ["👍", "❤️", "🔥", "💡", "✅"];
+  const canReact = currentUser?.role === "admin" || currentUser?.role === "director";
+
+  const calloutIds = topLevelCompanyCallouts.map(c => c.id);
+  const { data: calloutReactions = [] } = useQuery<CalloutReaction[]>({
+    queryKey: ["/api/callouts/reactions", calloutIds.join(",")],
+    queryFn: async () => {
+      if (calloutIds.length === 0) return [];
+      const res = await fetch(`/api/callouts/reactions?ids=${calloutIds.join(",")}`);
+      if (!res.ok) throw new Error("Failed to fetch reactions");
+      return res.json();
+    },
+    enabled: calloutIds.length > 0,
+  });
+
+  const toggleReactionMutation = useMutation({
+    mutationFn: async ({ calloutId, emoji }: { calloutId: string; emoji: string }) => {
+      await apiRequest("POST", `/api/callouts/${calloutId}/reactions`, { emoji });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/callouts/reactions"] });
+    },
+  });
 
   const toggleTaskStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
@@ -842,6 +866,41 @@ export default function CompanyDetail() {
                           <span className="text-xs text-muted-foreground/50">·</span>
                           <span className="text-xs text-muted-foreground">{formatCalloutTime(callout.createdAt)}</span>
                         </div>
+                        {(() => {
+                          const thisReactions = calloutReactions.filter(r => r.calloutId === callout.id);
+                          const emojiCounts = REACTION_EMOJIS.map(emoji => ({
+                            emoji,
+                            count: thisReactions.filter(r => r.emoji === emoji).length,
+                            reacted: thisReactions.some(r => r.emoji === emoji && r.userId === currentUser?.id),
+                          }));
+                          const hasAny = emojiCounts.some(e => e.count > 0);
+                          if (!canReact && !hasAny) return null;
+                          return (
+                            <div className="flex items-center gap-1 mt-2 flex-wrap" data-testid={`reactions-bar-${callout.id}`}>
+                              {emojiCounts.map(({ emoji, count, reacted }) => {
+                                if (!canReact && count === 0) return null;
+                                return (
+                                  <button
+                                    key={emoji}
+                                    onClick={canReact ? () => toggleReactionMutation.mutate({ calloutId: callout.id, emoji }) : undefined}
+                                    disabled={!canReact || toggleReactionMutation.isPending}
+                                    className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border transition-all ${
+                                      reacted
+                                        ? "bg-primary/10 border-primary/30 text-primary"
+                                        : count > 0
+                                          ? "bg-muted/50 border-border text-muted-foreground"
+                                          : "bg-transparent border-transparent text-muted-foreground/50 hover:bg-muted/50 hover:border-border"
+                                    } ${canReact ? "cursor-pointer hover:scale-105" : "cursor-default"}`}
+                                    data-testid={`button-reaction-${emoji}-${callout.id}`}
+                                  >
+                                    <span>{emoji}</span>
+                                    {count > 0 && <span className="font-medium">{count}</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         {replies.length > 0 && (

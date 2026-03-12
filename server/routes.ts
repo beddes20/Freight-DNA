@@ -8,7 +8,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -1426,6 +1426,59 @@ export async function registerRoutes(
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete feed post" });
+    }
+  });
+
+  // ── Callout Reactions ──────────────────────────────────────────────────────
+
+  app.get("/api/callouts/reactions", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const ids = req.query.ids;
+      if (!ids || typeof ids !== "string") return res.json([]);
+      const requestedIds = ids.split(",").filter(Boolean);
+      if (requestedIds.length === 0) return res.json([]);
+
+      let visibleCallouts: Callout[];
+      if (user.role === "admin") {
+        visibleCallouts = await storage.getCallouts();
+      } else {
+        visibleCallouts = await storage.getCallouts();
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamSet = new Set(teamIds);
+        visibleCallouts = visibleCallouts.filter(c => teamSet.has(c.authorId));
+      }
+
+      const visibleCalloutIds = new Set(visibleCallouts.map(c => c.id));
+      const filteredIds = requestedIds.filter(id => visibleCalloutIds.has(id));
+      if (filteredIds.length === 0) return res.json([]);
+
+      const reactions = await storage.getReactionsByCalloutIds(filteredIds);
+      res.json(reactions);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch reactions" });
+    }
+  });
+
+  app.post("/api/callouts/:id/reactions", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "admin" && user.role !== "director") {
+        return res.status(403).json({ error: "Only admins and directors can react" });
+      }
+      const { emoji } = req.body;
+      const validEmojis = ["👍", "❤️", "🔥", "💡", "✅"];
+      if (!emoji || !validEmojis.includes(emoji)) {
+        return res.status(400).json({ error: "Invalid emoji" });
+      }
+      const callout = await storage.getCallout(req.params.id);
+      if (!callout) return res.status(404).json({ error: "Callout not found" });
+      const result = await storage.toggleReaction(req.params.id, user.id, emoji);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to toggle reaction" });
     }
   });
 

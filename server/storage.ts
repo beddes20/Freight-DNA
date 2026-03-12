@@ -12,6 +12,7 @@ import {
   tasks,
   callouts,
   feedPosts,
+  calloutReactions,
   type User,
   type InsertUser,
   type Company,
@@ -30,6 +31,7 @@ import {
   type InsertCallout,
   type FeedPost,
   type InsertFeedPost,
+  type CalloutReaction,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -96,6 +98,9 @@ export interface IStorage {
 
   getSetting(key: string): Promise<string | undefined>;
   setSetting(key: string, value: string): Promise<void>;
+
+  getReactionsByCalloutIds(calloutIds: string[]): Promise<CalloutReaction[]>;
+  toggleReaction(calloutId: string, userId: string, emoji: string): Promise<{ action: "added" | "removed" }>;
 }
 
 const pool = new Pool({
@@ -395,6 +400,32 @@ export class DatabaseStorage implements IStorage {
       target: appSettings.key,
       set: { value },
     });
+  }
+
+  async getReactionsByCalloutIds(calloutIds: string[]): Promise<CalloutReaction[]> {
+    if (calloutIds.length === 0) return [];
+    return db.select().from(calloutReactions).where(inArray(calloutReactions.calloutId, calloutIds));
+  }
+
+  async toggleReaction(calloutId: string, userId: string, emoji: string): Promise<{ action: "added" | "removed" }> {
+    const [existing] = await db.select().from(calloutReactions).where(
+      and(
+        eq(calloutReactions.calloutId, calloutId),
+        eq(calloutReactions.userId, userId),
+        eq(calloutReactions.emoji, emoji),
+      )
+    );
+    if (existing) {
+      await db.delete(calloutReactions).where(eq(calloutReactions.id, existing.id));
+      return { action: "removed" };
+    }
+    await db.insert(calloutReactions).values({
+      calloutId,
+      userId,
+      emoji,
+      createdAt: new Date().toISOString(),
+    });
+    return { action: "added" };
   }
 }
 

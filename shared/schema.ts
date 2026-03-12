@@ -180,6 +180,21 @@ export const insertFeedPostSchema = createInsertSchema(feedPosts).omit({
 export type InsertFeedPost = z.infer<typeof insertFeedPostSchema>;
 export type FeedPost = typeof feedPosts.$inferSelect;
 
+export const calloutReactions = pgTable("callout_reactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  calloutId: varchar("callout_id").notNull().references(() => callouts.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  emoji: text("emoji").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertCalloutReactionSchema = createInsertSchema(calloutReactions).omit({
+  id: true,
+});
+
+export type InsertCalloutReaction = z.infer<typeof insertCalloutReactionSchema>;
+export type CalloutReaction = typeof calloutReactions.$inferSelect;
+
 export const appSettings = pgTable("app_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
