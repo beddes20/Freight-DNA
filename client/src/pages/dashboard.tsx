@@ -381,10 +381,14 @@ export default function Dashboard() {
             </div>
             <Textarea
               value={feedContent}
-              onChange={e => setFeedContent(e.target.value)}
+              onChange={e => {
+                setFeedContent(e.target.value);
+                e.target.style.height = "auto";
+                e.target.style.height = e.target.scrollHeight + "px";
+              }}
               placeholder="Share a trend, growth opportunity, or idea with the team..."
               rows={2}
-              className="resize-none"
+              className="resize-none min-h-[56px]"
               data-testid="input-feed-content"
             />
             <div className="flex items-center justify-between">
