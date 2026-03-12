@@ -34,18 +34,20 @@ function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const deliveryLayerRef = useRef<L.LayerGroup | null>(null);
   const pickupLayerRef = useRef<L.LayerGroup | null>(null);
+  const modeRef = useRef<MapMode>(mode);
+  modeRef.current = mode;
 
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
 
     import("leaflet").then((leaflet) => {
-      const w = window as Window & { L?: typeof leaflet };
-      w.L = leaflet;
+      Object.assign(window, { L: leaflet });
+      // @ts-expect-error leaflet.heat is a UMD plugin with no published type definitions
       return import("leaflet.heat").then(() => leaflet);
     }).then((L) => {
       if (!mapRef.current || mapInstanceRef.current) return;
 
-      delete (L.Icon.Default.prototype as Record<string, unknown>)._getIconUrl;
+      delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
       L.Icon.Default.mergeOptions({ iconUrl: "", shadowUrl: "" });
 
       const map = L.map(mapRef.current, { center: [39.5, -98.35], zoom: 4, zoomControl: true });
@@ -90,8 +92,9 @@ function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
       const pickupGroup = L.layerGroup([pickupHeat, pickupDots]);
       pickupLayerRef.current = pickupGroup;
 
-      if (mode === "inbound" || mode === "both") deliveryGroup.addTo(map);
-      if (mode === "outbound" || mode === "both") pickupGroup.addTo(map);
+      const currentMode = modeRef.current;
+      if (currentMode === "inbound" || currentMode === "both") deliveryGroup.addTo(map);
+      if (currentMode === "outbound" || currentMode === "both") pickupGroup.addTo(map);
     });
 
     return () => {

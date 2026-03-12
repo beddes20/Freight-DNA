@@ -1,4 +1,4 @@
-import * as L from "leaflet";
+import "leaflet";
 
 declare module "leaflet" {
   interface HeatLayerOptions {
@@ -13,7 +13,5 @@ declare module "leaflet" {
   function heatLayer(
     latlngs: Array<[number, number, number?]>,
     options?: HeatLayerOptions
-  ): L.Layer;
+  ): Layer;
 }
-
-declare module "leaflet.heat" {}
