@@ -349,7 +349,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
                 </SelectTrigger>
                 <SelectContent>
                   {teamMembers.map(u => (
-                    <SelectItem key={u.id} value={u.id}>{u.name} ({u.role === "admin" ? "Admin" : u.role === "director" ? "Director" : u.role === "national_account_manager" ? "NAM" : "AM"})</SelectItem>
+                    <SelectItem key={u.id} value={u.id}>{u.name} ({u.role === "admin" ? "Admin" : u.role === "director" ? "Director" : u.role === "national_account_manager" ? "NAM" : u.role === "sales" ? "Sales" : "AM"})</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

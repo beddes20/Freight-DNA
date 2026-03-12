@@ -124,7 +124,7 @@ export default function RepCustomers() {
             <p className="text-blue-200 text-sm mt-0.5">{rep.username}</p>
             <div className="mt-2 flex items-center gap-2">
               <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-medium text-white">
-                {rep.role === "director" || rep.role === "national_account_manager" ? (
+                {rep.role === "director" || rep.role === "national_account_manager" || rep.role === "sales" ? (
                   <ShieldCheck className="h-3 w-3" />
                 ) : (
                   <UserCircle className="h-3 w-3" />

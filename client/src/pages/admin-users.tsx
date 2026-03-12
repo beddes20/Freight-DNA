@@ -153,7 +153,7 @@ export default function AdminUsers() {
     },
   });
 
-  const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director";
+  const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
 
   if (currentUser?.role !== "admin" && !isNAM) {
     return (

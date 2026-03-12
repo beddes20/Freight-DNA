@@ -237,7 +237,7 @@ export async function registerRoutes(
       if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [] });
       const [matchedCompanies, matchedUsers] = await Promise.all([
         storage.searchCompanies(q),
-        storage.searchUsers(q, ["account_manager", "national_account_manager", "director"]),
+        storage.searchUsers(q, ["account_manager", "national_account_manager", "director", "sales"]),
       ]);
       const accounts = matchedCompanies.map(c => ({ id: c.id, name: c.name }));
       const accountManagers = matchedUsers.filter(u => u.role === "account_manager");
@@ -252,7 +252,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
         return res.status(403).json({ error: "Access required" });
       }
       const allUsers = await storage.getUsers();
@@ -269,7 +269,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
         return res.status(403).json({ error: "Access required" });
       }
       const { username, password, name, role, managerId } = req.body;
@@ -281,7 +281,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Username already exists" });
       }
       const hashedPassword = await bcrypt.hash(password, 10);
-      const isNamOrDirector = currentUser.role === "national_account_manager" || currentUser.role === "director";
+      const isNamOrDirector = currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales";
       const requestedRole = role || "account_manager";
       if (!userRoles.includes(requestedRole)) {
         return res.status(400).json({ error: "Invalid role" });
@@ -306,10 +306,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
         return res.status(403).json({ error: "Access required" });
       }
-      if (currentUser.role === "national_account_manager" || currentUser.role === "director") {
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
           return res.status(403).json({ error: "Cannot edit this user" });
@@ -341,10 +341,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
         return res.status(403).json({ error: "Access required" });
       }
-      if (currentUser.role === "national_account_manager" || currentUser.role === "director") {
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
           return res.status(403).json({ error: "Cannot delete this user" });
@@ -405,7 +405,7 @@ export async function registerRoutes(
       if (currentUser.role === "admin") {
         return res.json(safeUsers);
       }
-      if (currentUser.role === "director" || currentUser.role === "national_account_manager") {
+      if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
       }
@@ -433,7 +433,7 @@ export async function registerRoutes(
       const data = { ...parsed.data };
       if (currentUser.role === "admin") {
         // admin can assign to anyone — leave assignedTo as-is
-      } else if (currentUser.role === "director" || currentUser.role === "national_account_manager") {
+      } else if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales") {
         if (data.assignedTo) {
           const teamIds = await storage.getTeamMemberIds(currentUser.id);
           if (!teamIds.includes(data.assignedTo)) {
@@ -486,12 +486,12 @@ export async function registerRoutes(
       if (!(await canAccessCompany(currentUser, req.params.id))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
         return res.status(403).json({ error: "Only admins, directors and NAMs can reassign accounts" });
       }
       const { assignedTo } = req.body;
       if (!assignedTo) return res.status(400).json({ error: "assignedTo is required" });
-      if (currentUser.role === "national_account_manager" || currentUser.role === "director") {
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         if (!teamIds.includes(assignedTo)) {
           return res.status(403).json({ error: "Can only assign to team members" });
@@ -1148,7 +1148,7 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const allTasks = await storage.getTasks();
       if (user.role === "admin") return res.json(allTasks);
-      if (user.role === "director" || user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         return res.json(allTasks.filter(t => teamIds.includes(t.assignedTo) || teamIds.includes(t.assignedBy)));
       }
@@ -1192,7 +1192,7 @@ export async function registerRoutes(
       let assignableIds: Set<string>;
       if (user.role === "admin") {
         assignableIds = new Set(allUsers.map(u => u.id));
-      } else if (user.role === "director" || user.role === "national_account_manager") {
+      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         assignableIds = new Set(teamIds);
       } else {
@@ -1374,7 +1374,7 @@ export async function registerRoutes(
         return res.json(await storage.getFeedPosts());
       }
       let visibleIds: string[];
-      if (user.role === "director" || user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
         visibleIds = await storage.getTeamMemberIds(user.id);
       } else {
         const ids = new Set<string>([user.id]);
@@ -1488,7 +1488,7 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager") {
+      if (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales") {
         return res.status(403).json({ error: "Forbidden" });
       }
 
@@ -1503,7 +1503,7 @@ export async function registerRoutes(
       }
       allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
-      if (user.role === "director" || user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
@@ -1577,7 +1577,7 @@ export async function registerRoutes(
       }
       allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
-      if (user.role === "director" || user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
@@ -1725,7 +1725,7 @@ export async function registerRoutes(
   app.get("/api/financials", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
-      if (!user || (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager")) {
+      if (!user || (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales")) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const upload = await storage.getLatestFinancialUpload();
@@ -1733,7 +1733,7 @@ export async function registerRoutes(
 
       let rows = ((upload.rows as any[]) || []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
-      if (user.role === "director" || user.role === "national_account_manager") {
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
@@ -1809,7 +1809,7 @@ export async function registerRoutes(
   app.get("/api/settings/onedrive-url", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
-      if (!user || (user.role !== "admin" && user.role !== "national_account_manager")) {
+      if (!user || (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales")) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const url = await storage.getSetting("onedrive_url");
@@ -1837,7 +1837,7 @@ export async function registerRoutes(
   app.post("/api/financials/sync-onedrive", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
-      if (!user || (user.role !== "admin" && user.role !== "national_account_manager")) {
+      if (!user || (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales")) {
         return res.status(403).json({ error: "Forbidden" });
       }
 
