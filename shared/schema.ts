@@ -119,3 +119,10 @@ export const insertFinancialUploadSchema = createInsertSchema(financialUploads).
 
 export type InsertFinancialUpload = z.infer<typeof insertFinancialUploadSchema>;
 export type FinancialUpload = typeof financialUploads.$inferSelect;
+
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
+export type AppSetting = typeof appSettings.$inferSelect;

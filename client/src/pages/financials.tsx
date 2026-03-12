@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +24,10 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  CloudDownload,
+  Check,
+  Pencil,
+  Link,
 } from "lucide-react";
 
 type FinancialRow = {
@@ -90,6 +94,11 @@ export default function Financials() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const isAdminOrNam = user?.role === "admin" || user?.role === "national_account_manager";
+
+  const [oneDriveUrlInput, setOneDriveUrlInput] = useState("");
+  const [editingUrl, setEditingUrl] = useState(false);
+
   const { data: financialData, isLoading } = useQuery<FinancialData | null>({
     queryKey: ["/api/financials"],
   });
@@ -97,6 +106,49 @@ export default function Financials() {
   const { data: uploads = [], isLoading: uploadsLoading } = useQuery<UploadMeta[]>({
     queryKey: ["/api/financials/uploads"],
     enabled: isAdmin,
+  });
+
+  const { data: oneDriveSetting } = useQuery<{ url: string }>({
+    queryKey: ["/api/settings/onedrive-url"],
+    enabled: isAdminOrNam,
+  });
+
+  const saveUrlMutation = useMutation({
+    mutationFn: async (url: string) => {
+      await apiRequest("PATCH", "/api/settings/onedrive-url", { url });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/onedrive-url"] });
+      setEditingUrl(false);
+      toast({ title: "OneDrive URL saved" });
+    },
+    onError: () => {
+      toast({ title: "Failed to save URL", variant: "destructive" });
+    },
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/financials/sync-onedrive", { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Sync failed");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/financials"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/financials/uploads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/historical-data-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/historical-lane-corridors"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+      toast({ title: "Sync complete", description: `${data.rowCount.toLocaleString()} records imported from OneDrive.` });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Sync failed", description: error.message, variant: "destructive" });
+    },
   });
 
   const uploadMutation = useMutation({
@@ -201,6 +253,100 @@ export default function Financials() {
           )}
         </div>
       </div>
+
+      {isAdminOrNam && oneDriveSetting && (
+        <Card className="border-blue-200 dark:border-blue-800/50 bg-gradient-to-r from-blue-50/50 to-white dark:from-blue-950/20 dark:to-card">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <CloudDownload className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                OneDrive Sync
+              </CardTitle>
+              {oneDriveSetting.url && financialData && (
+                <span className="text-xs text-muted-foreground" data-testid="text-last-sync">
+                  Last updated: {formatDate(financialData.uploadedAt)}
+                </span>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                {editingUrl ? (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={oneDriveUrlInput}
+                      onChange={e => setOneDriveUrlInput(e.target.value)}
+                      placeholder="Paste your OneDrive share link here..."
+                      className="flex-1 text-xs"
+                      data-testid="input-onedrive-url"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => saveUrlMutation.mutate(oneDriveUrlInput)}
+                      disabled={saveUrlMutation.isPending || !oneDriveUrlInput.trim()}
+                      data-testid="button-save-onedrive-url"
+                    >
+                      {saveUrlMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                      <span className="ml-1">Save</span>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setEditingUrl(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    {oneDriveSetting.url ? (
+                      <>
+                        <Link className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <span className="text-xs text-muted-foreground truncate">{oneDriveSetting.url}</span>
+                      </>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">No OneDrive link configured</span>
+                    )}
+                    {isAdmin && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="shrink-0 h-7 px-2"
+                        onClick={() => { setOneDriveUrlInput(oneDriveSetting.url || ""); setEditingUrl(true); }}
+                        data-testid="button-edit-onedrive-url"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {isAdmin && oneDriveSetting.url && (
+              <Button
+                onClick={() => syncMutation.mutate()}
+                disabled={syncMutation.isPending}
+                className="w-full gap-2"
+                data-testid="button-sync-onedrive"
+              >
+                {syncMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Syncing from OneDrive...
+                  </>
+                ) : (
+                  <>
+                    <CloudDownload className="h-4 w-4" />
+                    Sync from OneDrive
+                  </>
+                )}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {isAdmin && (
         <Card>

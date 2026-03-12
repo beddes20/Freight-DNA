@@ -118,6 +118,7 @@ shared/
 22. **Global Search**: Search bar in top header searches across accounts (companies), account managers, and NAMs by name; live dropdown grouped by type; navigates to company detail or rep page on selection; debounced with abort on new keystroke.
 23. **Historical Data Tabs**: Historical Data page has 4 tabs — (1) Overview: hot zones + all destinations ranked by avg weekly loads; (2) Lane Corridors: top origin→destination pairs from dispatch data sorted by total loads, searchable table; (3) Density Map: interactive Leaflet map with blue circles (deliveries) and green circles (pickups) scaled by volume; (4) Proximity Matches: delivery zones within 75 miles of customer RFP pickup origins, expandable zone cards showing matched companies/RFPs with exact distance and assigned rep.
 24. **Lane Matching Portlet**: Company detail page portlet showing where our historical freight network overlaps with a customer's RFP lanes (75-mile radius). Two toggle views: "Our Deliveries → Their Pickups" (where we drop trucks near customer's RFP pickup origins) and "Their Deliveries → Our Pickups" (where customer needs delivery near our historical pickup locations — backhaul opportunities). Shows customer lane, matched city, distance badge, weekly loads, and RFP source.
+25. **OneDrive Sync**: Numbers page has "OneDrive Sync" card (admin/NAM visible). Admin can save a OneDrive share link (stored in `app_settings` table). "Sync from OneDrive" button fetches the latest Excel file from OneDrive via the shares API, parses it with xlsx, and saves as a new financial upload — no manual download/re-upload needed. Requires the OneDrive file to be shared with "Anyone with the link can view" permissions.
 
 ## UI Components
 - `client/src/components/confetti.tsx` - Confetti celebration animation (useConfetti hook)
@@ -164,6 +165,11 @@ shared/
 - `POST /api/awards` - Create award
 - `PATCH /api/awards/:id` - Update award
 - `DELETE /api/awards/:id` - Delete award
+
+### Settings & Sync
+- `GET /api/settings/onedrive-url` - Get stored OneDrive share URL (admin/NAM)
+- `PATCH /api/settings/onedrive-url` - Save OneDrive share URL (admin only)
+- `POST /api/financials/sync-onedrive` - Fetch Excel from OneDrive and create financial upload (admin only)
 
 ### Analysis
 - `GET /api/research-tasks` - Get visible research tasks across all RFPs

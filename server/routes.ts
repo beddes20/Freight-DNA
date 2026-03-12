@@ -1445,6 +1445,82 @@ export async function registerRoutes(
     }
   });
 
+  // ── OneDrive Sync & Settings ────────────────────────────────────────────────
+
+  app.get("/api/settings/onedrive-url", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || (user.role !== "admin" && user.role !== "national_account_manager")) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const url = await storage.getSetting("onedrive_url");
+      res.json({ url: url || "" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch setting" });
+    }
+  });
+
+  app.patch("/api/settings/onedrive-url", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const { url } = req.body;
+      if (typeof url !== "string") return res.status(400).json({ error: "url is required" });
+      await storage.setSetting("onedrive_url", url.trim());
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save setting" });
+    }
+  });
+
+  app.post("/api/financials/sync-onedrive", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const shareUrl = await storage.getSetting("onedrive_url");
+      if (!shareUrl) {
+        return res.status(400).json({ error: "No OneDrive URL configured. Please save a OneDrive share link first." });
+      }
+
+      const base64 = Buffer.from(shareUrl)
+        .toString("base64")
+        .replace(/=/g, "")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_");
+      const downloadUrl = `https://api.onedrive.com/v1.0/shares/u!${base64}/root/content`;
+
+      const response = await fetch(downloadUrl, { redirect: "follow" });
+      if (!response.ok) {
+        return res.status(502).json({ error: `Failed to fetch file from OneDrive (HTTP ${response.status}). Make sure the share link allows "Anyone with the link" to view.` });
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      const upload = await storage.createFinancialUpload({
+        fileName: `OneDrive Sync — ${new Date().toLocaleDateString()}`,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: user.id,
+        rowCount: rows.length,
+        rows,
+      });
+
+      res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
+    } catch (error) {
+      console.error("Error syncing from OneDrive:", error);
+      res.status(500).json({ error: "Failed to sync from OneDrive. Please check the share link and try again." });
+    }
+  });
+
   // ── Historical Data & Opportunities ─────────────────────────────────────────
 
   function getWeekKey(date: Date): string {

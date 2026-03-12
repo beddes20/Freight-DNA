@@ -8,6 +8,7 @@ import {
   rfps,
   awards,
   financialUploads,
+  appSettings,
   type User,
   type InsertUser,
   type Company,
@@ -65,6 +66,9 @@ export interface IStorage {
 
   searchCompanies(query: string): Promise<Company[]>;
   searchUsers(query: string, roles: string[]): Promise<Omit<User, 'password'>[]>;
+
+  getSetting(key: string): Promise<string | undefined>;
+  setSetting(key: string, value: string): Promise<void>;
 }
 
 const pool = new Pool({
@@ -272,6 +276,18 @@ export class DatabaseStorage implements IStorage {
         )
       )
     ).limit(10);
+  }
+
+  async getSetting(key: string): Promise<string | undefined> {
+    const [row] = await db.select().from(appSettings).where(eq(appSettings.key, key));
+    return row?.value;
+  }
+
+  async setSetting(key: string, value: string): Promise<void> {
+    await db.insert(appSettings).values({ key, value }).onConflictDoUpdate({
+      target: appSettings.key,
+      set: { value },
+    });
   }
 }
 
