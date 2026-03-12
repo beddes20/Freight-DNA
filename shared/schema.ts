@@ -136,6 +136,8 @@ export const tasks = pgTable("tasks", {
   companyId: varchar("company_id").references(() => companies.id),
   contactId: varchar("contact_id").references(() => contacts.id),
   createdAt: text("created_at").notNull(),
+  attachedLaneData: jsonb("attached_lane_data"),
+  forwardedFrom: varchar("forwarded_from"),
 });
 
 export const insertTaskSchema = createInsertSchema(tasks).omit({
