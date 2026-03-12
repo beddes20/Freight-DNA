@@ -16,6 +16,11 @@ const zipCodeMap: Record<string, string> = JSON.parse(
   readFileSync(join(process.cwd(), "server", "zipcodes.json"), "utf-8")
 );
 
+function findSheetByName(workbook: XLSX.WorkBook, preferredName: string): string {
+  const match = workbook.SheetNames.find(s => s.trim().toLowerCase() === preferredName.toLowerCase());
+  return match || workbook.SheetNames[0];
+}
+
 const ZIP_REGEX = /^\d{5}(-\d{4})?$/;
 
 function zipToCity(value: string): string {
@@ -1413,7 +1418,7 @@ export async function registerRoutes(
       if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
       const workbook = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true });
-      const sheetName = workbook.SheetNames[0];
+      const sheetName = findSheetByName(workbook, "HISTORICAL DATA");
       const sheet = workbook.Sheets[sheetName];
       const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
@@ -1502,7 +1507,7 @@ export async function registerRoutes(
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
       const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-      const sheetName = workbook.SheetNames[0];
+      const sheetName = findSheetByName(workbook, "HISTORICAL DATA");
       const sheet = workbook.Sheets[sheetName];
       const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
