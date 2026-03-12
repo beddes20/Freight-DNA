@@ -481,6 +481,12 @@ export default function CompanyDetail() {
     setContactDialogOpen(true);
   };
 
+  const openForceTask = (title: string, notes: string) => {
+    setForceLanePrefill({ title, notes });
+    setEditingTaskItem(undefined);
+    setTaskDialogOpen(true);
+  };
+
   const handleExport = () => {
     if (!company || !contacts) return;
 
@@ -1243,7 +1249,7 @@ export default function CompanyDetail() {
                                     <Button
                                       size="sm"
                                       variant="outline"
-                                      className="border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-400"
+                                      className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400"
                                       onClick={() => {
                                         const laneName = `${task.origin}${task.originState ? `, ${task.originState}` : ""} → ${task.destination}${task.destinationState ? `, ${task.destinationState}` : ""}`;
                                         setForceLanePrefill({
@@ -1271,7 +1277,7 @@ export default function CompanyDetail() {
                                       }}
                                       data-testid={`button-force-task-lane-${i}`}
                                     >
-                                      <ClipboardList className="h-4 w-4 mr-1" />
+                                      <Zap className="h-4 w-4 mr-1" />
                                       Force Task
                                     </Button>
                                   )}
@@ -1389,7 +1395,7 @@ export default function CompanyDetail() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-400"
+                        className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400"
                         onClick={() => {
                           setForceLanePrefill({
                             title: `Cover facility: ${f.fullName}`,
@@ -1408,7 +1414,7 @@ export default function CompanyDetail() {
                         }}
                         data-testid={`button-force-task-facility-${i}`}
                       >
-                        <ClipboardList className="h-4 w-4 mr-1" />
+                        <Zap className="h-4 w-4 mr-1" />
                         Force Task
                       </Button>
                     )}
@@ -1489,8 +1495,23 @@ export default function CompanyDetail() {
                             </div>
                           </div>
                         </div>
-                        <div className="text-right text-xs text-muted-foreground flex-shrink-0 ml-2">
-                          <span className="font-mono">{c.rfpTitles.join(", ")}</span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                          <span className="text-right text-xs text-muted-foreground font-mono">{c.rfpTitles.join(", ")}</span>
+                          {canReassign && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400"
+                              onClick={() => openForceTask(
+                                `Corridor: ${c.lane}`,
+                                `Lane Pattern — Top Corridor\nLane: ${c.lane}\nVolume: ${c.totalVolume.toLocaleString()} loads/yr\nAppearances: ${c.count}x\nRFPs: ${c.rfpTitles.join(", ")}${c.appearsInMultipleRfps ? "\nAppears in multiple RFPs" : ""}`
+                              )}
+                              data-testid={`button-force-task-corridor-${i}`}
+                            >
+                              <Zap className="h-4 w-4 mr-1" />
+                              Force Task
+                            </Button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1541,6 +1562,21 @@ export default function CompanyDetail() {
                             </div>
                             <span className="text-[10px] text-muted-foreground">{h.inboundCount} inbound</span>
                           </div>
+                          {canReassign && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400"
+                              onClick={() => openForceTask(
+                                `Hub: ${h.fullName}`,
+                                `Lane Pattern — Shipping/Receiving Hub\nFacility: ${h.fullName}\nTotal Volume: ${h.totalVolume.toLocaleString()} loads/yr\nOutbound: ${h.outboundVolume.toLocaleString()} (${h.outboundCount} lanes)\nInbound: ${h.inboundVolume.toLocaleString()} (${h.inboundCount} lanes)`
+                              )}
+                              data-testid={`button-force-task-hub-${i}`}
+                            >
+                              <Zap className="h-4 w-4 mr-1" />
+                              Force Task
+                            </Button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1562,6 +1598,7 @@ export default function CompanyDetail() {
                           <th className="text-right font-medium px-3 py-2">Lanes</th>
                           <th className="text-right font-medium px-3 py-2">Volume</th>
                           <th className="text-left px-3 py-2 w-1/3">Share</th>
+                          {canReassign && <th className="text-right font-medium px-3 py-2"></th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -1584,6 +1621,23 @@ export default function CompanyDetail() {
                                   </div>
                                 </div>
                               </td>
+                              {canReassign && (
+                                <td className="px-3 py-2 text-right">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400"
+                                    onClick={() => openForceTask(
+                                      `State Corridor: ${s.corridor}`,
+                                      `Lane Pattern — State Corridor\nCorridor: ${s.corridor}\nLanes: ${s.laneCount}\nVolume: ${s.totalVolume.toLocaleString()} loads/yr`
+                                    )}
+                                    data-testid={`button-force-task-state-corridor-${i}`}
+                                  >
+                                    <Zap className="h-4 w-4 mr-1" />
+                                    Force Task
+                                  </Button>
+                                </td>
+                              )}
                             </tr>
                           ));
                         })()}
@@ -1674,6 +1728,21 @@ export default function CompanyDetail() {
                             {m.weeklyLoads}/wk · {m.customerVolume.toLocaleString()} vol
                           </div>
                           <span className="text-xs text-muted-foreground truncate max-w-28">{m.rfpTitle}</span>
+                          {canReassign && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 mt-0.5"
+                              onClick={() => openForceTask(
+                                `Lane Match: ${m.customerLane}`,
+                                `Lane Matching — Our Deliveries → Their Pickups\nCustomer Lane: ${m.customerLane}\nCustomer Pickup: ${m.customerCity}, ${m.customerState}\nWe Deliver To: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nFrequency: ${m.weeklyLoads}/wk\nVolume: ${m.customerVolume.toLocaleString()}\nRFP: ${m.rfpTitle}`
+                              )}
+                              data-testid={`button-force-task-match-delivery-${i}`}
+                            >
+                              <Zap className="h-3.5 w-3.5 mr-1" />
+                              Force Task
+                            </Button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1717,6 +1786,21 @@ export default function CompanyDetail() {
                             {m.weeklyLoads}/wk · {m.customerVolume.toLocaleString()} vol
                           </div>
                           <span className="text-xs text-muted-foreground truncate max-w-28">{m.rfpTitle}</span>
+                          {canReassign && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 mt-0.5"
+                              onClick={() => openForceTask(
+                                `Lane Match: ${m.customerLane}`,
+                                `Lane Matching — Their Deliveries → Our Pickups\nCustomer Lane: ${m.customerLane}\nCustomer Delivery: ${m.customerCity}, ${m.customerState}\nWe Pick Up At: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nFrequency: ${m.weeklyLoads}/wk\nVolume: ${m.customerVolume.toLocaleString()}\nRFP: ${m.rfpTitle}`
+                              )}
+                              data-testid={`button-force-task-match-pickup-${i}`}
+                            >
+                              <Zap className="h-3.5 w-3.5 mr-1" />
+                              Force Task
+                            </Button>
+                          )}
                         </div>
                       </div>
                     ))}
