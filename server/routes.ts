@@ -219,6 +219,7 @@ export async function registerRoutes(
 ): Promise<Server> {
   app.use("/api", (req, res, next) => {
     if (req.path.startsWith("/auth/")) return next();
+    if (req.path === "/setup-production") return next();
     requireAuth(req, res, next);
   });
 
