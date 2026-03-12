@@ -1395,10 +1395,10 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "admin" && user.role !== "director") return res.status(403).json({ error: "Only admins and directors can post to the feed" });
       const { content, category } = req.body;
       const trimmed = typeof content === "string" ? content.trim() : "";
       if (!trimmed) return res.status(400).json({ error: "Content is required" });
-      if (trimmed.length > 500) return res.status(400).json({ error: "Content must be 500 characters or less" });
       const validCategories = ["trend", "growth", "idea"];
       if (!validCategories.includes(category)) return res.status(400).json({ error: "Invalid category" });
       const post = await storage.createFeedPost({

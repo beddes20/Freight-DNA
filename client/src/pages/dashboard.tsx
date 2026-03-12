@@ -397,7 +397,7 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      <Card data-testid="card-feed">
+      {(currentUser?.role === "admin" || currentUser?.role === "director") && <Card data-testid="card-feed">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Lightbulb className="h-4 w-4 text-blue-600 dark:text-blue-400" />
@@ -524,7 +524,7 @@ export default function Dashboard() {
             </div>
           )}
         </CardContent>
-      </Card>
+      </Card>}
 
       <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
