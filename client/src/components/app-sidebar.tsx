@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, FileText, ExternalLink } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -43,15 +43,20 @@ const menuItems = [
     url: "/top-opportunities",
     icon: Zap,
   },
+];
+
+const externalItems = [
   {
     title: "Playbook",
-    url: "/playbook",
+    url: "https://valuetruck-my.sharepoint.com/:w:/p/ben_beddes/IQAxq4cjYozxTJHB-zYcZtBnAYWpGDvcP6Qj_AW6ULA_Oq8?rtime=s9jxtGeA3kg&ovuser=99d7bd71-9046-4915-be1c-3aae2baf1645%2Cben.beddes%40valuetruck.com&clickparams=eyJBcHBOYW1lIjoiVGVhbXMtRGVza3RvcCIsIkFwcFZlcnNpb24iOiI0OS8yNjAyMDEwMTEyMCIsIkhhc0ZlZGVyYXRlZFVzZXIiOmZhbHNlfQ%3D%3D",
     icon: BookOpen,
+    testId: "link-playbook",
   },
   {
     title: "Buckets",
-    url: "/buckets",
+    url: "https://valuetruck-my.sharepoint.com/:p:/r/personal/ben_beddes_valuetruck_com/_layouts/15/Doc2.aspx?action=edit&sourcedoc=%7B088c48cc-a345-4d1a-9947-b49d3cd7112c%7D&wdOrigin=TEAMS-MAGLEV.undefined_ns.rwc&wdExp=TEAMS-TREATMENT&wdhostclicktime=1749156731495&web=1",
     icon: FolderOpen,
+    testId: "link-buckets",
   },
 ];
 
@@ -93,45 +98,25 @@ export function AppSidebar() {
                         <span>{item.title}</span>
                       </Link>
                     </SidebarMenuButton>
-                    {item.title === "Playbook" && (
-                      <SidebarMenu className="ml-4 mt-0.5">
-                        <SidebarMenuItem>
-                          <SidebarMenuButton asChild>
-                            <a
-                              href="https://valuetruck-my.sharepoint.com/:w:/p/ben_beddes/IQAxq4cjYozxTJHB-zYcZtBnAYWpGDvcP6Qj_AW6ULA_Oq8?rtime=s9jxtGeA3kg&ovuser=99d7bd71-9046-4915-be1c-3aae2baf1645%2Cben.beddes%40valuetruck.com&clickparams=eyJBcHBOYW1lIjoiVGVhbXMtRGVza3RvcCIsIkFwcFZlcnNpb24iOiI0OS8yNjAyMDEwMTEyMCIsIkhhc0ZlZGVyYXRlZFVzZXIiOmZhbHNlfQ%3D%3D"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              data-testid="link-sales-playbook-doc"
-                            >
-                              <FileText className="h-3.5 w-3.5" />
-                              <span className="text-xs">Sales Playbook Doc</span>
-                              <ExternalLink className="h-3 w-3 ml-auto opacity-50" />
-                            </a>
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      </SidebarMenu>
-                    )}
-                    {item.title === "Buckets" && (
-                      <SidebarMenu className="ml-4 mt-0.5">
-                        <SidebarMenuItem>
-                          <SidebarMenuButton asChild>
-                            <a
-                              href="https://valuetruck-my.sharepoint.com/:p:/r/personal/ben_beddes_valuetruck_com/_layouts/15/Doc2.aspx?action=edit&sourcedoc=%7B088c48cc-a345-4d1a-9947-b49d3cd7112c%7D&wdOrigin=TEAMS-MAGLEV.undefined_ns.rwc&wdExp=TEAMS-TREATMENT&wdhostclicktime=1749156731495&web=1"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              data-testid="link-buckets-doc"
-                            >
-                              <FileText className="h-3.5 w-3.5" />
-                              <span className="text-xs">Buckets Doc</span>
-                              <ExternalLink className="h-3 w-3 ml-auto opacity-50" />
-                            </a>
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      </SidebarMenu>
-                    )}
                   </SidebarMenuItem>
                 );
               })}
+              {externalItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton asChild>
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid={item.testId}
+                    >
+                      <item.icon className="h-4 w-4" />
+                      <span>{item.title}</span>
+                      <ExternalLink className="h-3 w-3 ml-auto opacity-50" />
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
