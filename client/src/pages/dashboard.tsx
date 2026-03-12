@@ -143,11 +143,11 @@ export default function Dashboard() {
   }, [feedContent, mentionState]);
 
   const handleFeedKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionState && e.key === "Escape") { setMentionState(null); return; }
     if (mentionState && mentionableUsers.length > 0) {
       if (e.key === "ArrowDown") { e.preventDefault(); setSelectedMentionIdx(i => Math.min(i + 1, mentionableUsers.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setSelectedMentionIdx(i => Math.max(i - 1, 0)); return; }
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); insertMention(mentionableUsers[selectedMentionIdx]); return; }
-      if (e.key === "Escape") { setMentionState(null); return; }
     }
     if (!mentionState && e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
