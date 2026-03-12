@@ -1,4 +1,6 @@
 import pg from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { rfps } from "../shared/schema";
 
 const JBS_COMPANY_ID = "9e8ae5e3-7b60-495b-a0c0-8da42f8288ff";
 
@@ -169,29 +171,24 @@ async function main() {
   };
 
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  const db = drizzle(pool);
 
   try {
-    const result = await pool.query(
-      `INSERT INTO rfps (id, company_id, title, status, due_date, notes, file_name, file_data, lane_count, total_volume, origin_states, destination_states)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING id, title`,
-      [
-        JBS_COMPANY_ID,
-        "JBS Foods 2026 National RFP",
-        "pending",
-        "2026-12-31",
-        "Test RFP with 200 metro-to-metro dry van lanes across major US cities",
-        "JBS_Foods_2026_National_RFP.xlsx",
-        JSON.stringify(fileData),
-        200,
-        String(finalTotal),
-        originStates,
-        destinationStates,
-      ]
-    );
+    const [created] = await db.insert(rfps).values({
+      companyId: JBS_COMPANY_ID,
+      title: "JBS Foods 2026 National RFP",
+      status: "pending",
+      dueDate: "2026-12-31",
+      notes: "Test RFP with 200 metro-to-metro dry van lanes across major US cities",
+      fileName: "JBS_Foods_2026_National_RFP.xlsx",
+      fileData,
+      laneCount: 200,
+      totalVolume: String(finalTotal),
+      originStates,
+      destinationStates,
+    }).returning();
 
-    const rfp = result.rows[0];
-    console.log(`Created RFP: ${rfp.title} (id: ${rfp.id})`);
+    console.log(`Created RFP: ${created.title} (id: ${created.id})`);
     console.log(`  Lanes: 200 | Total volume: ${finalTotal} | High-volume: ${highVolumeLanes.length}`);
     console.log(`  Origin states: ${originStates.join(", ")}`);
     console.log(`  Destination states: ${destinationStates.join(", ")}`);
