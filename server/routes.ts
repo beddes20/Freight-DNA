@@ -1607,10 +1607,13 @@ export async function registerRoutes(
   app.get("/api/historical-heatmap", requireAuth, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploads();
+      console.log(`[heatmap] ${uploads.length} upload(s) found`);
       const deliveries: Record<string, { city: string; state: string; count: number }> = {};
       const pickups: Record<string, { city: string; state: string; count: number }> = {};
+      let totalRows = 0;
       for (const upload of uploads) {
-        const rows: any[] = (upload as any).rows ?? [];
+        const rows: any[] = Array.isArray((upload as any).rows) ? (upload as any).rows : [];
+        totalRows += rows.length;
         for (const row of rows) {
           const dc = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
           const ds = (row["Consignee state"] || row["consignee_state"] || "").toString().trim();
@@ -1620,13 +1623,16 @@ export async function registerRoutes(
           if (oc) { const k = `${oc}|${os}`; if (!pickups[k]) pickups[k] = { city: oc, state: os, count: 0 }; pickups[k].count++; }
         }
       }
+      console.log(`[heatmap] processed ${totalRows} rows → ${Object.keys(deliveries).length} delivery cities, ${Object.keys(pickups).length} pickup cities`);
       const geocode = (items: Record<string, { city: string; state: string; count: number }>) =>
         Object.values(items).map(i => {
           const coords = geocodeCity(i.city, i.state);
           if (!coords) return null;
           return { city: i.city, state: i.state, lat: coords[0], lng: coords[1], count: i.count };
         }).filter(Boolean).sort((a: any, b: any) => b.count - a.count).slice(0, 300);
-      res.json({ deliveries: geocode(deliveries), pickups: geocode(pickups) });
+      const result = { deliveries: geocode(deliveries), pickups: geocode(pickups) };
+      console.log(`[heatmap] geocoded → ${result.deliveries.length} delivery pts, ${result.pickups.length} pickup pts`);
+      res.json(result);
     } catch (err) {
       console.error("Heatmap error:", err);
       res.status(500).json({ error: "Failed to compute heatmap" });

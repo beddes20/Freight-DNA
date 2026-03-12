@@ -161,9 +161,23 @@ function LaneCorridorsTab() {
 
 // ─── Map Tab ──────────────────────────────────────────────────────────────────
 function MapTab() {
-  const { data, isLoading } = useQuery<HeatmapResponse>({ queryKey: ["/api/historical-heatmap"] });
+  const { data, isLoading, isError, error, refetch } = useQuery<HeatmapResponse>({
+    queryKey: ["/api/historical-heatmap"],
+    staleTime: 0,
+    retry: 1,
+  });
 
   if (isLoading) return <Skeleton className="h-96 w-full" />;
+
+  if (isError) return (
+    <Card><CardContent className="py-16 text-center">
+      <Map className="h-10 w-10 text-destructive mx-auto mb-3" />
+      <p className="font-medium">Failed to load map data</p>
+      <p className="text-sm text-muted-foreground mt-1">{(error as any)?.message || "Unknown error"}</p>
+      <Button variant="outline" size="sm" className="mt-4" onClick={() => refetch()}>Retry</Button>
+    </CardContent></Card>
+  );
+
   if (!data || (data.deliveries.length === 0 && data.pickups.length === 0)) return (
     <Card><CardContent className="py-16 text-center">
       <Map className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
