@@ -223,6 +223,25 @@ export async function registerRoutes(
     requireAuth(req, res, next);
   });
 
+  app.get("/api/search", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const q = (req.query.q as string || "").trim();
+      if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [] });
+      const [matchedCompanies, matchedUsers] = await Promise.all([
+        storage.searchCompanies(q),
+        storage.searchUsers(q, ["account_manager", "national_account_manager"]),
+      ]);
+      const accounts = matchedCompanies.map(c => ({ id: c.id, name: c.name }));
+      const accountManagers = matchedUsers.filter(u => u.role === "account_manager");
+      const nationalAccountManagers = matchedUsers.filter(u => u.role === "national_account_manager");
+      res.json({ accounts, accountManagers, nationalAccountManagers });
+    } catch (error) {
+      res.status(500).json({ error: "Search failed" });
+    }
+  });
+
   app.get("/api/users", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);

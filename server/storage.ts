@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, ilike, or, and } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -62,6 +62,9 @@ export interface IStorage {
   getLatestFinancialUpload(): Promise<FinancialUpload | undefined>;
   createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload>;
   deleteFinancialUpload(id: string): Promise<boolean>;
+
+  searchCompanies(query: string): Promise<Company[]>;
+  searchUsers(query: string, roles: string[]): Promise<Omit<User, 'password'>[]>;
 }
 
 const pool = new Pool({
@@ -247,6 +250,28 @@ export class DatabaseStorage implements IStorage {
   async deleteFinancialUpload(id: string): Promise<boolean> {
     const result = await db.delete(financialUploads).where(eq(financialUploads.id, id)).returning();
     return result.length > 0;
+  }
+
+  async searchCompanies(query: string): Promise<Company[]> {
+    return db.select().from(companies).where(ilike(companies.name, `%${query}%`)).limit(10);
+  }
+
+  async searchUsers(query: string, roles: string[]): Promise<Omit<User, 'password'>[]> {
+    return db.select({
+      id: users.id,
+      username: users.username,
+      name: users.name,
+      role: users.role,
+      managerId: users.managerId,
+    }).from(users).where(
+      and(
+        inArray(users.role, roles),
+        or(
+          ilike(users.name, `%${query}%`),
+          ilike(users.username, `%${query}%`)
+        )
+      )
+    ).limit(10);
   }
 }
 
