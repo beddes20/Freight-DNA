@@ -80,7 +80,7 @@ export interface IStorage {
   updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
 
-  getFeedPosts(): Promise<FeedPost[]>;
+  getFeedPosts(visibleAuthorIds?: string[]): Promise<FeedPost[]>;
   createFeedPost(post: InsertFeedPost): Promise<FeedPost>;
   getFeedPost(id: string): Promise<FeedPost | undefined>;
   deleteFeedPost(id: string): Promise<boolean>;
@@ -324,7 +324,13 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  async getFeedPosts(): Promise<FeedPost[]> {
+  async getFeedPosts(visibleAuthorIds?: string[]): Promise<FeedPost[]> {
+    if (visibleAuthorIds) {
+      return db.select().from(feedPosts)
+        .where(inArray(feedPosts.authorId, visibleAuthorIds))
+        .orderBy(desc(feedPosts.createdAt))
+        .limit(30);
+    }
     return db.select().from(feedPosts).orderBy(desc(feedPosts.createdAt)).limit(30);
   }
 

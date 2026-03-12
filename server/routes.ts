@@ -1281,21 +1281,24 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const allPosts = await storage.getFeedPosts();
-      if (user.role === "admin") return res.json(allPosts);
+      if (user.role === "admin") {
+        return res.json(await storage.getFeedPosts());
+      }
+      let visibleIds: string[];
       if (user.role === "national_account_manager") {
-        const teamIds = await storage.getTeamMemberIds(user.id);
-        return res.json(allPosts.filter(p => teamIds.includes(p.authorId)));
+        visibleIds = await storage.getTeamMemberIds(user.id);
+      } else {
+        const ids = new Set<string>([user.id]);
+        if (user.managerId) {
+          ids.add(user.managerId);
+          const allUsers = await storage.getUsers();
+          allUsers.forEach(u => {
+            if (u.managerId === user.managerId) ids.add(u.id);
+          });
+        }
+        visibleIds = Array.from(ids);
       }
-      const visibleIds = new Set<string>([user.id]);
-      if (user.managerId) {
-        visibleIds.add(user.managerId);
-        const allUsers = await storage.getUsers();
-        allUsers.forEach(u => {
-          if (u.managerId === user.managerId) visibleIds.add(u.id);
-        });
-      }
-      return res.json(allPosts.filter(p => visibleIds.has(p.authorId)));
+      return res.json(await storage.getFeedPosts(visibleIds));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch feed posts" });
     }
