@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -42,6 +42,16 @@ const menuItems = [
     title: "Top Opportunities",
     url: "/top-opportunities",
     icon: Zap,
+  },
+  {
+    title: "Playbook",
+    url: "/playbook",
+    icon: BookOpen,
+  },
+  {
+    title: "Buckets",
+    url: "/buckets",
+    icon: FolderOpen,
   },
 ];
 
