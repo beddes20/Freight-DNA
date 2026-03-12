@@ -1305,7 +1305,7 @@ export default function CompanyDetail() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex-shrink-0">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     {f.covered ? (
                       <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
                         <CheckCircle className="h-3 w-3 mr-1" />
@@ -1324,6 +1324,33 @@ export default function CompanyDetail() {
                       >
                         <UserPlus className="h-4 w-4 mr-1" />
                         Find Planner
+                      </Button>
+                    )}
+                    {canReassign && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-400"
+                        onClick={() => {
+                          setForceLanePrefill({
+                            title: `Cover facility: ${f.fullName}`,
+                            notes: `Facility: ${f.fullName}\nType: ${f.type === "origin" ? "Origin" : "Destination"}\nVolume: ${f.totalVolume.toLocaleString()} loads/yr\nLanes: ${f.laneCount} lane${f.laneCount !== 1 ? "s" : ""}\nCoverage: ${f.covered ? `Covered by ${f.coveredBy}` : "Gap — no planner assigned"}`,
+                            attachedLaneData: [{
+                              type: "action_required",
+                              label: "Facility Coverage Gap",
+                              items: [{
+                                lane: f.fullName,
+                                volume: f.totalVolume,
+                              }],
+                            }],
+                          });
+                          setEditingTaskItem(undefined);
+                          setTaskDialogOpen(true);
+                        }}
+                        data-testid={`button-force-task-facility-${i}`}
+                      >
+                        <ClipboardList className="h-4 w-4 mr-1" />
+                        Force Task
                       </Button>
                     )}
                   </div>
