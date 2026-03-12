@@ -47,6 +47,7 @@ import {
   ArrowUpFromLine,
   Repeat2,
   Users,
+  ChevronDown,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -357,6 +358,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
   const [selectedLane, setSelectedLane] = useState<HighVolumeLane | null>(null);
   const [selectedLaneIndex, setSelectedLaneIndex] = useState(0);
   const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "volume", dir: "desc" });
+  const [hvLanesCollapsed, setHvLanesCollapsed] = useState(false);
   const [findPlannerFacility, setFindPlannerFacility] = useState<Facility | null>(null);
   const [assignExistingContactId, setAssignExistingContactId] = useState("");
 
@@ -475,7 +477,11 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
       {highVolumeLanes.length > 0 && (
         <Card className="border-2 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
+            <button
+              onClick={() => setHvLanesCollapsed(c => !c)}
+              className="w-full flex items-center justify-between group"
+              data-testid="btn-toggle-hv-lanes"
+            >
               <CardTitle className="text-base flex items-center gap-2 text-amber-700 dark:text-amber-400">
                 <AlertTriangle className="h-4 w-4" />
                 High-Volume Lanes — Action Required
@@ -489,13 +495,17 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                 <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
                   {openLanes.length} open
                 </Badge>
+                <ChevronDown className={`h-4 w-4 text-amber-600 dark:text-amber-400 transition-transform duration-200 ${hvLanesCollapsed ? "-rotate-90" : ""}`} />
               </div>
-            </div>
-            <p className="text-sm text-muted-foreground mt-1">
-              These lanes have more than 50 annual loads. Assign a planner to research who owns each lane.
-            </p>
+            </button>
+            {!hvLanesCollapsed && (
+              <p className="text-sm text-muted-foreground mt-1">
+                These lanes have more than 50 annual loads. Assign a planner to research who owns each lane.
+              </p>
+            )}
           </CardHeader>
-          <CardContent className="pt-0">
+          {!hvLanesCollapsed && (
+            <CardContent className="pt-0">
             {(() => {
               const fmtLoc = (city: string, state: string) => {
                 if (!city && !state) return "—";
@@ -619,6 +629,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
               );
             })()}
           </CardContent>
+          )}
         </Card>
       )}
 
