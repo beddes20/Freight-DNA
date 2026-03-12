@@ -713,7 +713,6 @@ export default function CompanyDetail() {
                     let color = "bg-muted text-muted-foreground";
                     if (diff < 0) color = "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
                     else if (diff === 0) color = "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
-                    else if (diff <= 3) color = "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400";
                     const label = diff < 0 ? `${Math.abs(diff)}d overdue` : diff === 0 ? "Today" : `${diff}d`;
                     return <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md font-medium ${color}`}><Calendar className="h-3 w-3" />{label}</span>;
                   })();
