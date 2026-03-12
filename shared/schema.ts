@@ -165,6 +165,21 @@ export const insertCalloutSchema = createInsertSchema(callouts).omit({
 export type InsertCallout = z.infer<typeof insertCalloutSchema>;
 export type Callout = typeof callouts.$inferSelect;
 
+export const feedPosts = pgTable("feed_posts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  content: text("content").notNull(),
+  category: text("category").notNull().default("idea"),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertFeedPostSchema = createInsertSchema(feedPosts).omit({
+  id: true,
+});
+
+export type InsertFeedPost = z.infer<typeof insertFeedPostSchema>;
+export type FeedPost = typeof feedPosts.$inferSelect;
+
 export const appSettings = pgTable("app_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),

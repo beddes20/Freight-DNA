@@ -8,7 +8,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -1361,6 +1361,71 @@ export async function registerRoutes(
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete callout" });
+    }
+  });
+
+  // ── Feed Posts (Trends / Growth / Ideas) ─────────────────────────────────
+
+  app.get("/api/feed-posts", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role === "admin") {
+        return res.json(await storage.getFeedPosts());
+      }
+      let visibleIds: string[];
+      if (user.role === "director" || user.role === "national_account_manager") {
+        visibleIds = await storage.getTeamMemberIds(user.id);
+      } else {
+        const ids = new Set<string>([user.id]);
+        if (user.managerId) {
+          ids.add(user.managerId);
+          const allUsers = await storage.getUsers();
+          allUsers.forEach(u => { if (u.managerId === user.managerId) ids.add(u.id); });
+        }
+        visibleIds = Array.from(ids);
+      }
+      return res.json(await storage.getFeedPosts(visibleIds));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch feed posts" });
+    }
+  });
+
+  app.post("/api/feed-posts", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { content, category } = req.body;
+      const trimmed = typeof content === "string" ? content.trim() : "";
+      if (!trimmed) return res.status(400).json({ error: "Content is required" });
+      if (trimmed.length > 500) return res.status(400).json({ error: "Content must be 500 characters or less" });
+      const validCategories = ["trend", "growth", "idea"];
+      if (!validCategories.includes(category)) return res.status(400).json({ error: "Invalid category" });
+      const post = await storage.createFeedPost({
+        content: trimmed,
+        category,
+        authorId: user.id,
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(post);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create feed post" });
+    }
+  });
+
+  app.delete("/api/feed-posts/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const post = await storage.getFeedPost(req.params.id);
+      if (!post) return res.status(404).json({ error: "Post not found" });
+      if (post.authorId !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Only the author or admin can delete posts" });
+      }
+      await storage.deleteFeedPost(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete feed post" });
     }
   });
 

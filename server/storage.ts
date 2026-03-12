@@ -11,6 +11,7 @@ import {
   appSettings,
   tasks,
   callouts,
+  feedPosts,
   type User,
   type InsertUser,
   type Company,
@@ -27,6 +28,8 @@ import {
   type InsertTask,
   type Callout,
   type InsertCallout,
+  type FeedPost,
+  type InsertFeedPost,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -85,6 +88,11 @@ export interface IStorage {
   getCallout(id: string): Promise<Callout | undefined>;
   createCallout(callout: InsertCallout): Promise<Callout>;
   deleteCallout(id: string): Promise<boolean>;
+
+  getFeedPosts(visibleAuthorIds?: string[]): Promise<FeedPost[]>;
+  createFeedPost(post: InsertFeedPost): Promise<FeedPost>;
+  getFeedPost(id: string): Promise<FeedPost | undefined>;
+  deleteFeedPost(id: string): Promise<boolean>;
 
   getSetting(key: string): Promise<string | undefined>;
   setSetting(key: string, value: string): Promise<void>;
@@ -349,6 +357,31 @@ export class DatabaseStorage implements IStorage {
   async deleteCallout(id: string): Promise<boolean> {
     await db.delete(callouts).where(eq(callouts.parentId, id));
     const result = await db.delete(callouts).where(eq(callouts.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getFeedPosts(visibleAuthorIds?: string[]): Promise<FeedPost[]> {
+    if (visibleAuthorIds) {
+      return db.select().from(feedPosts)
+        .where(inArray(feedPosts.authorId, visibleAuthorIds))
+        .orderBy(desc(feedPosts.createdAt))
+        .limit(30);
+    }
+    return db.select().from(feedPosts).orderBy(desc(feedPosts.createdAt)).limit(30);
+  }
+
+  async createFeedPost(post: InsertFeedPost): Promise<FeedPost> {
+    const [created] = await db.insert(feedPosts).values(post).returning();
+    return created;
+  }
+
+  async getFeedPost(id: string): Promise<FeedPost | undefined> {
+    const [post] = await db.select().from(feedPosts).where(eq(feedPosts.id, id));
+    return post;
+  }
+
+  async deleteFeedPost(id: string): Promise<boolean> {
+    const result = await db.delete(feedPosts).where(eq(feedPosts.id, id)).returning();
     return result.length > 0;
   }
 
