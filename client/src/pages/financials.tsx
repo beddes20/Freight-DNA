@@ -324,7 +324,7 @@ export default function Financials() {
               </div>
             </div>
 
-            {isAdmin && oneDriveSetting.url && (
+            {isAdminOrNam && oneDriveSetting.url && (
               <Button
                 onClick={() => syncMutation.mutate()}
                 disabled={syncMutation.isPending}

@@ -1478,7 +1478,7 @@ export async function registerRoutes(
   app.post("/api/financials/sync-onedrive", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") {
+      if (!user || (user.role !== "admin" && user.role !== "national_account_manager")) {
         return res.status(403).json({ error: "Forbidden" });
       }
 
