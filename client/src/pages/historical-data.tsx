@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   MapPin, Flame, TrendingUp, Package, Search, Compass,
   Upload, FileSpreadsheet, Loader2, Trash2, History, Map, Target, ArrowRight, Building2, User,
+  ArrowDownToLine, ArrowUpFromLine, Layers,
 } from "lucide-react";
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DestSummary = { destination: string; city: string; state: string; totalLoads: number; avgWeekly: number; maxWeekly: number; weekCount: number; isHotZone: boolean };
@@ -25,9 +26,13 @@ type ProximityMatch = { companyId: string; companyName: string; rfpTitle: string
 type ProximityZone = { zone: string; city: string; state: string; lat: number; lng: number; weeklyLoads: number; totalLoads: number; matchCount: number; matches: ProximityMatch[] };
 
 // ─── Leaflet Map Component ────────────────────────────────────────────────────
-function DeliveryMap({ data }: { data: HeatmapResponse }) {
+type MapMode = "inbound" | "both" | "outbound";
+
+function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
+  const deliveryLayerRef = useRef<any>(null);
+  const pickupLayerRef = useRef<any>(null);
 
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
@@ -35,7 +40,6 @@ function DeliveryMap({ data }: { data: HeatmapResponse }) {
     import("leaflet").then((L) => {
       if (!mapRef.current || mapInstanceRef.current) return;
 
-      // Fix default icon paths
       delete (L.Icon.Default.prototype as any)._getIconUrl;
       L.Icon.Default.mergeOptions({ iconUrl: "", shadowUrl: "" });
 
@@ -50,42 +54,74 @@ function DeliveryMap({ data }: { data: HeatmapResponse }) {
       const maxDeliv = Math.max(...data.deliveries.map(d => d.count), 1);
       const maxPickup = Math.max(...data.pickups.map(p => p.count), 1);
 
+      const deliveryLayer = L.layerGroup();
       data.deliveries.forEach(pt => {
         const radius = Math.max(6, Math.sqrt(pt.count / maxDeliv) * 30);
         const opacity = 0.3 + (pt.count / maxDeliv) * 0.55;
         L.circleMarker([pt.lat, pt.lng], {
           radius, color: "#1e40af", fillColor: "#3b82f6", fillOpacity: opacity, weight: 1.5, opacity: 0.8,
-        }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>📦 ${pt.count.toLocaleString()} deliveries`, { sticky: true }).addTo(map);
+        }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>📦 ${pt.count.toLocaleString()} deliveries`, { sticky: true }).addTo(deliveryLayer);
       });
+      deliveryLayerRef.current = deliveryLayer;
 
+      const pickupLayer = L.layerGroup();
       data.pickups.forEach(pt => {
         const radius = Math.max(5, Math.sqrt(pt.count / maxPickup) * 22);
         const opacity = 0.25 + (pt.count / maxPickup) * 0.5;
         L.circleMarker([pt.lat, pt.lng], {
           radius, color: "#15803d", fillColor: "#22c55e", fillOpacity: opacity, weight: 1.5, opacity: 0.8,
-        }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>🚚 ${pt.count.toLocaleString()} pickups`, { sticky: true }).addTo(map);
+        }).bindTooltip(`<b>${pt.city}, ${pt.state}</b><br/>🚚 ${pt.count.toLocaleString()} pickups`, { sticky: true }).addTo(pickupLayer);
       });
+      pickupLayerRef.current = pickupLayer;
+
+      deliveryLayer.addTo(map);
+      pickupLayer.addTo(map);
     });
 
     return () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
+        deliveryLayerRef.current = null;
+        pickupLayerRef.current = null;
       }
     };
   }, [data]);
 
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const dl = deliveryLayerRef.current;
+    const pl = pickupLayerRef.current;
+    if (!map || !dl || !pl) return;
+
+    if (mode === "inbound" || mode === "both") {
+      if (!map.hasLayer(dl)) dl.addTo(map);
+    } else {
+      if (map.hasLayer(dl)) dl.remove();
+    }
+
+    if (mode === "outbound" || mode === "both") {
+      if (!map.hasLayer(pl)) pl.addTo(map);
+    } else {
+      if (map.hasLayer(pl)) pl.remove();
+    }
+  }, [mode]);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-4 text-sm">
-        <div className="flex items-center gap-2">
-          <span className="w-3 h-3 rounded-full bg-blue-500 inline-block" />
-          <span className="text-muted-foreground">Deliveries (drop-offs) — {data.deliveries.length} cities</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-3 h-3 rounded-full bg-green-500 inline-block" />
-          <span className="text-muted-foreground">Pickups (shippers) — {data.pickups.length} cities</span>
-        </div>
+        {(mode === "inbound" || mode === "both") && (
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded-full bg-blue-500 inline-block" />
+            <span className="text-muted-foreground">Inbound (deliveries) — {data.deliveries.length} cities</span>
+          </div>
+        )}
+        {(mode === "outbound" || mode === "both") && (
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded-full bg-green-500 inline-block" />
+            <span className="text-muted-foreground">Outbound (pickups) — {data.pickups.length} cities</span>
+          </div>
+        )}
         <div className="text-muted-foreground">Circle size = relative volume</div>
       </div>
       <div ref={mapRef} style={{ height: 520, width: "100%", borderRadius: 8, zIndex: 0 }} className="border" data-testid="map-heatmap" />
@@ -161,6 +197,7 @@ function LaneCorridorsTab() {
 
 // ─── Map Tab ──────────────────────────────────────────────────────────────────
 function MapTab() {
+  const [mapMode, setMapMode] = useState<MapMode>("both");
   const { data, isLoading, isError, error, refetch } = useQuery<HeatmapResponse>({
     queryKey: ["/api/historical-heatmap"],
     staleTime: 0,
@@ -186,7 +223,39 @@ function MapTab() {
     </CardContent></Card>
   );
 
-  return <DeliveryMap data={data} />;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex rounded-lg border overflow-hidden text-sm">
+          <button
+            onClick={() => setMapMode("inbound")}
+            className={`px-3 py-1.5 flex items-center gap-1.5 transition-colors ${mapMode === "inbound" ? "bg-blue-600 text-white" : "hover:bg-muted text-muted-foreground"}`}
+            data-testid="btn-map-inbound"
+          >
+            <ArrowDownToLine className="h-3.5 w-3.5" />
+            Inbound
+          </button>
+          <button
+            onClick={() => setMapMode("both")}
+            className={`px-3 py-1.5 flex items-center gap-1.5 transition-colors border-x ${mapMode === "both" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
+            data-testid="btn-map-both"
+          >
+            <Layers className="h-3.5 w-3.5" />
+            Both
+          </button>
+          <button
+            onClick={() => setMapMode("outbound")}
+            className={`px-3 py-1.5 flex items-center gap-1.5 transition-colors ${mapMode === "outbound" ? "bg-green-600 text-white" : "hover:bg-muted text-muted-foreground"}`}
+            data-testid="btn-map-outbound"
+          >
+            <ArrowUpFromLine className="h-3.5 w-3.5" />
+            Outbound
+          </button>
+        </div>
+      </div>
+      <DeliveryMap data={data} mode={mapMode} />
+    </div>
+  );
 }
 
 // ─── Proximity Matches Tab ────────────────────────────────────────────────────
