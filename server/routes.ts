@@ -1246,12 +1246,12 @@ export async function registerRoutes(
         storage.createNotification({
           userId: assignedTo,
           type: "task_assigned",
-          title: "New task assigned",
+          title: `${user.name} assigned you a task`,
           body: title.trim(),
           link: "/tasks",
           relatedId: task.id,
           read: false,
-        }).catch(() => {});
+        }).catch((e) => console.error("Notification error:", e));
       }
       res.status(201).json(task);
     } catch (error) {
@@ -1355,9 +1355,10 @@ export async function registerRoutes(
       if (tag && !validTags.includes(tag)) {
         return res.status(400).json({ error: "Invalid tag" });
       }
+      let parentCallout: Awaited<ReturnType<typeof storage.getCallout>> = undefined;
       if (parentId) {
-        const parent = await storage.getCallout(parentId);
-        if (!parent) return res.status(404).json({ error: "Parent callout not found" });
+        parentCallout = await storage.getCallout(parentId);
+        if (!parentCallout) return res.status(404).json({ error: "Parent callout not found" });
       }
       if (companyId) {
         if (!(await canAccessCompany(user, companyId))) {
@@ -1373,6 +1374,18 @@ export async function registerRoutes(
         parentId: parentId || null,
         createdAt: new Date().toISOString(),
       });
+      // Notify the parent callout author if someone else replied
+      if (parentCallout && parentCallout.authorId !== user.id) {
+        storage.createNotification({
+          userId: parentCallout.authorId,
+          type: "post_reply",
+          title: `${user.name} replied to your callout`,
+          body: (title.trim()).length > 80 ? title.trim().slice(0, 80) + "…" : title.trim(),
+          link: "/feed",
+          relatedId: callout.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
       res.status(201).json(callout);
     } catch (error) {
       console.error("Error creating callout:", error);
@@ -1437,6 +1450,18 @@ export async function registerRoutes(
           createdAt: new Date().toISOString(),
           parentId,
         });
+        // Notify the original post author if someone else replied
+        if (parent.authorId !== user.id) {
+          storage.createNotification({
+            userId: parent.authorId,
+            type: "post_reply",
+            title: `${user.name} replied to your post`,
+            body: trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed,
+            link: "/feed",
+            relatedId: post.id,
+            read: false,
+          }).catch((e) => console.error("Notification error:", e));
+        }
         return res.status(201).json(post);
       }
 
@@ -2621,6 +2646,22 @@ export async function registerRoutes(
         status: "pending",
         createdAt: new Date().toISOString(),
       });
+      // Notify the other party in the 1:1 session
+      const session = await storage.getSession(sessionId);
+      if (session) {
+        const otherUserId = session.namId === currentUser.id ? session.amId : session.namId;
+        if (otherUserId !== currentUser.id) {
+          storage.createNotification({
+            userId: otherUserId,
+            type: "topic_added",
+            title: `${currentUser.name} added a 1:1 topic`,
+            body: text.trim().length > 80 ? text.trim().slice(0, 80) + "…" : text.trim(),
+            link: "/one-on-one",
+            relatedId: topic.id,
+            read: false,
+          }).catch((e) => console.error("Notification error:", e));
+        }
+      }
       res.status(201).json(topic);
     } catch (error) {
       res.status(500).json({ error: "Failed to create topic" });
