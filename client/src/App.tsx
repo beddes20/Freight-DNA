@@ -21,6 +21,7 @@ import Financials from "@/pages/financials";
 import HistoricalData from "@/pages/historical-data";
 import TopOpportunities from "@/pages/top-opportunities";
 import OneOnOnePage from "@/pages/one-on-one";
+import TasksPage from "@/pages/tasks";
 
 function Router() {
   return (
@@ -36,6 +37,7 @@ function Router() {
       <Route path="/historical-data" component={HistoricalData} />
       <Route path="/top-opportunities" component={TopOpportunities} />
       <Route path="/one-on-one" component={OneOnOnePage} />
+      <Route path="/tasks" component={TasksPage} />
       <Route component={NotFound} />
     </Switch>
   );

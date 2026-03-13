@@ -354,15 +354,27 @@ export default function Dashboard() {
                 <Badge variant="secondary" className="ml-1 font-normal">{openTasks.length}</Badge>
               )}
             </CardTitle>
-            <Button
-              size="sm"
-              variant="outline"
-              className="gap-1"
-              onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
-              data-testid="button-add-task"
-            >
-              <Plus className="h-3 w-3" /> Add Task
-            </Button>
+            <div className="flex items-center gap-2">
+              <Link href="/tasks#completed">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="gap-1 text-muted-foreground"
+                  data-testid="button-completed-tasks"
+                >
+                  <CheckCircle2 className="h-3 w-3" /> Completed
+                </Button>
+              </Link>
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1"
+                onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
+                data-testid="button-add-task"
+              >
+                <Plus className="h-3 w-3" /> Add Task
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
