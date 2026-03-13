@@ -67,6 +67,14 @@ function countMonth(tps: Touchpoint[]) {
   return tps.filter(t => t.date >= startStr).length;
 }
 
+function countThisWeek(tps: Touchpoint[]) {
+  const start = new Date();
+  start.setDate(start.getDate() - start.getDay());
+  start.setHours(0, 0, 0, 0);
+  const startStr = start.toISOString().split("T")[0];
+  return tps.filter(t => t.date >= startStr).length;
+}
+
 interface ContactCardProps {
   contact: Contact;
   tps: Touchpoint[];
@@ -101,6 +109,7 @@ function ContactCard({ contact, tps, onEdit, onView, level }: ContactCardProps) 
   const days = getLastTouchDays(tps);
   const dot = recencyDot(days);
   const monthCount = countMonth(tps);
+  const weekCount = countThisWeek(tps);
 
   return (
     <Card
@@ -151,10 +160,17 @@ function ContactCard({ contact, tps, onEdit, onView, level }: ContactCardProps) 
               </Button>
             </div>
 
-            {monthCount > 0 && (
-              <div className="mt-1 flex items-center gap-1.5">
-                <PhoneCall className="h-3 w-3 text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">{monthCount} touch{monthCount !== 1 ? "es" : ""} this month</span>
+            {(weekCount > 0 || monthCount > 0) && (
+              <div className="mt-1 flex items-center gap-2 flex-wrap">
+                {weekCount > 0 && (
+                  <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                    <PhoneCall className="h-2.5 w-2.5" />
+                    {weekCount} this week
+                  </span>
+                )}
+                {monthCount > 0 && (
+                  <span className="text-xs text-muted-foreground">{monthCount} this month</span>
+                )}
               </div>
             )}
 

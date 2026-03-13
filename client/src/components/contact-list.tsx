@@ -26,6 +26,7 @@ import {
   Mail,
   Phone,
   PhoneCall,
+  ArrowRight,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -165,9 +166,11 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                             <PhoneCall className="h-2.5 w-2.5" />
                             {dayLabel}
                           </span>
-                          <span className="text-xs text-muted-foreground">
-                            {weekCount} this week
-                          </span>
+                          {weekCount > 0 && (
+                            <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                              {weekCount} this week
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
@@ -256,6 +259,16 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                           <p className="text-xs text-muted-foreground line-clamp-2">
                             {contact.spotBiddingProcess}
                           </p>
+                        </div>
+                      )}
+
+                      {contact.nextSteps && (
+                        <div className="flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-2 py-1.5">
+                          <ArrowRight className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-amber-700 dark:text-amber-400 mb-0.5">Next Steps</p>
+                            <p className="text-xs text-amber-800 dark:text-amber-300 line-clamp-2">{contact.nextSteps}</p>
+                          </div>
                         </div>
                       )}
                     </div>
