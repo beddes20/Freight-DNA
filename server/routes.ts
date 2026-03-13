@@ -8,7 +8,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -2417,6 +2417,184 @@ export async function registerRoutes(
     } catch (err) {
       console.error("Lane matching error:", err);
       res.status(500).json({ error: "Failed to compute lane matching" });
+    }
+  });
+
+  async function canAccessPairing(user: { id: string; role: string; managerId: string | null }, namId: string, amId: string): Promise<boolean> {
+    if (user.role === "admin") return true;
+    if (user.role === "account_manager") {
+      return user.id === amId && user.managerId === namId;
+    }
+    if (user.role === "national_account_manager" || user.role === "director" || user.role === "sales") {
+      if (user.id !== namId) return false;
+      const am = await storage.getUser(amId);
+      return !!am && am.managerId === user.id;
+    }
+    return false;
+  }
+
+  async function canAccessSession(user: { id: string; role: string; managerId: string | null }, sessionId: string): Promise<boolean> {
+    const session = await storage.getSession(sessionId);
+    if (!session) return false;
+    return canAccessPairing(user, session.namId, session.amId);
+  }
+
+  app.get("/api/one-on-one/session", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { namId, amId } = req.query;
+      if (!namId || !amId) return res.status(400).json({ error: "namId and amId are required" });
+      if (!(await canAccessPairing(currentUser, namId as string, amId as string))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const session = await storage.getOrCreateActiveSession(namId as string, amId as string);
+      const topics = await storage.getTopicsBySession(session.id);
+      res.json({ session, topics });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch session" });
+    }
+  });
+
+  app.get("/api/one-on-one/pairings", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+
+      const allUsers = await storage.getUsers();
+      const safeUsers = allUsers.map(({ password, ...u }) => u);
+
+      if (currentUser.role === "account_manager") {
+        if (!currentUser.managerId) return res.json([]);
+        const manager = safeUsers.find(u => u.id === currentUser.managerId);
+        if (!manager) return res.json([]);
+        return res.json([{ namId: manager.id, amId: currentUser.id, namName: manager.name, amName: currentUser.name }]);
+      }
+
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
+        const directReports = safeUsers.filter(u => u.managerId === currentUser.id && u.role === "account_manager");
+        return res.json(directReports.map(am => ({
+          namId: currentUser.id,
+          amId: am.id,
+          namName: currentUser.name,
+          amName: am.name,
+        })));
+      }
+
+      if (currentUser.role === "admin") {
+        const pairings: { namId: string; amId: string; namName: string; amName: string }[] = [];
+        const ams = safeUsers.filter(u => u.role === "account_manager" && u.managerId);
+        for (const am of ams) {
+          const nam = safeUsers.find(u => u.id === am.managerId);
+          if (nam) {
+            pairings.push({ namId: nam.id, amId: am.id, namName: nam.name, amName: am.name });
+          }
+        }
+        return res.json(pairings);
+      }
+
+      res.json([]);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch pairings" });
+    }
+  });
+
+  app.post("/api/one-on-one/topics", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { sessionId, text, tag } = req.body;
+      if (!sessionId || !text || typeof text !== "string") {
+        return res.status(400).json({ error: "sessionId and text are required" });
+      }
+      if (!(await canAccessSession(currentUser, sessionId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const validTags = ["Action Item", "Question", "FYI", "Follow-up"];
+      const validatedTag = tag && validTags.includes(tag) ? tag : null;
+      const topic = await storage.createTopic({
+        sessionId,
+        addedById: currentUser.id,
+        text: text.trim(),
+        tag: validatedTag,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(topic);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create topic" });
+    }
+  });
+
+  app.patch("/api/one-on-one/topics/:id/toggle", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getTopic(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Topic not found" });
+      if (!(await canAccessSession(currentUser, existing.sessionId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const topic = await storage.toggleTopicStatus(req.params.id);
+      if (!topic) return res.status(404).json({ error: "Topic not found" });
+      res.json(topic);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to toggle topic" });
+    }
+  });
+
+  app.delete("/api/one-on-one/topics/:id", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getTopic(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Topic not found" });
+      if (!(await canAccessSession(currentUser, existing.sessionId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const deleted = await storage.deleteTopic(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Topic not found" });
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete topic" });
+    }
+  });
+
+  app.post("/api/one-on-one/sessions/:id/close", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessSession(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const newSession = await storage.closeSession(req.params.id);
+      if (!newSession) return res.status(404).json({ error: "Session not found" });
+      const topics = await storage.getTopicsBySession(newSession.id);
+      res.json({ session: newSession, topics });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to close session" });
+    }
+  });
+
+  app.get("/api/one-on-one/archived", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { namId, amId } = req.query;
+      if (!namId || !amId) return res.status(400).json({ error: "namId and amId are required" });
+      if (!(await canAccessPairing(currentUser, namId as string, amId as string))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const sessions = await storage.getArchivedSessions(namId as string, amId as string);
+      const sessionsWithTopics = await Promise.all(
+        sessions.map(async (s) => ({
+          ...s,
+          topics: await storage.getTopicsBySession(s.id),
+        }))
+      );
+      res.json(sessionsWithTopics);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch archived sessions" });
     }
   });
 

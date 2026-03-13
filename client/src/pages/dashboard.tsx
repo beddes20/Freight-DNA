@@ -15,7 +15,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
-import { OneOnOnePortlet } from "@/components/one-on-one-portlet";
+import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import type { Company, Contact, Task, User, FeedPost } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
@@ -416,11 +416,7 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      <OneOnOnePortlet
-        currentUser={currentUser as SafeUser}
-        allUsers={allUsers}
-        teamMembers={teamMembers}
-      />
+      <OneOnOnePortlet />
 
       <Card data-testid="card-feed">
         <CardHeader className="pb-3">

@@ -3,262 +3,108 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Users, Plus, CheckCircle2, Circle, Trash2, ChevronDown, ChevronUp,
-  Archive, RotateCcw, MessageSquare,
+  MessageSquare, ChevronDown, ChevronRight, Plus, Check,
+  Circle, Trash2, Archive, History, Tag,
 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { OneOnOneSession, OneOnOneTopic, User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
 
-const TAG_CONFIG: Record<string, { label: string; color: string }> = {
-  action_item: { label: "Action Item", color: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" },
-  question:    { label: "Question",    color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
-  fyi:         { label: "FYI",         color: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" },
-  follow_up:   { label: "Follow-up",   color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
+interface Pairing {
+  namId: string;
+  amId: string;
+  namName: string;
+  amName: string;
+}
+
+interface SessionWithTopics {
+  session: OneOnOneSession;
+  topics: OneOnOneTopic[];
+}
+
+interface ArchivedSession extends OneOnOneSession {
+  topics: OneOnOneTopic[];
+}
+
+const TAG_OPTIONS = ["Action Item", "Question", "FYI", "Follow-up"] as const;
+
+const tagColors: Record<string, string> = {
+  "Action Item": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  "Question": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  "FYI": "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
+  "Follow-up": "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
 };
 
-function initials(name: string) {
-  return name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
-}
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-interface SessionPanelProps {
-  managerId: string;
-  repId: string;
-  currentUserId: string;
-  allUsers: SafeUser[];
-}
-
-function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPanelProps) {
+function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic; teamMembers: SafeUser[]; currentUserId: string }) {
   const { toast } = useToast();
-  const [newText, setNewText] = useState("");
-  const [newTag, setNewTag] = useState("fyi");
-  const [showArchived, setShowArchived] = useState(false);
-
-  const sessionKey = ["/api/1on1/session", managerId, repId];
-  const { data, isLoading } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }>({
-    queryKey: sessionKey,
-    queryFn: async () => {
-      const res = await fetch(`/api/1on1/session?managerId=${managerId}&repId=${repId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-  });
-
-  const archivedKey = ["/api/1on1/archived", managerId, repId];
-  const { data: archivedSessions = [] } = useQuery<(OneOnOneSession & { topics: OneOnOneTopic[] })[]>({
-    queryKey: archivedKey,
-    enabled: showArchived,
-    queryFn: async () => {
-      const res = await fetch(`/api/1on1/archived?managerId=${managerId}&repId=${repId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-  });
-
-  const addTopicMutation = useMutation({
-    mutationFn: async ({ sessionId, text, tag }: { sessionId: string; text: string; tag: string }) => {
-      const res = await apiRequest("POST", `/api/1on1/session/${sessionId}/topics`, { text, tag });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: sessionKey });
-      setNewText("");
-    },
-    onError: () => toast({ title: "Failed to add topic", variant: "destructive" }),
-  });
+  const author = teamMembers.find(u => u.id === topic.addedById);
+  const initials = author?.name?.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "?";
+  const isNam = author?.role === "national_account_manager" || author?.role === "director" || author?.role === "sales";
 
   const toggleMutation = useMutation({
-    mutationFn: async ({ topicId, status }: { topicId: string; status: string }) => {
-      const res = await apiRequest("PATCH", `/api/1on1/topics/${topicId}`, { status });
-      return res.json();
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/one-on-one/topics/${topic.id}/toggle`);
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: sessionKey }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session"] });
+    },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (topicId: string) => {
-      await apiRequest("DELETE", `/api/1on1/topics/${topicId}`);
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/one-on-one/topics/${topic.id}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: sessionKey });
-      toast({ title: "Topic removed" });
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session"] });
+      toast({ title: "Topic deleted" });
     },
   });
-
-  const closeMutation = useMutation({
-    mutationFn: async (sessionId: string) => {
-      const res = await apiRequest("POST", `/api/1on1/session/${sessionId}/close`, {});
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: sessionKey });
-      queryClient.invalidateQueries({ queryKey: archivedKey });
-      toast({ title: "Session closed", description: "Unresolved topics carried over to the new session." });
-    },
-    onError: () => toast({ title: "Failed to close session", variant: "destructive" }),
-  });
-
-  const getUserName = (id: string) => allUsers.find(u => u.id === id)?.name || "Unknown";
-
-  if (isLoading) return <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>;
-  if (!data) return null;
-
-  const { session, topics } = data;
-  const pendingTopics = topics.filter(t => t.status === "pending");
-  const discussedTopics = topics.filter(t => t.status === "discussed");
-
-  const handleAdd = () => {
-    if (!newText.trim()) return;
-    addTopicMutation.mutate({ sessionId: session.id, text: newText.trim(), tag: newTag });
-  };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>Session started {formatDate(session.startedAt)}</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
-          onClick={() => closeMutation.mutate(session.id)}
-          disabled={closeMutation.isPending}
-          data-testid="btn-close-session"
-        >
-          <Archive className="h-3 w-3" />
-          Close Session
-        </Button>
-      </div>
-
-      {/* Add topic form */}
-      <div className="flex gap-2">
-        <div className="flex-1 flex gap-2">
-          <input
-            className="flex-1 h-8 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Add a topic..."
-            value={newText}
-            onChange={e => setNewText(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAdd(); } }}
-            data-testid="input-topic-text"
-          />
-          <select
-            className="h-8 rounded-md border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-            value={newTag}
-            onChange={e => setNewTag(e.target.value)}
-            data-testid="select-topic-tag"
-          >
-            <option value="fyi">FYI</option>
-            <option value="action_item">Action Item</option>
-            <option value="question">Question</option>
-            <option value="follow_up">Follow-up</option>
-          </select>
-        </div>
-        <Button
-          size="sm"
-          className="h-8 px-3"
-          onClick={handleAdd}
-          disabled={!newText.trim() || addTopicMutation.isPending}
-          data-testid="btn-add-topic"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
-      {/* Pending topics */}
-      {pendingTopics.length === 0 && discussedTopics.length === 0 ? (
-        <div className="text-center py-6 text-muted-foreground">
-          <MessageSquare className="h-7 w-7 mx-auto mb-2 opacity-40" />
-          <p className="text-sm">No topics yet — add one above</p>
-        </div>
-      ) : (
-        <div className="space-y-1.5">
-          {pendingTopics.map(topic => (
-            <TopicRow
-              key={topic.id}
-              topic={topic}
-              addedByName={getUserName(topic.addedById)}
-              onToggle={() => toggleMutation.mutate({ topicId: topic.id, status: "discussed" })}
-              onDelete={() => deleteMutation.mutate(topic.id)}
-            />
-          ))}
-          {discussedTopics.length > 0 && (
-            <>
-              <p className="text-xs text-muted-foreground pt-2 pb-1 font-medium">Discussed</p>
-              {discussedTopics.map(topic => (
-                <TopicRow
-                  key={topic.id}
-                  topic={topic}
-                  addedByName={getUserName(topic.addedById)}
-                  onToggle={() => toggleMutation.mutate({ topicId: topic.id, status: "pending" })}
-                  onDelete={() => deleteMutation.mutate(topic.id)}
-                  dimmed
-                />
-              ))}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Past sessions */}
-      <div className="border-t pt-3">
-        <button
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
-          onClick={() => setShowArchived(v => !v)}
-          data-testid="btn-toggle-archived"
-        >
-          <RotateCcw className="h-3 w-3" />
-          Past Sessions
-          {showArchived ? <ChevronUp className="h-3 w-3 ml-auto" /> : <ChevronDown className="h-3 w-3 ml-auto" />}
-        </button>
-        {showArchived && (
-          <div className="mt-3 space-y-3">
-            {archivedSessions.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-3">No past sessions yet</p>
-            ) : (
-              archivedSessions.map(s => (
-                <ArchivedSessionRow key={s.id} session={s} allUsers={allUsers} />
-              ))
-            )}
-          </div>
+    <div
+      className={`flex items-start gap-2 p-2 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group ${topic.status === "discussed" ? "opacity-50" : ""}`}
+      data-testid={`topic-row-${topic.id}`}
+    >
+      <button
+        onClick={() => toggleMutation.mutate()}
+        className="shrink-0 mt-0.5 hover:scale-110 transition-transform"
+        title={topic.status === "discussed" ? "Mark as pending" : "Mark as discussed"}
+        data-testid={`button-toggle-topic-${topic.id}`}
+      >
+        {topic.status === "discussed" ? (
+          <Check className="h-4 w-4 text-green-500" />
+        ) : (
+          <Circle className="h-4 w-4 text-muted-foreground" />
         )}
-      </div>
-    </div>
-  );
-}
-
-function TopicRow({ topic, addedByName, onToggle, onDelete, dimmed }: {
-  topic: OneOnOneTopic;
-  addedByName: string;
-  onToggle: () => void;
-  onDelete: () => void;
-  dimmed?: boolean;
-}) {
-  const tag = TAG_CONFIG[topic.tag] || TAG_CONFIG.fyi;
-  return (
-    <div className={`flex items-start gap-2 p-2.5 rounded-lg border border-transparent hover:border-border hover:bg-muted/30 transition-all group ${dimmed ? "opacity-60" : ""}`} data-testid={`row-topic-${topic.id}`}>
-      <button onClick={onToggle} className="mt-0.5 shrink-0 text-muted-foreground hover:text-primary transition-colors" data-testid={`btn-toggle-topic-${topic.id}`}>
-        {topic.status === "discussed"
-          ? <CheckCircle2 className="h-4 w-4 text-green-500" />
-          : <Circle className="h-4 w-4" />}
       </button>
       <div className="flex-1 min-w-0">
-        <p className={`text-sm ${dimmed ? "line-through text-muted-foreground" : ""}`}>{topic.text}</p>
-        <div className="flex items-center gap-1.5 mt-1">
-          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${tag.color}`}>{tag.label}</span>
-          <span className="text-xs text-muted-foreground">· {addedByName}</span>
+        <p className={`text-sm ${topic.status === "discussed" ? "line-through text-muted-foreground" : ""}`} data-testid={`text-topic-${topic.id}`}>
+          {topic.text}
+        </p>
+        <div className="flex items-center gap-1.5 flex-wrap mt-1">
+          {topic.tag && (
+            <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${tagColors[topic.tag] || "bg-muted text-muted-foreground"}`} data-testid={`badge-topic-tag-${topic.id}`}>
+              {topic.tag}
+            </span>
+          )}
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${isNam ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"}`}>
+              {initials}
+            </span>
+            {author?.name || "Unknown"}
+          </span>
         </div>
       </div>
       <button
-        onClick={onDelete}
-        className="opacity-0 group-hover:opacity-100 shrink-0 text-muted-foreground hover:text-destructive transition-all"
-        data-testid={`btn-delete-topic-${topic.id}`}
+        onClick={() => deleteMutation.mutate()}
+        className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity mt-0.5"
+        data-testid={`button-delete-topic-${topic.id}`}
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>
@@ -266,43 +112,203 @@ function TopicRow({ topic, addedByName, onToggle, onDelete, dimmed }: {
   );
 }
 
-function ArchivedSessionRow({ session, allUsers }: { session: OneOnOneSession & { topics: OneOnOneTopic[] }; allUsers: SafeUser[] }) {
-  const [open, setOpen] = useState(false);
-  const getUserName = (id: string) => allUsers.find(u => u.id === id)?.name || "Unknown";
+function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: SafeUser[] }) {
+  const { user: currentUser } = useAuth();
+  const { toast } = useToast();
+  const [topicText, setTopicText] = useState("");
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [showTagSelector, setShowTagSelector] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+
+  const { data: sessionData, isLoading } = useQuery<SessionWithTopics>({
+    queryKey: ["/api/one-on-one/session", pairing.namId, pairing.amId],
+    queryFn: async () => {
+      const res = await fetch(`/api/one-on-one/session?namId=${pairing.namId}&amId=${pairing.amId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+  });
+
+  const { data: archivedSessions = [] } = useQuery<ArchivedSession[]>({
+    queryKey: ["/api/one-on-one/archived", pairing.namId, pairing.amId],
+    queryFn: async () => {
+      const res = await fetch(`/api/one-on-one/archived?namId=${pairing.namId}&amId=${pairing.amId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: showHistory,
+  });
+
+  const addTopicMutation = useMutation({
+    mutationFn: async (data: { sessionId: string; text: string; tag: string | null }) => {
+      const res = await apiRequest("POST", "/api/one-on-one/topics", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session", pairing.namId, pairing.amId] });
+      setTopicText("");
+      setSelectedTag(null);
+      setShowTagSelector(false);
+    },
+    onError: () => {
+      toast({ title: "Failed to add topic", variant: "destructive" });
+    },
+  });
+
+  const closeSessionMutation = useMutation({
+    mutationFn: async (sessionId: string) => {
+      const res = await apiRequest("POST", `/api/one-on-one/sessions/${sessionId}/close`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session", pairing.namId, pairing.amId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/archived", pairing.namId, pairing.amId] });
+      toast({ title: "Session closed. Pending topics carried over." });
+    },
+    onError: () => {
+      toast({ title: "Failed to close session", variant: "destructive" });
+    },
+  });
+
+  const handleAddTopic = () => {
+    if (!topicText.trim() || !sessionData?.session) return;
+    addTopicMutation.mutate({
+      sessionId: sessionData.session.id,
+      text: topicText.trim(),
+      tag: selectedTag,
+    });
+  };
+
+  if (isLoading) {
+    return <div className="space-y-2 py-2"><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-full" /></div>;
+  }
+
+  const topics = sessionData?.topics || [];
+
   return (
-    <div className="rounded-lg border bg-muted/20">
-      <button
-        className="w-full flex items-center justify-between px-3 py-2 text-left"
-        onClick={() => setOpen(v => !v)}
-      >
-        <span className="text-xs font-medium text-muted-foreground">{formatDate(session.startedAt)}</span>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{session.topics.length} topic{session.topics.length !== 1 ? "s" : ""}</span>
-          {open ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
+    <div className="space-y-3" data-testid={`session-view-${pairing.namId}-${pairing.amId}`}>
+      <div className="flex items-center gap-2">
+        <div className="flex-1 flex items-center gap-2">
+          <Input
+            value={topicText}
+            onChange={e => setTopicText(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAddTopic(); } }}
+            placeholder="Add a discussion topic..."
+            className="text-sm h-8"
+            data-testid="input-new-topic"
+          />
+          <div className="relative">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0"
+              onClick={() => setShowTagSelector(!showTagSelector)}
+              title="Add tag"
+              data-testid="button-tag-selector"
+            >
+              <Tag className="h-3.5 w-3.5" />
+            </Button>
+            {showTagSelector && (
+              <div className="absolute z-50 right-0 top-full mt-1 w-36 rounded-md border bg-popover shadow-lg py-1" data-testid="tag-dropdown">
+                {TAG_OPTIONS.map(tag => (
+                  <button
+                    key={tag}
+                    onClick={() => { setSelectedTag(selectedTag === tag ? null : tag); setShowTagSelector(false); }}
+                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors ${selectedTag === tag ? "font-semibold bg-muted" : ""}`}
+                    data-testid={`button-tag-${tag}`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <Button
+            size="sm"
+            className="h-8 gap-1"
+            onClick={handleAddTopic}
+            disabled={!topicText.trim() || addTopicMutation.isPending}
+            data-testid="button-add-topic"
+          >
+            <Plus className="h-3 w-3" /> Add
+          </Button>
         </div>
-      </button>
-      {open && (
-        <div className="px-3 pb-3 space-y-1.5">
-          {session.topics.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No topics in this session</p>
-          ) : (
-            session.topics.map(t => {
-              const tag = TAG_CONFIG[t.tag] || TAG_CONFIG.fyi;
-              return (
-                <div key={t.id} className={`flex items-start gap-2 py-1 ${t.status === "discussed" ? "opacity-60" : ""}`}>
-                  {t.status === "discussed"
-                    ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 mt-0.5 shrink-0" />
-                    : <Circle className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />}
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-xs ${t.status === "discussed" ? "line-through text-muted-foreground" : ""}`}>{t.text}</p>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <span className={`inline-flex items-center px-1 py-px rounded text-xs ${tag.color}`}>{tag.label}</span>
-                      <span className="text-xs text-muted-foreground">· {getUserName(t.addedById)}</span>
-                    </div>
+      </div>
+
+      {selectedTag && (
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-muted-foreground">Tag:</span>
+          <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${tagColors[selectedTag]}`}>{selectedTag}</span>
+          <button onClick={() => setSelectedTag(null)} className="text-xs text-muted-foreground hover:text-foreground ml-1">×</button>
+        </div>
+      )}
+
+      {topics.length > 0 ? (
+        <div className="space-y-0.5 max-h-64 overflow-y-auto">
+          {topics.map(topic => (
+            <TopicRow key={topic.id} topic={topic} teamMembers={teamMembers} currentUserId={currentUser?.id || ""} />
+          ))}
+        </div>
+      ) : (
+        <div className="text-center py-4 text-muted-foreground">
+          <MessageSquare className="h-6 w-6 mx-auto mb-1 opacity-50" />
+          <p className="text-xs">No topics yet. Add one above.</p>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between pt-1 border-t">
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          data-testid="button-toggle-history"
+        >
+          <History className="h-3 w-3" />
+          Past Sessions
+          {showHistory ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs gap-1"
+          onClick={() => sessionData?.session && closeSessionMutation.mutate(sessionData.session.id)}
+          disabled={closeSessionMutation.isPending || !sessionData?.session}
+          data-testid="button-close-session"
+        >
+          <Archive className="h-3 w-3" /> Close Session
+        </Button>
+      </div>
+
+      {showHistory && (
+        <div className="space-y-2">
+          {archivedSessions.length > 0 ? (
+            archivedSessions.map(session => (
+              <div key={session.id} className="border rounded-lg p-2" data-testid={`archived-session-${session.id}`}>
+                <p className="text-xs font-medium text-muted-foreground mb-1">
+                  Session started {new Date(session.startDate).toLocaleDateString()}
+                </p>
+                {session.topics.length > 0 ? (
+                  <div className="space-y-0.5">
+                    {session.topics.map(topic => (
+                      <div key={topic.id} className="flex items-center gap-2 text-xs py-0.5">
+                        {topic.status === "discussed" ? (
+                          <Check className="h-3 w-3 text-green-500 shrink-0" />
+                        ) : (
+                          <Circle className="h-3 w-3 text-muted-foreground shrink-0" />
+                        )}
+                        <span className={topic.status === "discussed" ? "line-through text-muted-foreground" : ""}>{topic.text}</span>
+                        {topic.tag && (
+                          <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${tagColors[topic.tag] || "bg-muted text-muted-foreground"}`}>{topic.tag}</span>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                </div>
-              );
-            })
+                ) : (
+                  <p className="text-xs text-muted-foreground">No topics</p>
+                )}
+              </div>
+            ))
+          ) : (
+            <p className="text-xs text-muted-foreground text-center py-2">No past sessions</p>
           )}
         </div>
       )}
@@ -310,104 +316,132 @@ function ArchivedSessionRow({ session, allUsers }: { session: OneOnOneSession & 
   );
 }
 
-interface OneOnOnePortletProps {
-  currentUser: SafeUser;
-  allUsers: SafeUser[];
-  teamMembers: SafeUser[];
-}
+export default function OneOnOnePortlet() {
+  const { user: currentUser } = useAuth();
+  const [collapsed, setCollapsed] = useState(false);
+  const [selectedPairingIdx, setSelectedPairingIdx] = useState(0);
 
-export function OneOnOnePortlet({ currentUser, allUsers, teamMembers }: OneOnOnePortletProps) {
-  const isManager = currentUser.role !== "account_manager";
-  const isAM = currentUser.role === "account_manager";
-
-  const directReports = allUsers.filter(u => u.managerId === currentUser.id && u.role === "account_manager");
-  const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
-
-  const activeRep = isManager
-    ? (selectedRepId ? allUsers.find(u => u.id === selectedRepId) : directReports[0])
-    : null;
-
-  const managerId = isAM ? currentUser.managerId : currentUser.id;
-  const repId = isAM ? currentUser.id : (activeRep?.id ?? null);
-  const manager = isAM ? allUsers.find(u => u.id === currentUser.managerId) : currentUser;
-
-  const sessionKey = ["/api/1on1/session", managerId, repId];
-  const { data: sessionData } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }>({
-    queryKey: sessionKey,
-    enabled: !!managerId && !!repId,
-    queryFn: async () => {
-      const res = await fetch(`/api/1on1/session?managerId=${managerId}&repId=${repId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+  const { data: pairings = [], isLoading: pairingsLoading } = useQuery<Pairing[]>({
+    queryKey: ["/api/one-on-one/pairings"],
   });
 
-  const pendingCount = sessionData?.topics.filter(t => t.status === "pending").length ?? 0;
+  const { data: teamMembers = [] } = useQuery<SafeUser[]>({
+    queryKey: ["/api/team-members"],
+  });
 
-  if (isAM && !currentUser.managerId) return null;
+  const selectedPairing = pairings[selectedPairingIdx];
 
-  const pairingLabel = isAM
-    ? `with ${manager?.name || "your manager"}`
-    : activeRep ? `with ${activeRep.name}` : "";
+  const { data: sessionData } = useQuery<SessionWithTopics>({
+    queryKey: ["/api/one-on-one/session", selectedPairing?.namId, selectedPairing?.amId],
+    queryFn: async () => {
+      const res = await fetch(`/api/one-on-one/session?namId=${selectedPairing!.namId}&amId=${selectedPairing!.amId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!selectedPairing,
+  });
+
+  const unresolvedCount = sessionData?.topics?.filter(t => t.status === "pending").length || 0;
+
+  const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
+  const isAdmin = currentUser?.role === "admin";
+  const showSelector = (isNam || isAdmin) && pairings.length > 1;
+
+  if (pairingsLoading) {
+    return (
+      <Card data-testid="card-one-on-one">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+            1:1 Topics / Discussions
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-24 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (pairings.length === 0) {
+    return (
+      <Card data-testid="card-one-on-one">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+            1:1 Topics / Discussions
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-center py-6 text-muted-foreground">
+            <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            <p className="text-sm">No 1:1 pairings available</p>
+            <p className="text-xs mt-1">Pairings are based on manager-report relationships</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
-    <Card>
+    <Card data-testid="card-one-on-one">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base flex items-center gap-2">
-          <Users className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-          1:1 Topics
-          {pairingLabel && <span className="text-muted-foreground font-normal text-sm">{pairingLabel}</span>}
-          {pendingCount > 0 && (
-            <Badge className="ml-auto bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 font-normal border-0">
-              {pendingCount} unresolved
-            </Badge>
-          )}
-        </CardTitle>
-
-        {/* NAM / admin: rep selector tabs */}
-        {isManager && directReports.length > 1 && (
-          <div className="flex gap-1 flex-wrap pt-1">
-            {directReports.map(rep => (
-              <button
-                key={rep.id}
-                onClick={() => setSelectedRepId(rep.id)}
-                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                  (activeRep?.id === rep.id)
-                    ? "bg-indigo-600 text-white"
-                    : "bg-muted text-muted-foreground hover:bg-muted/80"
-                }`}
-                data-testid={`tab-rep-${rep.id}`}
-              >
-                {initials(rep.name)}
-                <span className="ml-1 hidden sm:inline">{rep.name.split(" ")[0]}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+            data-testid="button-toggle-one-on-one"
+          >
+            {collapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+            <CardTitle className="text-base flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+              1:1 Topics / Discussions
+              {unresolvedCount > 0 && (
+                <Badge variant="destructive" className="ml-1 font-normal text-xs" data-testid="badge-unresolved-count">
+                  {unresolvedCount}
+                </Badge>
+              )}
+            </CardTitle>
+          </button>
+        </div>
       </CardHeader>
+      {!collapsed && (
+        <CardContent className="space-y-3">
+          {showSelector && (
+            <div className="flex gap-1 flex-wrap" data-testid="pairing-selector">
+              {pairings.map((p, idx) => {
+                const label = isAdmin ? `${p.namName} ↔ ${p.amName}` : p.amName;
+                return (
+                  <button
+                    key={`${p.namId}-${p.amId}`}
+                    onClick={() => setSelectedPairingIdx(idx)}
+                    className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
+                      idx === selectedPairingIdx
+                        ? "bg-indigo-600 text-white border-indigo-600"
+                        : "bg-transparent border-border text-muted-foreground hover:border-foreground"
+                    }`}
+                    data-testid={`button-pairing-${p.namId}-${p.amId}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
-      <CardContent>
-        {isAM && managerId && repId ? (
-          <SessionPanel
-            managerId={managerId}
-            repId={repId}
-            currentUserId={currentUser.id}
-            allUsers={allUsers}
-          />
-        ) : isManager && activeRep && managerId ? (
-          <SessionPanel
-            managerId={managerId}
-            repId={activeRep.id}
-            currentUserId={currentUser.id}
-            allUsers={allUsers}
-          />
-        ) : isManager && directReports.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
-            <Users className="h-8 w-8 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">No direct reports yet</p>
-          </div>
-        ) : null}
-      </CardContent>
+          {!showSelector && selectedPairing && (
+            <p className="text-xs text-muted-foreground">
+              {currentUser?.role === "account_manager"
+                ? `1:1 with ${selectedPairing.namName}`
+                : `1:1 with ${selectedPairing.amName}`}
+            </p>
+          )}
+
+          {selectedPairing && (
+            <SessionView pairing={selectedPairing} teamMembers={teamMembers} />
+          )}
+        </CardContent>
+      )}
     </Card>
   );
 }

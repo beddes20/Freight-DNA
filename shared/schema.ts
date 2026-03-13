@@ -196,22 +196,18 @@ export const insertCalloutReactionSchema = createInsertSchema(calloutReactions).
 export type InsertCalloutReaction = z.infer<typeof insertCalloutReactionSchema>;
 export type CalloutReaction = typeof calloutReactions.$inferSelect;
 
-export const appSettings = pgTable("app_settings", {
-  key: text("key").primaryKey(),
-  value: text("value").notNull(),
-});
-
-export type AppSetting = typeof appSettings.$inferSelect;
-
 export const oneOnOneSessions = pgTable("one_on_one_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  managerId: varchar("manager_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  repId: varchar("rep_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  namId: varchar("nam_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  amId: varchar("am_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("active"),
-  startedAt: text("started_at").notNull(),
+  startDate: text("start_date").notNull(),
 });
 
-export const insertOneOnOneSessionSchema = createInsertSchema(oneOnOneSessions).omit({ id: true });
+export const insertOneOnOneSessionSchema = createInsertSchema(oneOnOneSessions).omit({
+  id: true,
+});
+
 export type InsertOneOnOneSession = z.infer<typeof insertOneOnOneSessionSchema>;
 export type OneOnOneSession = typeof oneOnOneSessions.$inferSelect;
 
@@ -220,11 +216,21 @@ export const oneOnOneTopics = pgTable("one_on_one_topics", {
   sessionId: varchar("session_id").notNull().references(() => oneOnOneSessions.id, { onDelete: "cascade" }),
   addedById: varchar("added_by_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   text: text("text").notNull(),
-  tag: text("tag").notNull().default("fyi"),
+  tag: text("tag"),
   status: text("status").notNull().default("pending"),
   createdAt: text("created_at").notNull(),
 });
 
-export const insertOneOnOneTopicSchema = createInsertSchema(oneOnOneTopics).omit({ id: true });
+export const insertOneOnOneTopicSchema = createInsertSchema(oneOnOneTopics).omit({
+  id: true,
+});
+
 export type InsertOneOnOneTopic = z.infer<typeof insertOneOnOneTopicSchema>;
 export type OneOnOneTopic = typeof oneOnOneTopics.$inferSelect;
+
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
+export type AppSetting = typeof appSettings.$inferSelect;

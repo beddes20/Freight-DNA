@@ -35,7 +35,9 @@ import {
   type InsertFeedPost,
   type CalloutReaction,
   type OneOnOneSession,
+  type InsertOneOnOneSession,
   type OneOnOneTopic,
+  type InsertOneOnOneTopic,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -107,14 +109,18 @@ export interface IStorage {
   getReactionsByCalloutIds(calloutIds: string[]): Promise<CalloutReaction[]>;
   toggleReaction(calloutId: string, userId: string, emoji: string): Promise<{ action: "added" | "removed" }>;
 
-  getOrCreateActiveSession(managerId: string, repId: string): Promise<OneOnOneSession>;
+  getActiveSession(namId: string, amId: string): Promise<OneOnOneSession | undefined>;
+  getOrCreateActiveSession(namId: string, amId: string): Promise<OneOnOneSession>;
+  getSession(id: string): Promise<OneOnOneSession | undefined>;
+  getSessionsByUser(userId: string): Promise<OneOnOneSession[]>;
+  getAllSessions(): Promise<OneOnOneSession[]>;
+  closeSession(sessionId: string): Promise<OneOnOneSession | undefined>;
   getTopicsBySession(sessionId: string): Promise<OneOnOneTopic[]>;
-  addTopic(data: { sessionId: string; addedById: string; text: string; tag: string }): Promise<OneOnOneTopic>;
-  updateTopicStatus(id: string, status: string): Promise<OneOnOneTopic | undefined>;
-  deleteTopic(id: string): Promise<boolean>;
-  closeSession(sessionId: string): Promise<OneOnOneSession>;
-  getArchivedSessions(managerId: string, repId: string): Promise<(OneOnOneSession & { topics: OneOnOneTopic[] })[]>;
-  getActiveSessionsForManager(managerId: string): Promise<OneOnOneSession[]>;
+  getTopic(id: string): Promise<OneOnOneTopic | undefined>;
+  createTopic(topic: InsertOneOnOneTopic): Promise<OneOnOneTopic>;
+  toggleTopicStatus(topicId: string): Promise<OneOnOneTopic | undefined>;
+  deleteTopic(topicId: string): Promise<boolean>;
+  getArchivedSessions(namId: string, amId: string): Promise<OneOnOneSession[]>;
 }
 
 const pool = new Pool({
@@ -452,97 +458,123 @@ export class DatabaseStorage implements IStorage {
     return { action: "added" };
   }
 
-  async getOrCreateActiveSession(managerId: string, repId: string): Promise<OneOnOneSession> {
-    const [existing] = await db.select().from(oneOnOneSessions).where(
+  async getActiveSession(namId: string, amId: string): Promise<OneOnOneSession | undefined> {
+    const [session] = await db.select().from(oneOnOneSessions).where(
       and(
-        eq(oneOnOneSessions.managerId, managerId),
-        eq(oneOnOneSessions.repId, repId),
-        eq(oneOnOneSessions.status, "active"),
+        eq(oneOnOneSessions.namId, namId),
+        eq(oneOnOneSessions.amId, amId),
+        eq(oneOnOneSessions.status, "active")
       )
     );
+    return session;
+  }
+
+  async getSession(id: string): Promise<OneOnOneSession | undefined> {
+    const [session] = await db.select().from(oneOnOneSessions).where(eq(oneOnOneSessions.id, id));
+    return session;
+  }
+
+  async getOrCreateActiveSession(namId: string, amId: string): Promise<OneOnOneSession> {
+    const existing = await this.getActiveSession(namId, amId);
     if (existing) return existing;
-    const [created] = await db.insert(oneOnOneSessions).values({
-      managerId,
-      repId,
+    const [session] = await db.insert(oneOnOneSessions).values({
+      namId,
+      amId,
       status: "active",
-      startedAt: new Date().toISOString(),
+      startDate: new Date().toISOString(),
     }).returning();
-    return created;
+    return session;
+  }
+
+  async getSessionsByUser(userId: string): Promise<OneOnOneSession[]> {
+    return db.select().from(oneOnOneSessions).where(
+      or(
+        eq(oneOnOneSessions.namId, userId),
+        eq(oneOnOneSessions.amId, userId)
+      )
+    );
+  }
+
+  async getAllSessions(): Promise<OneOnOneSession[]> {
+    return db.select().from(oneOnOneSessions);
+  }
+
+  async closeSession(sessionId: string): Promise<OneOnOneSession | undefined> {
+    const [session] = await db.select().from(oneOnOneSessions).where(eq(oneOnOneSessions.id, sessionId));
+    if (!session) return undefined;
+
+    const pendingTopics = await db.select().from(oneOnOneTopics).where(
+      and(
+        eq(oneOnOneTopics.sessionId, sessionId),
+        eq(oneOnOneTopics.status, "pending")
+      )
+    );
+
+    await db.update(oneOnOneSessions)
+      .set({ status: "archived" })
+      .where(eq(oneOnOneSessions.id, sessionId));
+
+    const [newSession] = await db.insert(oneOnOneSessions).values({
+      namId: session.namId,
+      amId: session.amId,
+      status: "active",
+      startDate: new Date().toISOString(),
+    }).returning();
+
+    for (const topic of pendingTopics) {
+      await db.insert(oneOnOneTopics).values({
+        sessionId: newSession.id,
+        addedById: topic.addedById,
+        text: topic.text,
+        tag: topic.tag,
+        status: "pending",
+        createdAt: topic.createdAt,
+      });
+    }
+
+    return newSession;
   }
 
   async getTopicsBySession(sessionId: string): Promise<OneOnOneTopic[]> {
     return db.select().from(oneOnOneTopics)
       .where(eq(oneOnOneTopics.sessionId, sessionId))
-      .orderBy(oneOnOneTopics.createdAt);
+      .orderBy(desc(oneOnOneTopics.createdAt));
   }
 
-  async addTopic(data: { sessionId: string; addedById: string; text: string; tag: string }): Promise<OneOnOneTopic> {
-    const [created] = await db.insert(oneOnOneTopics).values({
-      ...data,
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    }).returning();
+  async getTopic(id: string): Promise<OneOnOneTopic | undefined> {
+    const [topic] = await db.select().from(oneOnOneTopics).where(eq(oneOnOneTopics.id, id));
+    return topic;
+  }
+
+  async createTopic(topic: InsertOneOnOneTopic): Promise<OneOnOneTopic> {
+    const [created] = await db.insert(oneOnOneTopics).values(topic).returning();
     return created;
   }
 
-  async updateTopicStatus(id: string, status: string): Promise<OneOnOneTopic | undefined> {
-    const [updated] = await db.update(oneOnOneTopics).set({ status }).where(eq(oneOnOneTopics.id, id)).returning();
+  async toggleTopicStatus(topicId: string): Promise<OneOnOneTopic | undefined> {
+    const [topic] = await db.select().from(oneOnOneTopics).where(eq(oneOnOneTopics.id, topicId));
+    if (!topic) return undefined;
+    const newStatus = topic.status === "pending" ? "discussed" : "pending";
+    const [updated] = await db.update(oneOnOneTopics)
+      .set({ status: newStatus })
+      .where(eq(oneOnOneTopics.id, topicId))
+      .returning();
     return updated;
   }
 
-  async deleteTopic(id: string): Promise<boolean> {
-    const result = await db.delete(oneOnOneTopics).where(eq(oneOnOneTopics.id, id)).returning();
+  async deleteTopic(topicId: string): Promise<boolean> {
+    const result = await db.delete(oneOnOneTopics).where(eq(oneOnOneTopics.id, topicId)).returning();
     return result.length > 0;
   }
 
-  async closeSession(sessionId: string): Promise<OneOnOneSession> {
-    const [session] = await db.select().from(oneOnOneSessions).where(eq(oneOnOneSessions.id, sessionId));
-    if (!session) throw new Error("Session not found");
-    await db.update(oneOnOneSessions).set({ status: "archived" }).where(eq(oneOnOneSessions.id, sessionId));
-    const pendingTopics = await db.select().from(oneOnOneTopics).where(
-      and(eq(oneOnOneTopics.sessionId, sessionId), eq(oneOnOneTopics.status, "pending"))
-    );
-    const [newSession] = await db.insert(oneOnOneSessions).values({
-      managerId: session.managerId,
-      repId: session.repId,
-      status: "active",
-      startedAt: new Date().toISOString(),
-    }).returning();
-    if (pendingTopics.length > 0) {
-      await db.insert(oneOnOneTopics).values(
-        pendingTopics.map(t => ({
-          sessionId: newSession.id,
-          addedById: t.addedById,
-          text: t.text,
-          tag: t.tag,
-          status: "pending",
-          createdAt: new Date().toISOString(),
-        }))
-      );
-    }
-    return newSession;
-  }
-
-  async getArchivedSessions(managerId: string, repId: string): Promise<(OneOnOneSession & { topics: OneOnOneTopic[] })[]> {
-    const sessions = await db.select().from(oneOnOneSessions).where(
-      and(
-        eq(oneOnOneSessions.managerId, managerId),
-        eq(oneOnOneSessions.repId, repId),
-        eq(oneOnOneSessions.status, "archived"),
-      )
-    ).orderBy(desc(oneOnOneSessions.startedAt));
-    const result = [];
-    for (const s of sessions) {
-      const topics = await db.select().from(oneOnOneTopics).where(eq(oneOnOneTopics.sessionId, s.id)).orderBy(oneOnOneTopics.createdAt);
-      result.push({ ...s, topics });
-    }
-    return result;
-  }
-
-  async getActiveSessionsForManager(managerId: string): Promise<OneOnOneSession[]> {
+  async getArchivedSessions(namId: string, amId: string): Promise<OneOnOneSession[]> {
     return db.select().from(oneOnOneSessions).where(
-      and(eq(oneOnOneSessions.managerId, managerId), eq(oneOnOneSessions.status, "active"))
-    );
+      and(
+        eq(oneOnOneSessions.namId, namId),
+        eq(oneOnOneSessions.amId, amId),
+        eq(oneOnOneSessions.status, "archived")
+      )
+    ).orderBy(desc(oneOnOneSessions.startDate));
   }
 }
 
