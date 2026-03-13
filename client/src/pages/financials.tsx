@@ -145,6 +145,7 @@ export default function Financials() {
       queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
       queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
       queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
       toast({ title: "Sync complete", description: `${data.rowCount.toLocaleString()} records imported from OneDrive.` });
     },
     onError: (error: Error) => {
@@ -166,6 +167,7 @@ export default function Financials() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/financials"] });
       queryClient.invalidateQueries({ queryKey: ["/api/financials/uploads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
       toast({ title: "Upload successful", description: "Financial data has been updated." });
     },
     onError: (error: Error) => {

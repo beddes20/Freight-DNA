@@ -48,3 +48,8 @@ The application utilizes a modern, responsive design built with React, TypeScrip
 - **multer**: Middleware for handling multi-part form data, primarily for file uploads.
 - **Leaflet**: JavaScript library for interactive maps, used for visualizing delivery densities.
 - **OneDrive API (Microsoft Graph API)**: Utilized for fetching Excel files from OneDrive shared links for financial data synchronization.
+- **node-cron**: Used for scheduling recurring jobs (monthly goal alerts, monthly data refresh).
+
+## Schedulers
+- **Monthly Goal Scheduler** (`server/monthlyGoalScheduler.ts`): Runs daily at 8 AM (configurable via `MONTHLY_GOAL_CRON` env var). On the first business day of each month, creates goal-setting reminders for NAMs.
+- **Monthly Data Refresh Scheduler** (`server/monthlyDataRefreshScheduler.ts`): Runs daily at 7 AM (configurable via `MONTHLY_DATA_REFRESH_CRON` env var). On the first business day of each month, automatically triggers the OneDrive sync. On failure, sets `monthly_sync_failed` flag in `app_settings` and notifies admins. A dismissible banner appears on the admin dashboard when a sync failure has occurred. The flag is cleared when a manual sync or upload succeeds, or when an admin dismisses the alert. The shared `performOneDriveSync()` function is used by both the scheduler and the manual sync API route.

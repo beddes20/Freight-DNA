@@ -10,7 +10,7 @@ import {
   Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp,
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
-  PhoneCall, AlertTriangle, BellRing,
+  PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -103,6 +103,18 @@ export default function Dashboard() {
 
   const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPostWithReplies[]>({
     queryKey: ["/api/feed-posts"],
+  });
+
+  const { data: syncAlert } = useQuery<{ failed: boolean; month?: string; error?: string }>({
+    queryKey: ["/api/sync-alert"],
+    enabled: currentUser?.role === "admin",
+  });
+
+  const dismissSyncAlertMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/sync-alert/dismiss"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
+    },
   });
 
   const feedPostIds = feedPosts.map(p => p.id);
@@ -369,6 +381,31 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
+
+      {syncAlert?.failed && (
+        <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/50 p-4" data-testid="banner-sync-failed">
+          <CloudOff className="h-5 w-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm text-red-800 dark:text-red-300">Monthly data refresh failed</p>
+            <p className="text-sm text-red-700 dark:text-red-400 mt-0.5">
+              The automatic OneDrive sync for {syncAlert.month} could not complete: {syncAlert.error}
+            </p>
+            <Link href="/financials">
+              <Button size="sm" variant="outline" className="mt-2 gap-1.5 text-red-700 border-red-300 hover:bg-red-100 dark:text-red-300 dark:border-red-800 dark:hover:bg-red-900/50" data-testid="button-upload-manually">
+                <Upload className="h-3.5 w-3.5" />
+                Upload manually
+              </Button>
+            </Link>
+          </div>
+          <button
+            onClick={() => dismissSyncAlertMutation.mutate()}
+            className="shrink-0 text-red-400 hover:text-red-600 dark:hover:text-red-300"
+            data-testid="button-dismiss-sync-alert"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       <Card data-testid="card-my-tasks">
         <CardHeader className="pb-3">

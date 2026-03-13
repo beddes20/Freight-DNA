@@ -9,6 +9,7 @@ import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema } from "@shared/schema";
+import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -2068,6 +2069,9 @@ export async function registerRoutes(
         summaryRows,
       });
 
+      await storage.setSetting("monthly_sync_failed", "");
+      await storage.setSetting("monthly_sync_failed_error", "");
+
       res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
     } catch (error) {
       console.error("Error uploading financials:", error);
@@ -2169,49 +2173,47 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Forbidden" });
       }
 
-      const shareUrl = await storage.getSetting("onedrive_url");
-      if (!shareUrl) {
-        return res.status(400).json({ error: "No OneDrive URL configured. Please save a OneDrive share link first." });
-      }
+      const result = await performOneDriveSync(user.id);
 
-      const base64 = Buffer.from(shareUrl)
-        .toString("base64")
-        .replace(/=/g, "")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_");
-      const downloadUrl = `https://api.onedrive.com/v1.0/shares/u!${base64}/root/content`;
+      await storage.setSetting("monthly_sync_failed", "");
+      await storage.setSetting("monthly_sync_failed_error", "");
 
-      const response = await fetch(downloadUrl, { redirect: "follow" });
-      if (!response.ok) {
-        return res.status(502).json({ error: `Failed to fetch file from OneDrive (HTTP ${response.status}). Make sure the share link allows "Anyone with the link" to view.` });
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-      const sheetName = findSheetByName(workbook, "All Data (YTD)");
-      const sheet = workbook.Sheets[sheetName];
-      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-
-      const summarySheetName = findSheetByName(workbook, "March Replit");
-      const summarySheet = workbook.Sheets[summarySheetName];
-      const summaryRows: any[] = summarySheetName !== sheetName
-        ? XLSX.utils.sheet_to_json(summarySheet, { defval: "" })
-        : [];
-
-      const upload = await storage.createFinancialUpload({
-        fileName: `OneDrive Sync — ${new Date().toLocaleDateString()}`,
-        uploadedAt: new Date().toISOString(),
-        uploadedBy: user.id,
-        rowCount: rows.length,
-        rows,
-        summaryRows,
-      });
-
-      res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
-    } catch (error) {
+      res.json(result);
+    } catch (error: any) {
       console.error("Error syncing from OneDrive:", error);
-      res.status(500).json({ error: "Failed to sync from OneDrive. Please check the share link and try again." });
+      const message = error?.message || "Failed to sync from OneDrive. Please check the share link and try again.";
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.get("/api/sync-alert", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.json({ failed: false });
+      }
+      const failedMonth = await storage.getSetting("monthly_sync_failed");
+      if (!failedMonth) {
+        return res.json({ failed: false });
+      }
+      const errorMessage = await storage.getSetting("monthly_sync_failed_error") || "Unknown error";
+      res.json({ failed: true, month: failedMonth, error: errorMessage });
+    } catch (error) {
+      res.json({ failed: false });
+    }
+  });
+
+  app.post("/api/sync-alert/dismiss", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await storage.setSetting("monthly_sync_failed", "");
+      await storage.setSetting("monthly_sync_failed_error", "");
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to dismiss alert" });
     }
   });
 

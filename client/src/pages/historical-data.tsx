@@ -435,6 +435,7 @@ export default function HistoricalData() {
       queryClient.invalidateQueries({ queryKey: ["/api/historical-lane-corridors"] });
       queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
       queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
       toast({ title: "Upload successful", description: "Historical data has been analyzed." });
     },
     onError: (err: any) => {
