@@ -364,7 +364,19 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
 
           {(!editingTask || forwardingTask) && (
             <div className="space-y-2">
-              <Label>Assign To</Label>
+              <div className="flex items-center justify-between">
+                <Label>Assign To</Label>
+                {user && assignedTo !== user.id && (
+                  <button
+                    type="button"
+                    className="text-xs text-primary hover:underline"
+                    onClick={() => setAssignedTo(user.id)}
+                    data-testid="button-assign-to-me"
+                  >
+                    Assign to Me
+                  </button>
+                )}
+              </div>
               <Select value={assignedTo} onValueChange={setAssignedTo}>
                 <SelectTrigger data-testid="select-task-assignee">
                   <SelectValue placeholder="Select person" />

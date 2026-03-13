@@ -336,3 +336,18 @@ export const attachments = pgTable("attachments", {
 export const insertAttachmentSchema = createInsertSchema(attachments).omit({ id: true });
 export type InsertAttachment = z.infer<typeof insertAttachmentSchema>;
 export type Attachment = typeof attachments.$inferSelect;
+
+export const personalAlerts = pgTable("personal_alerts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  notes: text("notes"),
+  scheduledDate: text("scheduled_date").notNull(),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  fired: boolean("fired").notNull().default(false),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertPersonalAlertSchema = createInsertSchema(personalAlerts).omit({ id: true });
+export type InsertPersonalAlert = z.infer<typeof insertPersonalAlertSchema>;
+export type PersonalAlert = typeof personalAlerts.$inferSelect;

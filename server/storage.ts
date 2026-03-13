@@ -55,6 +55,9 @@ import {
   attachments,
   type Attachment,
   type InsertAttachment,
+  personalAlerts,
+  type PersonalAlert,
+  type InsertPersonalAlert,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -181,6 +184,11 @@ export interface IStorage {
   createGoalComment(comment: InsertGoalComment): Promise<GoalComment>;
   deleteGoalComment(id: string): Promise<boolean>;
   getContactsAddedByAm(amId: string, startDate: string, endDate: string): Promise<number>;
+
+  getPersonalAlerts(userId: string): Promise<PersonalAlert[]>;
+  createPersonalAlert(alert: InsertPersonalAlert): Promise<PersonalAlert>;
+  deletePersonalAlert(id: string, userId: string): Promise<boolean>;
+  fireDueAlerts(userId: string): Promise<PersonalAlert[]>;
 }
 
 const pool = new Pool({
@@ -968,6 +976,53 @@ export class DatabaseStorage implements IStorage {
   async getAttachment(id: string): Promise<Attachment | undefined> {
     const [att] = await db.select().from(attachments).where(eq(attachments.id, id));
     return att;
+  }
+
+  async getPersonalAlerts(userId: string): Promise<PersonalAlert[]> {
+    return db.select().from(personalAlerts)
+      .where(eq(personalAlerts.userId, userId))
+      .orderBy(desc(personalAlerts.scheduledDate));
+  }
+
+  async createPersonalAlert(alert: InsertPersonalAlert): Promise<PersonalAlert> {
+    const [created] = await db.insert(personalAlerts).values(alert).returning();
+    return created;
+  }
+
+  async deletePersonalAlert(id: string, userId: string): Promise<boolean> {
+    const result = await db.delete(personalAlerts)
+      .where(and(eq(personalAlerts.id, id), eq(personalAlerts.userId, userId)))
+      .returning();
+    return result.length > 0;
+  }
+
+  async fireDueAlerts(userId: string): Promise<PersonalAlert[]> {
+    const today = new Date().toISOString().split("T")[0];
+    const dueAlerts = await db.select().from(personalAlerts)
+      .where(and(
+        eq(personalAlerts.userId, userId),
+        eq(personalAlerts.fired, false),
+      ));
+
+    const toFire = dueAlerts.filter(a => a.scheduledDate <= today);
+
+    for (const alert of toFire) {
+      await db.update(personalAlerts)
+        .set({ fired: true })
+        .where(eq(personalAlerts.id, alert.id));
+
+      await db.insert(notifications).values({
+        userId: alert.userId,
+        type: "personal_alert",
+        title: `Reminder: ${alert.title}`,
+        body: alert.notes || undefined,
+        link: "/tasks#alerts",
+        read: false,
+        relatedId: alert.id,
+      });
+    }
+
+    return toFire;
   }
 }
 

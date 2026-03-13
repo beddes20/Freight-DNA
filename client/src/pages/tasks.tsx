@@ -5,16 +5,33 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import {
   ListTodo, Plus, Circle, PlayCircle, CheckCircle2, Calendar, Trash2,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, Bell, BellRing, Loader2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import { FileAttachmentList } from "@/components/file-attachment";
-import type { Company, Task, User } from "@shared/schema";
+import type { Company, Task, User, PersonalAlert } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
 
@@ -51,18 +68,133 @@ function formatDate(dateStr: string | null) {
   return new Date(dateStr).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+function AlertDialog({ open, onOpenChange, companies }: { open: boolean; onOpenChange: (v: boolean) => void; companies: Company[] }) {
+  const { toast } = useToast();
+  const [title, setTitle] = useState("");
+  const [notes, setNotes] = useState("");
+  const [scheduledDate, setScheduledDate] = useState("");
+  const [companyId, setCompanyId] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setTitle("");
+      setNotes("");
+      setScheduledDate("");
+      setCompanyId("");
+    }
+  }, [open]);
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/alerts", {
+        title,
+        notes: notes || null,
+        scheduledDate,
+        companyId: companyId && companyId !== "none" ? companyId : null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/alerts"] });
+      toast({ title: "Alert created" });
+      onOpenChange(false);
+    },
+    onError: () => toast({ title: "Failed to create alert", variant: "destructive" }),
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !scheduledDate) return;
+    createMutation.mutate();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle data-testid="text-alert-dialog-title">Create Alert</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="alert-title">Title</Label>
+            <Input
+              id="alert-title"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="e.g. Follow up with shipper"
+              required
+              data-testid="input-alert-title"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="alert-notes">Notes (optional)</Label>
+            <Textarea
+              id="alert-notes"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Additional details..."
+              rows={2}
+              data-testid="input-alert-notes"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="alert-date">Reminder Date</Label>
+            <Input
+              id="alert-date"
+              type="date"
+              value={scheduledDate}
+              onChange={e => setScheduledDate(e.target.value)}
+              required
+              data-testid="input-alert-date"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Link to Account (optional)</Label>
+            <Select value={companyId} onValueChange={setCompanyId}>
+              <SelectTrigger data-testid="select-alert-company">
+                <SelectValue placeholder="No account linked" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No account linked</SelectItem>
+                {companies.map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-alert-cancel">
+              Cancel
+            </Button>
+            <Button type="submit" disabled={createMutation.isPending || !title.trim() || !scheduledDate} data-testid="button-alert-save">
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Create Alert
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function TasksPage() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>();
   const [showCompleted, setShowCompleted] = useState(true);
+  const [showAlerts, setShowAlerts] = useState(true);
+  const [alertDialogOpen, setAlertDialogOpen] = useState(false);
 
   useEffect(() => {
     if (window.location.hash === "#completed") {
       setShowCompleted(true);
       setTimeout(() => {
         document.getElementById("completed")?.scrollIntoView({ behavior: "smooth" });
+      }, 300);
+    } else if (window.location.hash === "#alerts") {
+      setShowAlerts(true);
+      setTimeout(() => {
+        document.getElementById("alerts")?.scrollIntoView({ behavior: "smooth" });
       }, 300);
     }
   }, []);
@@ -71,12 +203,16 @@ export default function TasksPage() {
     queryKey: ["/api/tasks"],
   });
 
-  const { data: companies } = useQuery<Company[]>({
+  const { data: companies = [] } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
   });
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
+  });
+
+  const { data: alerts = [], isLoading: alertsLoading } = useQuery<PersonalAlert[]>({
+    queryKey: ["/api/alerts"],
   });
 
   const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director";
@@ -105,6 +241,9 @@ export default function TasksPage() {
       return b.createdAt.localeCompare(a.createdAt);
     });
 
+  const pendingAlerts = alerts.filter(a => !a.fired).sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
+  const firedAlerts = alerts.filter(a => a.fired).sort((a, b) => b.scheduledDate.localeCompare(a.scheduledDate));
+
   const toggleStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
       await apiRequest("PATCH", `/api/tasks/${id}`, { status });
@@ -121,6 +260,16 @@ export default function TasksPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       toast({ title: "Task deleted" });
+    },
+  });
+
+  const deleteAlertMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/alerts/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/alerts"] });
+      toast({ title: "Alert deleted" });
     },
   });
 
@@ -189,6 +338,52 @@ export default function TasksPage() {
     );
   };
 
+  const renderAlertRow = (alert: PersonalAlert) => {
+    const companyName = getCompanyName(alert.companyId);
+    return (
+      <div
+        key={alert.id}
+        className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group ${alert.fired ? "opacity-60" : ""}`}
+        data-testid={`alert-row-${alert.id}`}
+      >
+        <div className="shrink-0">
+          {alert.fired ? (
+            <BellRing className="h-4 w-4 text-amber-500" />
+          ) : (
+            <Bell className="h-4 w-4 text-muted-foreground" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-medium truncate ${alert.fired ? "text-muted-foreground" : ""}`}
+             data-testid={`text-alert-title-${alert.id}`}>
+            {alert.title}
+          </p>
+          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+            {companyName && (
+              <Link href={`/companies/${alert.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-alert-company-${alert.id}`}>
+                {companyName}
+              </Link>
+            )}
+            {alert.notes && (
+              <span className="text-xs text-muted-foreground truncate max-w-[200px]">{alert.notes}</span>
+            )}
+            {alert.fired && (
+              <Badge variant="secondary" className="text-xs" data-testid={`badge-alert-fired-${alert.id}`}>Sent</Badge>
+            )}
+          </div>
+        </div>
+        {dueDateBadge(alert.scheduledDate)}
+        <button
+          onClick={() => deleteAlertMutation.mutate(alert.id)}
+          className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+          data-testid={`button-delete-alert-${alert.id}`}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
@@ -201,13 +396,23 @@ export default function TasksPage() {
             {isAdmin ? "All team tasks" : "Your tasks in one place"}
           </p>
         </div>
-        <Button
-          className="gap-1"
-          onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
-          data-testid="button-add-task-page"
-        >
-          <Plus className="h-4 w-4" /> Add Task
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            className="gap-1"
+            onClick={() => setAlertDialogOpen(true)}
+            data-testid="button-add-alert"
+          >
+            <Bell className="h-4 w-4" /> Add Alert
+          </Button>
+          <Button
+            className="gap-1"
+            onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
+            data-testid="button-add-task-page"
+          >
+            <Plus className="h-4 w-4" /> Add Task
+          </Button>
+        </div>
       </div>
 
       <Card data-testid="card-open-tasks">
@@ -276,10 +481,65 @@ export default function TasksPage() {
         )}
       </Card>
 
+      <Card data-testid="card-my-alerts" id="alerts">
+        <CardHeader className="pb-3">
+          <button
+            className="flex items-center justify-between w-full text-left"
+            onClick={() => setShowAlerts(v => !v)}
+            data-testid="button-toggle-alerts-section"
+          >
+            <CardTitle className="text-base flex items-center gap-2">
+              <Bell className="h-4 w-4 text-amber-500" />
+              My Alerts
+              {!alertsLoading && alerts.length > 0 && (
+                <Badge variant="secondary" className="ml-1 font-normal">{alerts.length}</Badge>
+              )}
+            </CardTitle>
+            {showAlerts ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+          </button>
+        </CardHeader>
+        {showAlerts && (
+          <CardContent>
+            {alertsLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
+              </div>
+            ) : pendingAlerts.length > 0 || firedAlerts.length > 0 ? (
+              <div className="space-y-1">
+                {pendingAlerts.length > 0 && (
+                  <>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-3 pt-1" data-testid="text-pending-alerts-label">Upcoming</p>
+                    {pendingAlerts.map(alert => renderAlertRow(alert))}
+                  </>
+                )}
+                {firedAlerts.length > 0 && (
+                  <>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-3 pt-3" data-testid="text-fired-alerts-label">Sent</p>
+                    {firedAlerts.map(alert => renderAlertRow(alert))}
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                <Bell className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No alerts set</p>
+                <p className="text-xs mt-1">Create an alert to get reminded about important follow-ups</p>
+              </div>
+            )}
+          </CardContent>
+        )}
+      </Card>
+
       <TaskDialog
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
         editingTask={editingTask}
+      />
+
+      <AlertDialog
+        open={alertDialogOpen}
+        onOpenChange={setAlertDialogOpen}
+        companies={companies}
       />
     </div>
   );
