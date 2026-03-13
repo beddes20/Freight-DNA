@@ -1,4 +1,4 @@
-import { eq, inArray, ilike, or, and, desc } from "drizzle-orm";
+import { eq, inArray, ilike, or, and, desc, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -96,6 +96,7 @@ export interface IStorage {
   deleteCallout(id: string): Promise<boolean>;
 
   getFeedPosts(visibleAuthorIds?: string[]): Promise<FeedPost[]>;
+  getFeedReplies(parentIds: string[]): Promise<FeedPost[]>;
   createFeedPost(post: InsertFeedPost): Promise<FeedPost>;
   getFeedPost(id: string): Promise<FeedPost | undefined>;
   deleteFeedPost(id: string): Promise<boolean>;
@@ -381,11 +382,21 @@ export class DatabaseStorage implements IStorage {
   async getFeedPosts(visibleAuthorIds?: string[]): Promise<FeedPost[]> {
     if (visibleAuthorIds) {
       return db.select().from(feedPosts)
-        .where(inArray(feedPosts.authorId, visibleAuthorIds))
+        .where(and(inArray(feedPosts.authorId, visibleAuthorIds), isNull(feedPosts.parentId)))
         .orderBy(desc(feedPosts.createdAt))
         .limit(30);
     }
-    return db.select().from(feedPosts).orderBy(desc(feedPosts.createdAt)).limit(30);
+    return db.select().from(feedPosts)
+      .where(isNull(feedPosts.parentId))
+      .orderBy(desc(feedPosts.createdAt))
+      .limit(30);
+  }
+
+  async getFeedReplies(parentIds: string[]): Promise<FeedPost[]> {
+    if (!parentIds.length) return [];
+    return db.select().from(feedPosts)
+      .where(inArray(feedPosts.parentId, parentIds))
+      .orderBy(feedPosts.createdAt);
   }
 
   async createFeedPost(post: InsertFeedPost): Promise<FeedPost> {

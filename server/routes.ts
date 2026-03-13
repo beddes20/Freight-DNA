@@ -1370,23 +1370,33 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
+      let topLevel: any[];
       if (user.role === "admin") {
-        return res.json(await storage.getFeedPosts());
-      }
-      let visibleIds: string[];
-      if (user.role === "director") {
-        visibleIds = await storage.getTeamMemberIds(user.id);
-      } else if (user.role === "national_account_manager" || user.role === "sales") {
-        // Own subtree (their AMs) + their manager above them (director)
-        visibleIds = await storage.getTeamMemberIds(user.id);
-        if (user.managerId) visibleIds.push(user.managerId);
+        topLevel = await storage.getFeedPosts();
       } else {
-        // account_manager: see their own posts + their NAM manager's posts
-        const ids = new Set<string>([user.id]);
-        if (user.managerId) ids.add(user.managerId);
-        visibleIds = Array.from(ids);
+        let visibleIds: string[];
+        if (user.role === "director") {
+          visibleIds = await storage.getTeamMemberIds(user.id);
+        } else if (user.role === "national_account_manager" || user.role === "sales") {
+          visibleIds = await storage.getTeamMemberIds(user.id);
+          if (user.managerId) visibleIds.push(user.managerId);
+        } else {
+          // account_manager: see their manager's posts
+          const ids = new Set<string>([user.id]);
+          if (user.managerId) ids.add(user.managerId);
+          visibleIds = Array.from(ids);
+        }
+        topLevel = await storage.getFeedPosts(visibleIds);
       }
-      return res.json(await storage.getFeedPosts(visibleIds));
+      // Attach replies to each top-level post
+      const parentIds = topLevel.map((p: any) => p.id);
+      const replies = await storage.getFeedReplies(parentIds);
+      const replyMap: Record<string, any[]> = {};
+      for (const r of replies) {
+        if (!replyMap[r.parentId!]) replyMap[r.parentId!] = [];
+        replyMap[r.parentId!].push(r);
+      }
+      return res.json(topLevel.map((p: any) => ({ ...p, replies: replyMap[p.id] || [] })));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch feed posts" });
     }
@@ -1396,11 +1406,27 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const canPost = user.role === "admin" || user.role === "director" || user.role === "national_account_manager" || user.role === "sales";
-      if (!canPost) return res.status(403).json({ error: "Only managers and above can post to the feed" });
-      const { content, category } = req.body;
+      const { content, category, parentId } = req.body;
       const trimmed = typeof content === "string" ? content.trim() : "";
       if (!trimmed) return res.status(400).json({ error: "Content is required" });
+
+      // If replying to an existing post, all roles are allowed
+      if (parentId) {
+        const parent = await storage.getFeedPost(parentId);
+        if (!parent) return res.status(404).json({ error: "Parent post not found" });
+        const post = await storage.createFeedPost({
+          content: trimmed,
+          category: parent.category,
+          authorId: user.id,
+          createdAt: new Date().toISOString(),
+          parentId,
+        });
+        return res.status(201).json(post);
+      }
+
+      // Top-level post: managers and above only
+      const canPost = user.role === "admin" || user.role === "director" || user.role === "national_account_manager" || user.role === "sales";
+      if (!canPost) return res.status(403).json({ error: "Only managers and above can post to the feed" });
       const validCategories = ["trend", "growth", "idea"];
       if (!validCategories.includes(category)) return res.status(400).json({ error: "Invalid category" });
       const post = await storage.createFeedPost({
@@ -1408,6 +1434,7 @@ export async function registerRoutes(
         category,
         authorId: user.id,
         createdAt: new Date().toISOString(),
+        parentId: null,
       });
       res.status(201).json(post);
     } catch (error) {

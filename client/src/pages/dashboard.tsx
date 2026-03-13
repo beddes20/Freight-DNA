@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp,
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
-  CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb,
+  CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -19,6 +19,7 @@ import { OneOnOnePortlet } from "@/components/one-on-one-portlet";
 import type { Company, Contact, Task, User, FeedPost } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
+type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
 
 function dueDateBadge(dueDate: string | null) {
   if (!dueDate) return null;
@@ -56,6 +57,8 @@ export default function Dashboard() {
   const [feedContent, setFeedContent] = useState("");
   const [feedCategory, setFeedCategory] = useState<"trend" | "growth" | "idea">("idea");
   const [mentionState, setMentionState] = useState<{ mentionStart: number; query: string } | null>(null);
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [replyContent, setReplyContent] = useState("");
   const [selectedMentionIdx, setSelectedMentionIdx] = useState(0);
   const feedTextareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -81,7 +84,7 @@ export default function Dashboard() {
     queryKey: ["/api/team-members"],
   });
 
-  const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPost[]>({
+  const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPostWithReplies[]>({
     queryKey: ["/api/feed-posts"],
   });
 
@@ -97,6 +100,21 @@ export default function Dashboard() {
     },
     onError: () => {
       toast({ title: "Failed to post", variant: "destructive" });
+    },
+  });
+
+  const createReplyMutation = useMutation({
+    mutationFn: async (data: { content: string; parentId: string }) => {
+      const res = await apiRequest("POST", "/api/feed-posts", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/feed-posts"] });
+      setReplyContent("");
+      setReplyingTo(null);
+    },
+    onError: () => {
+      toast({ title: "Failed to post reply", variant: "destructive" });
     },
   });
 
@@ -486,7 +504,7 @@ export default function Dashboard() {
               {[1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full" />)}
             </div>
           ) : feedPosts.length > 0 ? (
-            <div className="space-y-1 max-h-80 overflow-y-auto">
+            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
               {feedPosts.map(post => {
                 const catColors: Record<string, string> = {
                   trend: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
@@ -494,34 +512,114 @@ export default function Dashboard() {
                   idea: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
                 };
                 const catIcon: Record<string, string> = { trend: "📈", growth: "🚀", idea: "💡" };
+                const isReplying = replyingTo === post.id;
                 return (
-                  <div
-                    key={post.id}
-                    className="flex items-start gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group"
-                    data-testid={`feed-post-${post.id}`}
-                  >
-                    <Lightbulb className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-foreground whitespace-pre-wrap break-words" data-testid={`text-feed-content-${post.id}`}>
-                        {post.content}
-                      </p>
-                      <div className="flex items-center gap-2 flex-wrap mt-1">
-                        <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium capitalize ${catColors[post.category] || "bg-muted text-muted-foreground"}`} data-testid={`badge-feed-category-${post.id}`}>
-                          {catIcon[post.category]} {post.category}
-                        </span>
-                        <span className="text-xs text-muted-foreground">{getAuthorName(post.authorId)}</span>
-                        <span className="text-xs text-muted-foreground/50">·</span>
-                        <span className="text-xs text-muted-foreground">{formatTimeAgo(post.createdAt)}</span>
+                  <div key={post.id} className="rounded-lg border border-border/50 bg-card" data-testid={`feed-post-${post.id}`}>
+                    {/* Main post */}
+                    <div className="flex items-start gap-3 p-3 group">
+                      <Lightbulb className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-foreground whitespace-pre-wrap break-words" data-testid={`text-feed-content-${post.id}`}>
+                          {post.content}
+                        </p>
+                        <div className="flex items-center gap-2 flex-wrap mt-1.5">
+                          <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium capitalize ${catColors[post.category] || "bg-muted text-muted-foreground"}`} data-testid={`badge-feed-category-${post.id}`}>
+                            {catIcon[post.category]} {post.category}
+                          </span>
+                          <span className="text-xs text-muted-foreground">{getAuthorName(post.authorId)}</span>
+                          <span className="text-xs text-muted-foreground/50">·</span>
+                          <span className="text-xs text-muted-foreground">{formatTimeAgo(post.createdAt)}</span>
+                          <button
+                            onClick={() => { setReplyingTo(isReplying ? null : post.id); setReplyContent(""); }}
+                            className="ml-auto text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
+                            data-testid={`button-reply-feed-${post.id}`}
+                          >
+                            <MessageSquare className="h-3 w-3" />
+                            {post.replies.length > 0 ? `${post.replies.length} repl${post.replies.length === 1 ? "y" : "ies"}` : "Reply"}
+                          </button>
+                        </div>
                       </div>
+                      {(post.authorId === currentUser?.id || currentUser?.role === "admin") && (
+                        <button
+                          onClick={() => deleteFeedPostMutation.mutate(post.id)}
+                          className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                          data-testid={`button-delete-feed-${post.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
-                    {(post.authorId === currentUser?.id || currentUser?.role === "admin") && (
-                      <button
-                        onClick={() => deleteFeedPostMutation.mutate(post.id)}
-                        className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                        data-testid={`button-delete-feed-${post.id}`}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+
+                    {/* Replies thread */}
+                    {post.replies.length > 0 && (
+                      <div className="border-t border-border/40 mx-3 mb-1" />
+                    )}
+                    {post.replies.map(reply => (
+                      <div key={reply.id} className="flex items-start gap-2 px-3 py-2 ml-6 group/reply" data-testid={`feed-reply-${reply.id}`}>
+                        <div className="h-4 w-4 shrink-0 flex items-end justify-end">
+                          <div className="h-3 w-3 border-l-2 border-b-2 border-border/50 rounded-bl-sm" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-foreground whitespace-pre-wrap break-words">{reply.content}</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-xs text-muted-foreground font-medium">{getAuthorName(reply.authorId)}</span>
+                            <span className="text-xs text-muted-foreground/50">·</span>
+                            <span className="text-xs text-muted-foreground">{formatTimeAgo(reply.createdAt)}</span>
+                          </div>
+                        </div>
+                        {(reply.authorId === currentUser?.id || currentUser?.role === "admin") && (
+                          <button
+                            onClick={() => deleteFeedPostMutation.mutate(reply.id)}
+                            className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/reply:opacity-100 transition-opacity"
+                            data-testid={`button-delete-reply-${reply.id}`}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+
+                    {/* Inline reply form */}
+                    {isReplying && (
+                      <div className="border-t border-border/40 p-3 flex gap-2 items-start" data-testid={`reply-form-${post.id}`}>
+                        <div className="ml-6 flex-1 flex flex-col gap-1.5">
+                          <Textarea
+                            autoFocus
+                            value={replyContent}
+                            onChange={e => setReplyContent(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && replyContent.trim()) {
+                                e.preventDefault();
+                                createReplyMutation.mutate({ content: replyContent.trim(), parentId: post.id });
+                              }
+                              if (e.key === "Escape") { setReplyingTo(null); setReplyContent(""); }
+                            }}
+                            placeholder="Write a reply… (Ctrl+Enter to send)"
+                            className="resize-none text-sm min-h-[56px]"
+                            data-testid={`textarea-reply-${post.id}`}
+                          />
+                          <div className="flex gap-2 justify-end">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => { setReplyingTo(null); setReplyContent(""); }}
+                              data-testid={`button-cancel-reply-${post.id}`}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="gap-1"
+                              disabled={!replyContent.trim() || createReplyMutation.isPending}
+                              onClick={() => createReplyMutation.mutate({ content: replyContent.trim(), parentId: post.id })}
+                              data-testid={`button-submit-reply-${post.id}`}
+                            >
+                              <Send className="h-3 w-3" />
+                              Reply
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
                     )}
                   </div>
                 );
