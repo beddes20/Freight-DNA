@@ -280,6 +280,13 @@ export default function CompanyDetail() {
     queryKey: ["/api/callouts/company", companyId],
   });
 
+  const { data: accountSummaryAll = [] } = useQuery<Array<{ customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; repName: string }>>({
+    queryKey: ["/api/financials/account-summary"],
+  });
+  const accountPerf = accountSummaryAll.find(r =>
+    r.customerName.toLowerCase() === (company?.name || "").toLowerCase()
+  );
+
   const { data: activityItems = [] } = useQuery<Array<{ type: string; title: string; description: string | null; date: string; userName: string | null }>>({
     queryKey: ["/api/companies", companyId, "activity"],
   });
@@ -677,6 +684,49 @@ export default function CompanyDetail() {
           </Button>
         </div>
       </div>
+
+      {/* Account Performance (from uploaded summary data) */}
+      {accountPerf && (
+        <Card data-testid="card-account-performance">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <BarChart3 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              Account Performance
+              {accountPerf.repName && (
+                <Badge variant="secondary" className="ml-auto text-xs font-normal">{accountPerf.repName}</Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-lg bg-muted/50 p-3 text-center">
+                <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{accountPerf.totalLoads.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Total Loads</p>
+              </div>
+              <div className="rounded-lg bg-muted/50 p-3 text-center">
+                <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{accountPerf.spotLoads.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Spot Loads</p>
+              </div>
+              <div className="rounded-lg bg-muted/50 p-3 text-center">
+                <p className="text-2xl font-bold text-green-600 dark:text-green-400">
+                  {accountPerf.totalMargin >= 1000
+                    ? `$${(accountPerf.totalMargin / 1000).toFixed(1)}K`
+                    : `$${accountPerf.totalMargin.toLocaleString()}`}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">Total Margin</p>
+              </div>
+            </div>
+            {accountPerf.totalLoads > 0 && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+                <span>{Math.round((accountPerf.spotLoads / accountPerf.totalLoads) * 100)}% spot</span>
+                <span className="ml-2 inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
+                <span>{Math.round(((accountPerf.totalLoads - accountPerf.spotLoads) / accountPerf.totalLoads) * 100)}% contract</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Customer Portal Information */}
       <Card data-testid="card-portal-info">

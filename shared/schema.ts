@@ -120,6 +120,7 @@ export const financialUploads = pgTable("financial_uploads", {
   uploadedBy: varchar("uploaded_by").notNull(),
   rowCount: integer("row_count").notNull().default(0),
   rows: jsonb("rows").notNull().default([]),
+  summaryRows: jsonb("summary_rows").notNull().default([]),
 });
 
 export const insertFinancialUploadSchema = createInsertSchema(financialUploads).omit({

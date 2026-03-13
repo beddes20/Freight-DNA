@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
-  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight
+  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign
 } from "lucide-react";
 
 interface RepPerf {
@@ -26,6 +26,14 @@ interface RepPerf {
   baseAdvanced: number;
 }
 
+interface AccountSummaryRow {
+  customerName: string;
+  totalLoads: number;
+  spotLoads: number;
+  totalMargin: number;
+  repName: string;
+}
+
 function StatPill({ value, label, color, icon }: { value: number; label: string; color: string; icon?: React.ReactNode }) {
   return (
     <div className="flex flex-col items-center px-2 py-2 rounded-lg bg-muted/50 min-w-[58px]">
@@ -36,13 +44,16 @@ function StatPill({ value, label, color, icon }: { value: number; label: string;
   );
 }
 
-function RepCard({ rep }: { rep: RepPerf }) {
+function RepCard({ rep, totalLoads, totalMargin }: { rep: RepPerf; totalLoads?: number; totalMargin?: number }) {
   const [, navigate] = useLocation();
   const initials = rep.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
   const colors = ["bg-blue-500", "bg-green-500", "bg-purple-500", "bg-amber-500", "bg-red-500", "bg-cyan-500", "bg-pink-500", "bg-indigo-500"];
   const color = colors[rep.name.charCodeAt(0) % colors.length];
   const totalTasks = rep.openTasks + rep.completedTasks;
   const completionPct = totalTasks > 0 ? Math.round((rep.completedTasks / totalTasks) * 100) : 0;
+  const marginDisplay = totalMargin != null && totalMargin >= 1000
+    ? `$${(totalMargin / 1000).toFixed(1)}K`
+    : totalMargin != null ? `$${totalMargin.toLocaleString()}` : null;
 
   return (
     <Card
@@ -68,6 +79,29 @@ function RepCard({ rep }: { rep: RepPerf }) {
             </div>
           )}
         </div>
+
+        {(totalLoads != null || marginDisplay != null) && (
+          <div className="grid grid-cols-2 gap-1.5 mb-2">
+            {totalLoads != null && (
+              <div className="flex items-center gap-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 px-2.5 py-1.5">
+                <Package className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                <div>
+                  <p className="text-sm font-bold text-blue-600 dark:text-blue-400 leading-none">{totalLoads.toLocaleString()}</p>
+                  <p className="text-[10px] text-muted-foreground">Total Loads</p>
+                </div>
+              </div>
+            )}
+            {marginDisplay && (
+              <div className="flex items-center gap-1.5 rounded-lg bg-green-50 dark:bg-green-900/20 px-2.5 py-1.5">
+                <DollarSign className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                <div>
+                  <p className="text-sm font-bold text-green-600 dark:text-green-400 leading-none">{marginDisplay}</p>
+                  <p className="text-[10px] text-muted-foreground">Total Margin</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-4 gap-1.5 mb-2">
           <StatPill value={rep.openTasks} label="Open" color={rep.openTasks > 5 ? "text-amber-600" : "text-foreground"} />
@@ -101,11 +135,24 @@ function RepCard({ rep }: { rep: RepPerf }) {
   );
 }
 
+function matchRepName(repName: string, userName: string): boolean {
+  const a = repName.toLowerCase().trim();
+  const b = userName.toLowerCase().trim();
+  if (a === b) return true;
+  const aParts = a.split(/\s+/);
+  const bParts = b.split(/\s+/);
+  return aParts.some(p => p.length > 1 && bParts.includes(p));
+}
+
 export default function TeamPerformancePage() {
   const { user } = useAuth();
 
   const { data: reps = [], isLoading } = useQuery<RepPerf[]>({
     queryKey: ["/api/team/performance"],
+  });
+
+  const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
+    queryKey: ["/api/financials/account-summary"],
   });
 
   if (!user || user.role === "account_manager") {
@@ -115,6 +162,21 @@ export default function TeamPerformancePage() {
       </div>
     );
   }
+
+  const repLoadsMap: Record<string, { loads: number; margin: number }> = {};
+  for (const row of accountSummary) {
+    if (!row.repName) continue;
+    const match = reps.find(r => matchRepName(row.repName, r.name));
+    if (match) {
+      if (!repLoadsMap[match.userId]) repLoadsMap[match.userId] = { loads: 0, margin: 0 };
+      repLoadsMap[match.userId].loads += row.totalLoads;
+      repLoadsMap[match.userId].margin += row.totalMargin;
+    }
+  }
+
+  const hasSummaryData = accountSummary.length > 0;
+  const totalLoadsAll = Object.values(repLoadsMap).reduce((s, v) => s + v.loads, 0);
+  const totalMarginAll = Object.values(repLoadsMap).reduce((s, v) => s + v.margin, 0);
 
   const ams = reps.filter(r => r.role === "account_manager");
   const nams = reps.filter(r => r.role === "national_account_manager" || r.role === "director");
@@ -185,6 +247,30 @@ export default function TeamPerformancePage() {
                 </Card>
               ))}
             </div>
+            {hasSummaryData && (
+              <div className="grid grid-cols-2 gap-3">
+                <Card>
+                  <CardContent className="pt-4 pb-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Package className="h-4 w-4 text-blue-500" />
+                      <span className="text-xs text-muted-foreground">Total Loads (all reps)</span>
+                    </div>
+                    <p className="text-2xl font-bold text-blue-600">{totalLoadsAll.toLocaleString()}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-4 pb-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <DollarSign className="h-4 w-4 text-green-500" />
+                      <span className="text-xs text-muted-foreground">Total Margin (all reps)</span>
+                    </div>
+                    <p className="text-2xl font-bold text-green-600">
+                      {totalMarginAll >= 1000 ? `$${(totalMarginAll / 1000).toFixed(1)}K` : `$${totalMarginAll.toLocaleString()}`}
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
           </div>
 
           {nams.length > 0 && (
@@ -194,7 +280,14 @@ export default function TeamPerformancePage() {
                 <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Directors & NAMs</h2>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {nams.map(rep => <RepCard key={rep.userId} rep={rep} />)}
+                {nams.map(rep => (
+                  <RepCard
+                    key={rep.userId}
+                    rep={rep}
+                    totalLoads={repLoadsMap[rep.userId]?.loads}
+                    totalMargin={repLoadsMap[rep.userId]?.margin}
+                  />
+                ))}
               </div>
             </div>
           )}
@@ -206,7 +299,14 @@ export default function TeamPerformancePage() {
                 <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Account Managers</h2>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {ams.map(rep => <RepCard key={rep.userId} rep={rep} />)}
+                {ams.map(rep => (
+                  <RepCard
+                    key={rep.userId}
+                    rep={rep}
+                    totalLoads={repLoadsMap[rep.userId]?.loads}
+                    totalMargin={repLoadsMap[rep.userId]?.margin}
+                  />
+                ))}
               </div>
             </div>
           )}

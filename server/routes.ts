@@ -2053,12 +2053,19 @@ export async function registerRoutes(
       const sheet = workbook.Sheets[sheetName];
       const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
+      const summarySheetName = findSheetByName(workbook, "March Replit");
+      const summarySheet = workbook.Sheets[summarySheetName];
+      const summaryRows: any[] = summarySheetName !== sheetName
+        ? XLSX.utils.sheet_to_json(summarySheet, { defval: "" })
+        : [];
+
       const upload = await storage.createFinancialUpload({
         fileName: req.file.originalname,
         uploadedAt: new Date().toISOString(),
         uploadedBy: user.id,
         rowCount: rows.length,
         rows,
+        summaryRows,
       });
 
       res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
@@ -2078,6 +2085,25 @@ export async function registerRoutes(
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete upload" });
+    }
+  });
+
+  app.get("/api/financials/account-summary", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploads();
+      if (!uploads.length) return res.json([]);
+      const latest = uploads[uploads.length - 1];
+      const rows = (latest.summaryRows as any[]) || [];
+      const result = rows.map((r: any) => ({
+        customerName: String(r["Customer Name"] || r["customer name"] || r["CUSTOMER NAME"] || "").trim(),
+        totalLoads: Number(r["Total Loads"] || r["total loads"] || r["TOTAL LOADS"] || 0),
+        spotLoads: Number(r["SPOT Loads"] || r["Spot Loads"] || r["spot loads"] || r["SPOT LOADS"] || 0),
+        totalMargin: Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0),
+        repName: String(r["Rep"] || r["Rep Name"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim(),
+      })).filter((r: any) => r.customerName);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch account summary" });
     }
   });
 
@@ -2142,12 +2168,19 @@ export async function registerRoutes(
       const sheet = workbook.Sheets[sheetName];
       const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
+      const summarySheetName = findSheetByName(workbook, "March Replit");
+      const summarySheet = workbook.Sheets[summarySheetName];
+      const summaryRows: any[] = summarySheetName !== sheetName
+        ? XLSX.utils.sheet_to_json(summarySheet, { defval: "" })
+        : [];
+
       const upload = await storage.createFinancialUpload({
         fileName: `OneDrive Sync — ${new Date().toLocaleDateString()}`,
         uploadedAt: new Date().toISOString(),
         uploadedBy: user.id,
         rowCount: rows.length,
         rows,
+        summaryRows,
       });
 
       res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
