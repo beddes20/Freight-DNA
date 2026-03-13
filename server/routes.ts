@@ -2049,7 +2049,7 @@ export async function registerRoutes(
       if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
       const workbook = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true });
-      const sheetName = findSheetByName(workbook, "HISTORICAL DATA");
+      const sheetName = findSheetByName(workbook, "All Data (YTD)");
       const sheet = workbook.Sheets[sheetName];
       const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
@@ -2138,7 +2138,7 @@ export async function registerRoutes(
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
       const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-      const sheetName = findSheetByName(workbook, "HISTORICAL DATA");
+      const sheetName = findSheetByName(workbook, "All Data (YTD)");
       const sheet = workbook.Sheets[sheetName];
       const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
