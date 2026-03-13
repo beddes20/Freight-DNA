@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { setupAuth } from "./auth";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { initMonthlyGoalScheduler } from "./monthlyGoalScheduler";
 
 const app = express();
 const httpServer = createServer(app);
@@ -101,6 +102,7 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      initMonthlyGoalScheduler();
     },
   );
 })();
