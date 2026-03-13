@@ -2893,6 +2893,19 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/goals/monthly-check", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role === "account_manager") return res.json([]);
+      const namId = user.role === "admin" ? undefined : user.id;
+      const missing = await storage.getAmsMissingMonthlyGoals(namId);
+      res.json(missing);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to check monthly goals" });
+    }
+  });
+
   app.post("/api/goals", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

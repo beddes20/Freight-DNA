@@ -14,7 +14,7 @@ import { Progress } from "@/components/ui/progress";
 import {
   Target, Plus, MessageSquare, Trash2, ChevronDown, ChevronUp,
   TrendingUp, Users, Truck, DollarSign, CalendarDays, Pencil, Send,
-  CheckCircle2, AlertCircle, BarChart3,
+  CheckCircle2, AlertCircle, BarChart3, BellRing, X,
 } from "lucide-react";
 import type { Goal, GoalComment } from "@shared/schema";
 
@@ -291,6 +291,10 @@ export default function GoalsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [form, setForm] = useState<GoalFormData>(defaultForm);
+  const [alertDismissed, setAlertDismissed] = useState(false);
+
+  const isNam = user?.role === "national_account_manager" || user?.role === "director" || user?.role === "sales" || user?.role === "admin";
+  const isAm = user?.role === "account_manager";
 
   const { data: goals = [], isLoading } = useQuery<Goal[]>({
     queryKey: ["/api/goals"],
@@ -305,10 +309,17 @@ export default function GoalsPage() {
     queryKey: ["/api/team-members"],
   });
 
+  const { data: missingMonthlyGoals = [] } = useQuery<Array<{ amId: string; amName: string }>>({
+    queryKey: ["/api/goals/monthly-check"],
+    enabled: isNam,
+    refetchOnWindowFocus: false,
+  });
+
   const createGoal = useMutation({
     mutationFn: (data: object) => apiRequest("POST", "/api/goals", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/goals/monthly-check"] });
       setDialogOpen(false);
       setForm(defaultForm);
       toast({ description: "Goal created." });
@@ -333,9 +344,6 @@ export default function GoalsPage() {
       toast({ description: "Goal deleted." });
     },
   });
-
-  const isNam = user?.role === "national_account_manager" || user?.role === "director" || user?.role === "sales" || user?.role === "admin";
-  const isAm = user?.role === "account_manager";
 
   const myPairings = isNam
     ? pairings.filter(p => user?.role === "admin" || p.namId === user?.id)
@@ -420,6 +428,40 @@ export default function GoalsPage() {
           </Button>
         )}
       </div>
+
+      {isNam && !alertDismissed && missingMonthlyGoals.length > 0 && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-4" data-testid="banner-monthly-goal-alert">
+          <BellRing className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+              Monthly goals not yet set for {new Date().toLocaleString("default", { month: "long" })}
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-0.5">
+              The following reps are missing monthly goals:{" "}
+              <span className="font-medium">
+                {missingMonthlyGoals.map(m => m.amName).join(", ")}
+              </span>
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2 h-7 text-xs border-amber-400 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900"
+              onClick={() => openCreate(missingMonthlyGoals[0]?.amId)}
+              data-testid="button-set-missing-goals"
+            >
+              <Plus className="h-3 w-3 mr-1" />
+              Set Goals
+            </Button>
+          </div>
+          <button
+            onClick={() => setAlertDismissed(true)}
+            className="shrink-0 text-amber-500 hover:text-amber-700 dark:hover:text-amber-300"
+            data-testid="button-dismiss-goal-alert"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-3">
         {goalsByMetric.map(m => {

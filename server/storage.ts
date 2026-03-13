@@ -176,6 +176,7 @@ export interface IStorage {
   createGoal(goal: InsertGoal): Promise<Goal>;
   updateGoal(id: string, data: Partial<InsertGoal>): Promise<Goal | undefined>;
   deleteGoal(id: string): Promise<boolean>;
+  getAmsMissingMonthlyGoals(namId?: string): Promise<Array<{ amId: string; amName: string }>>;
   getGoalComments(goalId: string): Promise<GoalComment[]>;
   createGoalComment(comment: InsertGoalComment): Promise<GoalComment>;
   deleteGoalComment(id: string): Promise<boolean>;
@@ -816,6 +817,26 @@ export class DatabaseStorage implements IStorage {
   async deleteGoal(id: string): Promise<boolean> {
     const result = await db.delete(goals).where(eq(goals.id, id));
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async getAmsMissingMonthlyGoals(namId?: string): Promise<Array<{ amId: string; amName: string }>> {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+    const allGoals = namId ? await this.getGoals({ namId }) : await this.getGoals({});
+    const coveredAmIds = new Set(
+      allGoals
+        .filter(g => g.period === "monthly" && g.startDate >= firstDay && g.startDate <= lastDay)
+        .map(g => g.amId)
+    );
+    const conditions: ReturnType<typeof eq>[] = [eq(users.role, "account_manager")];
+    if (namId) conditions.push(eq(users.managerId, namId));
+    const ams = await db.select({ id: users.id, name: users.name })
+      .from(users)
+      .where(and(...conditions));
+    return ams
+      .filter(am => !coveredAmIds.has(am.id))
+      .map(am => ({ amId: am.id, amName: am.name }));
   }
 
   async getGoalComments(goalId: string): Promise<GoalComment[]> {

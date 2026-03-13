@@ -10,7 +10,7 @@ import {
   Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp,
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
-  PhoneCall, AlertTriangle,
+  PhoneCall, AlertTriangle, BellRing,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -85,6 +85,13 @@ export default function Dashboard() {
   });
 
   const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
+
+  const { data: missingMonthlyGoals = [] } = useQuery<Array<{ amId: string; amName: string }>>({
+    queryKey: ["/api/goals/monthly-check"],
+    enabled: canSeeTeam,
+    refetchOnWindowFocus: false,
+  });
+
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/users"],
     enabled: canSeeTeam,
@@ -471,6 +478,40 @@ export default function Dashboard() {
       </Card>
 
       <OneOnOnePortlet />
+
+      {canSeeTeam && missingMonthlyGoals.length > 0 && (
+        <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goal-alert">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
+              <BellRing className="h-4 w-4" />
+              Monthly Goals Not Set
+              <Badge className="ml-auto bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300 font-normal border-amber-300">
+                {missingMonthlyGoals.length} rep{missingMonthlyGoals.length !== 1 ? "s" : ""}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <p className="text-sm text-muted-foreground mb-3">
+              The following reps are missing monthly goals for{" "}
+              <span className="font-medium text-foreground">
+                {new Date().toLocaleString("default", { month: "long", year: "numeric" })}
+              </span>:
+            </p>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {missingMonthlyGoals.map(m => (
+                <Badge key={m.amId} variant="secondary" className="font-normal" data-testid={`badge-missing-goal-${m.amId}`}>
+                  {m.amName}
+                </Badge>
+              ))}
+            </div>
+            <Link href="/goals">
+              <Button size="sm" variant="outline" className="h-7 text-xs" data-testid="button-go-to-goals">
+                Set Goals →
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      )}
 
       <Card data-testid="card-feed">
         <CardHeader className="pb-3">
