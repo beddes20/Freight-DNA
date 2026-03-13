@@ -398,6 +398,12 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
+      <OneOnOnePortlet
+        currentUser={currentUser as SafeUser}
+        allUsers={allUsers}
+        teamMembers={teamMembers}
+      />
+
       {(currentUser?.role === "admin" || currentUser?.role === "director") && <Card data-testid="card-feed">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
@@ -615,12 +621,6 @@ export default function Dashboard() {
           </Card>
         </div>
       )}
-
-      <OneOnOnePortlet
-        currentUser={currentUser as SafeUser}
-        allUsers={allUsers}
-        teamMembers={teamMembers}
-      />
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
