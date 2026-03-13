@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Users, Plus, CheckCircle2, Circle, Trash2, ChevronDown, ChevronUp,
   Archive, RotateCcw, MessageSquare, CalendarDays, TrendingUp, AlertCircle,
+  StickyNote, ClipboardList,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -42,6 +44,185 @@ function initials(name: string) {
   return name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
 }
 
+// ─── Session Notes (auto-saving) ──────────────────────────────────────────────
+
+function SessionNotesArea({ sessionId, initialNotes, sessionQueryKey }: { sessionId: string; initialNotes: string; sessionQueryKey: (string | undefined)[] }) {
+  const [notes, setNotes] = useState(initialNotes);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setNotes(initialNotes);
+  }, [initialNotes, sessionId]);
+
+  const saveNotes = useCallback(async (value: string) => {
+    setSaving(true);
+    setSaveError(false);
+    try {
+      await apiRequest("PATCH", `/api/1on1/session/${sessionId}/notes`, { notes: value });
+      queryClient.setQueryData<{ session: OneOnOneSession; topics: OneOnOneTopic[] }>(sessionQueryKey, (old) => {
+        if (!old) return old;
+        return { ...old, session: { ...old.session, notes: value } };
+      });
+    } catch {
+      setSaveError(true);
+    } finally {
+      setSaving(false);
+    }
+  }, [sessionId, sessionQueryKey]);
+
+  const latestNotesRef = useRef(initialNotes);
+
+  const handleChange = (value: string) => {
+    setNotes(value);
+    latestNotesRef.current = value;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => saveNotes(value), 800);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        saveNotes(latestNotesRef.current);
+      }
+    };
+  }, [saveNotes]);
+
+  return (
+    <div className="px-6 py-4 border-b">
+      <div className="flex items-center gap-2 mb-2">
+        <StickyNote className="h-4 w-4 text-muted-foreground" />
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Session Notes</span>
+        {saving && <span className="text-xs text-muted-foreground italic">Saving...</span>}
+        {saveError && <span className="text-xs text-destructive">Failed to save</span>}
+      </div>
+      <Textarea
+        placeholder="Jot down thoughts, key takeaways, or anything to remember..."
+        value={notes}
+        onChange={e => handleChange(e.target.value)}
+        className="min-h-[80px] resize-y text-sm"
+        data-testid="textarea-session-notes"
+      />
+    </div>
+  );
+}
+
+// ─── Action Items Panel ───────────────────────────────────────────────────────
+
+interface ActionItemsPanelProps {
+  managerId: string;
+  repId: string;
+  allUsers: SafeUser[];
+}
+
+function ActionItemsPanel({ managerId, repId, allUsers }: ActionItemsPanelProps) {
+  const actionItemsKey = ["/api/1on1/action-items", managerId, repId];
+  const { data: actionData = [], isLoading } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>({
+    queryKey: actionItemsKey,
+    queryFn: async () => {
+      const res = await fetch(`/api/1on1/action-items?managerId=${managerId}&repId=${repId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const sessionKey = ["/api/1on1/session", managerId, repId];
+  const overviewKey = ["/api/1on1/manager-overview", managerId];
+
+  const toggleMutation = useMutation({
+    mutationFn: async ({ topicId, status }: { topicId: string; status: string }) => {
+      const res = await apiRequest("PATCH", `/api/1on1/topics/${topicId}`, { status });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: actionItemsKey });
+      queryClient.invalidateQueries({ queryKey: sessionKey });
+      queryClient.invalidateQueries({ queryKey: overviewKey });
+    },
+  });
+
+  const getUserName = (id: string) => allUsers.find(u => u.id === id)?.name || "Unknown";
+
+  const totalOpen = actionData.reduce((sum, group) => sum + group.topics.filter(t => t.status === "pending").length, 0);
+  const totalCompleted = actionData.reduce((sum, group) => sum + group.topics.filter(t => t.status === "discussed").length, 0);
+
+  if (isLoading) {
+    return (
+      <div className="p-6 space-y-3">
+        <Skeleton className="h-8 w-48" />
+        {[1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full" />)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="px-6 py-4 border-b flex items-center gap-3">
+        <div className="flex items-center gap-2 text-sm">
+          <AlertCircle className="h-4 w-4 text-orange-500" />
+          <span className="font-medium">{totalOpen} open</span>
+        </div>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <CheckCircle2 className="h-4 w-4 text-green-500" />
+          <span>{totalCompleted} completed</span>
+        </div>
+      </div>
+
+      {actionData.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
+          <ClipboardList className="h-10 w-10 mb-3 opacity-30" />
+          <p className="text-base font-medium" data-testid="text-no-action-items">No action items yet</p>
+          <p className="text-sm mt-1">Action items added in sessions will appear here</p>
+        </div>
+      ) : (
+        <div className="px-6 py-4 space-y-5">
+          {actionData.map(({ session, topics }) => (
+            <div key={session.id}>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pb-2">
+                {formatDate(session.startDate)}
+                {session.status === "active" && (
+                  <Badge variant="secondary" className="ml-2 text-xs">Current</Badge>
+                )}
+              </p>
+              <div className="space-y-1.5">
+                {topics.map(topic => {
+                  const isComplete = topic.status === "discussed";
+                  return (
+                    <div
+                      key={topic.id}
+                      className={`flex items-start gap-3 p-3 rounded-xl border border-transparent hover:border-border hover:bg-muted/30 transition-all ${isComplete ? "opacity-60" : ""}`}
+                      data-testid={`action-item-${topic.id}`}
+                    >
+                      <button
+                        onClick={() => toggleMutation.mutate({
+                          topicId: topic.id,
+                          status: isComplete ? "pending" : "discussed",
+                        })}
+                        className="mt-0.5 shrink-0 text-muted-foreground hover:text-primary transition-colors"
+                        data-testid={`btn-toggle-action-${topic.id}`}
+                      >
+                        {isComplete
+                          ? <CheckCircle2 className="h-5 w-5 text-green-500" />
+                          : <Circle className="h-5 w-5" />}
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm ${isComplete ? "line-through text-muted-foreground" : "text-foreground"}`}>{topic.text}</p>
+                        <span className="text-xs text-muted-foreground mt-1 block">Added by {getUserName(topic.addedById)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Session Panel ────────────────────────────────────────────────────────────
 
 interface SessionPanelProps {
@@ -56,6 +237,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const [newText, setNewText] = useState("");
   const [newTag, setNewTag] = useState("fyi");
   const [showArchived, setShowArchived] = useState(false);
+  const [activeTab, setActiveTab] = useState<"topics" | "action-items">("topics");
 
   const sessionKey = ["/api/1on1/session", managerId, repId];
   const { data, isLoading } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }>({
@@ -80,6 +262,8 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
 
   const overviewKey = ["/api/1on1/manager-overview", managerId];
 
+  const actionItemsKey = ["/api/1on1/action-items", managerId, repId];
+
   const addTopicMutation = useMutation({
     mutationFn: async ({ sessionId, text, tag }: { sessionId: string; text: string; tag: string }) => {
       const res = await apiRequest("POST", `/api/1on1/session/${sessionId}/topics`, { text, tag });
@@ -88,6 +272,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: sessionKey });
       queryClient.invalidateQueries({ queryKey: overviewKey });
+      queryClient.invalidateQueries({ queryKey: actionItemsKey });
       setNewText("");
     },
     onError: () => toast({ title: "Failed to add topic", variant: "destructive" }),
@@ -101,6 +286,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: sessionKey });
       queryClient.invalidateQueries({ queryKey: overviewKey });
+      queryClient.invalidateQueries({ queryKey: actionItemsKey });
     },
   });
 
@@ -111,6 +297,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: sessionKey });
       queryClient.invalidateQueries({ queryKey: overviewKey });
+      queryClient.invalidateQueries({ queryKey: actionItemsKey });
       toast({ title: "Topic removed" });
     },
   });
@@ -124,9 +311,18 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
       queryClient.invalidateQueries({ queryKey: sessionKey });
       queryClient.invalidateQueries({ queryKey: archivedKey });
       queryClient.invalidateQueries({ queryKey: overviewKey });
+      queryClient.invalidateQueries({ queryKey: actionItemsKey });
       toast({ title: "Session closed", description: "Unresolved topics carried over." });
     },
     onError: () => toast({ title: "Failed to close session", variant: "destructive" }),
+  });
+  const { data: actionItemData = [] } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>({
+    queryKey: actionItemsKey,
+    queryFn: async () => {
+      const res = await fetch(`/api/1on1/action-items?managerId=${managerId}&repId=${repId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
   });
 
   const getUserName = (id: string) => allUsers.find(u => u.id === id)?.name || "Unknown";
@@ -147,7 +343,9 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const pendingTopics = topics.filter(t => t.status === "pending");
   const discussedTopics = topics.filter(t => t.status === "discussed");
   const progressPct = topics.length > 0 ? Math.round((discussedTopics.length / topics.length) * 100) : 0;
-  const actionItems = topics.filter(t => t.tag === "action_item" && t.status === "pending");
+  const openActionItemCount = actionItemData.reduce(
+    (sum, group) => sum + group.topics.filter(t => t.status === "pending").length, 0
+  );
 
   const handleAdd = () => {
     if (!newText.trim()) return;
@@ -163,22 +361,20 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
           <span>Started {formatDate(session.startDate)}</span>
         </div>
         {topics.length > 0 && (
-          <>
-            <div className="flex items-center gap-2 text-sm">
-              <TrendingUp className="h-4 w-4 text-green-500" />
-              <span className="text-muted-foreground">Progress</span>
-              <div className="flex items-center gap-2 w-24">
-                <Progress value={progressPct} className="h-1.5" />
-                <span className="text-xs font-medium">{progressPct}%</span>
-              </div>
+          <div className="flex items-center gap-2 text-sm">
+            <TrendingUp className="h-4 w-4 text-green-500" />
+            <span className="text-muted-foreground">Progress</span>
+            <div className="flex items-center gap-2 w-24">
+              <Progress value={progressPct} className="h-1.5" />
+              <span className="text-xs font-medium">{progressPct}%</span>
             </div>
-            {actionItems.length > 0 && (
-              <div className="flex items-center gap-1.5 text-sm text-orange-600 dark:text-orange-400">
-                <AlertCircle className="h-4 w-4" />
-                <span>{actionItems.length} open action item{actionItems.length !== 1 ? "s" : ""}</span>
-              </div>
-            )}
-          </>
+          </div>
+        )}
+        {openActionItemCount > 0 && (
+          <div className="flex items-center gap-1.5 text-sm text-orange-600 dark:text-orange-400">
+            <AlertCircle className="h-4 w-4" />
+            <span data-testid="text-open-action-count">{openActionItemCount} open action item{openActionItemCount !== 1 ? "s" : ""}</span>
+          </div>
         )}
         <div className="ml-auto">
           <Button
@@ -195,119 +391,155 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
         </div>
       </div>
 
-      {/* Add topic */}
-      <div className="px-6 py-4 border-b">
-        <div className="flex gap-2">
-          <input
-            className="flex-1 h-9 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Add a topic for your next 1:1..."
-            value={newText}
-            onChange={e => setNewText(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAdd(); } }}
-            data-testid="input-topic-text"
-          />
-          <select
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-            value={newTag}
-            onChange={e => setNewTag(e.target.value)}
-            data-testid="select-topic-tag"
-          >
-            <option value="fyi">FYI</option>
-            <option value="action_item">Action Item</option>
-            <option value="question">Question</option>
-            <option value="follow_up">Follow-up</option>
-          </select>
-          <Button
-            size="sm"
-            className="h-9 gap-1.5"
-            onClick={handleAdd}
-            disabled={!newText.trim() || addTopicMutation.isPending}
-            data-testid="btn-add-topic"
-          >
-            <Plus className="h-4 w-4" />
-            Add
-          </Button>
-        </div>
-      </div>
-
-      {/* Topics */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-1.5">
-        {topics.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
-            <MessageSquare className="h-10 w-10 mb-3 opacity-30" />
-            <p className="text-base font-medium">No topics yet</p>
-            <p className="text-sm mt-1">Add your first topic above to get started</p>
-          </div>
-        ) : (
-          <>
-            {pendingTopics.length > 0 && (
-              <div className="space-y-1.5">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pb-1">
-                  To Discuss ({pendingTopics.length})
-                </p>
-                {pendingTopics.map(topic => (
-                  <TopicRow
-                    key={topic.id}
-                    topic={topic}
-                    addedByName={getUserName(topic.addedById)}
-                    onToggle={() => toggleMutation.mutate({ topicId: topic.id, status: "discussed" })}
-                    onDelete={() => deleteMutation.mutate(topic.id)}
-                  />
-                ))}
-              </div>
-            )}
-            {discussedTopics.length > 0 && (
-              <div className="space-y-1.5 pt-3">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pb-1">
-                  Discussed ({discussedTopics.length})
-                </p>
-                {discussedTopics.map(topic => (
-                  <TopicRow
-                    key={topic.id}
-                    topic={topic}
-                    addedByName={getUserName(topic.addedById)}
-                    onToggle={() => toggleMutation.mutate({ topicId: topic.id, status: "pending" })}
-                    onDelete={() => deleteMutation.mutate(topic.id)}
-                    dimmed
-                  />
-                ))}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Past sessions */}
-      <div className="border-t">
+      {/* Tab switcher */}
+      <div className="flex border-b px-6">
         <button
-          className="flex items-center gap-2 w-full px-6 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-          onClick={() => setShowArchived(v => !v)}
-          data-testid="btn-toggle-archived"
+          onClick={() => setActiveTab("topics")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "topics" ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          data-testid="tab-topics"
         >
-          <RotateCcw className="h-4 w-4" />
-          <span>Past Sessions</span>
-          {archivedSessions.length > 0 && (
-            <Badge variant="secondary" className="ml-1 text-xs">{archivedSessions.length}</Badge>
-          )}
-          <span className="ml-auto">
-            {showArchived ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          <span className="flex items-center gap-1.5">
+            <MessageSquare className="h-4 w-4" />
+            Topics
           </span>
         </button>
+        <button
+          onClick={() => setActiveTab("action-items")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "action-items" ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          data-testid="tab-action-items"
+        >
+          <span className="flex items-center gap-1.5">
+            <ClipboardList className="h-4 w-4" />
+            Action Items
+            {openActionItemCount > 0 && (
+              <Badge variant="secondary" className="ml-1 text-xs h-5 min-w-[20px] flex items-center justify-center">{openActionItemCount}</Badge>
+            )}
+          </span>
+        </button>
+      </div>
 
-        {showArchived && (
-          <div className="px-6 pb-6 space-y-3">
-            {archivedLoading ? (
-              [1, 2].map(i => <Skeleton key={i} className="h-12 w-full" />)
-            ) : archivedSessions.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-4">No past sessions yet</p>
+      {activeTab === "topics" ? (
+        <>
+          {/* Add topic */}
+          <div className="px-6 py-4 border-b">
+            <div className="flex gap-2">
+              <input
+                className="flex-1 h-9 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                placeholder="Add a topic for your next 1:1..."
+                value={newText}
+                onChange={e => setNewText(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAdd(); } }}
+                data-testid="input-topic-text"
+              />
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                value={newTag}
+                onChange={e => setNewTag(e.target.value)}
+                data-testid="select-topic-tag"
+              >
+                <option value="fyi">FYI</option>
+                <option value="action_item">Action Item</option>
+                <option value="question">Question</option>
+                <option value="follow_up">Follow-up</option>
+              </select>
+              <Button
+                size="sm"
+                className="h-9 gap-1.5"
+                onClick={handleAdd}
+                disabled={!newText.trim() || addTopicMutation.isPending}
+                data-testid="btn-add-topic"
+              >
+                <Plus className="h-4 w-4" />
+                Add
+              </Button>
+            </div>
+          </div>
+
+          {/* Session Notes */}
+          <SessionNotesArea sessionId={session.id} initialNotes={session.notes || ""} sessionQueryKey={sessionKey} />
+
+          {/* Topics */}
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-1.5">
+            {topics.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
+                <MessageSquare className="h-10 w-10 mb-3 opacity-30" />
+                <p className="text-base font-medium">No topics yet</p>
+                <p className="text-sm mt-1">Add your first topic above to get started</p>
+              </div>
             ) : (
-              archivedSessions.map(s => (
-                <ArchivedSessionCard key={s.id} session={s} allUsers={allUsers} />
-              ))
+              <>
+                {pendingTopics.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pb-1">
+                      To Discuss ({pendingTopics.length})
+                    </p>
+                    {pendingTopics.map(topic => (
+                      <TopicRow
+                        key={topic.id}
+                        topic={topic}
+                        addedByName={getUserName(topic.addedById)}
+                        onToggle={() => toggleMutation.mutate({ topicId: topic.id, status: "discussed" })}
+                        onDelete={() => deleteMutation.mutate(topic.id)}
+                      />
+                    ))}
+                  </div>
+                )}
+                {discussedTopics.length > 0 && (
+                  <div className="space-y-1.5 pt-3">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pb-1">
+                      Discussed ({discussedTopics.length})
+                    </p>
+                    {discussedTopics.map(topic => (
+                      <TopicRow
+                        key={topic.id}
+                        topic={topic}
+                        addedByName={getUserName(topic.addedById)}
+                        onToggle={() => toggleMutation.mutate({ topicId: topic.id, status: "pending" })}
+                        onDelete={() => deleteMutation.mutate(topic.id)}
+                        dimmed
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
-        )}
-      </div>
+
+          {/* Past sessions */}
+          <div className="border-t">
+            <button
+              className="flex items-center gap-2 w-full px-6 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+              onClick={() => setShowArchived(v => !v)}
+              data-testid="btn-toggle-archived"
+            >
+              <RotateCcw className="h-4 w-4" />
+              <span>Past Sessions</span>
+              {archivedSessions.length > 0 && (
+                <Badge variant="secondary" className="ml-1 text-xs">{archivedSessions.length}</Badge>
+              )}
+              <span className="ml-auto">
+                {showArchived ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </span>
+            </button>
+
+            {showArchived && (
+              <div className="px-6 pb-6 space-y-3">
+                {archivedLoading ? (
+                  [1, 2].map(i => <Skeleton key={i} className="h-12 w-full" />)
+                ) : archivedSessions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-4">No past sessions yet</p>
+                ) : (
+                  archivedSessions.map(s => (
+                    <ArchivedSessionCard key={s.id} session={s} allUsers={allUsers} />
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <ActionItemsPanel managerId={managerId} repId={repId} allUsers={allUsers} />
+      )}
     </div>
   );
 }
@@ -391,6 +623,15 @@ function ArchivedSessionCard({ session, allUsers }: {
 
       {open && (
         <div className="px-4 pb-4 space-y-2 border-t pt-3">
+          {session.notes && (
+            <div className="mb-3 p-3 rounded-lg bg-muted/40 border border-border/50">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Notes</span>
+              </div>
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap" data-testid={`text-archived-notes-${session.id}`}>{session.notes}</p>
+            </div>
+          )}
           {session.topics.length === 0 ? (
             <p className="text-sm text-muted-foreground">No topics were added in this session</p>
           ) : (

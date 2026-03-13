@@ -205,6 +205,7 @@ export const oneOnOneSessions = pgTable("one_on_one_sessions", {
   amId: varchar("am_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("active"),
   startDate: text("start_date").notNull(),
+  notes: text("notes").default(""),
 });
 
 export const insertOneOnOneSessionSchema = createInsertSchema(oneOnOneSessions).omit({

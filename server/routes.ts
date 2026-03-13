@@ -1666,6 +1666,42 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/1on1/session/:id/notes", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { notes } = req.body;
+      if (typeof notes !== "string") return res.status(400).json({ error: "Notes must be a string" });
+      const session = await storage.getSession(req.params.id);
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      if (session.status !== "active") return res.status(400).json({ error: "Cannot update notes on an archived session" });
+      const isAdmin = user.role === "admin" || user.role === "director";
+      const isInvolved = user.id === session.namId || user.id === session.amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const updated = await storage.updateSessionNotes(req.params.id, notes);
+      if (!updated) return res.status(404).json({ error: "Session not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update notes" });
+    }
+  });
+
+  app.get("/api/1on1/action-items", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { managerId, repId } = req.query as { managerId?: string; repId?: string };
+      if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
+      const isAdmin = user.role === "admin" || user.role === "director";
+      const isInvolved = user.id === managerId || user.id === repId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const actionItems = await storage.getActionItemsByPairing(managerId, repId);
+      res.json(actionItems);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get action items" });
+    }
+  });
+
   app.get("/api/1on1/manager-overview", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

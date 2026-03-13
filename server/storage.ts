@@ -139,6 +139,8 @@ export interface IStorage {
   toggleTopicStatus(topicId: string): Promise<OneOnOneTopic | undefined>;
   deleteTopic(topicId: string): Promise<boolean>;
   getArchivedSessions(namId: string, amId: string): Promise<OneOnOneSession[]>;
+  updateSessionNotes(sessionId: string, notes: string): Promise<OneOnOneSession | undefined>;
+  getActionItemsByPairing(namId: string, amId: string): Promise<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>;
 
   searchContacts(query: string): Promise<Contact[]>;
   searchRfps(query: string): Promise<Rfp[]>;
@@ -658,6 +660,37 @@ export class DatabaseStorage implements IStorage {
         eq(oneOnOneSessions.status, "archived")
       )
     ).orderBy(desc(oneOnOneSessions.startDate));
+  }
+
+  async updateSessionNotes(sessionId: string, notes: string): Promise<OneOnOneSession | undefined> {
+    const [updated] = await db.update(oneOnOneSessions)
+      .set({ notes })
+      .where(eq(oneOnOneSessions.id, sessionId))
+      .returning();
+    return updated;
+  }
+
+  async getActionItemsByPairing(namId: string, amId: string): Promise<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]> {
+    const sessions = await db.select().from(oneOnOneSessions).where(
+      and(
+        eq(oneOnOneSessions.namId, namId),
+        eq(oneOnOneSessions.amId, amId)
+      )
+    ).orderBy(desc(oneOnOneSessions.startDate));
+
+    const results: { session: OneOnOneSession; topics: OneOnOneTopic[] }[] = [];
+    for (const session of sessions) {
+      const actionTopics = await db.select().from(oneOnOneTopics).where(
+        and(
+          eq(oneOnOneTopics.sessionId, session.id),
+          eq(oneOnOneTopics.tag, "action_item")
+        )
+      ).orderBy(desc(oneOnOneTopics.createdAt));
+      if (actionTopics.length > 0) {
+        results.push({ session, topics: actionTopics });
+      }
+    }
+    return results;
   }
 
   async searchContacts(query: string): Promise<Contact[]> {
