@@ -404,7 +404,7 @@ export default function Dashboard() {
         teamMembers={teamMembers}
       />
 
-      {(currentUser?.role === "admin" || currentUser?.role === "director") && <Card data-testid="card-feed">
+      <Card data-testid="card-feed">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Lightbulb className="h-4 w-4 text-blue-600 dark:text-blue-400" />
@@ -434,27 +434,31 @@ export default function Dashboard() {
                 </button>
               ))}
             </div>
-            <Textarea
-              ref={feedTextareaRef}
-              value={feedContent}
-              onChange={handleFeedChange}
-              onKeyDown={handleFeedKeyDown}
-              placeholder="Share a trend, growth win, or idea… Type @ to mention someone (Ctrl+Enter to post)"
-              className="resize-none text-sm min-h-[72px]"
-              data-testid="textarea-feed-content"
-            />
-            <div className="flex items-center justify-end mt-1.5">
-              <Button
-                size="sm"
-                className="gap-1"
-                onClick={handleSubmitFeed}
-                disabled={!feedContent.trim() || createFeedPostMutation.isPending}
-                data-testid="button-submit-feed"
-              >
-                <Send className="h-3 w-3" />
-                Post
-              </Button>
-            </div>
+            {currentUser?.role !== "account_manager" && (
+              <>
+                <Textarea
+                  ref={feedTextareaRef}
+                  value={feedContent}
+                  onChange={handleFeedChange}
+                  onKeyDown={handleFeedKeyDown}
+                  placeholder="Share a trend, growth win, or idea… Type @ to mention someone (Ctrl+Enter to post)"
+                  className="resize-none text-sm min-h-[72px]"
+                  data-testid="textarea-feed-content"
+                />
+                <div className="flex items-center justify-end mt-1.5">
+                  <Button
+                    size="sm"
+                    className="gap-1"
+                    onClick={handleSubmitFeed}
+                    disabled={!feedContent.trim() || createFeedPostMutation.isPending}
+                    data-testid="button-submit-feed"
+                  >
+                    <Send className="h-3 w-3" />
+                    Post
+                  </Button>
+                </div>
+              </>
+            )}
             {mentionState && mentionableUsers.length > 0 && (
               <div className="absolute z-50 mt-1 w-56 rounded-md border bg-popover shadow-lg" style={{ bottom: "100%", left: 0 }} data-testid="mention-dropdown">
                 {mentionableUsers.map((u, i) => (
@@ -531,7 +535,7 @@ export default function Dashboard() {
             </div>
           )}
         </CardContent>
-      </Card>}
+      </Card>
 
       <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (

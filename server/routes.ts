@@ -1374,15 +1374,16 @@ export async function registerRoutes(
         return res.json(await storage.getFeedPosts());
       }
       let visibleIds: string[];
-      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
+      if (user.role === "director") {
         visibleIds = await storage.getTeamMemberIds(user.id);
+      } else if (user.role === "national_account_manager" || user.role === "sales") {
+        // Own subtree (their AMs) + their manager above them (director)
+        visibleIds = await storage.getTeamMemberIds(user.id);
+        if (user.managerId) visibleIds.push(user.managerId);
       } else {
+        // account_manager: see their own posts + their NAM manager's posts
         const ids = new Set<string>([user.id]);
-        if (user.managerId) {
-          ids.add(user.managerId);
-          const allUsers = await storage.getUsers();
-          allUsers.forEach(u => { if (u.managerId === user.managerId) ids.add(u.id); });
-        }
+        if (user.managerId) ids.add(user.managerId);
         visibleIds = Array.from(ids);
       }
       return res.json(await storage.getFeedPosts(visibleIds));
@@ -1395,7 +1396,8 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role !== "admin" && user.role !== "director") return res.status(403).json({ error: "Only admins and directors can post to the feed" });
+      const canPost = user.role === "admin" || user.role === "director" || user.role === "national_account_manager" || user.role === "sales";
+      if (!canPost) return res.status(403).json({ error: "Only managers and above can post to the feed" });
       const { content, category } = req.body;
       const trimmed = typeof content === "string" ? content.trim() : "";
       if (!trimmed) return res.status(400).json({ error: "Content is required" });
