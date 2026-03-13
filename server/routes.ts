@@ -2093,14 +2093,39 @@ export async function registerRoutes(
       const uploads = await storage.getFinancialUploads();
       if (!uploads.length) return res.json([]);
       const latest = uploads[uploads.length - 1];
-      const rows = (latest.summaryRows as any[]) || [];
-      const result = rows.map((r: any) => ({
-        customerName: String(r["Customer Name"] || r["customer name"] || r["CUSTOMER NAME"] || "").trim(),
-        totalLoads: Number(r["Total Loads"] || r["total loads"] || r["TOTAL LOADS"] || 0),
-        spotLoads: Number(r["SPOT Loads"] || r["Spot Loads"] || r["spot loads"] || r["SPOT LOADS"] || 0),
-        totalMargin: Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0),
-        repName: String(r["Rep"] || r["Rep Name"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim(),
-      })).filter((r: any) => r.customerName);
+      const raw = (latest.summaryRows as any[]) || [];
+
+      // Detect whether rows use named headers or __EMPTY keys (non-standard header layout)
+      const firstRow = raw[0] || {};
+      const usesEmptyKeys = "__EMPTY" in firstRow;
+
+      let rows = raw;
+      if (usesEmptyKeys) {
+        // First row is a header row — skip it; skip any "TOTAL" footer row
+        rows = raw.filter((r: any) => {
+          const name = String(r["__EMPTY"] || "").trim();
+          return name && name !== "Customer Name" && name !== "TOTAL" && name !== "Customer code";
+        });
+      }
+
+      const result = rows.map((r: any) => {
+        let customerName: string, totalLoads: number, spotLoads: number, totalMargin: number, repName: string;
+        if (usesEmptyKeys) {
+          customerName = String(r["__EMPTY"] || "").trim();
+          totalLoads   = Number(r["__EMPTY_1"] ?? 0);
+          spotLoads    = Number(r["__EMPTY_2"] ?? 0);
+          totalMargin  = Number(r["__EMPTY_3"] ?? 0);
+          repName      = String(r["__EMPTY_6"] || "").trim();
+        } else {
+          customerName = String(r["Customer Name"] || r["customer name"] || r["CUSTOMER NAME"] || "").trim();
+          totalLoads   = Number(r["Total Loads"] || r["total loads"] || r["TOTAL LOADS"] || 0);
+          spotLoads    = Number(r["SPOT Loads"] || r["Spot Loads"] || r["spot loads"] || r["SPOT LOADS"] || 0);
+          totalMargin  = Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0);
+          repName      = String(r["Rep Name"] || r["Rep"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim();
+        }
+        return { customerName, totalLoads, spotLoads, totalMargin, repName };
+      }).filter((r: any) => r.customerName);
+
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch account summary" });
