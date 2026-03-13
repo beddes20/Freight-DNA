@@ -24,6 +24,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, ChevronDown, ChevronRight, Paperclip } from "lucide-react";
 import type { Company, Task, User } from "@shared/schema";
+import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
 type SafeUser = Omit<User, "password">;
 
@@ -63,6 +64,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
   const [snapshotData, setSnapshotData] = useState<LaneDataAttachment[]>([]);
   const [selectedItems, setSelectedItems] = useState<Record<string, Set<number>>>({}); 
   const [loadingSnapshot, setLoadingSnapshot] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
@@ -77,6 +79,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
 
   useEffect(() => {
     if (open) {
+      setPendingFiles([]);
       if (prefillData) {
         setTitle(prefillData.title);
         setNotes(prefillData.notes || "");
@@ -204,13 +207,15 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
   const createMutation = useMutation({
     mutationFn: async () => {
       const attachedLaneData = buildAttachedLaneData();
+      let taskResult: { id: string } | undefined;
       if (forwardingTask) {
-        await apiRequest("POST", `/api/tasks/${forwardingTask.id}/forward`, {
+        const res = await apiRequest("POST", `/api/tasks/${forwardingTask.id}/forward`, {
           assignedTo,
           notes: notes || null,
         });
+        taskResult = await res.json() as { id: string };
       } else {
-        await apiRequest("POST", "/api/tasks", {
+        const res = await apiRequest("POST", "/api/tasks", {
           title,
           notes: notes || null,
           status,
@@ -219,10 +224,19 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
           companyId: effectiveCompanyId && effectiveCompanyId !== "none" ? effectiveCompanyId : null,
           attachedLaneData,
         });
+        taskResult = await res.json() as { id: string };
+      }
+      if (pendingFiles.length > 0 && taskResult?.id) {
+        try {
+          await uploadPendingFiles(pendingFiles, "task", taskResult.id);
+        } catch {
+          toast({ title: "Task created but some files failed to upload", variant: "destructive" });
+        }
       }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
       if (effectiveCompanyId) {
         queryClient.invalidateQueries({ queryKey: ["/api/tasks/company", effectiveCompanyId] });
       }
@@ -240,9 +254,17 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
         dueDate: dueDate || null,
         status,
       });
+      if (pendingFiles.length > 0) {
+        try {
+          await uploadPendingFiles(pendingFiles, "task", editingTask!.id);
+        } catch {
+          toast({ title: "Task updated but some files failed to upload", variant: "destructive" });
+        }
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
       if (editingTask?.companyId) {
         queryClient.invalidateQueries({ queryKey: ["/api/tasks/company", editingTask.companyId] });
       }
@@ -446,6 +468,17 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
                 </div>
               )}
             </div>
+          )}
+
+          <FileAttachmentUpload
+            pendingFiles={pendingFiles}
+            onAdd={(files) => setPendingFiles(prev => [...prev, ...files])}
+            onRemove={(i) => setPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
+            compact
+          />
+
+          {editingTask && (
+            <FileAttachmentList entityType="task" entityIds={[editingTask.id]} />
           )}
 
           <DialogFooter>

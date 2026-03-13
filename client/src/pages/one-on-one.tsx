@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import type { OneOnOneSession, OneOnOneTopic, User } from "@shared/schema";
+import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
 type SafeUser = Omit<User, "password">;
 
@@ -238,6 +239,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const [newTag, setNewTag] = useState("fyi");
   const [showArchived, setShowArchived] = useState(false);
   const [activeTab, setActiveTab] = useState<"topics" | "action-items">("topics");
+  const [topicPendingFiles, setTopicPendingFiles] = useState<PendingFile[]>([]);
 
   const sessionKey = ["/api/1on1/session", managerId, repId];
   const { data, isLoading } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }>({
@@ -267,13 +269,23 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const addTopicMutation = useMutation({
     mutationFn: async ({ sessionId, text, tag }: { sessionId: string; text: string; tag: string }) => {
       const res = await apiRequest("POST", `/api/1on1/session/${sessionId}/topics`, { text, tag });
-      return res.json();
+      const topic = await res.json();
+      if (topicPendingFiles.length > 0) {
+        try {
+          await uploadPendingFiles(topicPendingFiles, "one_on_one_topic", topic.id);
+        } catch {
+          toast({ title: "Topic created but some files failed to upload", variant: "destructive" });
+        }
+      }
+      return topic;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: sessionKey });
       queryClient.invalidateQueries({ queryKey: overviewKey });
       queryClient.invalidateQueries({ queryKey: actionItemsKey });
+      queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
       setNewText("");
+      setTopicPendingFiles([]);
     },
     onError: () => toast({ title: "Failed to add topic", variant: "destructive" }),
   });
@@ -410,7 +422,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
       {activeTab === "topics" ? (
         <>
           {/* Add topic */}
-          <div className="px-6 py-4 border-b">
+          <div className="px-6 py-4 border-b space-y-2">
             <div className="flex gap-2">
               <input
                 className="flex-1 h-9 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
@@ -442,6 +454,12 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
                 Add
               </Button>
             </div>
+            <FileAttachmentUpload
+              pendingFiles={topicPendingFiles}
+              onAdd={(files) => setTopicPendingFiles(prev => [...prev, ...files])}
+              onRemove={(i) => setTopicPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
+              compact
+            />
           </div>
 
           {/* Session Notes */}
@@ -563,6 +581,7 @@ function TopicRow({ topic, addedByName, onToggle, onDelete, dimmed }: {
           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${tag.color}`}>{tag.label}</span>
           <span className="text-xs text-muted-foreground">Added by {addedByName}</span>
         </div>
+        <FileAttachmentList entityType="one_on_one_topic" entityIds={[topic.id]} />
       </div>
       <button
         onClick={onDelete}

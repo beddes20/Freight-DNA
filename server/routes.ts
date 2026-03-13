@@ -3068,6 +3068,132 @@ export async function registerRoutes(
     }
   });
 
+  async function canAccessAttachmentEntity(user: { id: string; role: string; managerId: string | null }, entityType: string, entityId: string): Promise<boolean> {
+    try {
+      if (entityType === "feed_post") {
+        const post = await storage.getFeedPost(entityId);
+        if (!post) return false;
+        const visibleAuthorIds = await getVisibleFeedAuthorIds(user);
+        if (!visibleAuthorIds) return true;
+        return visibleAuthorIds.includes(post.authorId);
+      }
+      if (entityType === "task") {
+        const task = await storage.getTask(entityId);
+        if (!task) return false;
+        if (user.role === "admin") return true;
+        if (task.assignedTo === user.id || task.assignedBy === user.id) return true;
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        return teamIds.includes(task.assignedTo) || teamIds.includes(task.assignedBy);
+      }
+      if (entityType === "touchpoint") {
+        const tp = await storage.getTouchpoint(entityId);
+        if (!tp) return false;
+        if (user.role === "admin") return true;
+        const contact = await storage.getContact(tp.contactId);
+        if (!contact) return false;
+        return canAccessCompany(user, contact.companyId);
+      }
+      if (entityType === "one_on_one_topic") {
+        const topic = await storage.getTopic(entityId);
+        if (!topic) return false;
+        return canAccessSession(user, topic.sessionId);
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  app.post("/api/attachments", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { entityType, entityId, fileName, mimeType, fileData } = req.body;
+      const validEntityTypes = ["feed_post", "one_on_one_topic", "touchpoint", "task"];
+      if (!validEntityTypes.includes(entityType)) {
+        return res.status(400).json({ error: "Invalid entity type" });
+      }
+      if (!entityId || !fileName || !mimeType || !fileData) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+      if (!(await canAccessAttachmentEntity(user, entityType, entityId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const allowedMimeTypes = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+      ];
+      if (!allowedMimeTypes.includes(mimeType)) {
+        return res.status(400).json({ error: "File type not supported" });
+      }
+      const maxSize = 10 * 1024 * 1024;
+      const dataSize = Buffer.byteLength(fileData, "utf-8");
+      if (dataSize > maxSize * 1.37) {
+        return res.status(413).json({ error: "File too large. Maximum size is 10MB." });
+      }
+      const attachment = await storage.createAttachment({
+        entityType,
+        entityId,
+        fileName,
+        mimeType,
+        fileData,
+        createdAt: new Date().toISOString(),
+      });
+      const { fileData: _, ...meta } = attachment;
+      res.status(201).json(meta);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to upload attachment" });
+    }
+  });
+
+  app.get("/api/attachments", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const entityType = req.query.entityType as string;
+      const entityIds = (req.query.entityIds as string || "").split(",").filter(Boolean);
+      if (!entityType || entityIds.length === 0) return res.json([]);
+      const authorizedIds: string[] = [];
+      for (const eid of entityIds) {
+        if (await canAccessAttachmentEntity(user, entityType, eid)) {
+          authorizedIds.push(eid);
+        }
+      }
+      if (authorizedIds.length === 0) return res.json([]);
+      const atts = await storage.getAttachmentsByEntities(entityType, authorizedIds);
+      const meta = atts.map(({ fileData, ...rest }) => rest);
+      res.json(meta);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch attachments" });
+    }
+  });
+
+  app.get("/api/attachments/:id/download", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const att = await storage.getAttachment(req.params.id);
+      if (!att) return res.status(404).json({ error: "Attachment not found" });
+      if (!(await canAccessAttachmentEntity(user, att.entityType, att.entityId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const buffer = Buffer.from(att.fileData, "base64");
+      res.setHeader("Content-Type", att.mimeType);
+      res.setHeader("Content-Disposition", `attachment; filename="${att.fileName}"`);
+      res.send(buffer);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to download attachment" });
+    }
+  });
+
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {
       if (err.code === "LIMIT_FILE_SIZE") {

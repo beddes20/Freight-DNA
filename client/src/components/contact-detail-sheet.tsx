@@ -23,6 +23,7 @@ import {
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Contact, Touchpoint } from "@shared/schema";
+import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
 const TYPE_CONFIG: Record<string, { label: string; icon: React.ElementType; color: string }> = {
   call:       { label: "Call",       icon: PhoneCall,    color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" },
@@ -81,6 +82,7 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
   const [logType, setLogType] = useState("call");
   const [logNotes, setLogNotes] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [tpPendingFiles, setTpPendingFiles] = useState<PendingFile[]>([]);
 
   const { data: touchpoints = [], isLoading } = useQuery<Touchpoint[]>({
     queryKey: ["/api/contacts", contact?.id, "touchpoints"],
@@ -90,17 +92,28 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
   const logMutation = useMutation({
     mutationFn: async () => {
       const today = new Date().toISOString().split("T")[0];
-      return apiRequest("POST", `/api/contacts/${contact!.id}/touchpoints`, {
+      const res = await apiRequest("POST", `/api/contacts/${contact!.id}/touchpoints`, {
         type: logType,
         date: today,
         notes: logNotes.trim() || null,
       });
+      const tp = await res.json();
+      if (tpPendingFiles.length > 0) {
+        try {
+          await uploadPendingFiles(tpPendingFiles, "touchpoint", tp.id);
+        } catch {
+          toast({ title: "Touchpoint logged but some files failed to upload", variant: "destructive" });
+        }
+      }
+      return tp;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/contacts", contact?.id, "touchpoints"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", contact?.companyId, "touchpoints"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/cold-contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
       setLogNotes("");
+      setTpPendingFiles([]);
       toast({ title: "Touchpoint logged" });
     },
     onError: () => toast({ title: "Failed to log touchpoint", variant: "destructive" }),
@@ -279,6 +292,12 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
                 rows={2}
                 data-testid="input-touchpoint-notes"
               />
+              <FileAttachmentUpload
+                pendingFiles={tpPendingFiles}
+                onAdd={(files) => setTpPendingFiles(prev => [...prev, ...files])}
+                onRemove={(i) => setTpPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
+                compact
+              />
             </div>
 
             <Separator />
@@ -319,6 +338,7 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-muted-foreground">{dateLabel}</p>
                         {tp.notes && <p className="text-sm mt-0.5 line-clamp-2">{tp.notes}</p>}
+                        <FileAttachmentList entityType="touchpoint" entityIds={[tp.id]} />
                       </div>
                       <Button
                         size="icon"

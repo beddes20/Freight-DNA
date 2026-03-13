@@ -19,6 +19,7 @@ import { TaskDialog } from "@/components/task-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint } from "@shared/schema";
+import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -64,6 +65,7 @@ export default function Dashboard() {
   const [replyContent, setReplyContent] = useState("");
   const [feedExpanded, setFeedExpanded] = useState(false);
   const [selectedMentionIdx, setSelectedMentionIdx] = useState(0);
+  const [feedPendingFiles, setFeedPendingFiles] = useState<PendingFile[]>([]);
   const feedTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
@@ -121,11 +123,21 @@ export default function Dashboard() {
   const createFeedPostMutation = useMutation({
     mutationFn: async (data: { content: string; category: string }) => {
       const res = await apiRequest("POST", "/api/feed-posts", data);
-      return res.json();
+      const post = await res.json();
+      if (feedPendingFiles.length > 0) {
+        try {
+          await uploadPendingFiles(feedPendingFiles, "feed_post", post.id);
+        } catch {
+          toast({ title: "Post created but some files failed to upload", variant: "destructive" });
+        }
+      }
+      return post;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/feed-posts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
       setFeedContent("");
+      setFeedPendingFiles([]);
       toast({ title: "Posted successfully" });
     },
     onError: () => {
@@ -501,7 +513,13 @@ export default function Dashboard() {
                   className="resize-none text-sm min-h-[72px]"
                   data-testid="textarea-feed-content"
                 />
-                <div className="flex items-center justify-end mt-1.5">
+                <div className="flex items-center justify-between mt-1.5">
+                  <FileAttachmentUpload
+                    pendingFiles={feedPendingFiles}
+                    onAdd={(files) => setFeedPendingFiles(prev => [...prev, ...files])}
+                    onRemove={(i) => setFeedPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
+                    compact
+                  />
                   <Button
                     size="sm"
                     className="gap-1"
@@ -561,6 +579,7 @@ export default function Dashboard() {
                         <p className="text-sm text-foreground whitespace-pre-wrap break-words" data-testid={`text-feed-content-${post.id}`}>
                           {post.content}
                         </p>
+                        <FileAttachmentList entityType="feed_post" entityIds={[post.id]} />
                         <div className="flex items-center gap-2 flex-wrap mt-1.5">
                           <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium capitalize ${catColors[post.category] || "bg-muted text-muted-foreground"}`} data-testid={`badge-feed-category-${post.id}`}>
                             {catIcon[post.category]} {post.category}

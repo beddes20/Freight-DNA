@@ -13,6 +13,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
+import { FileAttachmentList } from "@/components/file-attachment";
 import type { Company, Task, User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
@@ -167,6 +168,7 @@ export default function TasksPage() {
               </span>
             )}
           </div>
+          <FileAttachmentList entityType="task" entityIds={[task.id]} />
         </div>
         {!isCompleted && dueDateBadge(task.dueDate)}
         <button

@@ -13,6 +13,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { OneOnOneSession, OneOnOneTopic, User } from "@shared/schema";
+import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
 type SafeUser = Omit<User, "password">;
 
@@ -100,6 +101,7 @@ function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic;
             {author?.name || "Unknown"}
           </span>
         </div>
+        <FileAttachmentList entityType="one_on_one_topic" entityIds={[topic.id]} />
       </div>
       <button
         onClick={() => deleteMutation.mutate()}
@@ -119,6 +121,7 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [showTagSelector, setShowTagSelector] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [topicPendingFiles, setTopicPendingFiles] = useState<PendingFile[]>([]);
 
   const { data: sessionData, isLoading } = useQuery<SessionWithTopics>({
     queryKey: ["/api/one-on-one/session", pairing.namId, pairing.amId],
@@ -142,13 +145,23 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
   const addTopicMutation = useMutation({
     mutationFn: async (data: { sessionId: string; text: string; tag: string | null }) => {
       const res = await apiRequest("POST", "/api/one-on-one/topics", data);
-      return res.json();
+      const topic = await res.json();
+      if (topicPendingFiles.length > 0) {
+        try {
+          await uploadPendingFiles(topicPendingFiles, "one_on_one_topic", topic.id);
+        } catch {
+          toast({ title: "Topic created but some files failed to upload", variant: "destructive" });
+        }
+      }
+      return topic;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session", pairing.namId, pairing.amId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
       setTopicText("");
       setSelectedTag(null);
       setShowTagSelector(false);
+      setTopicPendingFiles([]);
     },
     onError: () => {
       toast({ title: "Failed to add topic", variant: "destructive" });
@@ -242,6 +255,13 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
           <button onClick={() => setSelectedTag(null)} className="text-xs text-muted-foreground hover:text-foreground ml-1">×</button>
         </div>
       )}
+
+      <FileAttachmentUpload
+        pendingFiles={topicPendingFiles}
+        onAdd={(files) => setTopicPendingFiles(prev => [...prev, ...files])}
+        onRemove={(i) => setTopicPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
+        compact
+      />
 
       {topics.length > 0 ? (
         <div className="space-y-0.5 max-h-64 overflow-y-auto">

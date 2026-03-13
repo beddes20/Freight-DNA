@@ -322,3 +322,17 @@ export const touchpoints = pgTable("touchpoints", {
 export const insertTouchpointSchema = createInsertSchema(touchpoints).omit({ id: true });
 export type InsertTouchpoint = z.infer<typeof insertTouchpointSchema>;
 export type Touchpoint = typeof touchpoints.$inferSelect;
+
+export const attachments = pgTable("attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  entityType: text("entity_type").notNull(),
+  entityId: varchar("entity_id").notNull(),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  fileData: text("file_data").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertAttachmentSchema = createInsertSchema(attachments).omit({ id: true });
+export type InsertAttachment = z.infer<typeof insertAttachmentSchema>;
+export type Attachment = typeof attachments.$inferSelect;

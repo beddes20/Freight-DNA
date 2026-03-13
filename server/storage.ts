@@ -52,6 +52,9 @@ import {
   type InsertGoalComment,
   type Touchpoint,
   type InsertTouchpoint,
+  attachments,
+  type Attachment,
+  type InsertAttachment,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -153,6 +156,7 @@ export interface IStorage {
   markNotificationRead(id: string): Promise<void>;
   markAllNotificationsRead(userId: string): Promise<void>;
 
+  getTouchpoint(id: string): Promise<Touchpoint | undefined>;
   getTouchpointsByContact(contactId: string): Promise<Touchpoint[]>;
   getTouchpointsByCompany(companyId: string): Promise<Touchpoint[]>;
   getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]>;
@@ -161,6 +165,11 @@ export interface IStorage {
   getColdContacts(assignedToUserId: string | null, daysSince: number): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>>;
 
   getTouchpointCountByAm(amId: string, startDate: string, endDate: string): Promise<number>;
+
+  getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]>;
+  getAttachmentsByEntities(entityType: string, entityIds: string[]): Promise<Attachment[]>;
+  createAttachment(attachment: InsertAttachment): Promise<Attachment>;
+  getAttachment(id: string): Promise<Attachment | undefined>;
 
   getGoals(filter: { namId?: string; amId?: string }): Promise<Goal[]>;
   getGoal(id: string): Promise<Goal | undefined>;
@@ -823,6 +832,11 @@ export class DatabaseStorage implements IStorage {
     return (result.rowCount ?? 0) > 0;
   }
 
+  async getTouchpoint(id: string): Promise<Touchpoint | undefined> {
+    const [tp] = await db.select().from(touchpoints).where(eq(touchpoints.id, id));
+    return tp;
+  }
+
   async getTouchpointsByContact(contactId: string): Promise<Touchpoint[]> {
     return db.select().from(touchpoints).where(eq(touchpoints.contactId, contactId)).orderBy(desc(touchpoints.date));
   }
@@ -910,6 +924,29 @@ export class DatabaseStorage implements IStorage {
     const companyIds = allCompanies.map(c => c.id);
     const allTps = await db.select().from(touchpoints).where(inArray(touchpoints.companyId, companyIds));
     return allTps.filter(tp => tp.date >= startDate && tp.date <= endDate).length;
+  }
+
+  async getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]> {
+    return db.select().from(attachments).where(
+      and(eq(attachments.entityType, entityType), eq(attachments.entityId, entityId))
+    );
+  }
+
+  async getAttachmentsByEntities(entityType: string, entityIds: string[]): Promise<Attachment[]> {
+    if (entityIds.length === 0) return [];
+    return db.select().from(attachments).where(
+      and(eq(attachments.entityType, entityType), inArray(attachments.entityId, entityIds))
+    );
+  }
+
+  async createAttachment(attachment: InsertAttachment): Promise<Attachment> {
+    const [created] = await db.insert(attachments).values(attachment).returning();
+    return created;
+  }
+
+  async getAttachment(id: string): Promise<Attachment | undefined> {
+    const [att] = await db.select().from(attachments).where(eq(attachments.id, id));
+    return att;
   }
 }
 
