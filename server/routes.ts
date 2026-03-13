@@ -1482,6 +1482,96 @@ export async function registerRoutes(
     }
   });
 
+  // ── 1-on-1 Sessions ────────────────────────────────────────────────────────
+
+  app.get("/api/1on1/session", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { managerId, repId } = req.query as { managerId?: string; repId?: string };
+      if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
+      const isAdmin = user.role === "admin" || user.role === "director";
+      const isInvolved = user.id === managerId || user.id === repId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const session = await storage.getOrCreateActiveSession(managerId, repId);
+      const topics = await storage.getTopicsBySession(session.id);
+      res.json({ session, topics });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get session" });
+    }
+  });
+
+  app.post("/api/1on1/session/:id/topics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { text, tag } = req.body;
+      if (!text?.trim()) return res.status(400).json({ error: "Text required" });
+      const topic = await storage.addTopic({
+        sessionId: req.params.id,
+        addedById: user.id,
+        text: text.trim(),
+        tag: tag || "fyi",
+      });
+      res.status(201).json(topic);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to add topic" });
+    }
+  });
+
+  app.patch("/api/1on1/topics/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { status } = req.body;
+      if (!status) return res.status(400).json({ error: "Status required" });
+      const updated = await storage.updateTopicStatus(req.params.id, status);
+      if (!updated) return res.status(404).json({ error: "Topic not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update topic" });
+    }
+  });
+
+  app.delete("/api/1on1/topics/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const deleted = await storage.deleteTopic(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Topic not found" });
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete topic" });
+    }
+  });
+
+  app.post("/api/1on1/session/:id/close", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const newSession = await storage.closeSession(req.params.id);
+      res.json(newSession);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to close session" });
+    }
+  });
+
+  app.get("/api/1on1/archived", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { managerId, repId } = req.query as { managerId?: string; repId?: string };
+      if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
+      const isAdmin = user.role === "admin" || user.role === "director";
+      const isInvolved = user.id === managerId || user.id === repId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const sessions = await storage.getArchivedSessions(managerId, repId);
+      res.json(sessions);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get archived sessions" });
+    }
+  });
+
   // ── Financial Data ─────────────────────────────────────────────────────────
 
   app.get("/api/historical-data", requireAuth, async (req, res) => {
