@@ -160,19 +160,13 @@ function ContactCard({ contact, tps, onEdit, onView, level }: ContactCardProps) 
               </Button>
             </div>
 
-            {(weekCount > 0 || monthCount > 0) && (
-              <div className="mt-1 flex items-center gap-2 flex-wrap">
-                {weekCount > 0 && (
-                  <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-                    <PhoneCall className="h-2.5 w-2.5" />
-                    {weekCount} this week
-                  </span>
-                )}
-                {monthCount > 0 && (
-                  <span className="text-xs text-muted-foreground">{monthCount} this month</span>
-                )}
-              </div>
-            )}
+            <div className="mt-1 flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                <PhoneCall className="h-2.5 w-2.5" />
+                {weekCount} this week
+              </span>
+              <span className="text-xs text-muted-foreground">{monthCount} this month</span>
+            </div>
 
             <div className="mt-3 space-y-2">
               {contact.regions && contact.regions.length > 0 && (

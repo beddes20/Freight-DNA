@@ -40,6 +40,12 @@ function countThisWeek(tps: Touchpoint[]) {
   return tps.filter(t => t.date >= startStr).length;
 }
 
+function countThisMonth(tps: Touchpoint[]) {
+  const now = new Date();
+  const startStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  return tps.filter(t => t.date >= startStr).length;
+}
+
 function getLastTouchDays(tps: Touchpoint[]): number | null {
   if (tps.length === 0) return null;
   const latest = tps.reduce((a, b) => a.date > b.date ? a : b);
@@ -123,6 +129,7 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
           const manager = contact.reportsToId ? contactsMap.get(contact.reportsToId) : null;
           const cTps = tpByContact.get(contact.id) ?? [];
           const weekCount = countThisWeek(cTps);
+          const monthCount = countThisMonth(cTps);
           const days = getLastTouchDays(cTps);
           const recClass = recencyBadgeClass(days);
           const dayLabel = days === null ? "No touch" : days === 0 ? "Today" : days === 1 ? "Yesterday" : `${days}d ago`;
@@ -166,11 +173,10 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                             <PhoneCall className="h-2.5 w-2.5" />
                             {dayLabel}
                           </span>
-                          {weekCount > 0 && (
-                            <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-                              {weekCount} this week
-                            </span>
-                          )}
+                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                            {weekCount} this week
+                          </span>
+                          <span className="text-xs text-muted-foreground">{monthCount} this month</span>
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
