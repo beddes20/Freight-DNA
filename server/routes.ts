@@ -585,6 +585,8 @@ export async function registerRoutes(
       const contactData = {
         ...req.body,
         companyId: req.params.companyId,
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.id,
       };
       const parsed = insertContactSchema.safeParse(contactData);
       if (!parsed.success) {
@@ -2731,6 +2733,130 @@ export async function registerRoutes(
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch team performance" });
+    }
+  });
+
+  // ── Goals ─────────────────────────────────────────────────────────────────
+  app.get("/api/goals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      let goalsList;
+      if (user.role === "admin") {
+        goalsList = await storage.getGoals({});
+      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
+        goalsList = await storage.getGoals({ namId: user.id });
+      } else {
+        goalsList = await storage.getGoals({ amId: user.id });
+      }
+      res.json(goalsList);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch goals" });
+    }
+  });
+
+  app.post("/api/goals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role === "account_manager") return res.status(403).json({ error: "Only NAMs can create goals" });
+      const goal = await storage.createGoal({
+        ...req.body,
+        namId: user.role === "admin" ? (req.body.namId || user.id) : user.id,
+        createdById: user.id,
+        createdAt: new Date().toISOString(),
+        currentValue: "0",
+      });
+      res.status(201).json(goal);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create goal" });
+    }
+  });
+
+  app.patch("/api/goals/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getGoal(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Goal not found" });
+      const canEdit = user.role === "admin" || existing.namId === user.id || existing.amId === user.id;
+      if (!canEdit) return res.status(403).json({ error: "Access denied" });
+      const updated = await storage.updateGoal(req.params.id, req.body);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update goal" });
+    }
+  });
+
+  app.delete("/api/goals/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getGoal(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Goal not found" });
+      if (user.role !== "admin" && existing.namId !== user.id) return res.status(403).json({ error: "Access denied" });
+      await storage.deleteGoal(req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete goal" });
+    }
+  });
+
+  app.get("/api/goals/:id/comments", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const comments = await storage.getGoalComments(req.params.id);
+      res.json(comments);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch comments" });
+    }
+  });
+
+  app.post("/api/goals/:id/comments", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const goal = await storage.getGoal(req.params.id);
+      if (!goal) return res.status(404).json({ error: "Goal not found" });
+      const canComment = user.role === "admin" || goal.namId === user.id || goal.amId === user.id;
+      if (!canComment) return res.status(403).json({ error: "Access denied" });
+      const comment = await storage.createGoalComment({
+        goalId: req.params.id,
+        authorId: user.id,
+        body: req.body.body,
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(comment);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to post comment" });
+    }
+  });
+
+  app.delete("/api/goal-comments/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      await storage.deleteGoalComment(req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete comment" });
+    }
+  });
+
+  app.get("/api/goals/:id/progress", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const goal = await storage.getGoal(req.params.id);
+      if (!goal) return res.status(404).json({ error: "Goal not found" });
+      let autoValue: number | null = null;
+      if (goal.metric === "contacts_added") {
+        autoValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+      }
+      res.json({ autoValue, currentValue: parseFloat(goal.currentValue || "0") });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch progress" });
     }
   });
 

@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink, MessagesSquare, ListTodo, TrendingUp } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink, MessagesSquare, ListTodo, TrendingUp, Target } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -58,6 +58,11 @@ const menuItems = [
     url: "/team-performance",
     icon: TrendingUp,
     roles: ["admin", "director", "national_account_manager", "sales"],
+  },
+  {
+    title: "Goals",
+    url: "/goals",
+    icon: Target,
   },
 ];
 

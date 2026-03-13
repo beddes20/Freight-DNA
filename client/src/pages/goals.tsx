@@ -1,0 +1,618 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useAuth } from "@/hooks/use-auth";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Progress } from "@/components/ui/progress";
+import {
+  Target, Plus, MessageSquare, Trash2, ChevronDown, ChevronUp,
+  TrendingUp, Users, Truck, DollarSign, CalendarDays, Pencil, Send,
+  CheckCircle2, AlertCircle, BarChart3,
+} from "lucide-react";
+import type { Goal, GoalComment } from "@shared/schema";
+
+const METRICS = [
+  { value: "contacts_added", label: "New Contacts", icon: Users, color: "bg-blue-500", unit: "contacts" },
+  { value: "load_count", label: "Load Count", icon: Truck, color: "bg-green-500", unit: "loads" },
+  { value: "margin", label: "Margin ($)", icon: DollarSign, color: "bg-violet-500", unit: "$" },
+];
+
+const PERIODS = [
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+];
+
+function getMetric(value: string) {
+  return METRICS.find(m => m.value === value) ?? METRICS[0];
+}
+
+function formatValue(metric: string, value: number) {
+  if (metric === "margin") return `$${value.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  return value.toLocaleString();
+}
+
+function progressPct(current: number, target: number) {
+  if (target <= 0) return 0;
+  return Math.min(100, Math.round((current / target) * 100));
+}
+
+function fmtDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  } catch { return iso; }
+}
+
+interface GoalCardProps {
+  goal: Goal;
+  currentUserId: string;
+  userRole: string;
+  allUsers: Array<{ id: string; name: string }>;
+  onEdit: (goal: Goal) => void;
+  onDelete: (id: string) => void;
+}
+
+function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }: GoalCardProps) {
+  const { toast } = useToast();
+  const [showComments, setShowComments] = useState(false);
+  const [commentBody, setCommentBody] = useState("");
+  const [updatingValue, setUpdatingValue] = useState(false);
+  const [newValue, setNewValue] = useState("");
+
+  const metric = getMetric(goal.metric);
+  const MetricIcon = metric.icon;
+  const current = parseFloat(goal.currentValue || "0");
+  const target = parseFloat(goal.target || "0");
+  const pct = progressPct(current, target);
+  const isAutoTracked = goal.metric === "contacts_added";
+
+  const { data: autoProgress } = useQuery<{ autoValue: number | null; currentValue: number }>({
+    queryKey: ["/api/goals", goal.id, "progress"],
+    enabled: isAutoTracked,
+  });
+
+  const { data: comments = [] } = useQuery<GoalComment[]>({
+    queryKey: ["/api/goals", goal.id, "comments"],
+    enabled: showComments,
+  });
+
+  const amName = allUsers.find(u => u.id === goal.amId)?.name ?? "Unknown";
+  const namName = allUsers.find(u => u.id === goal.namId)?.name ?? "Unknown";
+
+  const displayCurrent = isAutoTracked && autoProgress?.autoValue != null
+    ? autoProgress.autoValue
+    : current;
+  const displayPct = progressPct(displayCurrent, target);
+
+  const updateProgress = useMutation({
+    mutationFn: (value: string) => apiRequest("PATCH", `/api/goals/${goal.id}`, { currentValue: value }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      setUpdatingValue(false);
+      setNewValue("");
+      toast({ description: "Progress updated." });
+    },
+  });
+
+  const postComment = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/goals/${goal.id}/comments`, { body: commentBody }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals", goal.id, "comments"] });
+      setCommentBody("");
+    },
+  });
+
+  const deleteComment = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/goal-comments/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/goals", goal.id, "comments"] }),
+  });
+
+  const canDelete = userRole === "admin" || goal.namId === currentUserId;
+  const canUpdateProgress = userRole !== "admin" ? (goal.namId === currentUserId || goal.amId === currentUserId) : true;
+
+  return (
+    <Card className="border border-border" data-testid={`goal-card-${goal.id}`}>
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className={`h-7 w-7 rounded-full ${metric.color} flex items-center justify-center shrink-0`}>
+              <MetricIcon className="h-3.5 w-3.5 text-white" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold leading-tight">{goal.title || metric.label}</p>
+              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                <Badge variant="secondary" className="text-xs font-normal capitalize">{metric.label}</Badge>
+                <Badge variant="outline" className="text-xs font-normal capitalize">{goal.period}</Badge>
+                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                  <CalendarDays className="h-3 w-3" />
+                  {fmtDate(goal.startDate)} – {fmtDate(goal.endDate)}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {canDelete && (
+              <>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(goal)} data-testid={`button-edit-goal-${goal.id}`}>
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(goal.id)} data-testid={`button-delete-goal-${goal.id}`}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {goal.notes && (
+          <p className="text-xs text-muted-foreground mb-3 italic">{goal.notes}</p>
+        )}
+
+        <div className="space-y-1.5 mb-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Progress</span>
+            <span className="font-semibold tabular-nums">
+              {formatValue(goal.metric, displayCurrent)} <span className="text-muted-foreground font-normal">/ {formatValue(goal.metric, target)}</span>
+            </span>
+          </div>
+          <Progress value={displayPct} className="h-2" data-testid={`progress-goal-${goal.id}`} />
+          <div className="flex items-center justify-between">
+            <span className={`text-xs font-medium ${displayPct >= 100 ? "text-green-600 dark:text-green-400" : displayPct >= 70 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}>
+              {displayPct >= 100 ? (
+                <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Goal reached!</span>
+              ) : (
+                `${displayPct}% of goal`
+              )}
+            </span>
+            {isAutoTracked && (
+              <span className="text-xs text-muted-foreground">Auto-tracked</span>
+            )}
+          </div>
+        </div>
+
+        {!isAutoTracked && canUpdateProgress && (
+          <div className="mb-3">
+            {updatingValue ? (
+              <div className="flex gap-2">
+                <Input
+                  type="number"
+                  placeholder="Enter current value..."
+                  value={newValue}
+                  onChange={e => setNewValue(e.target.value)}
+                  className="h-8 text-sm"
+                  data-testid={`input-update-progress-${goal.id}`}
+                />
+                <Button size="sm" className="h-8" onClick={() => updateProgress.mutate(newValue)} disabled={!newValue || updateProgress.isPending} data-testid={`button-save-progress-${goal.id}`}>Save</Button>
+                <Button size="sm" variant="ghost" className="h-8" onClick={() => { setUpdatingValue(false); setNewValue(""); }}>Cancel</Button>
+              </div>
+            ) : (
+              <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => { setUpdatingValue(true); setNewValue(String(current)); }} data-testid={`button-update-progress-${goal.id}`}>
+                <BarChart3 className="h-3 w-3" /> Update Progress
+              </Button>
+            )}
+          </div>
+        )}
+
+        <div className="border-t pt-2">
+          <button
+            onClick={() => setShowComments(v => !v)}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
+            data-testid={`button-toggle-comments-${goal.id}`}
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            <span>Comments{comments.length > 0 ? ` (${comments.length})` : ""}</span>
+            {showComments ? <ChevronUp className="h-3 w-3 ml-auto" /> : <ChevronDown className="h-3 w-3 ml-auto" />}
+          </button>
+
+          {showComments && (
+            <div className="mt-2 space-y-2">
+              {comments.map(c => {
+                const author = allUsers.find(u => u.id === c.authorId);
+                const canDeleteComment = userRole === "admin" || c.authorId === currentUserId;
+                return (
+                  <div key={c.id} className="flex gap-2 group" data-testid={`goal-comment-${c.id}`}>
+                    <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary shrink-0">
+                      {(author?.name ?? "?")[0]}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium">{author?.name ?? "Unknown"}</span>
+                        <span className="text-xs text-muted-foreground">{fmtDate(c.createdAt)}</span>
+                        {canDeleteComment && (
+                          <button onClick={() => deleteComment.mutate(c.id)} className="ml-auto opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity" data-testid={`button-delete-comment-${c.id}`}>
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-xs text-foreground mt-0.5">{c.body}</p>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="flex gap-2 pt-1">
+                <Textarea
+                  placeholder="Add a comment..."
+                  value={commentBody}
+                  onChange={e => setCommentBody(e.target.value)}
+                  className="text-xs min-h-0 h-16 resize-none"
+                  data-testid={`input-goal-comment-${goal.id}`}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && commentBody.trim()) {
+                      e.preventDefault();
+                      postComment.mutate();
+                    }
+                  }}
+                />
+                <Button size="icon" className="h-8 w-8 shrink-0 self-end" onClick={() => postComment.mutate()} disabled={!commentBody.trim() || postComment.isPending} data-testid={`button-post-comment-${goal.id}`}>
+                  <Send className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface GoalFormData {
+  metric: string;
+  period: string;
+  target: string;
+  title: string;
+  notes: string;
+  startDate: string;
+  endDate: string;
+  amId: string;
+}
+
+const defaultForm: GoalFormData = {
+  metric: "contacts_added",
+  period: "monthly",
+  target: "",
+  title: "",
+  notes: "",
+  startDate: new Date().toISOString().slice(0, 10),
+  endDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+  amId: "",
+};
+
+export default function GoalsPage() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [activeTab, setActiveTab] = useState<string>("all");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
+  const [form, setForm] = useState<GoalFormData>(defaultForm);
+
+  const { data: goals = [], isLoading } = useQuery<Goal[]>({
+    queryKey: ["/api/goals"],
+  });
+
+  const { data: pairings = [] } = useQuery<Array<{ namId: string; amId: string; namName: string; amName: string }>>({
+    queryKey: ["/api/one-on-one/pairings"],
+    enabled: user?.role !== "account_manager",
+  });
+
+  const { data: allUsers = [] } = useQuery<Array<{ id: string; name: string; role: string }>>({
+    queryKey: ["/api/team-members"],
+  });
+
+  const createGoal = useMutation({
+    mutationFn: (data: object) => apiRequest("POST", "/api/goals", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      setDialogOpen(false);
+      setForm(defaultForm);
+      toast({ description: "Goal created." });
+    },
+    onError: () => toast({ variant: "destructive", description: "Failed to create goal." }),
+  });
+
+  const updateGoalMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: object }) => apiRequest("PATCH", `/api/goals/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      setDialogOpen(false);
+      setEditingGoal(null);
+      toast({ description: "Goal updated." });
+    },
+  });
+
+  const deleteGoalMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/goals/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      toast({ description: "Goal deleted." });
+    },
+  });
+
+  const isNam = user?.role === "national_account_manager" || user?.role === "director" || user?.role === "sales" || user?.role === "admin";
+  const isAm = user?.role === "account_manager";
+
+  const myPairings = isNam
+    ? pairings.filter(p => user?.role === "admin" || p.namId === user?.id)
+    : [];
+
+  const uniqueAms = Array.from(new Map(myPairings.map(p => [p.amId, p])).values());
+
+  const filteredGoals = activeTab === "all"
+    ? goals
+    : goals.filter(g => g.amId === activeTab);
+
+  function openCreate(amId?: string) {
+    setEditingGoal(null);
+    setForm({ ...defaultForm, amId: amId || (uniqueAms[0]?.amId ?? "") });
+    setDialogOpen(true);
+  }
+
+  function openEdit(goal: Goal) {
+    setEditingGoal(goal);
+    setForm({
+      metric: goal.metric,
+      period: goal.period,
+      target: goal.target,
+      title: goal.title || "",
+      notes: goal.notes || "",
+      startDate: goal.startDate,
+      endDate: goal.endDate,
+      amId: goal.amId,
+    });
+    setDialogOpen(true);
+  }
+
+  function handleSubmit() {
+    if (!form.target || !form.amId) {
+      toast({ variant: "destructive", description: "Please fill in target and select an AM." });
+      return;
+    }
+    if (editingGoal) {
+      updateGoalMutation.mutate({ id: editingGoal.id, data: form });
+    } else {
+      createGoal.mutate(form);
+    }
+  }
+
+  const goalsByMetric = METRICS.map(m => ({
+    ...m,
+    count: filteredGoals.filter(g => g.metric === m.value).length,
+    avgPct: (() => {
+      const gs = filteredGoals.filter(g => g.metric === m.value);
+      if (gs.length === 0) return 0;
+      return Math.round(gs.reduce((acc, g) => acc + progressPct(parseFloat(g.currentValue || "0"), parseFloat(g.target || "1")), 0) / gs.length);
+    })(),
+  }));
+
+  if (isLoading) {
+    return (
+      <div className="p-6 space-y-4">
+        <div className="h-8 w-48 bg-muted animate-pulse rounded" />
+        <div className="grid grid-cols-3 gap-4">
+          {[1, 2, 3].map(i => <div key={i} className="h-24 bg-muted animate-pulse rounded-lg" />)}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 space-y-5 max-w-4xl mx-auto">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold flex items-center gap-2">
+            <Target className="h-5 w-5 text-primary" />
+            Goals
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {isAm ? "Track your performance goals and progress" : "Set and track goals for your team"}
+          </p>
+        </div>
+        {isNam && (
+          <Button onClick={() => openCreate()} data-testid="button-create-goal">
+            <Plus className="h-4 w-4 mr-2" />
+            New Goal
+          </Button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        {goalsByMetric.map(m => {
+          const Icon = m.icon;
+          return (
+            <Card key={m.value} className="border" data-testid={`stat-card-${m.value}`}>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className={`h-7 w-7 rounded-full ${m.color} flex items-center justify-center`}>
+                    <Icon className="h-3.5 w-3.5 text-white" />
+                  </div>
+                  <span className="text-xs font-medium text-muted-foreground">{m.label}</span>
+                </div>
+                <p className="text-2xl font-bold">{m.count}</p>
+                <p className="text-xs text-muted-foreground">active goal{m.count !== 1 ? "s" : ""}</p>
+                {m.count > 0 && (
+                  <div className="mt-2">
+                    <Progress value={m.avgPct} className="h-1.5" />
+                    <p className="text-xs text-muted-foreground mt-1">{m.avgPct}% avg progress</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {isNam && uniqueAms.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setActiveTab("all")}
+            className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${activeTab === "all" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground"}`}
+            data-testid="tab-all-ams"
+          >
+            All AMs ({goals.length})
+          </button>
+          {uniqueAms.map(p => {
+            const count = goals.filter(g => g.amId === p.amId).length;
+            return (
+              <button
+                key={p.amId}
+                onClick={() => setActiveTab(p.amId)}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${activeTab === p.amId ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground"}`}
+                data-testid={`tab-am-${p.amId}`}
+              >
+                {p.amName} {count > 0 && `(${count})`}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {filteredGoals.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="py-12 flex flex-col items-center justify-center text-center">
+            <Target className="h-10 w-10 text-muted-foreground/40 mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">No goals yet</p>
+            {isNam && (
+              <>
+                <p className="text-xs text-muted-foreground mt-1 mb-4">Create goals to track new contacts, load counts, and margin targets</p>
+                <Button onClick={() => openCreate(activeTab !== "all" ? activeTab : undefined)} variant="outline" size="sm" data-testid="button-create-first-goal">
+                  <Plus className="h-4 w-4 mr-2" /> Create First Goal
+                </Button>
+              </>
+            )}
+            {isAm && <p className="text-xs text-muted-foreground mt-1">Your NAM will set goals for your review</p>}
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {filteredGoals.map(goal => (
+            <GoalCard
+              key={goal.id}
+              goal={goal}
+              currentUserId={user!.id}
+              userRole={user!.role}
+              allUsers={allUsers}
+              onEdit={openEdit}
+              onDelete={id => deleteGoalMutation.mutate(id)}
+            />
+          ))}
+          {isNam && activeTab !== "all" && (
+            <Button variant="outline" className="w-full" onClick={() => openCreate(activeTab)} data-testid="button-add-goal-for-am">
+              <Plus className="h-4 w-4 mr-2" /> Add Goal for {uniqueAms.find(p => p.amId === activeTab)?.amName}
+            </Button>
+          )}
+        </div>
+      )}
+
+      <Dialog open={dialogOpen} onOpenChange={v => { if (!v) { setDialogOpen(false); setEditingGoal(null); } }}>
+        <DialogContent className="max-w-md" data-testid="dialog-goal-form">
+          <DialogHeader>
+            <DialogTitle>{editingGoal ? "Edit Goal" : "Create Goal"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {isNam && !isAm && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Account Manager</label>
+                <Select value={form.amId} onValueChange={v => setForm(f => ({ ...f, amId: v }))}>
+                  <SelectTrigger data-testid="select-goal-am">
+                    <SelectValue placeholder="Select AM..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {uniqueAms.map(p => (
+                      <SelectItem key={p.amId} value={p.amId}>{p.amName}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Metric</label>
+              <Select value={form.metric} onValueChange={v => setForm(f => ({ ...f, metric: v }))}>
+                <SelectTrigger data-testid="select-goal-metric">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {METRICS.map(m => (
+                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Custom Label <span className="text-muted-foreground font-normal">(optional)</span></label>
+              <Input
+                placeholder="e.g. Q2 Contacts Push"
+                value={form.title}
+                onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+                data-testid="input-goal-title"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Period</label>
+                <Select value={form.period} onValueChange={v => setForm(f => ({ ...f, period: v }))}>
+                  <SelectTrigger data-testid="select-goal-period">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PERIODS.map(p => (
+                      <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Target {getMetric(form.metric).unit !== "$" ? `(${getMetric(form.metric).unit})` : "($)"}</label>
+                <Input
+                  type="number"
+                  placeholder={form.metric === "margin" ? "e.g. 50000" : "e.g. 10"}
+                  value={form.target}
+                  onChange={e => setForm(f => ({ ...f, target: e.target.value }))}
+                  data-testid="input-goal-target"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Start Date</label>
+                <Input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} data-testid="input-goal-start" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">End Date</label>
+                <Input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} data-testid="input-goal-end" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Notes <span className="text-muted-foreground font-normal">(optional)</span></label>
+              <Textarea
+                placeholder="Context, expectations, or strategy..."
+                value={form.notes}
+                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                className="resize-none h-20"
+                data-testid="input-goal-notes"
+              />
+            </div>
+            {form.metric === "contacts_added" && (
+              <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 p-3">
+                <p className="text-xs text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                  <TrendingUp className="h-3.5 w-3.5 shrink-0" />
+                  New Contacts are automatically tracked from the CRM — no manual updates needed.
+                </p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDialogOpen(false); setEditingGoal(null); }}>Cancel</Button>
+            <Button onClick={handleSubmit} disabled={createGoal.isPending || updateGoalMutation.isPending} data-testid="button-save-goal">
+              {editingGoal ? "Save Changes" : "Create Goal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

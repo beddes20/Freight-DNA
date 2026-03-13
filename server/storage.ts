@@ -16,6 +16,8 @@ import {
   feedPostReactions,
   oneOnOneSessions,
   oneOnOneTopics,
+  goals,
+  goalComments,
   type User,
   type InsertUser,
   type Company,
@@ -43,6 +45,10 @@ import {
   type Notification,
   type InsertNotification,
   notifications,
+  type Goal,
+  type InsertGoal,
+  type GoalComment,
+  type InsertGoalComment,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -141,6 +147,16 @@ export interface IStorage {
   createNotification(data: import('../shared/schema').InsertNotification): Promise<import('../shared/schema').Notification>;
   markNotificationRead(id: string): Promise<void>;
   markAllNotificationsRead(userId: string): Promise<void>;
+
+  getGoals(filter: { namId?: string; amId?: string }): Promise<Goal[]>;
+  getGoal(id: string): Promise<Goal | undefined>;
+  createGoal(goal: InsertGoal): Promise<Goal>;
+  updateGoal(id: string, data: Partial<InsertGoal>): Promise<Goal | undefined>;
+  deleteGoal(id: string): Promise<boolean>;
+  getGoalComments(goalId: string): Promise<GoalComment[]>;
+  createGoalComment(comment: InsertGoalComment): Promise<GoalComment>;
+  deleteGoalComment(id: string): Promise<boolean>;
+  getContactsAddedByAm(amId: string, startDate: string, endDate: string): Promise<number>;
 }
 
 const pool = new Pool({
@@ -705,6 +721,59 @@ export class DatabaseStorage implements IStorage {
 
   async markAllNotificationsRead(userId: string): Promise<void> {
     await db.update(notifications).set({ read: true }).where(eq(notifications.userId, userId));
+  }
+
+  async getGoals(filter: { namId?: string; amId?: string }): Promise<Goal[]> {
+    const conditions = [];
+    if (filter.namId) conditions.push(eq(goals.namId, filter.namId));
+    if (filter.amId) conditions.push(eq(goals.amId, filter.amId));
+    if (conditions.length === 0) return db.select().from(goals).orderBy(desc(goals.createdAt));
+    return db.select().from(goals).where(or(...conditions)).orderBy(desc(goals.createdAt));
+  }
+
+  async getGoal(id: string): Promise<Goal | undefined> {
+    const [g] = await db.select().from(goals).where(eq(goals.id, id));
+    return g;
+  }
+
+  async createGoal(goal: InsertGoal): Promise<Goal> {
+    const [g] = await db.insert(goals).values(goal).returning();
+    return g;
+  }
+
+  async updateGoal(id: string, data: Partial<InsertGoal>): Promise<Goal | undefined> {
+    const [g] = await db.update(goals).set(data).where(eq(goals.id, id)).returning();
+    return g;
+  }
+
+  async deleteGoal(id: string): Promise<boolean> {
+    const result = await db.delete(goals).where(eq(goals.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getGoalComments(goalId: string): Promise<GoalComment[]> {
+    return db.select().from(goalComments).where(eq(goalComments.goalId, goalId)).orderBy(goalComments.createdAt);
+  }
+
+  async createGoalComment(comment: InsertGoalComment): Promise<GoalComment> {
+    const [c] = await db.insert(goalComments).values(comment).returning();
+    return c;
+  }
+
+  async deleteGoalComment(id: string): Promise<boolean> {
+    const result = await db.delete(goalComments).where(eq(goalComments.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getContactsAddedByAm(amId: string, startDate: string, endDate: string): Promise<number> {
+    const allCompanies = await db.select().from(companies).where(eq(companies.assignedTo, amId));
+    if (allCompanies.length === 0) return 0;
+    const companyIds = allCompanies.map(c => c.id);
+    const allContacts = await db.select().from(contacts).where(inArray(contacts.companyId, companyIds));
+    return allContacts.filter(c => {
+      if (!c.createdAt) return false;
+      return c.createdAt >= startDate && c.createdAt <= endDate;
+    }).length;
   }
 }
 

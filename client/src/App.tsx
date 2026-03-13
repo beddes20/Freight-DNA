@@ -24,6 +24,7 @@ import TopOpportunities from "@/pages/top-opportunities";
 import OneOnOnePage from "@/pages/one-on-one";
 import TasksPage from "@/pages/tasks";
 import TeamPerformancePage from "@/pages/team-performance";
+import GoalsPage from "@/pages/goals";
 
 function Router() {
   return (
@@ -41,6 +42,7 @@ function Router() {
       <Route path="/one-on-one" component={OneOnOnePage} />
       <Route path="/tasks" component={TasksPage} />
       <Route path="/team-performance" component={TeamPerformancePage} />
+      <Route path="/goals" component={GoalsPage} />
       <Route component={NotFound} />
     </Switch>
   );

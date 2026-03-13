@@ -37,6 +37,8 @@ export const contacts = pgTable("contacts", {
   spotBiddingProcess: text("spot_bidding_process"),
   interests: text("interests"),
   notes: text("notes"),
+  createdAt: text("created_at"),
+  createdBy: varchar("created_by"),
 });
 
 export const insertContactSchema = createInsertSchema(contacts).omit({
@@ -269,3 +271,35 @@ export const insertNotificationSchema = createInsertSchema(notifications).omit({
 
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;
 export type Notification = typeof notifications.$inferSelect;
+
+export const goals = pgTable("goals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  namId: varchar("nam_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  amId: varchar("am_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  metric: text("metric").notNull(),
+  period: text("period").notNull(),
+  target: decimal("target", { precision: 14, scale: 2 }).notNull(),
+  currentValue: decimal("current_value", { precision: 14, scale: 2 }).notNull().default("0"),
+  title: text("title"),
+  notes: text("notes"),
+  startDate: text("start_date").notNull(),
+  endDate: text("end_date").notNull(),
+  createdAt: text("created_at").notNull(),
+  createdById: varchar("created_by_id").notNull().references(() => users.id),
+});
+
+export const insertGoalSchema = createInsertSchema(goals).omit({ id: true });
+export type InsertGoal = z.infer<typeof insertGoalSchema>;
+export type Goal = typeof goals.$inferSelect;
+
+export const goalComments = pgTable("goal_comments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  goalId: varchar("goal_id").notNull().references(() => goals.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  body: text("body").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertGoalCommentSchema = createInsertSchema(goalComments).omit({ id: true });
+export type InsertGoalComment = z.infer<typeof insertGoalCommentSchema>;
+export type GoalComment = typeof goalComments.$inferSelect;
