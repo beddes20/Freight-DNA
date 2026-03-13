@@ -16,14 +16,6 @@ import type { OneOnOneSession, OneOnOneTopic, User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
 
-type ManagerOverviewItem = {
-  amId: string;
-  sessionId: string;
-  startDate: string;
-  pendingCount: number;
-  discussedCount: number;
-  totalCount: number;
-};
 
 const TAG_CONFIG: Record<string, { label: string; color: string }> = {
   action_item: { label: "Action Item", color: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" },
@@ -426,67 +418,56 @@ function ArchivedSessionCard({ session, allUsers }: {
   );
 }
 
-// ─── Rep List (manager view) ──────────────────────────────────────────────────
+// ─── Pairing List sidebar ─────────────────────────────────────────────────────
 
-interface RepListProps {
-  managerId: string;
-  directReports: SafeUser[];
-  selectedRepId: string | null;
-  onSelect: (id: string) => void;
+interface Pairing {
+  namId: string;
+  amId: string;
+  namName: string;
+  amName: string;
 }
 
-function RepList({ managerId, directReports, selectedRepId, onSelect }: RepListProps) {
-  const { data: overview = [] } = useQuery<ManagerOverviewItem[]>({
-    queryKey: ["/api/1on1/manager-overview", managerId],
-    queryFn: async () => {
-      const res = await fetch(`/api/1on1/manager-overview?managerId=${managerId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-    refetchInterval: 30000,
-  });
+interface PairingListProps {
+  pairings: Pairing[];
+  selectedKey: string | null;
+  onSelect: (key: string) => void;
+  showNamLabel: boolean;
+}
 
-  const getOverview = (repId: string) => overview.find(o => o.amId === repId);
-
+function PairingList({ pairings, selectedKey, onSelect, showNamLabel }: PairingListProps) {
   return (
     <div className="w-64 shrink-0 border-r flex flex-col bg-muted/10">
       <div className="px-4 py-3 border-b">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Direct Reports</p>
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          {showNamLabel ? "All Pairings" : "Direct Reports"}
+        </p>
       </div>
       <div className="flex-1 overflow-y-auto py-2">
-        {directReports.length === 0 ? (
+        {pairings.length === 0 ? (
           <div className="px-4 py-8 text-center text-muted-foreground">
             <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
-            <p className="text-sm">No direct reports</p>
+            <p className="text-sm">No pairings found</p>
           </div>
         ) : (
-          directReports.map(rep => {
-            const ov = getOverview(rep.id);
-            const pending = ov?.pendingCount ?? 0;
-            const isSelected = selectedRepId === rep.id;
+          pairings.map(p => {
+            const key = `${p.namId}::${p.amId}`;
+            const isSelected = selectedKey === key;
             return (
               <button
-                key={rep.id}
-                onClick={() => onSelect(rep.id)}
+                key={key}
+                onClick={() => onSelect(key)}
                 className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 ${isSelected ? "bg-muted/60 border-r-2 border-r-indigo-600" : ""}`}
-                data-testid={`btn-select-rep-${rep.id}`}
+                data-testid={`btn-select-pairing-${p.amId}`}
               >
-                <div className={`h-8 w-8 rounded-full shrink-0 flex items-center justify-center text-white text-xs font-semibold ${avatarColor(rep.name)}`}>
-                  {initials(rep.name)}
+                <div className={`h-8 w-8 rounded-full shrink-0 flex items-center justify-center text-white text-xs font-semibold ${avatarColor(p.amName)}`}>
+                  {initials(p.amName)}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{rep.name}</p>
-                  {ov && (
-                    <p className="text-xs text-muted-foreground">
-                      {ov.totalCount === 0 ? "No topics" : `${ov.totalCount} topic${ov.totalCount !== 1 ? "s" : ""}`}
-                    </p>
+                  <p className="text-sm font-medium truncate">{p.amName}</p>
+                  {showNamLabel && (
+                    <p className="text-xs text-muted-foreground truncate">with {p.namName}</p>
                   )}
                 </div>
-                {pending > 0 && (
-                  <span className="shrink-0 h-5 min-w-5 flex items-center justify-center rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 text-xs font-semibold px-1.5">
-                    {pending}
-                  </span>
-                )}
               </button>
             );
           })
@@ -500,37 +481,32 @@ function RepList({ managerId, directReports, selectedRepId, onSelect }: RepListP
 
 export default function OneOnOnePage() {
   const { user } = useAuth();
-  const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/users"],
   });
 
+  const { data: pairings = [], isLoading: pairingsLoading } = useQuery<Pairing[]>({
+    queryKey: ["/api/one-on-one/pairings"],
+  });
+
   if (!user) return null;
 
   const isAM = user.role === "account_manager";
-  const isManager = !isAM;
+  const showNamLabel = user.role === "admin";
 
-  const directReports = allUsers.filter(u => u.managerId === user.id && u.role === "account_manager");
+  const activePairingKey = selectedKey ?? (pairings.length > 0 ? `${pairings[0].namId}::${pairings[0].amId}` : null);
+  const activePairing = pairings.find(p => `${p.namId}::${p.amId}` === activePairingKey) ?? pairings[0] ?? null;
 
-  const activeRep = isManager
-    ? (selectedRepId ? allUsers.find(u => u.id === selectedRepId) : directReports[0]) ?? null
-    : null;
-
-  if (!selectedRepId && directReports.length > 0 && !selectedRepId) {
-    // auto-select first on mount is handled below
-  }
-
-  const managerId = isAM ? (user.managerId ?? null) : user.id;
-  const repId = isAM ? user.id : (activeRep?.id ?? null);
-
-  const manager = isAM ? allUsers.find(u => u.id === user.managerId) : null;
+  const managerId = activePairing?.namId ?? null;
+  const repId = activePairing?.amId ?? null;
 
   const pairingTitle = isAM
-    ? manager ? `Your 1:1 with ${manager.name}` : "Your 1:1 Sessions"
-    : activeRep ? `1:1 with ${activeRep.name}` : "1:1 Sessions";
+    ? activePairing ? `Your 1:1 with ${activePairing.namName}` : "Your 1:1 Sessions"
+    : activePairing ? `1:1 with ${activePairing.amName}` : "1:1 Sessions";
 
-  if (usersLoading) {
+  if (usersLoading || pairingsLoading) {
     return (
       <div className="p-6 space-y-4">
         <Skeleton className="h-8 w-64" />
@@ -554,13 +530,13 @@ export default function OneOnOnePage() {
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Manager: rep list on left */}
-        {isManager && (
-          <RepList
-            managerId={user.id}
-            directReports={directReports}
-            selectedRepId={selectedRepId ?? (directReports[0]?.id ?? null)}
-            onSelect={setSelectedRepId}
+        {/* Sidebar: pairing list for managers/admins */}
+        {!isAM && pairings.length > 1 && (
+          <PairingList
+            pairings={pairings}
+            selectedKey={activePairingKey}
+            onSelect={setSelectedKey}
+            showNamLabel={showNamLabel}
           />
         )}
 
@@ -571,9 +547,9 @@ export default function OneOnOnePage() {
               {/* Pairing header */}
               <div className="px-6 pt-5 pb-0">
                 <div className="flex items-center gap-3 mb-1">
-                  {isManager && activeRep && (
-                    <div className={`h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0 ${avatarColor(activeRep.name)}`}>
-                      {initials(activeRep.name)}
+                  {activePairing && (
+                    <div className={`h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0 ${avatarColor(isAM ? activePairing.namName : activePairing.amName)}`}>
+                      {initials(isAM ? activePairing.namName : activePairing.amName)}
                     </div>
                   )}
                   <div>
@@ -600,7 +576,8 @@ export default function OneOnOnePage() {
               ) : (
                 <>
                   <Users className="h-12 w-12 mb-3 opacity-30" />
-                  <p className="text-base font-medium">Select a rep from the list</p>
+                  <p className="text-base font-medium">No 1:1 sessions found</p>
+                  <p className="text-sm mt-1">Sessions are created automatically when you select a pairing</p>
                 </>
               )}
             </div>
