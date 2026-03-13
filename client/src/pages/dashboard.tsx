@@ -59,6 +59,7 @@ export default function Dashboard() {
   const [mentionState, setMentionState] = useState<{ mentionStart: number; query: string } | null>(null);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
+  const [feedExpanded, setFeedExpanded] = useState(false);
   const [selectedMentionIdx, setSelectedMentionIdx] = useState(0);
   const feedTextareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -500,8 +501,9 @@ export default function Dashboard() {
               {[1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full" />)}
             </div>
           ) : feedPosts.length > 0 ? (
-            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-              {feedPosts.map(post => {
+            <div>
+            <div className={`space-y-2 pr-1 ${feedExpanded ? "max-h-[600px] overflow-y-auto" : ""}`}>
+              {(feedExpanded ? feedPosts : feedPosts.slice(0, 5)).map(post => {
                 const catColors: Record<string, string> = {
                   trend: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
                   growth: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
@@ -620,6 +622,16 @@ export default function Dashboard() {
                   </div>
                 );
               })}
+            </div>
+            {feedPosts.length > 5 && (
+              <button
+                onClick={() => setFeedExpanded(v => !v)}
+                className="w-full mt-2 py-1.5 text-xs text-muted-foreground hover:text-primary flex items-center justify-center gap-1.5 rounded-md hover:bg-muted/50 transition-colors"
+                data-testid="button-toggle-feed-expand"
+              >
+                {feedExpanded ? "Show less" : `Show ${feedPosts.length - 5} more post${feedPosts.length - 5 === 1 ? "" : "s"}`}
+              </button>
+            )}
             </div>
           ) : (
             <div className="text-center py-6 text-muted-foreground">
