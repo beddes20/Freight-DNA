@@ -17,9 +17,9 @@ import type { OneOnOneSession, OneOnOneTopic, User } from "@shared/schema";
 type SafeUser = Omit<User, "password">;
 
 type ManagerOverviewItem = {
-  repId: string;
+  amId: string;
   sessionId: string;
-  startedAt: string;
+  startDate: string;
   pendingCount: number;
   discussedCount: number;
   totalCount: number;
@@ -168,7 +168,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
       <div className="flex gap-4 px-6 py-4 border-b flex-wrap">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <CalendarDays className="h-4 w-4" />
-          <span>Started {formatDate(session.startedAt)}</span>
+          <span>Started {formatDate(session.startDate)}</span>
         </div>
         {topics.length > 0 && (
           <>
@@ -380,7 +380,7 @@ function ArchivedSessionCard({ session, allUsers }: {
         onClick={() => setOpen(v => !v)}
       >
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium">{formatDate(session.startedAt)}</p>
+          <p className="text-sm font-medium">{formatDate(session.startDate)}</p>
           <div className="flex items-center gap-2 mt-1">
             <span className="text-xs text-muted-foreground">{session.topics.length} topic{session.topics.length !== 1 ? "s" : ""}</span>
             {session.topics.length > 0 && (
@@ -446,7 +446,7 @@ function RepList({ managerId, directReports, selectedRepId, onSelect }: RepListP
     refetchInterval: 30000,
   });
 
-  const getOverview = (repId: string) => overview.find(o => o.repId === repId);
+  const getOverview = (repId: string) => overview.find(o => o.amId === repId);
 
   return (
     <div className="w-64 shrink-0 border-r flex flex-col bg-muted/10">

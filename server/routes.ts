@@ -1663,9 +1663,9 @@ export async function registerRoutes(
         activeSessions.map(async (s) => {
           const topics = await storage.getTopicsBySession(s.id);
           return {
-            repId: s.repId,
+            amId: s.amId,
             sessionId: s.id,
-            startedAt: s.startedAt,
+            startDate: s.startDate,
             pendingCount: topics.filter(t => t.status === "pending").length,
             discussedCount: topics.filter(t => t.status === "discussed").length,
             totalCount: topics.length,

@@ -115,6 +115,7 @@ export interface IStorage {
   toggleFeedPostReaction(feedPostId: string, userId: string, emoji: string): Promise<{ action: "added" | "removed" }>;
 
   getActiveSession(namId: string, amId: string): Promise<OneOnOneSession | undefined>;
+  getActiveSessionsForManager(namId: string): Promise<OneOnOneSession[]>;
   getOrCreateActiveSession(namId: string, amId: string): Promise<OneOnOneSession>;
   getSession(id: string): Promise<OneOnOneSession | undefined>;
   getSessionsByUser(userId: string): Promise<OneOnOneSession[]>;
@@ -498,6 +499,15 @@ export class DatabaseStorage implements IStorage {
       )
     );
     return session;
+  }
+
+  async getActiveSessionsForManager(namId: string): Promise<OneOnOneSession[]> {
+    return db.select().from(oneOnOneSessions).where(
+      and(
+        eq(oneOnOneSessions.namId, namId),
+        eq(oneOnOneSessions.status, "active")
+      )
+    );
   }
 
   async getSession(id: string): Promise<OneOnOneSession | undefined> {
