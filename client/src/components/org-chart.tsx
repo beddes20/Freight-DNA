@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Pencil, MapPin, Route, DollarSign, FileText, PhoneCall } from "lucide-react";
+import { Pencil, MapPin, Route, DollarSign, FileText, PhoneCall, ListTodo } from "lucide-react";
 import type { Contact, Touchpoint } from "@shared/schema";
 
 interface OrgChartProps {
@@ -199,6 +199,18 @@ function ContactCard({ contact, tps, onEdit, onView, level }: ContactCardProps) 
                   <p className="text-xs text-muted-foreground line-clamp-2">
                     {contact.spotBiddingProcess}
                   </p>
+                </div>
+              )}
+
+              {contact.nextSteps && (
+                <div className="flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 px-2 py-1.5">
+                  <ListTodo className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400 mb-0.5">Next Steps</p>
+                    <p className="text-xs text-amber-800 dark:text-amber-200 line-clamp-2">
+                      {contact.nextSteps}
+                    </p>
+                  </div>
                 </div>
               )}
             </div>

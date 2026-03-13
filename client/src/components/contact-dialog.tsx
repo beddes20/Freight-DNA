@@ -45,6 +45,7 @@ const contactSchema = z.object({
   regions: z.string().optional(),
   freightSpend: z.string().optional(),
   spotBiddingProcess: z.string().optional(),
+  nextSteps: z.string().optional(),
   interests: z.string().optional(),
   notes: z.string().optional(),
 });
@@ -82,6 +83,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       regions: "",
       freightSpend: "",
       spotBiddingProcess: "",
+      nextSteps: "",
       interests: "",
       notes: "",
     },
@@ -100,6 +102,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         regions: contact.regions?.join(", ") || "",
         freightSpend: contact.freightSpend || "",
         spotBiddingProcess: contact.spotBiddingProcess || "",
+        nextSteps: contact.nextSteps || "",
         interests: contact.interests || "",
         notes: contact.notes || "",
       });
@@ -115,6 +118,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         regions: defaults?.region || "",
         freightSpend: "",
         spotBiddingProcess: "",
+        nextSteps: "",
         interests: "",
         notes: defaults?.lane ? `Contact needed for lane: ${defaults.lane}` : "",
       });
@@ -183,6 +187,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       regions: data.regions ? data.regions.split(",").map((s) => s.trim()).filter(Boolean) : null,
       freightSpend: data.freightSpend || null,
       spotBiddingProcess: data.spotBiddingProcess || null,
+      nextSteps: data.nextSteps || null,
       interests: data.interests || null,
       notes: data.notes || null,
     };
@@ -367,6 +372,24 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
                 />
               </div>
             </div>
+
+            <FormField
+              control={form.control}
+              name="nextSteps"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Next Steps</FormLabel>
+                  <FormControl>
+                    <Textarea 
+                      placeholder="What are the next steps with this contact?" 
+                      {...field} 
+                      data-testid="input-contact-next-steps"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <FormField
               control={form.control}

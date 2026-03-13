@@ -35,6 +35,7 @@ export const contacts = pgTable("contacts", {
   regions: text("regions").array(),
   freightSpend: decimal("freight_spend", { precision: 12, scale: 2 }),
   spotBiddingProcess: text("spot_bidding_process"),
+  nextSteps: text("next_steps"),
   interests: text("interests"),
   notes: text("notes"),
   createdAt: text("created_at"),

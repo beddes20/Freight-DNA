@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Phone, Mail, MapPin, Route, DollarSign, FileText, PhoneCall,
-  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays,
+  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -222,6 +222,16 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
               <div className="flex items-start gap-2">
                 <FileText className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                 <p className="text-sm text-muted-foreground">{contact.spotBiddingProcess}</p>
+              </div>
+            )}
+
+            {contact.nextSteps && (
+              <div className="rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 px-3 py-2 flex items-start gap-2">
+                <ListTodo className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400 mb-0.5">Next Steps</p>
+                  <p className="text-sm text-amber-800 dark:text-amber-200">{contact.nextSteps}</p>
+                </div>
               </div>
             )}
 
