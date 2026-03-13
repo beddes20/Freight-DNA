@@ -40,6 +40,7 @@ export const contacts = pgTable("contacts", {
   notes: text("notes"),
   createdAt: text("created_at"),
   createdBy: varchar("created_by"),
+  baseAdvancedAt: text("base_advanced_at"),
 });
 
 export const insertContactSchema = createInsertSchema(contacts).omit({

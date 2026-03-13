@@ -619,6 +619,9 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
+      if (parsed.data.relationshipBase && parsed.data.relationshipBase !== existing.relationshipBase) {
+        parsed.data.baseAdvancedAt = new Date().toISOString().split("T")[0];
+      }
       const contact = await storage.updateContact(req.params.id, parsed.data);
       res.json(contact);
     } catch (error) {

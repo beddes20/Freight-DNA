@@ -146,7 +146,7 @@ export interface IStorage {
   searchRfps(query: string): Promise<Rfp[]>;
 
   getCompanyActivity(companyId: string): Promise<Array<{ type: string; title: string; subtitle?: string; date: string; link?: string }>>;
-  getTeamPerformance(managerIds: string[]): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number }>>;
+  getTeamPerformance(managerIds: string[]): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number }>>;
 
   getNotifications(userId: string): Promise<import('../shared/schema').Notification[]>;
   createNotification(data: import('../shared/schema').InsertNotification): Promise<import('../shared/schema').Notification>;
@@ -725,14 +725,18 @@ export class DatabaseStorage implements IStorage {
     return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 30);
   }
 
-  async getTeamPerformance(teamMemberIds: string[]): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number }>> {
+  async getTeamPerformance(teamMemberIds: string[]): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number }>> {
     if (teamMemberIds.length === 0) return [];
-    const now = new Date().toISOString().split("T")[0];
-    const monthPrefix = now.slice(0, 7); // e.g. "2026-03"
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
     const [allTasks, allCompanies, allTouchpoints, allContacts] = await Promise.all([
       db.select().from(tasks).where(inArray(tasks.assignedTo, teamMemberIds)),
       db.select().from(companies).where(inArray(companies.assignedTo, teamMemberIds)),
-      db.select().from(touchpoints).where(inArray(touchpoints.loggedById, teamMemberIds)),
+      db.select().from(touchpoints).where(
+        and(inArray(touchpoints.loggedById, teamMemberIds), gte(touchpoints.date, monthStart))
+      ),
       db.select().from(contacts),
     ]);
 
@@ -740,20 +744,22 @@ export class DatabaseStorage implements IStorage {
       const userTasks = allTasks.filter(t => t.assignedTo === uid);
       const userCompanies = allCompanies.filter(c => c.assignedTo === uid);
       const userCompanyIds = userCompanies.map(c => c.id);
-      const monthTouchpoints = allTouchpoints.filter(tp => tp.loggedById === uid && tp.date.startsWith(monthPrefix));
-      const monthContacts = allContacts.filter(c => userCompanyIds.includes(c.companyId) && c.createdBy === uid && c.createdAt && c.createdAt.startsWith(monthPrefix));
-      const touchedContactIds = new Set(monthTouchpoints.map(tp => tp.contactId));
+      const userTouchpoints = allTouchpoints.filter(t => t.loggedById === uid);
+      const userContacts = allContacts.filter(c => userCompanyIds.includes(c.companyId));
+      const touchedContactIds = new Set(userTouchpoints.map(tp => tp.contactId));
+
       return {
         userId: uid,
         openTasks: userTasks.filter(t => t.status === "open" || t.status === "in_progress").length,
-        overdueTasks: userTasks.filter(t => (t.status === "open" || t.status === "in_progress") && t.dueDate && t.dueDate < now).length,
+        overdueTasks: userTasks.filter(t => (t.status === "open" || t.status === "in_progress") && t.dueDate && t.dueDate < today).length,
         completedTasks: userTasks.filter(t => t.status === "completed").length,
         companyCount: userCompanies.length,
-        newContacts: monthContacts.length,
-        callTouchpoints: monthTouchpoints.filter(tp => tp.type === "call").length,
-        textTouchpoints: monthTouchpoints.filter(tp => tp.type === "text").length,
-        emailTouchpoints: monthTouchpoints.filter(tp => tp.type === "email").length,
+        newContacts: userContacts.filter(c => c.createdAt && c.createdAt >= monthStart).length,
+        callTouchpoints: userTouchpoints.filter(t => t.type === "call").length,
+        textTouchpoints: userTouchpoints.filter(t => t.type === "text").length,
+        emailTouchpoints: userTouchpoints.filter(t => t.type === "email").length,
         contactsTouched: touchedContactIds.size,
+        baseAdvanced: userContacts.filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart).length,
       };
     });
   }
