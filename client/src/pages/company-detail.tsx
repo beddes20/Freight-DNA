@@ -283,9 +283,29 @@ export default function CompanyDetail() {
   const { data: accountSummaryAll = [] } = useQuery<Array<{ customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; repName: string }>>({
     queryKey: ["/api/financials/account-summary"],
   });
-  const accountPerf = accountSummaryAll.find(r =>
-    r.customerName.toLowerCase() === (company?.name || "").toLowerCase()
-  );
+  const matchedPerf = (() => {
+    if (!company) return null;
+    // Normalize: lowercase, collapse whitespace, strip punctuation
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    const crmNorm = normalize(company.name);
+    const matches = accountSummaryAll.filter(r => {
+      const excelNorm = normalize(r.customerName);
+      // Exact normalized match
+      if (excelNorm === crmNorm) return true;
+      // Substring: one fully contains the other (min 8 chars to avoid noise)
+      const shorter = crmNorm.length <= excelNorm.length ? crmNorm : excelNorm;
+      const longer  = crmNorm.length <= excelNorm.length ? excelNorm : crmNorm;
+      return shorter.length >= 8 && longer.includes(shorter);
+    });
+    if (!matches.length) return null;
+    return {
+      totalLoads:  matches.reduce((s, r) => s + r.totalLoads, 0),
+      spotLoads:   matches.reduce((s, r) => s + r.spotLoads, 0),
+      totalMargin: matches.reduce((s, r) => s + r.totalMargin, 0),
+      repName:     matches[0].repName,
+    };
+  })();
+  const accountPerf = matchedPerf;
 
   const { data: activityItems = [] } = useQuery<Array<{ type: string; title: string; description: string | null; date: string; userName: string | null }>>({
     queryKey: ["/api/companies", companyId, "activity"],
