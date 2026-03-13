@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
-  Users, Building2, Trophy, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3
+  Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
+  Phone, MessageSquare, Mail, UserPlus, UserCheck
 } from "lucide-react";
 
 interface RepPerf {
@@ -17,14 +18,19 @@ interface RepPerf {
   overdueTasks: number;
   completedTasks: number;
   companyCount: number;
-  rfpCount: number;
+  newContacts: number;
+  callTouchpoints: number;
+  textTouchpoints: number;
+  emailTouchpoints: number;
+  contactsTouched: number;
 }
 
-function StatPill({ value, label, color }: { value: number; label: string; color: string }) {
+function StatPill({ value, label, color, icon }: { value: number; label: string; color: string; icon?: React.ReactNode }) {
   return (
-    <div className="flex flex-col items-center px-3 py-2 rounded-lg bg-muted/50 min-w-[64px]">
-      <span className={`text-lg font-bold ${color}`}>{value}</span>
-      <span className="text-[10px] text-muted-foreground leading-tight text-center">{label}</span>
+    <div className="flex flex-col items-center px-2 py-2 rounded-lg bg-muted/50 min-w-[58px]">
+      {icon && <div className="mb-0.5">{icon}</div>}
+      <span className={`text-base font-bold leading-none ${color}`}>{value}</span>
+      <span className="text-[10px] text-muted-foreground leading-tight text-center mt-0.5">{label}</span>
     </div>
   );
 }
@@ -62,11 +68,18 @@ function RepCard({ rep }: { rep: RepPerf }) {
           )}
         </div>
 
-        <div className="grid grid-cols-4 gap-2 mb-4">
+        <div className="grid grid-cols-4 gap-1.5 mb-2">
           <StatPill value={rep.openTasks} label="Open" color={rep.openTasks > 5 ? "text-amber-600" : "text-foreground"} />
           <StatPill value={rep.overdueTasks} label="Overdue" color={rep.overdueTasks > 0 ? "text-red-600" : "text-foreground"} />
           <StatPill value={rep.companyCount} label="Accounts" color="text-blue-600" />
-          <StatPill value={rep.rfpCount} label="RFPs" color="text-purple-600" />
+          <StatPill value={rep.newContacts} label="New Contacts" color="text-emerald-600" icon={<UserPlus className="h-3 w-3 text-emerald-500" />} />
+        </div>
+
+        <div className="grid grid-cols-4 gap-1.5 mb-4">
+          <StatPill value={rep.callTouchpoints} label="Calls" color="text-blue-600" icon={<Phone className="h-3 w-3 text-blue-500" />} />
+          <StatPill value={rep.textTouchpoints} label="Texts" color="text-green-600" icon={<MessageSquare className="h-3 w-3 text-green-500" />} />
+          <StatPill value={rep.emailTouchpoints} label="Emails" color="text-purple-600" icon={<Mail className="h-3 w-3 text-purple-500" />} />
+          <StatPill value={rep.contactsTouched} label="Touched" color="text-cyan-600" icon={<UserCheck className="h-3 w-3 text-cyan-500" />} />
         </div>
 
         <div className="space-y-1">
@@ -107,7 +120,11 @@ export default function TeamPerformancePage() {
   const totalOpenTasks = reps.reduce((sum, r) => sum + r.openTasks, 0);
   const totalOverdue = reps.reduce((sum, r) => sum + r.overdueTasks, 0);
   const totalAccounts = reps.reduce((sum, r) => sum + r.companyCount, 0);
-  const totalRfps = reps.reduce((sum, r) => sum + r.rfpCount, 0);
+  const totalNewContacts = reps.reduce((sum, r) => sum + r.newContacts, 0);
+  const totalCalls = reps.reduce((sum, r) => sum + r.callTouchpoints, 0);
+  const totalTexts = reps.reduce((sum, r) => sum + r.textTouchpoints, 0);
+  const totalEmails = reps.reduce((sum, r) => sum + r.emailTouchpoints, 0);
+  const totalTouched = reps.reduce((sum, r) => sum + r.contactsTouched, 0);
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
@@ -117,33 +134,53 @@ export default function TeamPerformancePage() {
         </div>
         <div>
           <h1 className="text-xl font-semibold" data-testid="text-page-title">Team Performance</h1>
-          <p className="text-sm text-muted-foreground">KPIs across your team — tasks, accounts, and RFPs</p>
+          <p className="text-sm text-muted-foreground">KPIs across your team — tasks, accounts, and this month's activity</p>
         </div>
       </div>
 
       {isLoading ? (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-24 w-full" />)}
+          {[1, 2, 3, 4, 5, 6, 7, 8].map(i => <Skeleton key={i} className="h-24 w-full" />)}
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {[
-              { label: "Open Tasks", value: totalOpenTasks, icon: <Clock className="h-5 w-5 text-amber-500" />, color: "text-amber-600" },
-              { label: "Overdue", value: totalOverdue, icon: <AlertTriangle className="h-5 w-5 text-red-500" />, color: "text-red-600" },
-              { label: "Total Accounts", value: totalAccounts, icon: <Building2 className="h-5 w-5 text-blue-500" />, color: "text-blue-600" },
-              { label: "Active RFPs", value: totalRfps, icon: <Trophy className="h-5 w-5 text-purple-500" />, color: "text-purple-600" },
-            ].map(stat => (
-              <Card key={stat.label}>
-                <CardContent className="pt-4 pb-3">
-                  <div className="flex items-center gap-2 mb-1">
-                    {stat.icon}
-                    <span className="text-xs text-muted-foreground">{stat.label}</span>
-                  </div>
-                  <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
-                </CardContent>
-              </Card>
-            ))}
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { label: "Open Tasks", value: totalOpenTasks, icon: <Clock className="h-4 w-4 text-amber-500" />, color: "text-amber-600" },
+                { label: "Overdue", value: totalOverdue, icon: <AlertTriangle className="h-4 w-4 text-red-500" />, color: "text-red-600" },
+                { label: "Total Accounts", value: totalAccounts, icon: <Building2 className="h-4 w-4 text-blue-500" />, color: "text-blue-600" },
+                { label: "New Contacts (Mo)", value: totalNewContacts, icon: <UserPlus className="h-4 w-4 text-emerald-500" />, color: "text-emerald-600" },
+              ].map(stat => (
+                <Card key={stat.label}>
+                  <CardContent className="pt-4 pb-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      {stat.icon}
+                      <span className="text-xs text-muted-foreground">{stat.label}</span>
+                    </div>
+                    <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { label: "Calls This Month", value: totalCalls, icon: <Phone className="h-4 w-4 text-blue-500" />, color: "text-blue-600" },
+                { label: "Texts This Month", value: totalTexts, icon: <MessageSquare className="h-4 w-4 text-green-500" />, color: "text-green-600" },
+                { label: "Emails This Month", value: totalEmails, icon: <Mail className="h-4 w-4 text-purple-500" />, color: "text-purple-600" },
+                { label: "Contacts Touched", value: totalTouched, icon: <UserCheck className="h-4 w-4 text-cyan-500" />, color: "text-cyan-600" },
+              ].map(stat => (
+                <Card key={stat.label}>
+                  <CardContent className="pt-4 pb-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      {stat.icon}
+                      <span className="text-xs text-muted-foreground">{stat.label}</span>
+                    </div>
+                    <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           </div>
 
           {nams.length > 0 && (
