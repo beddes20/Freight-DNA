@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink, MessagesSquare } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -42,6 +42,11 @@ const menuItems = [
     title: "Top Opportunities",
     url: "/top-opportunities",
     icon: Zap,
+  },
+  {
+    title: "1:1 Meetings",
+    url: "/one-on-one",
+    icon: MessagesSquare,
   },
 ];
 

@@ -1572,6 +1572,35 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/1on1/manager-overview", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { managerId } = req.query as { managerId?: string };
+      if (!managerId) return res.status(400).json({ error: "managerId required" });
+      const isAdmin = user.role === "admin" || user.role === "director";
+      const isSelf = user.id === managerId;
+      if (!isAdmin && !isSelf) return res.status(403).json({ error: "Access denied" });
+      const activeSessions = await storage.getActiveSessionsForManager(managerId);
+      const overview = await Promise.all(
+        activeSessions.map(async (s) => {
+          const topics = await storage.getTopicsBySession(s.id);
+          return {
+            repId: s.repId,
+            sessionId: s.id,
+            startedAt: s.startedAt,
+            pendingCount: topics.filter(t => t.status === "pending").length,
+            discussedCount: topics.filter(t => t.status === "discussed").length,
+            totalCount: topics.length,
+          };
+        })
+      );
+      res.json(overview);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get manager overview" });
+    }
+  });
+
   // ── Financial Data ─────────────────────────────────────────────────────────
 
   app.get("/api/historical-data", requireAuth, async (req, res) => {
