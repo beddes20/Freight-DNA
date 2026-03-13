@@ -427,7 +427,8 @@ export async function registerRoutes(
       }
       if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
-        return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
+        const visibleIds = new Set([...teamIds, currentUser.id]);
+        return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
       }
       const visibleIds = new Set<string>([currentUser.id]);
       if (currentUser.managerId) {
