@@ -21,6 +21,21 @@ function findSheetByName(workbook: XLSX.WorkBook, preferredName: string): string
   return match || workbook.SheetNames[0];
 }
 
+async function getVisibleFeedAuthorIds(user: { id: string; role: string; managerId: string | null }): Promise<string[] | undefined> {
+  if (user.role === "admin") return undefined;
+  if (user.role === "director") {
+    return storage.getTeamMemberIds(user.id);
+  }
+  if (user.role === "national_account_manager" || user.role === "sales") {
+    const ids = await storage.getTeamMemberIds(user.id);
+    if (user.managerId) ids.push(user.managerId);
+    return ids;
+  }
+  const ids = new Set<string>([user.id]);
+  if (user.managerId) ids.add(user.managerId);
+  return Array.from(ids);
+}
+
 const ZIP_REGEX = /^\d{5}(-\d{4})?$/;
 
 function zipToCity(value: string): string {
@@ -1370,24 +1385,8 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      let topLevel: any[];
-      if (user.role === "admin") {
-        topLevel = await storage.getFeedPosts();
-      } else {
-        let visibleIds: string[];
-        if (user.role === "director") {
-          visibleIds = await storage.getTeamMemberIds(user.id);
-        } else if (user.role === "national_account_manager" || user.role === "sales") {
-          visibleIds = await storage.getTeamMemberIds(user.id);
-          if (user.managerId) visibleIds.push(user.managerId);
-        } else {
-          // account_manager: see their manager's posts
-          const ids = new Set<string>([user.id]);
-          if (user.managerId) ids.add(user.managerId);
-          visibleIds = Array.from(ids);
-        }
-        topLevel = await storage.getFeedPosts(visibleIds);
-      }
+      const visibleAuthorIds = await getVisibleFeedAuthorIds(user);
+      const topLevel = await storage.getFeedPosts(visibleAuthorIds);
       // Attach replies to each top-level post
       const parentIds = topLevel.map((p: any) => p.id);
       const replies = await storage.getFeedReplies(parentIds);
@@ -1508,6 +1507,55 @@ export async function registerRoutes(
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to toggle reaction" });
+    }
+  });
+
+  // ── Feed Post Reactions ─────────────────────────────────────────────────────
+
+  app.get("/api/feed/reactions", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const ids = req.query.ids;
+      if (!ids || typeof ids !== "string") return res.json([]);
+      const requestedIds = ids.split(",").filter(Boolean);
+      if (requestedIds.length === 0) return res.json([]);
+
+      const visibleAuthorIds = await getVisibleFeedAuthorIds(user);
+      const visiblePosts = await storage.getFeedPosts(visibleAuthorIds);
+      const visiblePostIds = new Set(visiblePosts.map(p => p.id));
+      const filteredIds = requestedIds.filter(id => visiblePostIds.has(id));
+      if (filteredIds.length === 0) return res.json([]);
+
+      const reactions = await storage.getReactionsByFeedPostIds(filteredIds);
+      res.json(reactions);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch feed reactions" });
+    }
+  });
+
+  app.post("/api/feed/:id/reactions", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { emoji } = req.body;
+      const validEmojis = ["👍", "🔥", "💡", "❤️", "✅"];
+      if (!emoji || !validEmojis.includes(emoji)) {
+        return res.status(400).json({ error: "Invalid emoji" });
+      }
+      const post = await storage.getFeedPost(req.params.id);
+      if (!post) return res.status(404).json({ error: "Feed post not found" });
+      if (post.parentId) return res.status(400).json({ error: "Reactions are only allowed on top-level posts" });
+
+      const visibleAuthorIds = await getVisibleFeedAuthorIds(user);
+      if (visibleAuthorIds && !visibleAuthorIds.includes(post.authorId)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const result = await storage.toggleFeedPostReaction(req.params.id, user.id, emoji);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to toggle feed reaction" });
     }
   });
 

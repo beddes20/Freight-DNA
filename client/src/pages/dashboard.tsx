@@ -16,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
-import type { Company, Contact, Task, User, FeedPost } from "@shared/schema";
+import type { Company, Contact, Task, User, FeedPost, FeedPostReaction } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -87,6 +87,28 @@ export default function Dashboard() {
 
   const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPostWithReplies[]>({
     queryKey: ["/api/feed-posts"],
+  });
+
+  const feedPostIds = feedPosts.map(p => p.id);
+  const { data: feedReactions = [] } = useQuery<FeedPostReaction[]>({
+    queryKey: ["/api/feed/reactions", feedPostIds.join(",")],
+    queryFn: async () => {
+      if (feedPostIds.length === 0) return [];
+      const res = await fetch(`/api/feed/reactions?ids=${feedPostIds.join(",")}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch feed reactions");
+      return res.json();
+    },
+    enabled: feedPostIds.length > 0,
+  });
+
+  const toggleFeedReactionMutation = useMutation({
+    mutationFn: async ({ postId, emoji }: { postId: string; emoji: string }) => {
+      const res = await apiRequest("POST", `/api/feed/${postId}/reactions`, { emoji });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/feed/reactions"] });
+    },
   });
 
   const createFeedPostMutation = useMutation({
@@ -535,6 +557,28 @@ export default function Dashboard() {
                             <MessageSquare className="h-3 w-3" />
                             {post.replies.length > 0 ? `${post.replies.length} repl${post.replies.length === 1 ? "y" : "ies"}` : "Reply"}
                           </button>
+                        </div>
+                        <div className="flex items-center gap-1 mt-1.5" data-testid={`reaction-bar-${post.id}`}>
+                          {(["👍", "🔥", "💡", "❤️", "✅"] as const).map(emoji => {
+                            const postReactions = feedReactions.filter(r => r.feedPostId === post.id && r.emoji === emoji);
+                            const count = postReactions.length;
+                            const isActive = postReactions.some(r => r.userId === currentUser?.id);
+                            return (
+                              <button
+                                key={emoji}
+                                onClick={() => toggleFeedReactionMutation.mutate({ postId: post.id, emoji })}
+                                className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full border transition-colors ${
+                                  isActive
+                                    ? "bg-primary/10 border-primary/30 text-primary"
+                                    : "bg-transparent border-transparent text-muted-foreground hover:bg-muted hover:border-border"
+                                }`}
+                                data-testid={`button-reaction-${emoji}-${post.id}`}
+                              >
+                                <span>{emoji}</span>
+                                {count > 0 && <span className="font-medium">{count}</span>}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                       {(post.authorId === currentUser?.id || currentUser?.role === "admin") && (

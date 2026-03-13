@@ -13,6 +13,7 @@ import {
   callouts,
   feedPosts,
   calloutReactions,
+  feedPostReactions,
   oneOnOneSessions,
   oneOnOneTopics,
   type User,
@@ -34,6 +35,7 @@ import {
   type FeedPost,
   type InsertFeedPost,
   type CalloutReaction,
+  type FeedPostReaction,
   type OneOnOneSession,
   type InsertOneOnOneSession,
   type OneOnOneTopic,
@@ -108,6 +110,9 @@ export interface IStorage {
 
   getReactionsByCalloutIds(calloutIds: string[]): Promise<CalloutReaction[]>;
   toggleReaction(calloutId: string, userId: string, emoji: string): Promise<{ action: "added" | "removed" }>;
+
+  getReactionsByFeedPostIds(feedPostIds: string[]): Promise<FeedPostReaction[]>;
+  toggleFeedPostReaction(feedPostId: string, userId: string, emoji: string): Promise<{ action: "added" | "removed" }>;
 
   getActiveSession(namId: string, amId: string): Promise<OneOnOneSession | undefined>;
   getOrCreateActiveSession(namId: string, amId: string): Promise<OneOnOneSession>;
@@ -451,6 +456,32 @@ export class DatabaseStorage implements IStorage {
     }
     await db.insert(calloutReactions).values({
       calloutId,
+      userId,
+      emoji,
+      createdAt: new Date().toISOString(),
+    });
+    return { action: "added" };
+  }
+
+  async getReactionsByFeedPostIds(feedPostIds: string[]): Promise<FeedPostReaction[]> {
+    if (feedPostIds.length === 0) return [];
+    return db.select().from(feedPostReactions).where(inArray(feedPostReactions.feedPostId, feedPostIds));
+  }
+
+  async toggleFeedPostReaction(feedPostId: string, userId: string, emoji: string): Promise<{ action: "added" | "removed" }> {
+    const [existing] = await db.select().from(feedPostReactions).where(
+      and(
+        eq(feedPostReactions.feedPostId, feedPostId),
+        eq(feedPostReactions.userId, userId),
+        eq(feedPostReactions.emoji, emoji),
+      )
+    );
+    if (existing) {
+      await db.delete(feedPostReactions).where(eq(feedPostReactions.id, existing.id));
+      return { action: "removed" };
+    }
+    await db.insert(feedPostReactions).values({
+      feedPostId,
       userId,
       emoji,
       createdAt: new Date().toISOString(),
