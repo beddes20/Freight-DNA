@@ -8,7 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Users, Plus, CheckCircle2, Circle, Trash2, ChevronDown, ChevronUp,
-  Archive, RotateCcw, MessageSquare, CalendarDays, TrendingUp, AlertCircle,
+  Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle,
   StickyNote, ClipboardList,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -342,7 +342,6 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const { session, topics } = data;
   const pendingTopics = topics.filter(t => t.status === "pending");
   const discussedTopics = topics.filter(t => t.status === "discussed");
-  const progressPct = topics.length > 0 ? Math.round((discussedTopics.length / topics.length) * 100) : 0;
   const openActionItemCount = actionItemData.reduce(
     (sum, group) => sum + group.topics.filter(t => t.status === "pending").length, 0
   );
@@ -360,16 +359,6 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
           <CalendarDays className="h-4 w-4" />
           <span>Started {formatDate(session.startDate)}</span>
         </div>
-        {topics.length > 0 && (
-          <div className="flex items-center gap-2 text-sm">
-            <TrendingUp className="h-4 w-4 text-green-500" />
-            <span className="text-muted-foreground">Progress</span>
-            <div className="flex items-center gap-2 w-24">
-              <Progress value={progressPct} className="h-1.5" />
-              <span className="text-xs font-medium">{progressPct}%</span>
-            </div>
-          </div>
-        )}
         {openActionItemCount > 0 && (
           <div className="flex items-center gap-1.5 text-sm text-orange-600 dark:text-orange-400">
             <AlertCircle className="h-4 w-4" />
