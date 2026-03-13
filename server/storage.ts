@@ -1,4 +1,4 @@
-import { eq, inArray, ilike, or, and, desc, isNull, gte } from "drizzle-orm";
+import { eq, inArray, ilike, or, and, desc, isNull, gte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -58,6 +58,8 @@ import {
   personalAlerts,
   type PersonalAlert,
   type InsertPersonalAlert,
+  vendorRouted,
+  type VendorRouted,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -189,6 +191,8 @@ export interface IStorage {
   createPersonalAlert(alert: InsertPersonalAlert): Promise<PersonalAlert>;
   deletePersonalAlert(id: string, userId: string): Promise<boolean>;
   fireDueAlerts(userId: string): Promise<PersonalAlert[]>;
+  getVendorRoutedByCompany(companyId: string): Promise<VendorRouted[]>;
+  toggleVendorRouted(companyId: string, rowKey: string): Promise<{ active: boolean }>;
 }
 
 const pool = new Pool({
@@ -1023,6 +1027,23 @@ export class DatabaseStorage implements IStorage {
     }
 
     return toFire;
+  }
+
+  async getVendorRoutedByCompany(companyId: string): Promise<VendorRouted[]> {
+    return db.select().from(vendorRouted).where(
+      and(eq(vendorRouted.companyId, companyId), eq(vendorRouted.active, true))
+    );
+  }
+
+  async toggleVendorRouted(companyId: string, rowKey: string): Promise<{ active: boolean }> {
+    const [upserted] = await db.insert(vendorRouted)
+      .values({ companyId, rowKey, active: true })
+      .onConflictDoUpdate({
+        target: [vendorRouted.companyId, vendorRouted.rowKey],
+        set: { active: sql`NOT vendor_routed.active` },
+      })
+      .returning();
+    return { active: upserted.active };
   }
 }
 

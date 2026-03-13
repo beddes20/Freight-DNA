@@ -3261,6 +3261,39 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/companies/:id/vendor-routed", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const rows = await storage.getVendorRoutedByCompany(req.params.id);
+      const keys = rows.map(r => r.rowKey);
+      res.json(keys);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch vendor routed data" });
+    }
+  });
+
+  app.post("/api/companies/:id/vendor-routed/toggle", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { rowKey } = req.body;
+      if (!rowKey || typeof rowKey !== "string") {
+        return res.status(400).json({ error: "rowKey is required" });
+      }
+      const result = await storage.toggleVendorRouted(req.params.id, rowKey);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to toggle vendor routed" });
+    }
+  });
+
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {
       if (err.code === "LIMIT_FILE_SIZE") {

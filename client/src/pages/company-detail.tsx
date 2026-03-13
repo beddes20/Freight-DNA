@@ -268,6 +268,20 @@ export default function CompanyDetail() {
     queryKey: ["/api/companies", companyId, "lane-matching"],
   });
 
+  const { data: vendorRoutedKeys = [] } = useQuery<string[]>({
+    queryKey: ["/api/companies", companyId, "vendor-routed"],
+  });
+
+  const vendorRoutedToggle = useMutation({
+    mutationFn: async (rowKey: string) => {
+      const res = await apiRequest("POST", `/api/companies/${companyId}/vendor-routed/toggle`, { rowKey });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "vendor-routed"] });
+    },
+  });
+
   const { data: companyTasks = [] } = useQuery<Task[]>({
     queryKey: ["/api/tasks/company", companyId],
   });
@@ -1597,6 +1611,20 @@ export default function CompanyDetail() {
                         Force Task
                       </Button>
                     )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={vendorRoutedToggle.isPending}
+                      className={vendorRoutedKeys.includes(`facility:${f.fullName}:${f.type}`)
+                        ? "bg-green-500 text-white border-green-500 hover:bg-green-600"
+                        : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300"
+                      }
+                      onClick={() => vendorRoutedToggle.mutate(`facility:${f.fullName}:${f.type}`)}
+                      data-testid={`button-vendor-routed-facility-${i}`}
+                    >
+                      <TruckIcon className="h-4 w-4 mr-1" />
+                      Vendor Routed
+                    </Button>
                   </div>
                 </div>
               ))}
@@ -1691,6 +1719,20 @@ export default function CompanyDetail() {
                               Force Task
                             </Button>
                           )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={vendorRoutedToggle.isPending}
+                            className={vendorRoutedKeys.includes(`corridor:${c.lane}`)
+                              ? "bg-green-500 text-white border-green-500 hover:bg-green-600"
+                              : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300"
+                            }
+                            onClick={() => vendorRoutedToggle.mutate(`corridor:${c.lane}`)}
+                            data-testid={`button-vendor-routed-corridor-${i}`}
+                          >
+                            <TruckIcon className="h-4 w-4 mr-1" />
+                            Vendor Routed
+                          </Button>
                         </div>
                       </div>
                     ))}
@@ -1756,6 +1798,20 @@ export default function CompanyDetail() {
                               Force Task
                             </Button>
                           )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={vendorRoutedToggle.isPending}
+                            className={vendorRoutedKeys.includes(`hub:${h.fullName}`)
+                              ? "bg-green-500 text-white border-green-500 hover:bg-green-600"
+                              : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300"
+                            }
+                            onClick={() => vendorRoutedToggle.mutate(`hub:${h.fullName}`)}
+                            data-testid={`button-vendor-routed-hub-${i}`}
+                          >
+                            <TruckIcon className="h-4 w-4 mr-1" />
+                            Vendor Routed
+                          </Button>
                         </div>
                       </div>
                     ))}
@@ -1778,6 +1834,7 @@ export default function CompanyDetail() {
                           <th className="text-right font-medium px-3 py-2">Volume</th>
                           <th className="text-left px-3 py-2 w-1/3">Share</th>
                           {canReassign && <th className="text-right font-medium px-3 py-2"></th>}
+                          <th className="text-right font-medium px-3 py-2"></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1817,6 +1874,22 @@ export default function CompanyDetail() {
                                   </Button>
                                 </td>
                               )}
+                              <td className="px-3 py-2 text-right">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={vendorRoutedToggle.isPending}
+                                  className={vendorRoutedKeys.includes(`state-corridor:${s.corridor}`)
+                                    ? "bg-green-500 text-white border-green-500 hover:bg-green-600"
+                                    : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300"
+                                  }
+                                  onClick={() => vendorRoutedToggle.mutate(`state-corridor:${s.corridor}`)}
+                                  data-testid={`button-vendor-routed-state-corridor-${i}`}
+                                >
+                                  <TruckIcon className="h-4 w-4 mr-1" />
+                                  Vendor Routed
+                                </Button>
+                              </td>
                             </tr>
                           ));
                         })()}

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, decimal, jsonb, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, decimal, jsonb, boolean, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -351,3 +351,16 @@ export const personalAlerts = pgTable("personal_alerts", {
 export const insertPersonalAlertSchema = createInsertSchema(personalAlerts).omit({ id: true });
 export type InsertPersonalAlert = z.infer<typeof insertPersonalAlertSchema>;
 export type PersonalAlert = typeof personalAlerts.$inferSelect;
+
+export const vendorRouted = pgTable("vendor_routed", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  rowKey: text("row_key").notNull(),
+  active: boolean("active").notNull().default(true),
+}, (table) => [
+  uniqueIndex("vendor_routed_company_row_key").on(table.companyId, table.rowKey),
+]);
+
+export const insertVendorRoutedSchema = createInsertSchema(vendorRouted).omit({ id: true });
+export type InsertVendorRouted = z.infer<typeof insertVendorRoutedSchema>;
+export type VendorRouted = typeof vendorRouted.$inferSelect;
