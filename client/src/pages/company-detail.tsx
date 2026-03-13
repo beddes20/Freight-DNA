@@ -74,6 +74,7 @@ import {
   Calendar,
   Megaphone,
   MessageSquare,
+  PhoneCall,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -86,7 +87,8 @@ import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import { CalloutDialog } from "@/components/callout-dialog";
-import type { Company, Contact, User, Task, Callout, CalloutReaction } from "@shared/schema";
+import { ContactDetailSheet } from "@/components/contact-detail-sheet";
+import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint } from "@shared/schema";
 
 interface ResearchTask {
   rfpId: string;
@@ -207,6 +209,7 @@ export default function CompanyDetail() {
   const [showPortalPassword, setShowPortalPassword] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState("");
+  const [viewContact, setViewContact] = useState<Contact | null>(null);
   const [laneMatchMode, setLaneMatchMode] = useState<"deliveries" | "pickups">("deliveries");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<Task | undefined>();
@@ -237,6 +240,11 @@ export default function CompanyDetail() {
 
   const { data: contacts, isLoading: contactsLoading } = useQuery<Contact[]>({
     queryKey: ["/api/companies", companyId, "contacts"],
+  });
+
+  const { data: companyTouchpoints = [] } = useQuery<Touchpoint[]>({
+    queryKey: ["/api/companies", companyId, "touchpoints"],
+    enabled: !!companyId,
   });
 
   const { data: researchTasks } = useQuery<ResearchTask[]>({
@@ -1047,6 +1055,56 @@ export default function CompanyDetail() {
         </Card>
       )}
 
+      {companyTouchpoints.length > 0 && (() => {
+        const now = new Date();
+        const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+        const monthTps = companyTouchpoints.filter(tp => tp.date >= monthStart);
+        const uniqueContacts = new Set(monthTps.map(tp => tp.contactId)).size;
+        const recentTps = [...companyTouchpoints].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
+        const TYPE_LABELS: Record<string, string> = { call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" };
+        const TYPE_COLORS: Record<string, string> = {
+          call:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+          email:      "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+          text:       "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+          site_visit: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+        };
+        return (
+          <Card data-testid="card-touchpoints-summary">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <PhoneCall className="h-4 w-4 text-cyan-500" />
+                Touchpoints
+                <Badge variant="secondary" className="ml-1 font-normal">{monthTps.length} this month · {uniqueContacts} contacts</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0 space-y-1">
+              {recentTps.map(tp => {
+                const dateStr = (() => {
+                  try { return new Date(tp.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
+                  catch { return tp.date; }
+                })();
+                const cnt = contacts?.find(c => c.id === tp.contactId);
+                return (
+                  <div
+                    key={tp.id}
+                    className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-muted/40 rounded px-1"
+                    onClick={() => cnt && setViewContact(cnt)}
+                    data-testid={`tp-row-${tp.id}`}
+                  >
+                    <span className={`inline-flex text-xs px-1.5 py-0.5 rounded font-medium shrink-0 ${TYPE_COLORS[tp.type] ?? "bg-muted text-muted-foreground"}`}>
+                      {TYPE_LABELS[tp.type] ?? tp.type}
+                    </span>
+                    <span className="text-sm truncate">{cnt?.name ?? "Unknown"}</span>
+                    <span className="text-xs text-muted-foreground ml-auto shrink-0">{dateStr}</span>
+                    {tp.notes && <span className="text-xs text-muted-foreground truncate max-w-[120px]">· {tp.notes}</span>}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {activityItems.length > 0 && (
         <Card data-testid="card-activity-timeline">
           <CardHeader className="pb-3">
@@ -1108,7 +1166,7 @@ export default function CompanyDetail() {
             </Button>
           </div>
           {contacts && contacts.length > 0 ? (
-            <OrgChart contacts={contacts} onEditContact={handleEditContact} />
+            <OrgChart contacts={contacts} touchpoints={companyTouchpoints} onEditContact={handleEditContact} onViewContact={setViewContact} />
           ) : (
             <div className="flex flex-col items-center justify-center py-8">
               <Users className="h-10 w-10 text-muted-foreground/50 mb-3" />
@@ -1876,7 +1934,9 @@ export default function CompanyDetail() {
           <ContactList
             contacts={contacts}
             companyId={companyId}
+            touchpoints={companyTouchpoints}
             onEditContact={handleEditContact}
+            onViewContact={setViewContact}
           />
         </div>
       )}
@@ -2019,6 +2079,13 @@ export default function CompanyDetail() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ContactDetailSheet
+        contact={viewContact}
+        open={!!viewContact}
+        onClose={() => setViewContact(null)}
+        onEdit={(c) => { setViewContact(null); handleEditContact(c); }}
+      />
     </div>
   );
 }

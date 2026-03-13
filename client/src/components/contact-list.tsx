@@ -25,18 +25,44 @@ import {
   FileText,
   Mail,
   Phone,
+  PhoneCall,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Contact } from "@shared/schema";
+import type { Contact, Touchpoint } from "@shared/schema";
+
+function countThisWeek(tps: Touchpoint[]) {
+  const start = new Date();
+  start.setDate(start.getDate() - start.getDay());
+  start.setHours(0, 0, 0, 0);
+  const startStr = start.toISOString().split("T")[0];
+  return tps.filter(t => t.date >= startStr).length;
+}
+
+function getLastTouchDays(tps: Touchpoint[]): number | null {
+  if (tps.length === 0) return null;
+  const latest = tps.reduce((a, b) => a.date > b.date ? a : b);
+  const today = new Date();
+  const d = new Date(latest.date + "T00:00:00");
+  return Math.floor((today.getTime() - d.getTime()) / 86400000);
+}
+
+function recencyBadgeClass(days: number | null) {
+  if (days === null) return "bg-muted/60 text-muted-foreground";
+  if (days <= 7)  return "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300";
+  if (days <= 30) return "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300";
+  return "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300";
+}
 
 interface ContactListProps {
   contacts: Contact[];
   companyId: string;
+  touchpoints?: Touchpoint[];
   onEditContact: (contact: Contact) => void;
+  onViewContact?: (contact: Contact) => void;
 }
 
-export function ContactList({ contacts, companyId, onEditContact }: ContactListProps) {
+export function ContactList({ contacts, companyId, touchpoints = [], onEditContact, onViewContact }: ContactListProps) {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
@@ -64,6 +90,12 @@ export function ContactList({ contacts, companyId, onEditContact }: ContactListP
   );
 
   const contactsMap = new Map(contacts.map((c) => [c.id, c]));
+  const tpByContact = new Map<string, Touchpoint[]>();
+  for (const tp of touchpoints) {
+    const arr = tpByContact.get(tp.contactId) ?? [];
+    arr.push(tp);
+    tpByContact.set(tp.contactId, arr);
+  }
 
   return (
     <div className="space-y-4">
@@ -88,16 +120,32 @@ export function ContactList({ contacts, companyId, onEditContact }: ContactListP
             .toUpperCase();
 
           const manager = contact.reportsToId ? contactsMap.get(contact.reportsToId) : null;
+          const cTps = tpByContact.get(contact.id) ?? [];
+          const weekCount = countThisWeek(cTps);
+          const days = getLastTouchDays(cTps);
+          const recClass = recencyBadgeClass(days);
+          const dayLabel = days === null ? "No touch" : days === 0 ? "Today" : days === 1 ? "Yesterday" : `${days}d ago`;
 
           return (
-            <Card key={contact.id} data-testid={`card-contact-list-${contact.id}`}>
+            <Card
+              key={contact.id}
+              data-testid={`card-contact-list-${contact.id}`}
+              className={onViewContact ? "cursor-pointer hover-elevate" : ""}
+              onClick={onViewContact ? () => onViewContact(contact) : undefined}
+            >
               <CardContent className="p-4">
                 <div className="flex items-start gap-3">
-                  <Avatar className="h-12 w-12 shrink-0">
-                    <AvatarFallback className="bg-primary/10 text-primary font-medium">
-                      {initials}
-                    </AvatarFallback>
-                  </Avatar>
+                  <div className="relative shrink-0">
+                    <Avatar className="h-12 w-12">
+                      <AvatarFallback className="bg-primary/10 text-primary font-medium">
+                        {initials}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span
+                      className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${days === null ? "bg-muted-foreground/30" : days <= 7 ? "bg-green-500" : days <= 30 ? "bg-amber-500" : "bg-red-500"}`}
+                      title={dayLabel}
+                    />
+                  </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -112,12 +160,21 @@ export function ContactList({ contacts, companyId, onEditContact }: ContactListP
                             Reports to: {manager.name}
                           </p>
                         )}
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ${recClass}`}>
+                            <PhoneCall className="h-2.5 w-2.5" />
+                            {dayLabel}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {weekCount} this week
+                          </span>
+                        </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <Button
                           size="icon"
                           variant="ghost"
-                          onClick={() => onEditContact(contact)}
+                          onClick={(e) => { e.stopPropagation(); onEditContact(contact); }}
                           data-testid={`button-edit-contact-list-${contact.id}`}
                         >
                           <Pencil className="h-4 w-4" />
@@ -125,7 +182,7 @@ export function ContactList({ contacts, companyId, onEditContact }: ContactListP
                         <Button
                           size="icon"
                           variant="ghost"
-                          onClick={() => setDeleteTarget(contact)}
+                          onClick={(e) => { e.stopPropagation(); setDeleteTarget(contact); }}
                           data-testid={`button-delete-contact-${contact.id}`}
                         >
                           <Trash2 className="h-4 w-4" />

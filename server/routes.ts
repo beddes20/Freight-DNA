@@ -2853,10 +2853,80 @@ export async function registerRoutes(
       let autoValue: number | null = null;
       if (goal.metric === "contacts_added") {
         autoValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+      } else if (goal.metric === "touchpoints") {
+        autoValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
       }
       res.json({ autoValue, currentValue: parseFloat(goal.currentValue || "0") });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch progress" });
+    }
+  });
+
+  app.get("/api/contacts/:id/touchpoints", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const tps = await storage.getTouchpointsByContact(req.params.id);
+      res.json(tps);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch touchpoints" });
+    }
+  });
+
+  app.post("/api/contacts/:id/touchpoints", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const contact = await storage.getContact(req.params.id);
+      if (!contact) return res.status(404).json({ error: "Contact not found" });
+      const now = new Date();
+      const tp = await storage.createTouchpoint({
+        contactId: req.params.id,
+        companyId: contact.companyId,
+        type: req.body.type || "call",
+        date: req.body.date || now.toISOString().split("T")[0],
+        notes: req.body.notes || null,
+        loggedById: user.id,
+        createdAt: now.toISOString(),
+      });
+      res.json(tp);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create touchpoint" });
+    }
+  });
+
+  app.delete("/api/touchpoints/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      await storage.deleteTouchpoint(req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete touchpoint" });
+    }
+  });
+
+  app.get("/api/companies/:id/touchpoints", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const tps = await storage.getTouchpointsByCompany(req.params.id);
+      res.json(tps);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch company touchpoints" });
+    }
+  });
+
+  app.get("/api/dashboard/cold-contacts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const days = parseInt(req.query.days as string) || 30;
+      const scopedUserId = (user.role === "admin" || user.role === "director") ? null : user.id;
+      const results = await storage.getColdContacts(scopedUserId, days);
+      res.json(results);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch cold contacts" });
     }
   });
 

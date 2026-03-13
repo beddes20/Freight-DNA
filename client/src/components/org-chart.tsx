@@ -3,12 +3,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Pencil, MapPin, Route, DollarSign, FileText } from "lucide-react";
-import type { Contact } from "@shared/schema";
+import { Pencil, MapPin, Route, DollarSign, FileText, PhoneCall } from "lucide-react";
+import type { Contact, Touchpoint } from "@shared/schema";
 
 interface OrgChartProps {
   contacts: Contact[];
+  touchpoints?: Touchpoint[];
   onEditContact: (contact: Contact) => void;
+  onViewContact?: (contact: Contact) => void;
 }
 
 interface ContactNode {
@@ -44,13 +46,36 @@ function buildOrgTree(contacts: Contact[]): ContactNode[] {
   return roots.map(buildNode);
 }
 
+function getLastTouchDays(tps: Touchpoint[]): number | null {
+  if (tps.length === 0) return null;
+  const latest = tps.reduce((a, b) => a.date > b.date ? a : b);
+  const today = new Date();
+  const d = new Date(latest.date + "T00:00:00");
+  return Math.floor((today.getTime() - d.getTime()) / 86400000);
+}
+
+function recencyDot(daysSince: number | null) {
+  if (daysSince === null) return { color: "bg-muted-foreground/30", title: "No touchpoints" };
+  if (daysSince <= 7)  return { color: "bg-green-500", title: `Last touched ${daysSince}d ago` };
+  if (daysSince <= 30) return { color: "bg-amber-500", title: `Last touched ${daysSince}d ago` };
+  return { color: "bg-red-500", title: `Last touched ${daysSince}d ago` };
+}
+
+function countMonth(tps: Touchpoint[]) {
+  const now = new Date();
+  const startStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  return tps.filter(t => t.date >= startStr).length;
+}
+
 interface ContactCardProps {
   contact: Contact;
+  tps: Touchpoint[];
   onEdit: (contact: Contact) => void;
+  onView?: (contact: Contact) => void;
   level: number;
 }
 
-function ContactCard({ contact, onEdit, level }: ContactCardProps) {
+function ContactCard({ contact, tps, onEdit, onView, level }: ContactCardProps) {
   const initials = contact.name
     .split(" ")
     .map((n) => n[0])
@@ -63,26 +88,39 @@ function ContactCard({ contact, onEdit, level }: ContactCardProps) {
     : null;
 
   const baseConfig: Record<string, { label: string; className: string }> = {
-    "1st": { label: "1st Base", className: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400" },
-    "2nd": { label: "2nd Base", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400" },
-    "3rd": { label: "3rd Base", className: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400" },
+    "1st":     { label: "1st Base", className: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400" },
+    "2nd":     { label: "2nd Base", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400" },
+    "3rd":     { label: "3rd Base", className: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400" },
     "homerun": { label: "Home Run", className: "bg-green-700 text-white dark:bg-green-800 dark:text-green-100" },
   };
-
   const baseKey = contact.relationshipBase
     ? Object.keys(baseConfig).find((k) => contact.relationshipBase?.toLowerCase().startsWith(k))
     : null;
   const base = baseKey ? baseConfig[baseKey] : null;
 
+  const days = getLastTouchDays(tps);
+  const dot = recencyDot(days);
+  const monthCount = countMonth(tps);
+
   return (
-    <Card className="hover-elevate" data-testid={`card-org-contact-${contact.id}`}>
+    <Card
+      className={`hover-elevate ${onView ? "cursor-pointer" : ""}`}
+      data-testid={`card-org-contact-${contact.id}`}
+      onClick={onView ? () => onView(contact) : undefined}
+    >
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
-          <Avatar className="h-10 w-10 shrink-0">
-            <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
-              {initials}
-            </AvatarFallback>
-          </Avatar>
+          <div className="relative shrink-0">
+            <Avatar className="h-10 w-10">
+              <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            <span
+              className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${dot.color}`}
+              title={dot.title}
+            />
+          </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
@@ -105,13 +143,20 @@ function ContactCard({ contact, onEdit, level }: ContactCardProps) {
               <Button
                 size="icon"
                 variant="ghost"
-                onClick={() => onEdit(contact)}
+                onClick={(e) => { e.stopPropagation(); onEdit(contact); }}
                 className="shrink-0"
                 data-testid={`button-edit-contact-${contact.id}`}
               >
                 <Pencil className="h-4 w-4" />
               </Button>
             </div>
+
+            {monthCount > 0 && (
+              <div className="mt-1 flex items-center gap-1.5">
+                <PhoneCall className="h-3 w-3 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">{monthCount} touch{monthCount !== 1 ? "es" : ""} this month</span>
+              </div>
+            )}
 
             <div className="mt-3 space-y-2">
               {contact.regions && contact.regions.length > 0 && (
@@ -173,15 +218,18 @@ function ContactCard({ contact, onEdit, level }: ContactCardProps) {
 
 interface OrgNodeProps {
   node: ContactNode;
+  tpMap: Map<string, Touchpoint[]>;
   onEdit: (contact: Contact) => void;
+  onView?: (contact: Contact) => void;
   level: number;
 }
 
-function OrgNode({ node, onEdit, level }: OrgNodeProps) {
+function OrgNode({ node, tpMap, onEdit, onView, level }: OrgNodeProps) {
+  const tps = tpMap.get(node.contact.id) ?? [];
   return (
     <div className="flex flex-col items-center">
       <div className="w-72">
-        <ContactCard contact={node.contact} onEdit={onEdit} level={level} />
+        <ContactCard contact={node.contact} tps={tps} onEdit={onEdit} onView={onView} level={level} />
       </div>
       {node.children.length > 0 && (
         <>
@@ -190,17 +238,14 @@ function OrgNode({ node, onEdit, level }: OrgNodeProps) {
             {node.children.length > 1 && (
               <div
                 className="absolute top-0 h-px bg-border"
-                style={{
-                  left: "25%",
-                  right: "25%",
-                }}
+                style={{ left: "25%", right: "25%" }}
               />
             )}
             <div className="flex gap-8 pt-0">
               {node.children.map((child) => (
                 <div key={child.contact.id} className="flex flex-col items-center">
                   <div className="w-px h-6 bg-border" />
-                  <OrgNode node={child} onEdit={onEdit} level={level + 1} />
+                  <OrgNode node={child} tpMap={tpMap} onEdit={onEdit} onView={onView} level={level + 1} />
                 </div>
               ))}
             </div>
@@ -211,8 +256,18 @@ function OrgNode({ node, onEdit, level }: OrgNodeProps) {
   );
 }
 
-export function OrgChart({ contacts, onEditContact }: OrgChartProps) {
+export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewContact }: OrgChartProps) {
   const tree = useMemo(() => buildOrgTree(contacts), [contacts]);
+
+  const tpMap = useMemo(() => {
+    const map = new Map<string, Touchpoint[]>();
+    for (const tp of touchpoints) {
+      const arr = map.get(tp.contactId) ?? [];
+      arr.push(tp);
+      map.set(tp.contactId, arr);
+    }
+    return map;
+  }, [touchpoints]);
 
   if (contacts.length === 0) {
     return null;
@@ -222,7 +277,7 @@ export function OrgChart({ contacts, onEditContact }: OrgChartProps) {
     <div className="overflow-x-auto pb-4">
       <div className="inline-flex flex-col items-center gap-4 min-w-max p-4">
         {tree.map((node) => (
-          <OrgNode key={node.contact.id} node={node} onEdit={onEditContact} level={0} />
+          <OrgNode key={node.contact.id} node={node} tpMap={tpMap} onEdit={onEditContact} onView={onViewContact} level={0} />
         ))}
       </div>
     </div>

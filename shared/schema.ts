@@ -303,3 +303,18 @@ export const goalComments = pgTable("goal_comments", {
 export const insertGoalCommentSchema = createInsertSchema(goalComments).omit({ id: true });
 export type InsertGoalComment = z.infer<typeof insertGoalCommentSchema>;
 export type GoalComment = typeof goalComments.$inferSelect;
+
+export const touchpoints = pgTable("touchpoints", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contactId: varchar("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  type: text("type").notNull(),
+  date: text("date").notNull(),
+  notes: text("notes"),
+  loggedById: varchar("logged_by_id").notNull().references(() => users.id),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertTouchpointSchema = createInsertSchema(touchpoints).omit({ id: true });
+export type InsertTouchpoint = z.infer<typeof insertTouchpointSchema>;
+export type Touchpoint = typeof touchpoints.$inferSelect;

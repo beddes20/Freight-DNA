@@ -10,13 +10,15 @@ import {
   Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp,
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
+  PhoneCall, AlertTriangle,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
-import type { Company, Contact, Task, User, FeedPost, FeedPostReaction } from "@shared/schema";
+import { ContactDetailSheet } from "@/components/contact-detail-sheet";
+import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -54,6 +56,7 @@ export default function Dashboard() {
   const { toast } = useToast();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>();
+  const [viewContact, setViewContact] = useState<Contact | null>(null);
   const [feedContent, setFeedContent] = useState("");
   const [feedCategory, setFeedCategory] = useState<"trend" | "growth" | "idea">("idea");
   const [mentionState, setMentionState] = useState<{ mentionStart: number; query: string } | null>(null);
@@ -69,6 +72,10 @@ export default function Dashboard() {
 
   const { data: contacts, isLoading: contactsLoading } = useQuery<Contact[]>({
     queryKey: ["/api/contacts"],
+  });
+
+  const { data: coldContacts = [] } = useQuery<Array<{ contact: Contact; company: { id: string; name: string }; daysSince: number; lastType: string | null }>>({
+    queryKey: ["/api/dashboard/cold-contacts"],
   });
 
   const { data: allTasks = [], isLoading: tasksLoading } = useQuery<Task[]>({
@@ -898,10 +905,55 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      {coldContacts.length > 0 && (
+        <Card data-testid="card-cold-contacts">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              Contacts Needing Attention
+              <Badge variant="secondary" className="ml-auto font-normal">{coldContacts.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="divide-y">
+              {coldContacts.slice(0, 8).map(({ contact, company, daysSince, lastType }) => {
+                const dotColor = daysSince >= 999 ? "bg-muted-foreground/40" : daysSince > 30 ? "bg-red-500" : "bg-amber-500";
+                const dayLabel = daysSince >= 999 ? "Never touched" : `${daysSince}d since last touch`;
+                const typeLabel = lastType ? ({ call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" }[lastType] ?? lastType) : null;
+                return (
+                  <div
+                    key={contact.id}
+                    className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 cursor-pointer transition-colors"
+                    onClick={() => setViewContact(contact)}
+                    data-testid={`cold-contact-row-${contact.id}`}
+                  >
+                    <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${dotColor}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{contact.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{company.name}{contact.title ? ` · ${contact.title}` : ""}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-xs font-medium text-amber-600 dark:text-amber-400">{dayLabel}</p>
+                      {typeLabel && <p className="text-xs text-muted-foreground">Last: {typeLabel}</p>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <TaskDialog
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
         editingTask={editingTask}
+      />
+
+      <ContactDetailSheet
+        contact={viewContact}
+        open={!!viewContact}
+        onClose={() => setViewContact(null)}
       />
 
     </div>

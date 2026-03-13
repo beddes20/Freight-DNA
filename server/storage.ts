@@ -1,4 +1,4 @@
-import { eq, inArray, ilike, or, and, desc, isNull } from "drizzle-orm";
+import { eq, inArray, ilike, or, and, desc, isNull, gte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -18,6 +18,7 @@ import {
   oneOnOneTopics,
   goals,
   goalComments,
+  touchpoints,
   type User,
   type InsertUser,
   type Company,
@@ -49,6 +50,8 @@ import {
   type InsertGoal,
   type GoalComment,
   type InsertGoalComment,
+  type Touchpoint,
+  type InsertTouchpoint,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -147,6 +150,15 @@ export interface IStorage {
   createNotification(data: import('../shared/schema').InsertNotification): Promise<import('../shared/schema').Notification>;
   markNotificationRead(id: string): Promise<void>;
   markAllNotificationsRead(userId: string): Promise<void>;
+
+  getTouchpointsByContact(contactId: string): Promise<Touchpoint[]>;
+  getTouchpointsByCompany(companyId: string): Promise<Touchpoint[]>;
+  getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]>;
+  createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint>;
+  deleteTouchpoint(id: string): Promise<boolean>;
+  getColdContacts(assignedToUserId: string | null, daysSince: number): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>>;
+
+  getTouchpointCountByAm(amId: string, startDate: string, endDate: string): Promise<number>;
 
   getGoals(filter: { namId?: string; amId?: string }): Promise<Goal[]>;
   getGoal(id: string): Promise<Goal | undefined>;
@@ -765,6 +777,76 @@ export class DatabaseStorage implements IStorage {
     return (result.rowCount ?? 0) > 0;
   }
 
+  async getTouchpointsByContact(contactId: string): Promise<Touchpoint[]> {
+    return db.select().from(touchpoints).where(eq(touchpoints.contactId, contactId)).orderBy(desc(touchpoints.date));
+  }
+
+  async getTouchpointsByCompany(companyId: string): Promise<Touchpoint[]> {
+    return db.select().from(touchpoints).where(eq(touchpoints.companyId, companyId)).orderBy(desc(touchpoints.date));
+  }
+
+  async getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]> {
+    return db.select().from(touchpoints).where(
+      and(eq(touchpoints.loggedById, userId), gte(touchpoints.date, since))
+    );
+  }
+
+  async createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint> {
+    const [created] = await db.insert(touchpoints).values(tp).returning();
+    return created;
+  }
+
+  async deleteTouchpoint(id: string): Promise<boolean> {
+    const result = await db.delete(touchpoints).where(eq(touchpoints.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getColdContacts(assignedToUserId: string | null, daysSince: number): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysSince);
+    const cutoffStr = cutoff.toISOString().split("T")[0];
+
+    let companiesResult: Company[];
+    if (assignedToUserId) {
+      companiesResult = await db.select().from(companies).where(eq(companies.assignedTo, assignedToUserId));
+    } else {
+      companiesResult = await db.select().from(companies);
+    }
+    if (companiesResult.length === 0) return [];
+    const companyIds = companiesResult.map(c => c.id);
+    const companyMap = new Map(companiesResult.map(c => [c.id, c]));
+
+    const allContacts = await db.select().from(contacts).where(inArray(contacts.companyId, companyIds));
+    const allTouchpoints = await db.select().from(touchpoints).where(inArray(touchpoints.companyId, companyIds));
+
+    const tpByContact = new Map<string, Touchpoint[]>();
+    for (const tp of allTouchpoints) {
+      const arr = tpByContact.get(tp.contactId) ?? [];
+      arr.push(tp);
+      tpByContact.set(tp.contactId, arr);
+    }
+
+    const results: Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }> = [];
+    const today = new Date();
+
+    for (const contact of allContacts) {
+      const tps = tpByContact.get(contact.id) ?? [];
+      if (tps.length === 0) {
+        const comp = companyMap.get(contact.companyId);
+        if (comp) results.push({ contact, company: comp, daysSince: 999, lastType: null });
+      } else {
+        const latest = tps.sort((a, b) => b.date.localeCompare(a.date))[0];
+        if (latest.date < cutoffStr) {
+          const diff = Math.floor((today.getTime() - new Date(latest.date).getTime()) / 86400000);
+          const comp = companyMap.get(contact.companyId);
+          if (comp) results.push({ contact, company: comp, daysSince: diff, lastType: latest.type });
+        }
+      }
+    }
+
+    return results.sort((a, b) => b.daysSince - a.daysSince).slice(0, 20);
+  }
+
   async getContactsAddedByAm(amId: string, startDate: string, endDate: string): Promise<number> {
     const allCompanies = await db.select().from(companies).where(eq(companies.assignedTo, amId));
     if (allCompanies.length === 0) return 0;
@@ -774,6 +856,14 @@ export class DatabaseStorage implements IStorage {
       if (!c.createdAt) return false;
       return c.createdAt >= startDate && c.createdAt <= endDate;
     }).length;
+  }
+
+  async getTouchpointCountByAm(amId: string, startDate: string, endDate: string): Promise<number> {
+    const allCompanies = await db.select().from(companies).where(eq(companies.assignedTo, amId));
+    if (allCompanies.length === 0) return 0;
+    const companyIds = allCompanies.map(c => c.id);
+    const allTps = await db.select().from(touchpoints).where(inArray(touchpoints.companyId, companyIds));
+    return allTps.filter(tp => tp.date >= startDate && tp.date <= endDate).length;
   }
 }
 

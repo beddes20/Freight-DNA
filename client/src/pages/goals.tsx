@@ -20,8 +20,9 @@ import type { Goal, GoalComment } from "@shared/schema";
 
 const METRICS = [
   { value: "contacts_added", label: "New Contacts", icon: Users, color: "bg-blue-500", unit: "contacts" },
-  { value: "load_count", label: "Load Count", icon: Truck, color: "bg-green-500", unit: "loads" },
-  { value: "margin", label: "Margin ($)", icon: DollarSign, color: "bg-violet-500", unit: "$" },
+  { value: "touchpoints",    label: "Touchpoints",  icon: TrendingUp, color: "bg-cyan-500", unit: "touches" },
+  { value: "load_count",     label: "Load Count",   icon: Truck, color: "bg-green-500", unit: "loads" },
+  { value: "margin",         label: "Margin ($)",   icon: DollarSign, color: "bg-violet-500", unit: "$" },
 ];
 
 const PERIODS = [
@@ -70,7 +71,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
   const current = parseFloat(goal.currentValue || "0");
   const target = parseFloat(goal.target || "0");
   const pct = progressPct(current, target);
-  const isAutoTracked = goal.metric === "contacts_added";
+  const isAutoTracked = goal.metric === "contacts_added" || goal.metric === "touchpoints";
 
   const { data: autoProgress } = useQuery<{ autoValue: number | null; currentValue: number }>({
     queryKey: ["/api/goals", goal.id, "progress"],
