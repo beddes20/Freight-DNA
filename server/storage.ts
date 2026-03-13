@@ -40,6 +40,9 @@ import {
   type InsertOneOnOneSession,
   type OneOnOneTopic,
   type InsertOneOnOneTopic,
+  type Notification,
+  type InsertNotification,
+  notifications,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -127,6 +130,17 @@ export interface IStorage {
   toggleTopicStatus(topicId: string): Promise<OneOnOneTopic | undefined>;
   deleteTopic(topicId: string): Promise<boolean>;
   getArchivedSessions(namId: string, amId: string): Promise<OneOnOneSession[]>;
+
+  searchContacts(query: string): Promise<Contact[]>;
+  searchRfps(query: string): Promise<Rfp[]>;
+
+  getCompanyActivity(companyId: string): Promise<Array<{ type: string; title: string; subtitle?: string; date: string; link?: string }>>;
+  getTeamPerformance(managerIds: string[]): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; rfpCount: number }>>;
+
+  getNotifications(userId: string): Promise<import('../shared/schema').Notification[]>;
+  createNotification(data: import('../shared/schema').InsertNotification): Promise<import('../shared/schema').Notification>;
+  markNotificationRead(id: string): Promise<void>;
+  markAllNotificationsRead(userId: string): Promise<void>;
 }
 
 const pool = new Pool({
@@ -616,6 +630,81 @@ export class DatabaseStorage implements IStorage {
         eq(oneOnOneSessions.status, "archived")
       )
     ).orderBy(desc(oneOnOneSessions.startDate));
+  }
+
+  async searchContacts(query: string): Promise<Contact[]> {
+    return db.select().from(contacts).where(
+      or(ilike(contacts.name, `%${query}%`), ilike(contacts.title, `%${query}%`))
+    ).limit(8);
+  }
+
+  async searchRfps(query: string): Promise<Rfp[]> {
+    return db.select().from(rfps).where(ilike(rfps.title, `%${query}%`)).limit(6);
+  }
+
+  async getCompanyActivity(companyId: string): Promise<Array<{ type: string; title: string; subtitle?: string; date: string; link?: string }>> {
+    const [companyTasks, companyCallouts, companyRfps] = await Promise.all([
+      db.select().from(tasks).where(eq(tasks.companyId, companyId)),
+      db.select().from(callouts).where(and(eq(callouts.companyId, companyId), isNull(callouts.parentId))),
+      db.select().from(rfps).where(eq(rfps.companyId, companyId)),
+    ]);
+
+    const events: Array<{ type: string; title: string; subtitle?: string; date: string; link?: string }> = [];
+
+    for (const t of companyTasks) {
+      events.push({ type: "task", title: t.title, subtitle: t.status, date: t.createdAt, link: undefined });
+    }
+    for (const c of companyCallouts) {
+      events.push({ type: "callout", title: c.title, subtitle: c.tag || undefined, date: c.createdAt });
+    }
+    for (const r of companyRfps) {
+      events.push({ type: "rfp", title: r.title, subtitle: `${r.laneCount ?? 0} lanes`, date: r.dueDate || new Date().toISOString() });
+    }
+
+    return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 30);
+  }
+
+  async getTeamPerformance(teamMemberIds: string[]): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; rfpCount: number }>> {
+    if (teamMemberIds.length === 0) return [];
+    const now = new Date().toISOString().split("T")[0];
+    const [allTasks, allCompanies, allRfps] = await Promise.all([
+      db.select().from(tasks).where(inArray(tasks.assignedTo, teamMemberIds)),
+      db.select().from(companies).where(inArray(companies.assignedTo, teamMemberIds)),
+      db.select().from(rfps),
+    ]);
+    const companyIds = allCompanies.map(c => c.id);
+    const rfpsByCompany = allRfps.filter(r => companyIds.includes(r.companyId));
+
+    return teamMemberIds.map(uid => {
+      const userTasks = allTasks.filter(t => t.assignedTo === uid);
+      const userCompanies = allCompanies.filter(c => c.assignedTo === uid);
+      const userCompanyIds = userCompanies.map(c => c.id);
+      return {
+        userId: uid,
+        openTasks: userTasks.filter(t => t.status === "open" || t.status === "in_progress").length,
+        overdueTasks: userTasks.filter(t => (t.status === "open" || t.status === "in_progress") && t.dueDate && t.dueDate < now).length,
+        completedTasks: userTasks.filter(t => t.status === "completed").length,
+        companyCount: userCompanies.length,
+        rfpCount: rfpsByCompany.filter(r => userCompanyIds.includes(r.companyId)).length,
+      };
+    });
+  }
+
+  async getNotifications(userId: string): Promise<Notification[]> {
+    return db.select().from(notifications).where(eq(notifications.userId, userId)).orderBy(desc(notifications.createdAt)).limit(50);
+  }
+
+  async createNotification(data: InsertNotification): Promise<Notification> {
+    const [created] = await db.insert(notifications).values(data).returning();
+    return created;
+  }
+
+  async markNotificationRead(id: string): Promise<void> {
+    await db.update(notifications).set({ read: true }).where(eq(notifications.id, id));
+  }
+
+  async markAllNotificationsRead(userId: string): Promise<void> {
+    await db.update(notifications).set({ read: true }).where(eq(notifications.userId, userId));
   }
 }
 

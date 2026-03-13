@@ -249,15 +249,19 @@ export async function registerRoutes(
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const q = (req.query.q as string || "").trim();
-      if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [] });
-      const [matchedCompanies, matchedUsers] = await Promise.all([
+      if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [] });
+      const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps] = await Promise.all([
         storage.searchCompanies(q),
         storage.searchUsers(q, ["account_manager", "national_account_manager", "director", "sales"]),
+        storage.searchContacts(q),
+        storage.searchRfps(q),
       ]);
       const accounts = matchedCompanies.map(c => ({ id: c.id, name: c.name }));
       const accountManagers = matchedUsers.filter(u => u.role === "account_manager");
       const nationalAccountManagers = matchedUsers.filter(u => u.role === "national_account_manager" || u.role === "director");
-      res.json({ accounts, accountManagers, nationalAccountManagers });
+      const contacts = matchedContacts.map(c => ({ id: c.id, name: c.name, title: c.title, companyId: c.companyId }));
+      const rfps = matchedRfps.map(r => ({ id: r.id, title: r.title, companyId: r.companyId, status: r.status }));
+      res.json({ accounts, accountManagers, nationalAccountManagers, contacts, rfps });
     } catch (error) {
       res.status(500).json({ error: "Search failed" });
     }
@@ -1236,6 +1240,17 @@ export async function registerRoutes(
         contactId: contactId || null,
         createdAt: new Date().toISOString(),
       });
+      if (assignedTo !== user.id) {
+        storage.createNotification({
+          userId: assignedTo,
+          type: "task_assigned",
+          title: "New task assigned",
+          body: title.trim(),
+          link: "/tasks",
+          relatedId: task.id,
+          read: false,
+        }).catch(() => {});
+      }
       res.status(201).json(task);
     } catch (error) {
       console.error("Error creating task:", error);
@@ -2643,6 +2658,79 @@ export async function registerRoutes(
       res.json(sessionsWithTopics);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch archived sessions" });
+    }
+  });
+
+  // ── Notifications ─────────────────────────────────────────────────────────
+  app.get("/api/notifications", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const notifs = await storage.getNotifications(user.id);
+      res.json(notifs);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch notifications" });
+    }
+  });
+
+  app.patch("/api/notifications/:id/read", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      await storage.markNotificationRead(req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to mark notification read" });
+    }
+  });
+
+  app.patch("/api/notifications/read-all", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      await storage.markAllNotificationsRead(user.id);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to mark all notifications read" });
+    }
+  });
+
+  // ── Company Activity Timeline ──────────────────────────────────────────────
+  app.get("/api/companies/:id/activity", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const activity = await storage.getCompanyActivity(req.params.id);
+      res.json(activity);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch activity" });
+    }
+  });
+
+  // ── Team Performance ───────────────────────────────────────────────────────
+  app.get("/api/team/performance", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role === "account_manager") return res.status(403).json({ error: "Access denied" });
+      let teamIds: string[];
+      if (user.role === "admin") {
+        const allUsers = await storage.getUsers();
+        teamIds = allUsers.filter(u => u.role === "account_manager" || u.role === "national_account_manager").map(u => u.id);
+      } else {
+        teamIds = await storage.getTeamMemberIds(user.id);
+      }
+      const [perf, allUsers] = await Promise.all([
+        storage.getTeamPerformance(teamIds),
+        storage.getUsers(),
+      ]);
+      const result = perf.map(p => {
+        const u = allUsers.find(u => u.id === p.userId);
+        return { ...p, name: u?.name || "Unknown", role: u?.role || "account_manager", managerId: u?.managerId };
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch team performance" });
     }
   });
 

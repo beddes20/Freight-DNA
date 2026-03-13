@@ -7,6 +7,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { useAuth } from "@/hooks/use-auth";
 import { GlobalSearch } from "@/components/global-search";
+import { NotificationBell } from "@/components/notification-bell";
 import { Loader2 } from "lucide-react";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -22,6 +23,7 @@ import HistoricalData from "@/pages/historical-data";
 import TopOpportunities from "@/pages/top-opportunities";
 import OneOnOnePage from "@/pages/one-on-one";
 import TasksPage from "@/pages/tasks";
+import TeamPerformancePage from "@/pages/team-performance";
 
 function Router() {
   return (
@@ -38,6 +40,7 @@ function Router() {
       <Route path="/top-opportunities" component={TopOpportunities} />
       <Route path="/one-on-one" component={OneOnOnePage} />
       <Route path="/tasks" component={TasksPage} />
+      <Route path="/team-performance" component={TeamPerformancePage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -72,6 +75,7 @@ function AuthenticatedApp() {
             <SidebarTrigger data-testid="button-sidebar-toggle" />
             <div className="flex-1" />
             <GlobalSearch />
+            <NotificationBell />
           </header>
           <main className="flex-1 overflow-auto">
             <Router />

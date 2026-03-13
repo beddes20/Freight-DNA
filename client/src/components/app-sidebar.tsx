@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink, MessagesSquare, ListTodo } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink, MessagesSquare, ListTodo, TrendingUp } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -53,6 +53,12 @@ const menuItems = [
     url: "/tasks",
     icon: ListTodo,
   },
+  {
+    title: "Team Performance",
+    url: "/team-performance",
+    icon: TrendingUp,
+    roles: ["admin", "director", "national_account_manager", "sales"],
+  },
 ];
 
 const externalItems = [
@@ -97,7 +103,7 @@ export function AppSidebar() {
           <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {menuItems.map((item) => {
+              {menuItems.filter(item => !('roles' in item) || (user?.role && (item as any).roles.includes(user.role))).map((item) => {
                 const isActive = location === item.url ||
                   (item.url !== "/" && location.startsWith(item.url)) ||
                   (item.url === "/customers" && location.startsWith("/companies/"));

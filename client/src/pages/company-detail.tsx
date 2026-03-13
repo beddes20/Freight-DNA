@@ -272,6 +272,10 @@ export default function CompanyDetail() {
     queryKey: ["/api/callouts/company", companyId],
   });
 
+  const { data: activityItems = [] } = useQuery<Array<{ type: string; title: string; description: string | null; date: string; userName: string | null }>>({
+    queryKey: ["/api/companies", companyId, "activity"],
+  });
+
   const deleteCalloutMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/callouts/${id}`);
@@ -1039,6 +1043,53 @@ export default function CompanyDetail() {
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-muted-foreground">{company.notes}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {activityItems.length > 0 && (
+        <Card data-testid="card-activity-timeline">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Clock className="h-4 w-4 text-violet-500" />
+              Account Activity
+              <Badge variant="secondary" className="ml-1 font-normal">{activityItems.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="relative space-y-0">
+              {activityItems.slice(0, 10).map((item, i) => {
+                const iconColor =
+                  item.type === "task_completed" ? "bg-green-500" :
+                  item.type === "task_created" ? "bg-blue-500" :
+                  item.type === "callout" ? "bg-orange-500" :
+                  item.type === "rfp" ? "bg-violet-500" : "bg-muted-foreground";
+                const dateStr = (() => {
+                  try {
+                    const d = new Date(item.date);
+                    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                  } catch { return item.date; }
+                })();
+                return (
+                  <div key={i} className="flex gap-3 pb-4 relative" data-testid={`activity-item-${i}`}>
+                    <div className="flex flex-col items-center">
+                      <div className={`h-2 w-2 rounded-full mt-1.5 shrink-0 ${iconColor}`} />
+                      {i < activityItems.slice(0, 10).length - 1 && (
+                        <div className="w-px flex-1 bg-border mt-1" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0 pb-1">
+                      <p className="text-sm font-medium leading-tight">{item.title}</p>
+                      {item.description && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{item.description}</p>}
+                      <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                        <span>{dateStr}</span>
+                        {item.userName && <><span>·</span><span>{item.userName}</span></>}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </CardContent>
         </Card>
       )}

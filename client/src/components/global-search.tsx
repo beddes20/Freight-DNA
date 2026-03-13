@@ -1,15 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
-import { Search, Building2, UserCircle, Crown } from "lucide-react";
+import { Search, Building2, UserCircle, Crown, Contact, FileText } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 interface SearchResults {
   accounts: Array<{ id: string; name: string }>;
   accountManagers: Array<{ id: string; name: string; username: string }>;
   nationalAccountManagers: Array<{ id: string; name: string; username: string }>;
+  contacts: Array<{ id: string; name: string; title?: string; companyId: string }>;
+  rfps: Array<{ id: string; title: string; companyId: string; status: string }>;
 }
 
-const emptyResults: SearchResults = { accounts: [], accountManagers: [], nationalAccountManagers: [] };
+const emptyResults: SearchResults = { accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [] };
 
 export function GlobalSearch() {
   const [query, setQuery] = useState("");
@@ -87,16 +89,21 @@ export function GlobalSearch() {
     }
   };
 
-  const hasResults = results.accounts.length > 0 || results.accountManagers.length > 0 || results.nationalAccountManagers.length > 0;
+  const hasResults =
+    results.accounts.length > 0 ||
+    results.accountManagers.length > 0 ||
+    results.nationalAccountManagers.length > 0 ||
+    results.contacts.length > 0 ||
+    results.rfps.length > 0;
   const showDropdown = open && query.trim().length > 0;
 
   return (
-    <div ref={containerRef} className="relative w-64" data-testid="global-search-container">
+    <div ref={containerRef} className="relative w-72" data-testid="global-search-container">
       <div className="relative">
         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           data-testid="input-global-search"
-          placeholder="Search accounts, managers..."
+          placeholder="Search accounts, contacts, RFPs..."
           value={query}
           onChange={(e) => handleChange(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -108,7 +115,7 @@ export function GlobalSearch() {
       {showDropdown && (
         <div
           data-testid="search-results-dropdown"
-          className="absolute top-full mt-1 w-full bg-popover border rounded-md shadow-lg z-50 max-h-80 overflow-auto"
+          className="absolute top-full mt-1 w-full bg-popover border rounded-md shadow-lg z-50 max-h-[360px] overflow-auto"
         >
           {loading && (
             <div className="p-3 text-sm text-muted-foreground text-center" data-testid="search-loading">
@@ -124,7 +131,7 @@ export function GlobalSearch() {
 
           {!loading && results.accounts.length > 0 && (
             <div>
-              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider" data-testid="search-group-accounts">
+              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-accounts">
                 Accounts
               </div>
               {results.accounts.map((account) => (
@@ -141,9 +148,53 @@ export function GlobalSearch() {
             </div>
           )}
 
+          {!loading && results.contacts.length > 0 && (
+            <div>
+              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-contacts">
+                Contacts
+              </div>
+              {results.contacts.map((contact) => (
+                <button
+                  key={contact.id}
+                  data-testid={`search-result-contact-${contact.id}`}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent cursor-pointer text-left"
+                  onClick={() => handleSelect(`/companies/${contact.companyId}`)}
+                >
+                  <Contact className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <span className="truncate block">{contact.name}</span>
+                    {contact.title && <span className="text-xs text-muted-foreground truncate block">{contact.title}</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!loading && results.rfps.length > 0 && (
+            <div>
+              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-rfps">
+                RFPs
+              </div>
+              {results.rfps.map((rfp) => (
+                <button
+                  key={rfp.id}
+                  data-testid={`search-result-rfp-${rfp.id}`}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent cursor-pointer text-left"
+                  onClick={() => handleSelect(`/companies/${rfp.companyId}`)}
+                >
+                  <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <span className="truncate block">{rfp.title}</span>
+                    <span className="text-xs text-muted-foreground capitalize">{rfp.status}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
           {!loading && results.accountManagers.length > 0 && (
             <div>
-              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider" data-testid="search-group-account-managers">
+              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-account-managers">
                 Account Managers
               </div>
               {results.accountManagers.map((user) => (
@@ -162,8 +213,8 @@ export function GlobalSearch() {
 
           {!loading && results.nationalAccountManagers.length > 0 && (
             <div>
-              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider" data-testid="search-group-national-account-managers">
-                National Account Managers
+              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-national-account-managers">
+                Directors & NAMs
               </div>
               {results.nationalAccountManagers.map((user) => (
                 <button

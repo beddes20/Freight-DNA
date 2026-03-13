@@ -1,0 +1,126 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useLocation } from "wouter";
+import type { Notification } from "@shared/schema";
+
+const typeIcon: Record<string, React.ReactNode> = {
+  task_assigned: <ListTodo className="h-3.5 w-3.5 text-blue-500" />,
+  topic_added: <MessageSquare className="h-3.5 w-3.5 text-purple-500" />,
+  post_reply: <MessageSquare className="h-3.5 w-3.5 text-green-500" />,
+};
+
+function timeAgo(dateStr: string) {
+  const d = new Date(dateStr);
+  const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+export function NotificationBell() {
+  const [open, setOpen] = useState(false);
+  const [, navigate] = useLocation();
+
+  const { data: notifications = [], isLoading } = useQuery<Notification[]>({
+    queryKey: ["/api/notifications"],
+    refetchInterval: 30000,
+  });
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  const markRead = useMutation({
+    mutationFn: (id: string) => apiRequest("PATCH", `/api/notifications/${id}/read`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/notifications"] }),
+  });
+
+  const markAllRead = useMutation({
+    mutationFn: () => apiRequest("PATCH", "/api/notifications/read-all"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/notifications"] }),
+  });
+
+  const handleNotifClick = (notif: Notification) => {
+    if (!notif.read) markRead.mutate(notif.id);
+    if (notif.link) navigate(notif.link);
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative h-8 w-8"
+          data-testid="button-notification-bell"
+        >
+          <Bell className="h-4 w-4" />
+          {unreadCount > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold px-1 leading-none" data-testid="badge-notification-count">
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-0" data-testid="notification-popover">
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <p className="text-sm font-semibold">Notifications</p>
+          {unreadCount > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-muted-foreground"
+              onClick={() => markAllRead.mutate()}
+              disabled={markAllRead.isPending}
+              data-testid="button-mark-all-read"
+            >
+              <CheckCheck className="h-3.5 w-3.5 mr-1" />
+              Mark all read
+            </Button>
+          )}
+        </div>
+        <div className="max-h-80 overflow-y-auto">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : notifications.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              <Bell className="h-8 w-8 mx-auto mb-2 opacity-30" />
+              <p>No notifications yet</p>
+            </div>
+          ) : (
+            notifications.map(notif => (
+              <button
+                key={notif.id}
+                onClick={() => handleNotifClick(notif)}
+                className={`w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-muted/50 transition-colors border-b last:border-0 ${!notif.read ? "bg-blue-50/50 dark:bg-blue-950/20" : ""}`}
+                data-testid={`notification-item-${notif.id}`}
+              >
+                <div className="shrink-0 mt-0.5 h-6 w-6 rounded-full bg-muted flex items-center justify-center">
+                  {typeIcon[notif.type] ?? <Bell className="h-3.5 w-3.5 text-muted-foreground" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm leading-snug ${!notif.read ? "font-medium" : ""}`}>{notif.title}</p>
+                  {notif.body && <p className="text-xs text-muted-foreground mt-0.5 truncate">{notif.body}</p>}
+                  <p className="text-xs text-muted-foreground mt-1">{timeAgo(notif.createdAt as unknown as string)}</p>
+                </div>
+                {!notif.read && (
+                  <div className="shrink-0 h-2 w-2 rounded-full bg-blue-500 mt-1.5" />
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
