@@ -26,7 +26,7 @@ function timeAgo(dateStr: string) {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-export function NotificationBell() {
+export function NotificationBell({ navBar }: { navBar?: boolean }) {
   const [open, setOpen] = useState(false);
   const [, navigate] = useLocation();
 
@@ -59,7 +59,7 @@ export function NotificationBell() {
         <Button
           variant="ghost"
           size="icon"
-          className="relative h-8 w-8"
+          className={`relative h-8 w-8 ${navBar ? "text-white/80 hover:text-white hover:bg-white/10" : ""}`}
           data-testid="button-notification-bell"
         >
           <Bell className="h-4 w-4" />

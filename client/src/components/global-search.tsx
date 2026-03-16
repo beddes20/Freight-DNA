@@ -13,7 +13,7 @@ interface SearchResults {
 
 const emptyResults: SearchResults = { accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [] };
 
-export function GlobalSearch() {
+export function GlobalSearch({ navBar }: { navBar?: boolean }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults>(emptyResults);
   const [open, setOpen] = useState(false);
@@ -100,7 +100,7 @@ export function GlobalSearch() {
   return (
     <div ref={containerRef} className="relative w-72" data-testid="global-search-container">
       <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Search className={`absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 ${navBar ? "text-white/60" : "text-muted-foreground"}`} />
         <Input
           data-testid="input-global-search"
           placeholder="Search accounts, contacts, RFPs..."
@@ -108,7 +108,7 @@ export function GlobalSearch() {
           onChange={(e) => handleChange(e.target.value)}
           onKeyDown={handleKeyDown}
           onFocus={() => { if (query.trim() && hasResults) setOpen(true); }}
-          className="pl-9 h-8"
+          className={`pl-9 h-8 ${navBar ? "bg-white/10 border-white/20 text-white placeholder:text-white/50 focus-visible:ring-white/30" : ""}`}
         />
       </div>
 
