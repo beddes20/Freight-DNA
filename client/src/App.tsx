@@ -79,7 +79,7 @@ function AuthenticatedApp() {
       <div className="flex h-screen w-full">
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
-          <header className="flex items-center gap-2 p-2 border-b" style={{ backgroundColor: "#001AB3" }}>
+          <header className="flex items-center gap-2 p-2 border-b" style={{ backgroundColor: "hsl(var(--sidebar))", borderColor: "hsl(var(--sidebar-border))" }}>
             <SidebarTrigger className="text-white/80 hover:text-white hover:bg-white/10" data-testid="button-sidebar-toggle" />
             <div className="flex-1 flex items-center justify-center overflow-hidden px-4">
               <p className="hidden md:flex items-center gap-0 text-xs italic text-white/60 whitespace-nowrap select-none tracking-wide">
