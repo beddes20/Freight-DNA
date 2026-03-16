@@ -2214,6 +2214,127 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/financials/seed-demo", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+
+      const REPS = [
+        { name: "Ethan Van Allen",   accounts: ["Wada Farms", "Conagra", "Honeywell International", "Lactalis"] },
+        { name: "Brianna Coakley",   accounts: ["Nortek", "Ball Metal Beverage", "HP Hood"] },
+        { name: "Braden Shinsel",    accounts: ["Ferrara", "JBS Foods"] },
+        { name: "Yuri Yassin",       accounts: ["Masonite Corporation", "Ball Metal Beverage", "JBS Foods"] },
+        { name: "Jared Reynolds",    accounts: ["Brooklyn Bedding", "Covestro"] },
+        { name: "Jason Allen",       accounts: ["Rheem", "ALF Inc"] },
+        { name: "Taylor Call",       accounts: ["DOW CHEMICAL", "Ferrara", "Lactalis"] },
+        { name: "Legrand Toia",      accounts: ["JBS Foods", "Conagra"] },
+        { name: "Adan Castaneda",    accounts: ["BAE Maritime", "Conagra"] },
+        { name: "Mason Moore",       accounts: ["ALF Inc", "BAE Maritime"] },
+        { name: "Alex Shumway",      accounts: ["Rheem", "HP Hood"] },
+        { name: "TJ Russon",         accounts: ["Nortek", "Brooklyn Bedding"] },
+        { name: "Dallin Meier",      accounts: ["Brooklyn Bedding", "Covestro"] },
+        { name: "Kimberly Dornseif", accounts: ["HP Hood", "Covestro"] },
+      ];
+      const ORIGINS: Record<string, [string,string][]> = {
+        "Wada Farms":             [["Tulare","CA"],["Fresno","CA"],["Salinas","CA"]],
+        "Conagra":                [["Omaha","NE"],["Chicago","IL"],["Troy","OH"]],
+        "Honeywell International":[["Phoenix","AZ"],["Morris Plains","NJ"],["Houston","TX"]],
+        "Lactalis":               [["Buffalo","NY"],["Nampa","ID"],["Belmont","WI"]],
+        "Nortek":                 [["O'Fallon","MO"],["Providence","RI"],["Findlay","OH"]],
+        "Ball Metal Beverage":    [["Findlay","OH"],["Tampa","FL"],["Fort Worth","TX"]],
+        "HP Hood":                [["Portland","ME"],["Oneida","NY"],["Winchester","VA"]],
+        "Ferrara":                [["Chicago","IL"],["Bellwood","IL"],["Forest Park","IL"]],
+        "JBS Foods":              [["Grand Island","NE"],["Greeley","CO"],["Cactus","TX"]],
+        "Masonite Corporation":   [["Tampa","FL"],["Laurel","MS"],["Laurel","MD"]],
+        "Brooklyn Bedding":       [["Phoenix","AZ"],["Atlanta","GA"]],
+        "Covestro":               [["Pittsburgh","PA"],["Baytown","TX"],["New Martinsville","WV"]],
+        "Rheem":                  [["Fort Smith","AR"],["Montgomery","AL"],["Laredo","TX"]],
+        "ALF Inc":                [["Dallas","TX"],["Irving","TX"]],
+        "BAE Maritime":           [["York","PA"],["Sterling Heights","MI"],["Nashua","NH"]],
+        "DOW CHEMICAL":           [["Freeport","TX"],["Midland","MI"],["Plaquemine","LA"]],
+      };
+      const DESTINATIONS: [string,string][] = [
+        ["Atlanta","GA"],["Dallas","TX"],["Chicago","IL"],["Phoenix","AZ"],["Los Angeles","CA"],
+        ["Denver","CO"],["Kansas City","MO"],["Nashville","TN"],["Charlotte","NC"],["Columbus","OH"],
+        ["Indianapolis","IN"],["Minneapolis","MN"],["Portland","OR"],["Salt Lake City","UT"],
+        ["Memphis","TN"],["Louisville","KY"],["Cleveland","OH"],["Pittsburgh","PA"],["Baltimore","MD"],
+        ["Jacksonville","FL"],["San Antonio","TX"],["Houston","TX"],["Seattle","WA"],["Detroit","MI"],
+        ["St. Louis","MO"],["Cincinnati","OH"],["Raleigh","NC"],["Tampa","FL"],["San Diego","CA"],
+        ["Sacramento","CA"],["Oklahoma City","OK"],["Tulsa","OK"],["Albuquerque","NM"],["Richmond","VA"],
+      ];
+      const STATUSES = ["Completed","Completed","Completed","Completed","Dispatched","Dispatched"];
+      const rand = (min: number, max: number) => Math.random() * (max - min) + min;
+      const randInt = (min: number, max: number) => Math.floor(rand(min, max + 1));
+      const pick = <T>(arr: T[]): T => arr[randInt(0, arr.length - 1)];
+      const fmt2 = (n: number) => Math.round(n * 100) / 100;
+      const randomDate = () => {
+        const d = new Date("2026-01-01");
+        d.setDate(d.getDate() + randInt(0, 89));
+        return d.toISOString().slice(0, 10);
+      };
+
+      let orderNum = 10001;
+      const rows: any[] = [];
+      for (const rep of REPS) {
+        const baseLoads = rep.accounts.length >= 3 ? 28 : 22;
+        for (const account of rep.accounts) {
+          const origins = ORIGINS[account] || [["Chicago","IL"]] as [string,string][];
+          const loadsForAccount = randInt(baseLoads - 6, baseLoads + 10);
+          const spotRatio = rand(0.2, 0.45);
+          for (let i = 0; i < loadsForAccount; i++) {
+            const isSpot = Math.random() < spotRatio;
+            const origin = pick(origins);
+            let dest = pick(DESTINATIONS);
+            while (dest[0] === origin[0]) dest = pick(DESTINATIONS);
+            const revenue = isSpot ? rand(2200, 5800) : rand(1400, 3800);
+            const marginPct = isSpot ? rand(0.22, 0.38) : rand(0.10, 0.20);
+            const freight = revenue * (1 - marginPct);
+            const miles = randInt(280, 1400);
+            rows.push({
+              "Order number": `VT-2026-${orderNum++}`,
+              "Customer": account,
+              "Operations user": rep.name,
+              "Date ordered": randomDate(),
+              "Status": pick(STATUSES),
+              "Total charges": fmt2(revenue),
+              "Freight charge": fmt2(freight),
+              "Rate": fmt2(revenue / miles),
+              "Shipper city": origin[0], "Shipper state": origin[1],
+              "Consignee city": dest[0],  "Consignee state": dest[1],
+              "Weight": randInt(22000, 44000),
+              "Mode": isSpot ? "Spot" : "Contract",
+            });
+          }
+        }
+      }
+
+      const summaryMap: Record<string, any> = {};
+      for (const row of rows) {
+        const key = `${row["Customer"]}__${row["Operations user"]}`;
+        if (!summaryMap[key]) summaryMap[key] = { "Customer Name": row["Customer"], "Rep Name": row["Operations user"], "Total Loads": 0, "SPOT Loads": 0, "Total Margin $": 0 };
+        summaryMap[key]["Total Loads"]++;
+        if (row["Mode"] === "Spot") summaryMap[key]["SPOT Loads"]++;
+        summaryMap[key]["Total Margin $"] = fmt2(summaryMap[key]["Total Margin $"] + fmt2(row["Total charges"] - row["Freight charge"]));
+      }
+      const summaryRows = Object.values(summaryMap);
+
+      await storage.deleteAllFinancialUploads();
+      const upload = await storage.createFinancialUpload({
+        fileName: "Value Truck YTD 2026 - Jan-Mar (Demo).xlsx",
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: user.id,
+        rowCount: rows.length,
+        rows,
+        summaryRows,
+      });
+
+      res.json({ ok: true, rowCount: rows.length, summaryCount: summaryRows.length, id: upload.id });
+    } catch (error) {
+      console.error("Error seeding demo financials:", error);
+      res.status(500).json({ error: "Failed to seed demo data" });
+    }
+  });
+
   app.get("/api/financials/account-summary", requireAuth, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploads();

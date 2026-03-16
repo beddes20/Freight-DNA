@@ -112,6 +112,7 @@ export interface IStorage {
   getLatestFinancialUpload(): Promise<FinancialUpload | undefined>;
   createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload>;
   deleteFinancialUpload(id: string): Promise<boolean>;
+  deleteAllFinancialUploads(): Promise<void>;
 
   searchCompanies(query: string): Promise<Company[]>;
   searchUsers(query: string, roles: string[]): Promise<Omit<User, 'password'>[]>;
@@ -430,6 +431,10 @@ export class DatabaseStorage implements IStorage {
   async deleteFinancialUpload(id: string): Promise<boolean> {
     const result = await db.delete(financialUploads).where(eq(financialUploads.id, id)).returning();
     return result.length > 0;
+  }
+
+  async deleteAllFinancialUploads(): Promise<void> {
+    await db.delete(financialUploads);
   }
 
   async searchCompanies(query: string): Promise<Company[]> {
