@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
+import { useConfetti } from "@/components/confetti";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +48,7 @@ interface CompanyDialogProps {
 export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProps) {
   const { toast } = useToast();
   const { user: currentUser } = useAuth();
+  const { fire: fireConfetti, ConfettiOverlay } = useConfetti();
   const isEditing = !!company;
   const isAdmin = currentUser?.role === "admin";
   const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
@@ -73,9 +75,10 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
       const response = await apiRequest("POST", "/api/companies", data);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
-      toast({ title: "Company created successfully" });
+      toast({ title: "🎉 New account added!" });
+      fireConfetti();
       onOpenChange(false);
       form.reset();
     },
@@ -119,11 +122,13 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{isEditing ? "Edit Company" : "Add Company"}</DialogTitle>
-        </DialogHeader>
+    <>
+      {ConfettiOverlay && <ConfettiOverlay />}
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{isEditing ? "Edit Company" : "Add Company"}</DialogTitle>
+          </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
@@ -215,5 +220,6 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
         </Form>
       </DialogContent>
     </Dialog>
+    </>
   );
 }

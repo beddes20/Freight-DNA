@@ -447,6 +447,19 @@ export async function registerRoutes(
     }
   });
 
+  async function fanOutCelebration(type: "new_account" | "new_contact", title: string, body: string, link: string, relatedId: string, actorId: string) {
+    try {
+      const allUsers = await storage.getUsers();
+      const celebrationRoles = ["national_account_manager", "director", "admin"];
+      const targets = allUsers.filter(u => celebrationRoles.includes(u.role));
+      await Promise.all(targets.map(u =>
+        storage.createNotification({ userId: u.id, type, title, body, link, relatedId, read: false }).catch(() => {})
+      ));
+    } catch (e) {
+      console.error("fanOutCelebration error:", e);
+    }
+  }
+
   app.post("/api/companies", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
@@ -471,6 +484,14 @@ export async function registerRoutes(
         data.assignedTo = currentUser.id;
       }
       const company = await storage.createCompany(data);
+      fanOutCelebration(
+        "new_account",
+        `🎉 New account: ${company.name}`,
+        `${currentUser.name} just added a new account to the CRM.`,
+        `/companies/${company.id}`,
+        company.id,
+        currentUser.id
+      );
       res.status(201).json(company);
     } catch (error) {
       console.error("Error creating company:", error);
@@ -629,6 +650,16 @@ export async function registerRoutes(
         return res.status(400).json({ error: parsed.error.message });
       }
       const contact = await storage.createContact(parsed.data);
+      storage.getCompany(req.params.companyId).then(co => {
+        fanOutCelebration(
+          "new_contact",
+          `🎉 New contact: ${contact.name}`,
+          `${currentUser.name} added ${contact.name}${contact.title ? ` (${contact.title})` : ""} at ${co?.name ?? "an account"}.`,
+          `/companies/${req.params.companyId}`,
+          contact.id,
+          currentUser.id
+        );
+      }).catch(() => {});
       res.status(201).json(contact);
     } catch (error) {
       console.error("Error creating contact:", error);
