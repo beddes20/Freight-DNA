@@ -13,6 +13,7 @@ export const companies = pgTable("companies", {
   portalUrl: text("portal_url"),
   portalUsername: text("portal_username"),
   portalPassword: text("portal_password"),
+  archivedAt: text("archived_at"),
 });
 
 export const insertCompanySchema = createInsertSchema(companies).omit({

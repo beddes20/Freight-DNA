@@ -75,6 +75,10 @@ import {
   Megaphone,
   MessageSquare,
   PhoneCall,
+  Archive,
+  ArchiveX,
+  Upload,
+  FileSpreadsheet,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -221,6 +225,10 @@ export default function CompanyDetail() {
   const [calloutDialogOpen, setCalloutDialogOpen] = useState(false);
   const [calloutReplyTo, setCalloutReplyTo] = useState<{ id: string; title: string } | undefined>();
   const [expandedCallouts, setExpandedCallouts] = useState<Set<string>>(new Set());
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importRows, setImportRows] = useState<any[]>([]);
+  const [importFileName, setImportFileName] = useState("");
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -524,6 +532,87 @@ export default function CompanyDetail() {
     },
   });
 
+  const archiveMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest("POST", `/api/companies/${companyId}/archive`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
+      setArchiveDialogOpen(false);
+      toast({ title: "Account archived", description: "This account is now parked in your archived list." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error archiving account", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const unarchiveMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest("POST", `/api/companies/${companyId}/unarchive`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
+      toast({ title: "Account restored", description: "This account is now active again." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error restoring account", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const bulkImportMutation = useMutation({
+    mutationFn: async (rows: any[]) => {
+      const res = await apiRequest("POST", `/api/companies/${companyId}/contacts/bulk-import`, { contacts: rows });
+      return res;
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
+      setImportDialogOpen(false);
+      setImportRows([]);
+      setImportFileName("");
+      toast({ title: `Imported ${data.count} contact${data.count !== 1 ? "s" : ""}`, description: "Contacts have been added to this account." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Import failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const data = ev.target?.result;
+      const wb = XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      const normalized = raw.map(r => {
+        const keys = Object.keys(r);
+        const find = (candidates: string[]) => {
+          for (const c of candidates) {
+            const k = keys.find(k => k.toLowerCase().replace(/[\s_-]/g, "").includes(c.toLowerCase().replace(/[\s_-]/g, "")));
+            if (k && r[k]) return String(r[k]).trim();
+          }
+          return "";
+        };
+        return {
+          name: find(["name", "fullname", "contactname", "contact"]),
+          title: find(["title", "jobtitle", "position", "role"]),
+          email: find(["email", "emailaddress", "mail"]),
+          phone: find(["phone", "phonenumber", "mobile", "cell", "telephone"]),
+          notes: find(["notes", "note", "comments", "comment"]),
+          nextSteps: find(["nextsteps", "nextstep", "next steps", "next step", "action"]),
+        };
+      }).filter(r => r.name.length > 0);
+      setImportRows(normalized);
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  }
+
   const handleEditContact = (contact: Contact) => {
     setEditingContact(contact);
     setContactDialogOpen(true);
@@ -712,12 +801,36 @@ export default function CompanyDetail() {
             <Pencil className="h-4 w-4 mr-2" />
             Edit
           </Button>
+          {company.archivedAt ? (
+            <Button variant="outline" onClick={() => unarchiveMutation.mutate()} disabled={unarchiveMutation.isPending} data-testid="button-unarchive-company">
+              <ArchiveX className="h-4 w-4 mr-2" />
+              {unarchiveMutation.isPending ? "Restoring..." : "Restore"}
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={() => setArchiveDialogOpen(true)} data-testid="button-archive-company">
+              <Archive className="h-4 w-4 mr-2" />
+              Archive
+            </Button>
+          )}
           <Button variant="outline" onClick={() => setDeleteDialogOpen(true)} data-testid="button-delete-company">
             <Trash2 className="h-4 w-4 mr-2" />
             Delete
           </Button>
         </div>
       </div>
+
+      {company.archivedAt && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/30 px-4 py-3">
+          <Archive className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          <p className="text-sm text-amber-700 dark:text-amber-400">
+            This account was archived on {new Date(company.archivedAt).toLocaleDateString()}. It is hidden from the active customers list.
+          </p>
+          <Button size="sm" variant="outline" className="ml-auto shrink-0" onClick={() => unarchiveMutation.mutate()} disabled={unarchiveMutation.isPending}>
+            <ArchiveX className="h-3.5 w-3.5 mr-1.5" />
+            Restore
+          </Button>
+        </div>
+      )}
 
       {/* Account Performance (from uploaded summary data) */}
       {accountPerf && (
@@ -1244,10 +1357,16 @@ export default function CompanyDetail() {
               <h2 className="text-base font-medium">Org Chart</h2>
               <Badge variant="secondary">{contacts?.length || 0} contacts</Badge>
             </div>
-            <Button onClick={handleAddContact} data-testid="button-add-contact-top">
-              <Plus className="h-4 w-4 mr-2" />
-              Add Contact
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)} data-testid="button-import-contacts">
+                <Upload className="h-4 w-4 mr-1.5" />
+                Import
+              </Button>
+              <Button onClick={handleAddContact} data-testid="button-add-contact-top">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Contact
+              </Button>
+            </div>
           </div>
           {contacts && contacts.length > 0 ? (
             <OrgChart contacts={contacts} touchpoints={companyTouchpoints} onEditContact={handleEditContact} onViewContact={setViewContact} />
@@ -2125,6 +2244,95 @@ export default function CompanyDetail() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog open={archiveDialogOpen} onOpenChange={setArchiveDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Archive {company.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This account will be hidden from the active customers list. All contacts, RFPs, and history are preserved. You can restore it at any time from the Archived view.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => archiveMutation.mutate()} disabled={archiveMutation.isPending} data-testid="button-confirm-archive">
+              {archiveMutation.isPending ? "Archiving..." : "Archive Account"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={importDialogOpen} onOpenChange={(open) => { setImportDialogOpen(open); if (!open) { setImportRows([]); setImportFileName(""); } }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileSpreadsheet className="h-5 w-5 text-green-600" />
+              Import Contacts from Excel
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {importRows.length === 0 ? (
+              <div className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-8 text-center">
+                <Upload className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
+                <p className="text-sm font-medium mb-1">Drop your spreadsheet here or click to browse</p>
+                <p className="text-xs text-muted-foreground mb-4">Supports .xlsx, .xls, and .csv files. Columns detected automatically: Name, Title, Email, Phone, Notes.</p>
+                <label className="cursor-pointer">
+                  <Button variant="outline" size="sm" asChild>
+                    <span><Upload className="h-4 w-4 mr-2" />Choose File</span>
+                  </Button>
+                  <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImportFile} data-testid="input-import-contacts-file" />
+                </label>
+                {importFileName && <p className="text-xs text-muted-foreground mt-2">{importFileName}</p>}
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-muted-foreground">{importRows.length} contacts found in <span className="font-medium text-foreground">{importFileName}</span></p>
+                  <label className="cursor-pointer">
+                    <Button variant="ghost" size="sm" asChild>
+                      <span>Change file</span>
+                    </Button>
+                    <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImportFile} />
+                  </label>
+                </div>
+                <div className="border rounded-md overflow-hidden">
+                  <div className="overflow-x-auto max-h-64">
+                    <table className="w-full text-xs">
+                      <thead className="bg-muted/50 sticky top-0">
+                        <tr>
+                          {["Name", "Title", "Email", "Phone", "Notes"].map(h => (
+                            <th key={h} className="text-left px-3 py-2 font-medium text-muted-foreground">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importRows.slice(0, 20).map((r, i) => (
+                          <tr key={i} className="border-t border-muted/50">
+                            <td className="px-3 py-2 font-medium">{r.name}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{r.title || "—"}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{r.email || "—"}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{r.phone || "—"}</td>
+                            <td className="px-3 py-2 text-muted-foreground truncate max-w-[150px]">{r.notes || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {importRows.length > 20 && (
+                    <div className="px-3 py-2 text-xs text-muted-foreground border-t bg-muted/30">+{importRows.length - 20} more rows not shown</div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setImportDialogOpen(false); setImportRows([]); setImportFileName(""); }}>Cancel</Button>
+            <Button onClick={() => bulkImportMutation.mutate(importRows)} disabled={importRows.length === 0 || bulkImportMutation.isPending} data-testid="button-confirm-import">
+              {bulkImportMutation.isPending ? "Importing..." : `Import ${importRows.length > 0 ? importRows.length + " " : ""}Contact${importRows.length !== 1 ? "s" : ""}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {selectedTask && (
         <ResearchLaneDialog

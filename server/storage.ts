@@ -78,11 +78,14 @@ export interface IStorage {
   createCompany(company: InsertCompany): Promise<Company>;
   updateCompany(id: string, company: InsertCompany): Promise<Company | undefined>;
   deleteCompany(id: string): Promise<boolean>;
+  archiveCompany(id: string): Promise<Company | undefined>;
+  unarchiveCompany(id: string): Promise<Company | undefined>;
   
   getContacts(): Promise<Contact[]>;
   getContactsByCompany(companyId: string): Promise<Contact[]>;
   getContact(id: string): Promise<Contact | undefined>;
   createContact(contact: InsertContact): Promise<Contact>;
+  bulkCreateContacts(contacts: InsertContact[]): Promise<Contact[]>;
   updateContact(id: string, contact: InsertContact): Promise<Contact | undefined>;
   deleteContact(id: string): Promise<boolean>;
   
@@ -162,6 +165,7 @@ export interface IStorage {
   markAllNotificationsRead(userId: string): Promise<void>;
 
   getTouchpoint(id: string): Promise<Touchpoint | undefined>;
+  getTouchpoints(): Promise<Touchpoint[]>;
   getTouchpointsByContact(contactId: string): Promise<Touchpoint[]>;
   getTouchpointsByCompany(companyId: string): Promise<Touchpoint[]>;
   getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]>;
@@ -275,6 +279,24 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
+  async archiveCompany(id: string): Promise<Company | undefined> {
+    const [updated] = await db
+      .update(companies)
+      .set({ archivedAt: new Date().toISOString() })
+      .where(eq(companies.id, id))
+      .returning();
+    return updated;
+  }
+
+  async unarchiveCompany(id: string): Promise<Company | undefined> {
+    const [updated] = await db
+      .update(companies)
+      .set({ archivedAt: null })
+      .where(eq(companies.id, id))
+      .returning();
+    return updated;
+  }
+
   async getContacts(): Promise<Contact[]> {
     return db.select().from(contacts);
   }
@@ -291,6 +313,11 @@ export class DatabaseStorage implements IStorage {
   async createContact(contact: InsertContact): Promise<Contact> {
     const [created] = await db.insert(contacts).values(contact).returning();
     return created;
+  }
+
+  async bulkCreateContacts(contactList: InsertContact[]): Promise<Contact[]> {
+    if (contactList.length === 0) return [];
+    return db.insert(contacts).values(contactList).returning();
   }
 
   async updateContact(id: string, contact: InsertContact): Promise<Contact | undefined> {
@@ -868,6 +895,10 @@ export class DatabaseStorage implements IStorage {
   async getTouchpoint(id: string): Promise<Touchpoint | undefined> {
     const [tp] = await db.select().from(touchpoints).where(eq(touchpoints.id, id));
     return tp;
+  }
+
+  async getTouchpoints(): Promise<Touchpoint[]> {
+    return db.select().from(touchpoints).orderBy(desc(touchpoints.date));
   }
 
   async getTouchpointsByContact(contactId: string): Promise<Touchpoint[]> {

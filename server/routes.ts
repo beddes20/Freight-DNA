@@ -386,12 +386,16 @@ export async function registerRoutes(
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
 
-      let companies = await storage.getCompanies();
+      let allCompanies = await storage.getCompanies();
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
-        companies = companies.filter(c => visibleIds.includes(c.id));
+        allCompanies = allCompanies.filter(c => visibleIds.includes(c.id));
       }
-      res.json(companies);
+      const includeArchived = req.query.includeArchived === "true";
+      if (!includeArchived) {
+        allCompanies = allCompanies.filter(c => !c.archivedAt);
+      }
+      res.json(allCompanies);
     } catch (error) {
       console.error("Error fetching companies:", error);
       res.status(500).json({ error: "Failed to fetch companies" });
@@ -546,6 +550,36 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/companies/:id/archive", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const updated = await storage.archiveCompany(req.params.id);
+      if (!updated) return res.status(404).json({ error: "Company not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to archive company" });
+    }
+  });
+
+  app.post("/api/companies/:id/unarchive", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const updated = await storage.unarchiveCompany(req.params.id);
+      if (!updated) return res.status(404).json({ error: "Company not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to unarchive company" });
+    }
+  });
+
   app.get("/api/contacts", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
@@ -599,6 +633,38 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error creating contact:", error);
       res.status(500).json({ error: "Failed to create contact" });
+    }
+  });
+
+  app.post("/api/companies/:companyId/contacts/bulk-import", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const rows: any[] = req.body.contacts;
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return res.status(400).json({ error: "No contacts provided" });
+      }
+      const now = new Date().toISOString();
+      const toInsert = rows.map(r => ({
+        companyId: req.params.companyId,
+        name: (r.name || "").trim(),
+        title: r.title?.trim() || null,
+        email: r.email?.trim() || null,
+        phone: r.phone?.trim() || null,
+        notes: r.notes?.trim() || null,
+        nextSteps: r.nextSteps?.trim() || null,
+        createdAt: now,
+        createdBy: currentUser.id,
+      })).filter(r => r.name.length > 0);
+      if (toInsert.length === 0) return res.status(400).json({ error: "No valid contacts (name is required)" });
+      const created = await storage.bulkCreateContacts(toInsert);
+      res.status(201).json({ count: created.length, contacts: created });
+    } catch (error) {
+      console.error("Error bulk importing contacts:", error);
+      res.status(500).json({ error: "Failed to import contacts" });
     }
   });
 

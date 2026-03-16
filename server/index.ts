@@ -5,6 +5,8 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { initMonthlyGoalScheduler } from "./monthlyGoalScheduler";
 import { initMonthlyDataRefreshScheduler } from "./monthlyDataRefreshScheduler";
+import { initRfpDeadlineScheduler } from "./rfpDeadlineScheduler";
+import { initDailyDigestScheduler } from "./dailyDigestScheduler";
 
 const app = express();
 const httpServer = createServer(app);
@@ -105,6 +107,8 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
       initMonthlyGoalScheduler();
       initMonthlyDataRefreshScheduler();
+      initRfpDeadlineScheduler();
+      initDailyDigestScheduler();
     },
   );
 })();
