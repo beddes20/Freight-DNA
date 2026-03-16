@@ -24,6 +24,11 @@ const menuItems = [
     icon: LayoutGrid,
   },
   {
+    title: "Training",
+    url: "/training",
+    icon: GraduationCap,
+  },
+  {
     title: "Customers",
     url: "/customers",
     icon: Network,
@@ -68,11 +73,6 @@ const menuItems = [
     title: "PTO Passoff",
     url: "/pto-passoff",
     icon: Plane,
-  },
-  {
-    title: "Training",
-    url: "/training",
-    icon: GraduationCap,
   },
 ];
 
