@@ -80,6 +80,7 @@ export interface IStorage {
   getTeamMemberIds(userId: string): Promise<string[]>;
   
   getCompanies(): Promise<Company[]>;
+  getCompaniesByIds(ids: string[]): Promise<Company[]>;
   getCompany(id: string): Promise<Company | undefined>;
   createCompany(company: InsertCompany): Promise<Company>;
   updateCompany(id: string, company: InsertCompany): Promise<Company | undefined>;
@@ -269,6 +270,11 @@ export class DatabaseStorage implements IStorage {
 
   async getCompanies(): Promise<Company[]> {
     return db.select().from(companies);
+  }
+
+  async getCompaniesByIds(ids: string[]): Promise<Company[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(companies).where(inArray(companies.id, ids));
   }
 
   async getCompany(id: string): Promise<Company | undefined> {

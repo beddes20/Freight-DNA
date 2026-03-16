@@ -3420,13 +3420,22 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const isAdmin = currentUser.role === "admin";
-      const showAll = isAdmin && req.query.all === "true";
-      const passoffs = showAll
+      const isAdminOrDirector = currentUser.role === "admin" || currentUser.role === "director";
+      const passoffs = isAdminOrDirector
         ? await storage.getPtoPassoffs({ all: true })
         : await storage.getPtoPassoffs({ createdById: currentUser.id, coveringUserId: currentUser.id });
-      const items = await Promise.all(passoffs.map(p => storage.getPtoPassoffItems(p.id)));
-      res.json(passoffs.map((p, i) => ({ ...p, items: items[i] })));
+      const allItems = await Promise.all(passoffs.map(p => storage.getPtoPassoffItems(p.id)));
+      // Collect all unique companyIds across all items to batch-fetch names
+      const allCompanyIds = [...new Set(allItems.flat().map(i => i.companyId).filter(Boolean) as string[])];
+      const allCompanies = allCompanyIds.length > 0 ? await storage.getCompaniesByIds(allCompanyIds) : [];
+      const companyNameMap = new Map(allCompanies.map(c => [c.id, c.name]));
+      res.json(passoffs.map((p, i) => ({
+        ...p,
+        items: allItems[i].map(item => ({
+          ...item,
+          companyName: item.companyId ? (companyNameMap.get(item.companyId) ?? "Unknown Account") : null,
+        })),
+      })));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch PTO passoffs" });
     }

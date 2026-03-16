@@ -22,6 +22,7 @@ import {
 import type { Company } from "@shared/schema";
 
 type PtoPassoffItem = {
+  companyName?: string | null;
   id: string;
   passoffId: string;
   companyId: string | null;
@@ -766,19 +767,16 @@ function PassoffCard({
                   No accounts added yet. {isOwner ? "Add accounts below to build the checklist." : ""}
                 </p>
               )}
-              {passoff.items.map(item => {
-                const company = companies.find(c => c.id === item.companyId);
-                return (
-                  <AccountItemEditor
-                    key={item.id}
-                    item={item}
-                    companyName={company?.name ?? "Unknown Account"}
-                    passoffId={passoff.id}
-                    isOwner={isOwner || isAdmin}
-                    isCovering={isCovering}
-                  />
-                );
-              })}
+              {passoff.items.map(item => (
+                <AccountItemEditor
+                  key={item.id}
+                  item={item}
+                  companyName={item.companyName ?? companies.find(c => c.id === item.companyId)?.name ?? "Unknown Account"}
+                  passoffId={passoff.id}
+                  isOwner={isOwner || isAdmin}
+                  isCovering={isCovering}
+                />
+              ))}
             </div>
 
             {(isOwner || isAdmin) && availableCompanies.length > 0 && (
