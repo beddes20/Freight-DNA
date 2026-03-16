@@ -502,7 +502,7 @@ function PassoffCard({
   isAdmin: boolean;
 }) {
   const { toast } = useToast();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
   const [addAccountId, setAddAccountId] = useState("none");
 
@@ -887,7 +887,14 @@ export default function PtoPassoffPage() {
           <DialogHeader>
             <DialogTitle>Create PTO Passoff</DialogTitle>
           </DialogHeader>
-          <PassoffDialog users={otherUsers} companies={companies.filter(c => c.assignedTo === currentUser.id)} onClose={() => setCreateOpen(false)} />
+          <PassoffDialog
+            users={otherUsers}
+            companies={(() => {
+              const mine = companies.filter(c => c.assignedTo === currentUser.id);
+              return mine.length > 0 ? mine : companies;
+            })()}
+            onClose={() => setCreateOpen(false)}
+          />
         </DialogContent>
       </Dialog>
     </div>
