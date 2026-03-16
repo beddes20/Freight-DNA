@@ -75,7 +75,22 @@ function AuthenticatedApp() {
         <div className="flex flex-col flex-1 overflow-hidden">
           <header className="flex items-center gap-2 p-2 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <div className="flex-1" />
+            <div className="flex-1 flex items-center justify-center overflow-hidden px-4">
+              <p className="hidden md:flex items-center gap-0 text-xs italic text-muted-foreground/70 whitespace-nowrap select-none tracking-wide">
+                {[
+                  "Service exceptionally",
+                  "Move fast",
+                  "Build relationships",
+                  "Hunt opportunities",
+                  "Grow relentlessly",
+                ].map((phrase, i) => (
+                  <span key={i} className="flex items-center gap-0">
+                    {i > 0 && <span className="mx-2.5 text-muted-foreground/30 not-italic font-light">·</span>}
+                    <span className="hover:text-foreground transition-colors duration-200">{phrase}</span>
+                  </span>
+                ))}
+              </p>
+            </div>
             <GlobalSearch />
             <NotificationBell />
           </header>
