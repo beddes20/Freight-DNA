@@ -17,7 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Plane, Plus, Trash2, ChevronDown, ChevronRight, Shield, Pencil,
   AlertTriangle, Phone, Users, ClipboardList, Briefcase, CheckCircle2,
-  FileText, Package, Clock, UserCheck
+  FileText, Package, Clock, UserCheck, Mail, Database
 } from "lucide-react";
 import type { Company } from "@shared/schema";
 
@@ -32,6 +32,8 @@ type PtoPassoffItem = {
   processNotes: string | null;
   activeDeals: string | null;
   acknowledged: boolean;
+  emailForwardingSet: boolean;
+  spotBoardUpdated: boolean;
 };
 
 type PassoffWithItems = {
@@ -307,6 +309,8 @@ function AccountItemEditor({
   const [openItems, setOpenItems] = useState(item.openItems ?? "");
   const [processNotes, setProcessNotes] = useState(item.processNotes ?? "");
   const [activeDeals, setActiveDeals] = useState(item.activeDeals ?? "");
+  const [emailForwardingSet, setEmailForwardingSet] = useState(item.emailForwardingSet);
+  const [spotBoardUpdated, setSpotBoardUpdated] = useState(item.spotBoardUpdated);
 
   const updateMutation = useMutation({
     mutationFn: (data: any) =>
@@ -326,11 +330,17 @@ function AccountItemEditor({
   });
 
   const handleSave = () => {
-    updateMutation.mutate({ priority, spotFreightHandler, keyCustomerContact, openItems, processNotes, activeDeals });
+    updateMutation.mutate({ priority, spotFreightHandler, keyCustomerContact, openItems, processNotes, activeDeals, emailForwardingSet, spotBoardUpdated });
   };
 
   const handleAck = (checked: boolean) => {
     updateMutation.mutate({ acknowledged: checked });
+  };
+
+  const handleToggle = (field: "emailForwardingSet" | "spotBoardUpdated", checked: boolean) => {
+    updateMutation.mutate({ [field]: checked });
+    if (field === "emailForwardingSet") setEmailForwardingSet(checked);
+    else setSpotBoardUpdated(checked);
   };
 
   const priorityLabel = priority.charAt(0).toUpperCase() + priority.slice(1);
@@ -378,6 +388,48 @@ function AccountItemEditor({
           )}
         </div>
       </div>
+
+      {isOwner && (
+        <div className="flex flex-col sm:flex-row gap-2 pt-1 border-t border-black/10 dark:border-white/10">
+          <label className="flex items-center gap-2 text-xs cursor-pointer flex-1" data-testid={`label-email-fwd-${item.id}`}>
+            <Checkbox
+              checked={item.emailForwardingSet}
+              onCheckedChange={(v) => handleToggle("emailForwardingSet", !!v)}
+              data-testid={`checkbox-email-fwd-${item.id}`}
+            />
+            <Mail className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <span className={item.emailForwardingSet ? "line-through text-muted-foreground" : ""}>
+              Autoforwarding emails to rep covering?
+            </span>
+            {item.emailForwardingSet && <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />}
+          </label>
+          <label className="flex items-center gap-2 text-xs cursor-pointer flex-1" data-testid={`label-spot-board-${item.id}`}>
+            <Checkbox
+              checked={item.spotBoardUpdated}
+              onCheckedChange={(v) => handleToggle("spotBoardUpdated", !!v)}
+              data-testid={`checkbox-spot-board-${item.id}`}
+            />
+            <Database className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <span className={item.spotBoardUpdated ? "line-through text-muted-foreground" : ""}>
+              Spot board/portal info up to date?
+            </span>
+            {item.spotBoardUpdated && <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />}
+          </label>
+        </div>
+      )}
+
+      {!isOwner && (
+        <div className="flex flex-col sm:flex-row gap-3 pt-1 border-t border-black/10 dark:border-white/10 text-xs">
+          <span className={`flex items-center gap-1.5 ${item.emailForwardingSet ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+            <Mail className="w-3.5 h-3.5" />
+            Autoforward: {item.emailForwardingSet ? "✓ Set" : "Not set"}
+          </span>
+          <span className={`flex items-center gap-1.5 ${item.spotBoardUpdated ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+            <Database className="w-3.5 h-3.5" />
+            Spot board: {item.spotBoardUpdated ? "✓ Updated" : "Not updated"}
+          </span>
+        </div>
+      )}
 
       {editing && isOwner ? (
         <div className="space-y-3 bg-background/70 rounded p-3 border">
