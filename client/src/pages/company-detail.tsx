@@ -317,7 +317,7 @@ export default function CompanyDetail() {
       // Substring: one fully contains the other (min 8 chars to avoid noise)
       const shorter = crmNorm.length <= excelNorm.length ? crmNorm : excelNorm;
       const longer  = crmNorm.length <= excelNorm.length ? excelNorm : crmNorm;
-      return shorter.length >= 8 && longer.includes(shorter);
+      return shorter.length >= 5 && longer.includes(shorter);
     });
     if (!matches.length) return null;
     return {
