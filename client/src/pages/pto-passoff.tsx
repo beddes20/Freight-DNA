@@ -90,6 +90,7 @@ function PassoffDialog({
   const [status, setStatus] = useState(passoff?.status ?? "draft");
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set());
   const [accountSearch, setAccountSearch] = useState("");
+  const [showAccountList, setShowAccountList] = useState(false);
 
   const sortedCompanies = [...companies].sort((a, b) => a.name.localeCompare(b.name));
   const filteredCompanies = sortedCompanies.filter(c =>
@@ -242,32 +243,35 @@ function PassoffDialog({
             </button>
           </div>
           <Input
-            placeholder="Search accounts…"
+            placeholder="Click to search accounts…"
             value={accountSearch}
             onChange={e => setAccountSearch(e.target.value)}
+            onFocus={() => setShowAccountList(true)}
             className="h-8 text-sm"
             data-testid="input-search-accounts"
           />
-          <div className="border rounded-md max-h-44 overflow-y-auto divide-y">
-            {filteredCompanies.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-3 italic">No accounts match</p>
-            ) : (
-              filteredCompanies.map(c => (
-                <label
-                  key={c.id}
-                  className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted/40 cursor-pointer text-sm"
-                  data-testid={`label-account-${c.id}`}
-                >
-                  <Checkbox
-                    checked={selectedCompanyIds.has(c.id)}
-                    onCheckedChange={() => toggleCompany(c.id)}
-                    data-testid={`checkbox-account-${c.id}`}
-                  />
-                  <span className="truncate">{c.name}</span>
-                </label>
-              ))
-            )}
-          </div>
+          {showAccountList && (
+            <div className="border rounded-md max-h-44 overflow-y-auto divide-y">
+              {filteredCompanies.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-3 italic">No accounts match</p>
+              ) : (
+                filteredCompanies.map(c => (
+                  <label
+                    key={c.id}
+                    className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted/40 cursor-pointer text-sm"
+                    data-testid={`label-account-${c.id}`}
+                  >
+                    <Checkbox
+                      checked={selectedCompanyIds.has(c.id)}
+                      onCheckedChange={() => toggleCompany(c.id)}
+                      data-testid={`checkbox-account-${c.id}`}
+                    />
+                    <span className="truncate">{c.name}</span>
+                  </label>
+                ))
+              )}
+            </div>
+          )}
         </div>
       )}
 
