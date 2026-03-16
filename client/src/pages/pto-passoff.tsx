@@ -400,30 +400,36 @@ function AccountItemEditor({
 
       {isOwner && (
         <div className="flex flex-col sm:flex-row gap-2 pt-1 border-t border-black/10 dark:border-white/10">
-          <label className="flex items-center gap-2 text-xs cursor-pointer flex-1" data-testid={`label-email-fwd-${item.id}`}>
+          <div className="flex items-center gap-2 text-xs flex-1" data-testid={`label-email-fwd-${item.id}`}>
             <Checkbox
               checked={item.emailForwardingSet}
               onCheckedChange={(v) => handleToggle("emailForwardingSet", !!v)}
               data-testid={`checkbox-email-fwd-${item.id}`}
             />
             <Mail className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-            <span className={item.emailForwardingSet ? "line-through text-muted-foreground" : ""}>
+            <span
+              className={`cursor-pointer select-none ${item.emailForwardingSet ? "line-through text-muted-foreground" : ""}`}
+              onClick={() => handleToggle("emailForwardingSet", !item.emailForwardingSet)}
+            >
               Autoforwarding emails to rep covering?
             </span>
             {item.emailForwardingSet && <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />}
-          </label>
-          <label className="flex items-center gap-2 text-xs cursor-pointer flex-1" data-testid={`label-spot-board-${item.id}`}>
+          </div>
+          <div className="flex items-center gap-2 text-xs flex-1" data-testid={`label-spot-board-${item.id}`}>
             <Checkbox
               checked={item.spotBoardUpdated}
               onCheckedChange={(v) => handleToggle("spotBoardUpdated", !!v)}
               data-testid={`checkbox-spot-board-${item.id}`}
             />
             <Database className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-            <span className={item.spotBoardUpdated ? "line-through text-muted-foreground" : ""}>
+            <span
+              className={`cursor-pointer select-none ${item.spotBoardUpdated ? "line-through text-muted-foreground" : ""}`}
+              onClick={() => handleToggle("spotBoardUpdated", !item.spotBoardUpdated)}
+            >
               Spot board/portal info up to date?
             </span>
             {item.spotBoardUpdated && <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />}
-          </label>
+          </div>
         </div>
       )}
 
