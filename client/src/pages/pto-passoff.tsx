@@ -68,10 +68,12 @@ function formatDate(iso: string) {
 function PassoffDialog({
   passoff,
   users,
+  companies,
   onClose,
 }: {
   passoff?: PassoffWithItems;
   users: SafeUser[];
+  companies: Company[];
   onClose: () => void;
 }) {
   const { toast } = useToast();
@@ -81,9 +83,42 @@ function PassoffDialog({
   const [emergencyContact, setEmergencyContact] = useState(passoff?.emergencyContact ?? "");
   const [generalNotes, setGeneralNotes] = useState(passoff?.generalNotes ?? "");
   const [status, setStatus] = useState(passoff?.status ?? "draft");
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set());
+  const [accountSearch, setAccountSearch] = useState("");
+
+  const sortedCompanies = [...companies].sort((a, b) => a.name.localeCompare(b.name));
+  const filteredCompanies = sortedCompanies.filter(c =>
+    c.name.toLowerCase().includes(accountSearch.toLowerCase())
+  );
+  const allSelected = sortedCompanies.length > 0 && sortedCompanies.every(c => selectedCompanyIds.has(c.id));
+
+  const toggleCompany = (id: string) => {
+    setSelectedCompanyIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedCompanyIds(new Set());
+    } else {
+      setSelectedCompanyIds(new Set(sortedCompanies.map(c => c.id)));
+    }
+  };
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", "/api/pto-passoffs", data).then(r => r.json()),
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/pto-passoffs", data);
+      const created = await res.json();
+      if (selectedCompanyIds.size > 0) {
+        for (const companyId of selectedCompanyIds) {
+          await apiRequest("POST", `/api/pto-passoffs/${created.id}/items`, { companyId, priority: "medium" });
+        }
+      }
+      return created;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] });
       toast({ title: "PTO passoff created" });
@@ -177,10 +212,60 @@ function PassoffDialog({
           placeholder="Anything the covering person should know in general..."
           value={generalNotes}
           onChange={e => setGeneralNotes(e.target.value)}
-          rows={3}
+          rows={2}
           data-testid="textarea-pto-notes"
         />
       </div>
+
+      {!passoff && companies.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label className="flex items-center gap-1.5">
+              <Briefcase className="w-3.5 h-3.5 text-muted-foreground" />
+              Accounts to Include
+              {selectedCompanyIds.size > 0 && (
+                <Badge variant="secondary" className="ml-1 text-xs">{selectedCompanyIds.size} selected</Badge>
+              )}
+            </Label>
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+              data-testid="button-select-all-accounts"
+            >
+              {allSelected ? "Clear all" : "Select all"}
+            </button>
+          </div>
+          <Input
+            placeholder="Search accounts…"
+            value={accountSearch}
+            onChange={e => setAccountSearch(e.target.value)}
+            className="h-8 text-sm"
+            data-testid="input-search-accounts"
+          />
+          <div className="border rounded-md max-h-44 overflow-y-auto divide-y">
+            {filteredCompanies.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-3 italic">No accounts match</p>
+            ) : (
+              filteredCompanies.map(c => (
+                <label
+                  key={c.id}
+                  className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted/40 cursor-pointer text-sm"
+                  data-testid={`label-account-${c.id}`}
+                >
+                  <Checkbox
+                    checked={selectedCompanyIds.has(c.id)}
+                    onCheckedChange={() => toggleCompany(c.id)}
+                    data-testid={`checkbox-account-${c.id}`}
+                  />
+                  <span className="truncate">{c.name}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-1.5">
         <Label>Status</Label>
         <Select value={status} onValueChange={setStatus}>
@@ -195,7 +280,7 @@ function PassoffDialog({
         </Select>
       </div>
       <Button type="submit" className="w-full bg-gradient-to-r from-blue-600 to-green-600" disabled={isPending} data-testid="button-save-passoff">
-        {isPending ? "Saving..." : passoff ? "Update Passoff" : "Create Passoff"}
+        {isPending ? "Saving..." : passoff ? "Update Passoff" : `Create Passoff${selectedCompanyIds.size > 0 ? ` with ${selectedCompanyIds.size} account${selectedCompanyIds.size !== 1 ? "s" : ""}` : ""}`}
       </Button>
     </form>
   );
@@ -615,7 +700,7 @@ function PassoffCard({
           <DialogHeader>
             <DialogTitle>Edit PTO Passoff</DialogTitle>
           </DialogHeader>
-          <PassoffDialog passoff={passoff} users={users} onClose={() => setEditOpen(false)} />
+          <PassoffDialog passoff={passoff} users={users} companies={[]} onClose={() => setEditOpen(false)} />
         </DialogContent>
       </Dialog>
     </Card>
@@ -798,11 +883,11 @@ export default function PtoPassoffPage() {
       </Tabs>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create PTO Passoff</DialogTitle>
           </DialogHeader>
-          <PassoffDialog users={otherUsers} onClose={() => setCreateOpen(false)} />
+          <PassoffDialog users={otherUsers} companies={companies.filter(c => c.assignedTo === currentUser.id)} onClose={() => setCreateOpen(false)} />
         </DialogContent>
       </Dialog>
     </div>
