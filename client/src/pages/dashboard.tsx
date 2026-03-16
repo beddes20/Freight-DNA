@@ -10,7 +10,8 @@ import {
   Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp,
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
-  PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload,
+  PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
+  Phone, Mail, Package, FileText, Shield,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -103,6 +104,10 @@ export default function Dashboard() {
 
   const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPostWithReplies[]>({
     queryKey: ["/api/feed-posts"],
+  });
+
+  const { data: passoffs = [] } = useQuery<any[]>({
+    queryKey: ["/api/pto-passoffs"],
   });
 
   const { data: syncAlert } = useQuery<{ failed: boolean; month?: string; error?: string }>({
@@ -406,6 +411,130 @@ export default function Dashboard() {
           </button>
         </div>
       )}
+
+      {/* PTO Coverage Portlet — only shown to users who are assigned as covering someone */}
+      {currentUser && passoffs.filter((p: any) => p.coveringUserId === currentUser.id).map((passoff: any) => {
+        const owner = allUsers.find(u => u.id === passoff.createdById);
+        const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+        const sortedItems = [...(passoff.items || [])].sort((a: any, b: any) =>
+          (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1)
+        );
+        const highCount = sortedItems.filter((i: any) => i.priority === "high").length;
+        return (
+          <Card key={passoff.id} className="border-blue-300 dark:border-blue-700 bg-blue-50/40 dark:bg-blue-950/20" data-testid={`card-pto-coverage-${passoff.id}`}>
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between gap-2">
+                <CardTitle className="text-base flex items-center gap-2 text-blue-700 dark:text-blue-300">
+                  <Plane className="h-4 w-4" />
+                  You're Covering for {owner?.name ?? "a teammate"}
+                </CardTitle>
+                <Link href="/pto-passoff">
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 shrink-0" data-testid={`button-view-passoff-${passoff.id}`}>
+                    View Full Passoff →
+                  </Button>
+                </Link>
+              </div>
+              <div className="flex items-center gap-3 mt-1 flex-wrap">
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Calendar className="h-3 w-3" />
+                  {passoff.startDate} – {passoff.endDate}
+                </span>
+                {highCount > 0 && (
+                  <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-200 text-xs font-normal">
+                    {highCount} high-priority account{highCount !== 1 ? "s" : ""}
+                  </Badge>
+                )}
+                <Badge variant="secondary" className="text-xs font-normal">
+                  {sortedItems.length} account{sortedItems.length !== 1 ? "s" : ""}
+                </Badge>
+                {passoff.emergencyContact && (
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Phone className="h-3 w-3" />
+                    Emergency: {passoff.emergencyContact}
+                  </span>
+                )}
+              </div>
+              {passoff.generalNotes && (
+                <p className="text-xs text-muted-foreground mt-1 italic border-l-2 border-blue-300 dark:border-blue-700 pl-2">{passoff.generalNotes}</p>
+              )}
+            </CardHeader>
+            <CardContent className="pt-0 space-y-2">
+              {sortedItems.length === 0 && (
+                <p className="text-sm text-muted-foreground italic">No accounts in this passoff yet.</p>
+              )}
+              {sortedItems.map((item: any) => {
+                const priorityColors: Record<string, string> = {
+                  high: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-200",
+                  medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-amber-200",
+                  low: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-green-200",
+                };
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-lg border bg-card p-3 space-y-2"
+                    data-testid={`card-coverage-account-${item.id}`}
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge className={`text-xs font-normal border ${priorityColors[item.priority] ?? priorityColors.medium}`}>
+                        {item.priority === "high" ? "🔴" : item.priority === "low" ? "🟢" : "🟡"} {item.priority}
+                      </Badge>
+                      <span className="font-medium text-sm">{item.companyName ?? "Account"}</span>
+                      {item.acknowledged && (
+                        <Badge variant="secondary" className="text-xs font-normal ml-auto">
+                          <CheckCircle2 className="h-3 w-3 mr-1 text-green-500" />Acknowledged
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs text-muted-foreground">
+                      {item.spotFreightHandler && (
+                        <span className="flex items-center gap-1.5">
+                          <Package className="h-3 w-3 shrink-0" />
+                          <span><span className="text-foreground font-medium">Spot handler:</span> {item.spotFreightHandler}</span>
+                        </span>
+                      )}
+                      {item.keyCustomerContact && (
+                        <span className="flex items-center gap-1.5">
+                          <UserCircle className="h-3 w-3 shrink-0" />
+                          <span><span className="text-foreground font-medium">Key contact:</span> {item.keyCustomerContact}</span>
+                        </span>
+                      )}
+                      {item.openItems && (
+                        <span className="flex items-start gap-1.5 sm:col-span-2">
+                          <FileText className="h-3 w-3 shrink-0 mt-0.5" />
+                          <span><span className="text-foreground font-medium">Open items:</span> {item.openItems}</span>
+                        </span>
+                      )}
+                      {item.activeDeals && (
+                        <span className="flex items-start gap-1.5 sm:col-span-2">
+                          <Shield className="h-3 w-3 shrink-0 mt-0.5" />
+                          <span><span className="text-foreground font-medium">Active RFPs/bids:</span> {item.activeDeals}</span>
+                        </span>
+                      )}
+                      {item.processNotes && (
+                        <span className="flex items-start gap-1.5 sm:col-span-2 italic">
+                          <Mail className="h-3 w-3 shrink-0 mt-0.5" />
+                          <span><span className="text-foreground font-medium not-italic">Process notes:</span> {item.processNotes}</span>
+                        </span>
+                      )}
+                      {(item.avgWeeklySpotLoads || item.avgWeeklyTotalLoads) && (
+                        <span className="flex items-center gap-2 sm:col-span-2">
+                          <TrendingUp className="h-3 w-3 shrink-0" />
+                          <span className="text-foreground font-medium">Avg loads/wk:</span>
+                          {item.avgWeeklySpotLoads && <span>Spot: <strong>{Number(item.avgWeeklySpotLoads).toFixed(1)}</strong></span>}
+                          {item.avgWeeklyTotalLoads && <span>Total: <strong>{Number(item.avgWeeklyTotalLoads).toFixed(1)}</strong></span>}
+                        </span>
+                      )}
+                    </div>
+                    {!item.spotFreightHandler && !item.keyCustomerContact && !item.openItems && !item.processNotes && !item.activeDeals && (
+                      <p className="text-xs text-muted-foreground italic">No details added yet — check the full passoff for updates.</p>
+                    )}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        );
+      })}
 
       <Card data-testid="card-my-tasks">
         <CardHeader className="pb-3">
