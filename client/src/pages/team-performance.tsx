@@ -115,7 +115,7 @@ function RepCard({ rep, totalLoads, totalMargin }: { rep: RepPerf; totalLoads?: 
           <StatPill value={rep.textTouchpoints} label="Texts" color="text-green-600" icon={<MessageSquare className="h-3 w-3 text-green-500" />} />
           <StatPill value={rep.emailTouchpoints} label="Emails" color="text-purple-600" icon={<Mail className="h-3 w-3 text-purple-500" />} />
           <StatPill value={rep.contactsTouched} label="Touched" color="text-cyan-600" icon={<UserCheck className="h-3 w-3 text-cyan-500" />} />
-          <StatPill value={rep.baseAdvanced} label="Advanced" color="text-teal-600" icon={<ArrowUpRight className="h-3 w-3 text-teal-500" />} />
+          <StatPill value={rep.baseAdvanced} label="Rel. Moved" color="text-teal-600" icon={<ArrowUpRight className="h-3 w-3 text-teal-500" />} />
         </div>
 
         <div className="space-y-1">

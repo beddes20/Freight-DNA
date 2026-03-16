@@ -447,7 +447,17 @@ export async function registerRoutes(
     }
   });
 
-  async function fanOutCelebration(type: "new_account" | "new_contact", title: string, body: string, link: string, relatedId: string, actorId: string) {
+  function getBaseRank(base: string | null | undefined): number {
+    if (!base) return 0;
+    const s = base.toLowerCase().replace(/\s+/g, "");
+    if (s.includes("home") || s === "hr" || s === "homerun") return 4;
+    if (s.includes("3rd") || s.includes("third")) return 3;
+    if (s.includes("2nd") || s.includes("second")) return 2;
+    if (s.includes("1st") || s.includes("first")) return 1;
+    return 0;
+  }
+
+  async function fanOutCelebration(type: "new_account" | "new_contact" | "base_advanced", title: string, body: string, link: string, relatedId: string, actorId: string) {
     try {
       const allUsers = await storage.getUsers();
       const celebrationRoles = ["national_account_manager", "director", "admin"];
@@ -720,6 +730,20 @@ export async function registerRoutes(
       }
       if (parsed.data.relationshipBase && parsed.data.relationshipBase !== existing.relationshipBase) {
         parsed.data.baseAdvancedAt = new Date().toISOString().split("T")[0];
+        const oldRank = getBaseRank(existing.relationshipBase);
+        const newRank = getBaseRank(parsed.data.relationshipBase);
+        if (newRank > oldRank && newRank > 0) {
+          storage.getCompany(existing.companyId).then(co => {
+            fanOutCelebration(
+              "base_advanced",
+              `🎉 Relationship advanced: ${parsed.data.name ?? existing.name}`,
+              `${currentUser.name} moved ${parsed.data.name ?? existing.name} at ${co?.name ?? "an account"} from ${existing.relationshipBase ?? "no base"} → ${parsed.data.relationshipBase}.`,
+              `/companies/${existing.companyId}`,
+              req.params.id,
+              currentUser.id
+            );
+          }).catch(() => {});
+        }
       }
       const contact = await storage.updateContact(req.params.id, parsed.data);
       res.json(contact);
