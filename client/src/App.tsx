@@ -26,6 +26,7 @@ import TasksPage from "@/pages/tasks";
 import TeamPerformancePage from "@/pages/team-performance";
 import GoalsPage from "@/pages/goals";
 import PtoPassoffPage from "@/pages/pto-passoff";
+import TrainingPage from "@/pages/training";
 
 function Router() {
   return (
@@ -45,6 +46,7 @@ function Router() {
       <Route path="/team-performance" component={TeamPerformancePage} />
       <Route path="/goals" component={GoalsPage} />
       <Route path="/pto-passoff" component={PtoPassoffPage} />
+      <Route path="/training" component={TrainingPage} />
       <Route component={NotFound} />
     </Switch>
   );
