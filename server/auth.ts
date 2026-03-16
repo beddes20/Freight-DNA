@@ -83,8 +83,10 @@ export function setupAuth(app: any) {
       }
 
       req.session.userId = user.id;
+      const now = new Date().toISOString();
+      await storage.updateUser(user.id, { lastLoginAt: now });
       const { password: _, ...safeUser } = user;
-      res.json(safeUser);
+      res.json({ ...safeUser, lastLoginAt: now });
     } catch (error) {
       console.error("Login error:", error);
       res.status(500).json({ error: "Login failed" });

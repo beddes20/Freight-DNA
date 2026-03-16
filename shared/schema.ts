@@ -103,6 +103,7 @@ export const users = pgTable("users", {
   name: text("name").notNull().default(""),
   role: text("role").notNull().default("account_manager"),
   managerId: varchar("manager_id"),
+  lastLoginAt: text("last_login_at"),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({

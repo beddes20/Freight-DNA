@@ -10,10 +10,25 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock } from "lucide-react";
 import type { User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
+
+function formatLastLogin(iso: string | null | undefined): string {
+  if (!iso) return "Never";
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHrs = Math.floor(diffMins / 60);
+  if (diffHrs < 24) return `${diffHrs}h ago`;
+  const diffDays = Math.floor(diffHrs / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -220,6 +235,10 @@ export default function AdminUsers() {
                       {manager && (
                         <p className="text-xs text-muted-foreground mt-0.5">Reports to: {manager.name}</p>
                       )}
+                      <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1" data-testid={`text-user-lastlogin-${u.id}`}>
+                        <Clock className="w-3 h-3" />
+                        Last login: {formatLastLogin(u.lastLoginAt)}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
