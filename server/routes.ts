@@ -3430,6 +3430,10 @@ export async function registerRoutes(
         if (!topic) return false;
         return canAccessSession(user, topic.sessionId);
       }
+      if (entityType === "scorecard") {
+        if (user.role === "admin") return true;
+        return canAccessCompany(user, entityId);
+      }
       return false;
     } catch {
       return false;
@@ -3441,7 +3445,7 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { entityType, entityId, fileName, mimeType, fileData } = req.body;
-      const validEntityTypes = ["feed_post", "one_on_one_topic", "touchpoint", "task"];
+      const validEntityTypes = ["feed_post", "one_on_one_topic", "touchpoint", "task", "scorecard"];
       if (!validEntityTypes.includes(entityType)) {
         return res.status(400).json({ error: "Invalid entity type" });
       }

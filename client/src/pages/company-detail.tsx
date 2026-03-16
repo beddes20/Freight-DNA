@@ -92,6 +92,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import { CalloutDialog } from "@/components/callout-dialog";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
+import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint } from "@shared/schema";
 
 interface ResearchTask {
@@ -219,6 +220,8 @@ export default function CompanyDetail() {
   const [editingTaskItem, setEditingTaskItem] = useState<Task | undefined>();
   const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[] } | undefined>();
   const [lanesCollapsed, setLanesCollapsed] = useState(false);
+  const [scorecardPending, setScorecardPending] = useState<PendingFile[]>([]);
+  const [scorecardUploading, setScorecardUploading] = useState(false);
   const [facilityCoverageCollapsed, setFacilityCoverageCollapsed] = useState(false);
   const [lanePatternsCollapsed, setLanePatternsCollapsed] = useState(false);
   const [laneMatchingCollapsed, setLaneMatchingCollapsed] = useState(false);
@@ -968,6 +971,59 @@ export default function CompanyDetail() {
               </div>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Customer Scorecard */}
+      <Card data-testid="card-customer-scorecard">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-primary" />
+              Customer Scorecard
+            </CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0 space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Upload scorecards, performance reviews, or any account-related documents.
+          </p>
+          <FileAttachmentList
+            entityType="scorecard"
+            entityIds={companyId ? [companyId] : []}
+            showForEntityId={companyId}
+          />
+          <div className="space-y-2">
+            <FileAttachmentUpload
+              pendingFiles={scorecardPending}
+              onAdd={(files) => setScorecardPending(prev => [...prev, ...files])}
+              onRemove={(i) => setScorecardPending(prev => prev.filter((_, idx) => idx !== i))}
+            />
+            {scorecardPending.length > 0 && (
+              <Button
+                size="sm"
+                className="h-7 text-xs"
+                disabled={scorecardUploading}
+                data-testid="button-upload-scorecard"
+                onClick={async () => {
+                  if (!companyId) return;
+                  setScorecardUploading(true);
+                  try {
+                    await uploadPendingFiles(scorecardPending, "scorecard", companyId);
+                    setScorecardPending([]);
+                    queryClient.invalidateQueries({ queryKey: ["/api/attachments", "scorecard", companyId] });
+                    toast({ title: "Scorecard uploaded" });
+                  } catch {
+                    toast({ title: "Upload failed", variant: "destructive" });
+                  } finally {
+                    setScorecardUploading(false);
+                  }
+                }}
+              >
+                {scorecardUploading ? "Uploading…" : `Save ${scorecardPending.length} file${scorecardPending.length !== 1 ? "s" : ""}`}
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
 
