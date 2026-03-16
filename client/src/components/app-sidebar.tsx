@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink, MessagesSquare, ListTodo, TrendingUp, Target } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink, MessagesSquare, ListTodo, TrendingUp, Target, Plane } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -63,6 +63,11 @@ const menuItems = [
     title: "Goals",
     url: "/goals",
     icon: Target,
+  },
+  {
+    title: "PTO Passoff",
+    url: "/pto-passoff",
+    icon: Plane,
   },
 ];
 

@@ -3415,6 +3415,138 @@ export async function registerRoutes(
     }
   });
 
+  // PTO Passoff routes
+  app.get("/api/pto-passoffs", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const isAdmin = currentUser.role === "admin";
+      const showAll = isAdmin && req.query.all === "true";
+      const passoffs = showAll
+        ? await storage.getPtoPassoffs({ all: true })
+        : await storage.getPtoPassoffs({ createdById: currentUser.id, coveringUserId: currentUser.id });
+      const items = await Promise.all(passoffs.map(p => storage.getPtoPassoffItems(p.id)));
+      res.json(passoffs.map((p, i) => ({ ...p, items: items[i] })));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch PTO passoffs" });
+    }
+  });
+
+  app.post("/api/pto-passoffs", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { startDate, endDate, coveringUserId, emergencyContact, generalNotes, status } = req.body;
+      if (!startDate || !endDate) return res.status(400).json({ error: "Start and end dates are required" });
+      const passoff = await storage.createPtoPassoff({
+        createdById: currentUser.id,
+        coveringUserId: coveringUserId || null,
+        startDate,
+        endDate,
+        emergencyContact: emergencyContact || null,
+        generalNotes: generalNotes || null,
+        status: status || "draft",
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json({ ...passoff, items: [] });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create PTO passoff" });
+    }
+  });
+
+  app.patch("/api/pto-passoffs/:id", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const passoff = await storage.getPtoPassoff(req.params.id);
+      if (!passoff) return res.status(404).json({ error: "Not found" });
+      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const updated = await storage.updatePtoPassoff(req.params.id, req.body);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update PTO passoff" });
+    }
+  });
+
+  app.delete("/api/pto-passoffs/:id", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const passoff = await storage.getPtoPassoff(req.params.id);
+      if (!passoff) return res.status(404).json({ error: "Not found" });
+      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      await storage.deletePtoPassoff(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete PTO passoff" });
+    }
+  });
+
+  app.post("/api/pto-passoffs/:id/items", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const passoff = await storage.getPtoPassoff(req.params.id);
+      if (!passoff) return res.status(404).json({ error: "Not found" });
+      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const item = await storage.createPtoPassoffItem({
+        passoffId: req.params.id,
+        companyId: req.body.companyId || null,
+        priority: req.body.priority || "medium",
+        spotFreightHandler: req.body.spotFreightHandler || null,
+        keyCustomerContact: req.body.keyCustomerContact || null,
+        openItems: req.body.openItems || null,
+        processNotes: req.body.processNotes || null,
+        activeDeals: req.body.activeDeals || null,
+        acknowledged: false,
+      });
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to add passoff item" });
+    }
+  });
+
+  app.patch("/api/pto-passoffs/:id/items/:itemId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const passoff = await storage.getPtoPassoff(req.params.id);
+      if (!passoff) return res.status(404).json({ error: "Not found" });
+      const isCovering = passoff.coveringUserId === currentUser.id;
+      const isOwner = passoff.createdById === currentUser.id;
+      const isAdmin = currentUser.role === "admin";
+      if (!isOwner && !isCovering && !isAdmin) return res.status(403).json({ error: "Access denied" });
+      // Covering user can only update acknowledged field
+      const allowedFields = isOwner || isAdmin ? req.body : { acknowledged: req.body.acknowledged };
+      const updated = await storage.updatePtoPassoffItem(req.params.itemId, allowedFields);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update passoff item" });
+    }
+  });
+
+  app.delete("/api/pto-passoffs/:id/items/:itemId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const passoff = await storage.getPtoPassoff(req.params.id);
+      if (!passoff) return res.status(404).json({ error: "Not found" });
+      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      await storage.deletePtoPassoffItem(req.params.itemId);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete passoff item" });
+    }
+  });
+
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {
       if (err.code === "LIMIT_FILE_SIZE") {

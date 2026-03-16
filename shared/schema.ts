@@ -354,6 +354,37 @@ export const insertPersonalAlertSchema = createInsertSchema(personalAlerts).omit
 export type InsertPersonalAlert = z.infer<typeof insertPersonalAlertSchema>;
 export type PersonalAlert = typeof personalAlerts.$inferSelect;
 
+export const ptoPassoffs = pgTable("pto_passoffs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  createdById: varchar("created_by_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  coveringUserId: varchar("covering_user_id").references(() => users.id),
+  startDate: text("start_date").notNull(),
+  endDate: text("end_date").notNull(),
+  emergencyContact: text("emergency_contact"),
+  generalNotes: text("general_notes"),
+  status: text("status").notNull().default("draft"),
+  createdAt: text("created_at").notNull(),
+});
+export const insertPtoPassoffSchema = createInsertSchema(ptoPassoffs).omit({ id: true, createdAt: true });
+export type InsertPtoPassoff = z.infer<typeof insertPtoPassoffSchema>;
+export type PtoPassoff = typeof ptoPassoffs.$inferSelect;
+
+export const ptoPassoffItems = pgTable("pto_passoff_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  passoffId: varchar("passoff_id").notNull().references(() => ptoPassoffs.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "cascade" }),
+  priority: text("priority").notNull().default("medium"),
+  spotFreightHandler: text("spot_freight_handler"),
+  keyCustomerContact: text("key_customer_contact"),
+  openItems: text("open_items"),
+  processNotes: text("process_notes"),
+  activeDeals: text("active_deals"),
+  acknowledged: boolean("acknowledged").notNull().default(false),
+});
+export const insertPtoPassoffItemSchema = createInsertSchema(ptoPassoffItems).omit({ id: true });
+export type InsertPtoPassoffItem = z.infer<typeof insertPtoPassoffItemSchema>;
+export type PtoPassoffItem = typeof ptoPassoffItems.$inferSelect;
+
 export const vendorRouted = pgTable("vendor_routed", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),

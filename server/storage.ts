@@ -60,6 +60,12 @@ import {
   type InsertPersonalAlert,
   vendorRouted,
   type VendorRouted,
+  ptoPassoffs,
+  type PtoPassoff,
+  type InsertPtoPassoff,
+  ptoPassoffItems,
+  type PtoPassoffItem,
+  type InsertPtoPassoffItem,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -197,6 +203,16 @@ export interface IStorage {
   fireDueAlerts(userId: string): Promise<PersonalAlert[]>;
   getVendorRoutedByCompany(companyId: string): Promise<VendorRouted[]>;
   toggleVendorRouted(companyId: string, rowKey: string): Promise<{ active: boolean }>;
+
+  getPtoPassoffs(filter: { createdById?: string; coveringUserId?: string; all?: boolean }): Promise<PtoPassoff[]>;
+  getPtoPassoff(id: string): Promise<PtoPassoff | undefined>;
+  createPtoPassoff(data: InsertPtoPassoff & { createdAt: string }): Promise<PtoPassoff>;
+  updatePtoPassoff(id: string, data: Partial<InsertPtoPassoff>): Promise<PtoPassoff | undefined>;
+  deletePtoPassoff(id: string): Promise<boolean>;
+  getPtoPassoffItems(passoffId: string): Promise<PtoPassoffItem[]>;
+  createPtoPassoffItem(data: InsertPtoPassoffItem): Promise<PtoPassoffItem>;
+  updatePtoPassoffItem(id: string, data: Partial<InsertPtoPassoffItem>): Promise<PtoPassoffItem | undefined>;
+  deletePtoPassoffItem(id: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -1075,6 +1091,63 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return { active: upserted.active };
+  }
+
+  async getPtoPassoffs(filter: { createdById?: string; coveringUserId?: string; all?: boolean }): Promise<PtoPassoff[]> {
+    if (filter.all) {
+      return db.select().from(ptoPassoffs).orderBy(desc(ptoPassoffs.createdAt));
+    }
+    if (filter.createdById && filter.coveringUserId) {
+      return db.select().from(ptoPassoffs).where(
+        or(eq(ptoPassoffs.createdById, filter.createdById), eq(ptoPassoffs.coveringUserId, filter.coveringUserId))
+      ).orderBy(desc(ptoPassoffs.createdAt));
+    }
+    if (filter.createdById) {
+      return db.select().from(ptoPassoffs).where(eq(ptoPassoffs.createdById, filter.createdById)).orderBy(desc(ptoPassoffs.createdAt));
+    }
+    if (filter.coveringUserId) {
+      return db.select().from(ptoPassoffs).where(eq(ptoPassoffs.coveringUserId, filter.coveringUserId)).orderBy(desc(ptoPassoffs.createdAt));
+    }
+    return [];
+  }
+
+  async getPtoPassoff(id: string): Promise<PtoPassoff | undefined> {
+    const [passoff] = await db.select().from(ptoPassoffs).where(eq(ptoPassoffs.id, id));
+    return passoff;
+  }
+
+  async createPtoPassoff(data: InsertPtoPassoff & { createdAt: string }): Promise<PtoPassoff> {
+    const [passoff] = await db.insert(ptoPassoffs).values(data).returning();
+    return passoff;
+  }
+
+  async updatePtoPassoff(id: string, data: Partial<InsertPtoPassoff>): Promise<PtoPassoff | undefined> {
+    const [updated] = await db.update(ptoPassoffs).set(data).where(eq(ptoPassoffs.id, id)).returning();
+    return updated;
+  }
+
+  async deletePtoPassoff(id: string): Promise<boolean> {
+    const result = await db.delete(ptoPassoffs).where(eq(ptoPassoffs.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getPtoPassoffItems(passoffId: string): Promise<PtoPassoffItem[]> {
+    return db.select().from(ptoPassoffItems).where(eq(ptoPassoffItems.passoffId, passoffId));
+  }
+
+  async createPtoPassoffItem(data: InsertPtoPassoffItem): Promise<PtoPassoffItem> {
+    const [item] = await db.insert(ptoPassoffItems).values(data).returning();
+    return item;
+  }
+
+  async updatePtoPassoffItem(id: string, data: Partial<InsertPtoPassoffItem>): Promise<PtoPassoffItem | undefined> {
+    const [updated] = await db.update(ptoPassoffItems).set(data).where(eq(ptoPassoffItems.id, id)).returning();
+    return updated;
+  }
+
+  async deletePtoPassoffItem(id: string): Promise<boolean> {
+    const result = await db.delete(ptoPassoffItems).where(eq(ptoPassoffItems.id, id)).returning();
+    return result.length > 0;
   }
 }
 
