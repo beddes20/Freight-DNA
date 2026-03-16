@@ -13,13 +13,37 @@ import {
   Users,
   Network,
   ChevronRight,
-  TruckIcon,
   AlertTriangle,
   Archive,
   ArchiveX,
+  DollarSign,
+  Truck,
+  Phone,
 } from "lucide-react";
 import { CompanyDialog } from "@/components/company-dialog";
 import type { Company, Contact } from "@shared/schema";
+
+type AccountSummaryRow = {
+  customerName: string;
+  totalLoads: number;
+  spotLoads: number;
+  totalMargin: number;
+  repName: string;
+};
+
+type TouchpointSummary = Record<string, { week: number; month: number }>;
+
+function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummaryRow | null {
+  if (!rows.length) return null;
+  const lower = name.toLowerCase();
+  const exact = rows.find(r => r.customerName.toLowerCase() === lower);
+  if (exact) return exact;
+  const sub = name.length >= 5 ? rows.find(r =>
+    r.customerName.toLowerCase().includes(lower) ||
+    lower.includes(r.customerName.toLowerCase())
+  ) : null;
+  return sub || null;
+}
 
 export default function Customers() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -47,6 +71,14 @@ export default function Customers() {
 
   const { data: researchTasks } = useQuery<any[]>({
     queryKey: ["/api/research-tasks"],
+  });
+
+  const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
+    queryKey: ["/api/financials/account-summary"],
+  });
+
+  const { data: tpSummary = {} } = useQuery<TouchpointSummary>({
+    queryKey: ["/api/touchpoints/company-summary"],
   });
 
   const contactsByCompany = new Map<string, Contact[]>();
@@ -140,6 +172,8 @@ export default function Customers() {
           {displayList.map((company) => {
             const contacts = contactsByCompany.get(company.id) || [];
             const openTasks = openTasksByCompany.get(company.id) || 0;
+            const fin = matchFinancials(company.name, accountSummary);
+            const tps = tpSummary[company.id] || { week: 0, month: 0 };
             return (
               <Link key={company.id} href={`/companies/${company.id}`}>
                 <Card className="hover-elevate cursor-pointer h-full" data-testid={`card-customer-${company.id}`}>
@@ -187,6 +221,37 @@ export default function Customers() {
                         </span>
                       )}
                     </div>
+
+                    {!company.archivedAt && (
+                      <div className="mt-3 pt-3 border-t flex items-center gap-4 flex-wrap">
+                        {fin ? (
+                          <>
+                            <div className="flex items-center gap-1.5 text-xs" title="Total loads (financial data)">
+                              <Truck className="h-3.5 w-3.5 text-blue-500" />
+                              <span className="font-medium text-foreground">{fin.totalLoads.toLocaleString()}</span>
+                              <span className="text-muted-foreground">loads</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-xs" title="Total margin (financial data)">
+                              <DollarSign className="h-3.5 w-3.5 text-green-500" />
+                              <span className="font-medium text-foreground">
+                                {fin.totalMargin >= 1000
+                                  ? `$${(fin.totalMargin / 1000).toFixed(1)}k`
+                                  : `$${fin.totalMargin.toFixed(0)}`}
+                              </span>
+                              <span className="text-muted-foreground">margin</span>
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-xs text-muted-foreground italic">No financial data</span>
+                        )}
+                        <div className="flex items-center gap-1.5 text-xs ml-auto" title="Touchpoints this week / this month">
+                          <Phone className="h-3.5 w-3.5 text-violet-500" />
+                          <span className="font-medium text-foreground">{tps.week}</span>
+                          <span className="text-muted-foreground">/ {tps.month}</span>
+                          <span className="text-muted-foreground">touches</span>
+                        </div>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </Link>

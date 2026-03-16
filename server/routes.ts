@@ -3364,6 +3364,29 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/touchpoints/company-summary", requireAuth, async (req, res) => {
+    try {
+      const now = new Date();
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      const monthAgo = new Date(now);
+      monthAgo.setDate(monthAgo.getDate() - 30);
+      const weekStr = weekAgo.toISOString().slice(0, 10);
+      const monthStr = monthAgo.toISOString().slice(0, 10);
+
+      const all = await storage.getTouchpoints();
+      const summary: Record<string, { week: number; month: number }> = {};
+      for (const tp of all) {
+        if (!summary[tp.companyId]) summary[tp.companyId] = { week: 0, month: 0 };
+        if (tp.date >= monthStr) summary[tp.companyId].month++;
+        if (tp.date >= weekStr) summary[tp.companyId].week++;
+      }
+      res.json(summary);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch touchpoint summary" });
+    }
+  });
+
   app.get("/api/dashboard/cold-contacts", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
