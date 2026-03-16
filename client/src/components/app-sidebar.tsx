@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, BookOpen, FolderOpen, ExternalLink, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -18,75 +18,37 @@ import { Button } from "@/components/ui/button";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const menuItems = [
-  {
-    title: "Dashboard",
-    url: "/",
-    icon: LayoutGrid,
-  },
-  {
-    title: "Training",
-    url: "/training",
-    icon: GraduationCap,
-  },
-  {
-    title: "Customers",
-    url: "/customers",
-    icon: Network,
-  },
-  {
-    title: "RFP & Awards",
-    url: "/rfp-awards",
-    icon: Trophy,
-  },
-  {
-    title: "Research Tasks",
-    url: "/research-tasks",
-    icon: ClipboardList,
-  },
-  {
-    title: "Top Opportunities",
-    url: "/top-opportunities",
-    icon: Zap,
-  },
-  {
-    title: "1:1 Meetings",
-    url: "/one-on-one",
-    icon: MessagesSquare,
-  },
-  {
-    title: "Tasks",
-    url: "/tasks",
-    icon: ListTodo,
-  },
+  { title: "Dashboard",        url: "/",                icon: LayoutGrid  },
+  { title: "Customers",        url: "/customers",       icon: Network     },
+  { title: "RFP & Awards",     url: "/rfp-awards",      icon: Trophy      },
+  { title: "Research Tasks",   url: "/research-tasks",  icon: ClipboardList },
+  { title: "Top Opportunities",url: "/top-opportunities",icon: Zap        },
+  { title: "1:1 Meetings",     url: "/one-on-one",      icon: MessagesSquare },
+  { title: "Tasks",            url: "/tasks",           icon: ListTodo    },
   {
     title: "Team Performance",
     url: "/team-performance",
     icon: TrendingUp,
     roles: ["admin", "director", "national_account_manager", "sales"],
   },
-  {
-    title: "Goals",
-    url: "/goals",
-    icon: Target,
-  },
-  {
-    title: "PTO Passoff",
-    url: "/pto-passoff",
-    icon: Plane,
-  },
+  { title: "Goals",      url: "/goals",       icon: Target },
+  { title: "PTO Passoff",url: "/pto-passoff", icon: Plane  },
 ];
 
-const externalItems = [
+const toolItems = [
+  { title: "Training", url: "/training", icon: GraduationCap, external: false },
   {
     title: "Playbook",
     url: "https://valuetruck-my.sharepoint.com/:w:/p/ben_beddes/IQAxq4cjYozxTJHB-zYcZtBnAYWpGDvcP6Qj_AW6ULA_Oq8?rtime=s9jxtGeA3kg&ovuser=99d7bd71-9046-4915-be1c-3aae2baf1645%2Cben.beddes%40valuetruck.com&clickparams=eyJBcHBOYW1lIjoiVGVhbXMtRGVza3RvcCIsIkFwcFZlcnNpb24iOiI0OS8yNjAyMDEwMTEyMCIsIkhhc0ZlZGVyYXRlZFVzZXIiOmZhbHNlfQ%3D%3D",
     icon: BookOpen,
+    external: true,
     testId: "link-playbook",
   },
   {
     title: "Buckets",
     url: "https://valuetruck-my.sharepoint.com/:p:/r/personal/ben_beddes_valuetruck_com/_layouts/15/Doc2.aspx?action=edit&sourcedoc=%7B088c48cc-a345-4d1a-9947-b49d3cd7112c%7D&wdOrigin=TEAMS-MAGLEV.undefined_ns.rwc&wdExp=TEAMS-TREATMENT&wdhostclicktime=1749156731495&web=1",
     icon: FolderOpen,
+    external: true,
     testId: "link-buckets",
   },
 ];
@@ -113,45 +75,72 @@ export function AppSidebar() {
           />
         </div>
       </SidebarHeader>
+
       <SidebarContent>
+        {/* ── Main Navigation ── */}
         <SidebarGroup>
           <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {menuItems.filter(item => !('roles' in item) || (user?.role && (item as any).roles.includes(user.role))).map((item) => {
-                const isActive = location === item.url ||
-                  (item.url !== "/" && location.startsWith(item.url)) ||
-                  (item.url === "/customers" && location.startsWith("/companies/"));
-                return (
+              {menuItems
+                .filter(item => !('roles' in item) || (user?.role && (item as any).roles.includes(user.role)))
+                .map((item) => {
+                  const isActive =
+                    location === item.url ||
+                    (item.url !== "/" && location.startsWith(item.url)) ||
+                    (item.url === "/customers" && location.startsWith("/companies/"));
+                  return (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild isActive={isActive}>
+                        <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/\s/g, "-")}`}>
+                          <item.icon className="h-4 w-4" />
+                          <span>{item.title}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* ── Tools ── */}
+        <SidebarGroup>
+          <SidebarGroupLabel>Tools</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {toolItems.map((item) =>
+                item.external ? (
                   <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton asChild isActive={isActive}>
-                      <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/\s/g, "-")}`}>
+                    <SidebarMenuButton asChild>
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-testid={(item as any).testId}
+                      >
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                        <ExternalLink className="h-3 w-3 ml-auto opacity-50" />
+                      </a>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location === item.url}>
+                      <Link href={item.url} data-testid={`link-${item.title.toLowerCase()}`}>
                         <item.icon className="h-4 w-4" />
                         <span>{item.title}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                );
-              })}
-              {externalItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild>
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      data-testid={item.testId}
-                    >
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                      <ExternalLink className="h-3 w-3 ml-auto opacity-50" />
-                    </a>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+                )
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {/* ── Admin / Team ── */}
         {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales") && (
           <SidebarGroup>
             <SidebarGroupLabel>{user?.role === "admin" ? "Admin" : "Team"}</SidebarGroupLabel>
@@ -186,6 +175,7 @@ export function AppSidebar() {
           </SidebarGroup>
         )}
       </SidebarContent>
+
       <SidebarFooter className="p-3 border-t border-sidebar-border space-y-3">
         {user && (
           <div className="flex items-center justify-between">
