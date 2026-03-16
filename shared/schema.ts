@@ -382,6 +382,8 @@ export const ptoPassoffItems = pgTable("pto_passoff_items", {
   acknowledged: boolean("acknowledged").notNull().default(false),
   emailForwardingSet: boolean("email_forwarding_set").notNull().default(false),
   spotBoardUpdated: boolean("spot_board_updated").notNull().default(false),
+  avgWeeklySpotLoads: decimal("avg_weekly_spot_loads"),
+  avgWeeklyTotalLoads: decimal("avg_weekly_total_loads"),
 });
 export const insertPtoPassoffItemSchema = createInsertSchema(ptoPassoffItems).omit({ id: true });
 export type InsertPtoPassoffItem = z.infer<typeof insertPtoPassoffItemSchema>;

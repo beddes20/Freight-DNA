@@ -17,7 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Plane, Plus, Trash2, ChevronDown, ChevronRight, Shield, Pencil,
   AlertTriangle, Phone, Users, ClipboardList, Briefcase, CheckCircle2,
-  FileText, Package, Clock, UserCheck, Mail, Database
+  FileText, Package, Clock, UserCheck, Mail, Database, TrendingUp
 } from "lucide-react";
 import type { Company } from "@shared/schema";
 
@@ -34,6 +34,8 @@ type PtoPassoffItem = {
   acknowledged: boolean;
   emailForwardingSet: boolean;
   spotBoardUpdated: boolean;
+  avgWeeklySpotLoads: string | null;
+  avgWeeklyTotalLoads: string | null;
 };
 
 type PassoffWithItems = {
@@ -311,6 +313,8 @@ function AccountItemEditor({
   const [activeDeals, setActiveDeals] = useState(item.activeDeals ?? "");
   const [emailForwardingSet, setEmailForwardingSet] = useState(item.emailForwardingSet);
   const [spotBoardUpdated, setSpotBoardUpdated] = useState(item.spotBoardUpdated);
+  const [avgWeeklySpotLoads, setAvgWeeklySpotLoads] = useState(item.avgWeeklySpotLoads ?? "");
+  const [avgWeeklyTotalLoads, setAvgWeeklyTotalLoads] = useState(item.avgWeeklyTotalLoads ?? "");
 
   const updateMutation = useMutation({
     mutationFn: (data: any) =>
@@ -330,7 +334,12 @@ function AccountItemEditor({
   });
 
   const handleSave = () => {
-    updateMutation.mutate({ priority, spotFreightHandler, keyCustomerContact, openItems, processNotes, activeDeals, emailForwardingSet, spotBoardUpdated });
+    updateMutation.mutate({
+      priority, spotFreightHandler, keyCustomerContact, openItems, processNotes, activeDeals,
+      emailForwardingSet, spotBoardUpdated,
+      avgWeeklySpotLoads: avgWeeklySpotLoads !== "" ? avgWeeklySpotLoads : null,
+      avgWeeklyTotalLoads: avgWeeklyTotalLoads !== "" ? avgWeeklyTotalLoads : null,
+    });
   };
 
   const handleAck = (checked: boolean) => {
@@ -494,6 +503,37 @@ function AccountItemEditor({
               rows={2}
             />
           </div>
+          <div className="space-y-1">
+            <Label className="text-xs flex items-center gap-1"><TrendingUp className="w-3 h-3" />4-Week Avg Load Acquisition</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1 block">Spot Loads / week</Label>
+                <Input
+                  className="h-8 text-sm"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  placeholder="e.g. 4.5"
+                  value={avgWeeklySpotLoads}
+                  onChange={e => setAvgWeeklySpotLoads(e.target.value)}
+                  data-testid="input-avg-spot-loads"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1 block">Total Loads / week</Label>
+                <Input
+                  className="h-8 text-sm"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  placeholder="e.g. 12"
+                  value={avgWeeklyTotalLoads}
+                  onChange={e => setAvgWeeklyTotalLoads(e.target.value)}
+                  data-testid="input-avg-total-loads"
+                />
+              </div>
+            </div>
+          </div>
           <div className="flex gap-2">
             <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending}>Save</Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
@@ -531,7 +571,28 @@ function AccountItemEditor({
               <p className="whitespace-pre-wrap">{item.activeDeals}</p>
             </div>
           )}
-          {!item.spotFreightHandler && !item.keyCustomerContact && !item.openItems && !item.processNotes && !item.activeDeals && (
+          {(item.avgWeeklySpotLoads || item.avgWeeklyTotalLoads) && (
+            <div className="col-span-full border-t pt-2 mt-1">
+              <p className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-2">
+                <TrendingUp className="w-3 h-3" />4-Week Avg Load Acquisition
+              </p>
+              <div className="flex gap-4">
+                {item.avgWeeklySpotLoads && (
+                  <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg px-3 py-2 text-center min-w-[80px]">
+                    <p className="text-lg font-bold text-orange-700 dark:text-orange-300">{Number(item.avgWeeklySpotLoads).toFixed(1)}</p>
+                    <p className="text-xs text-orange-600 dark:text-orange-400">Spot / wk</p>
+                  </div>
+                )}
+                {item.avgWeeklyTotalLoads && (
+                  <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 text-center min-w-[80px]">
+                    <p className="text-lg font-bold text-blue-700 dark:text-blue-300">{Number(item.avgWeeklyTotalLoads).toFixed(1)}</p>
+                    <p className="text-xs text-blue-600 dark:text-blue-400">Total / wk</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {!item.spotFreightHandler && !item.keyCustomerContact && !item.openItems && !item.processNotes && !item.activeDeals && !item.avgWeeklySpotLoads && !item.avgWeeklyTotalLoads && (
             <p className="col-span-full text-muted-foreground text-xs italic">No details filled in yet. {isOwner ? "Click edit to add coverage info." : ""}</p>
           )}
         </div>
