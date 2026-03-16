@@ -194,7 +194,7 @@ function PassoffDialog({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">Not assigned yet</SelectItem>
-            {users.map(u => (
+            {[...users].sort((a, b) => a.name.localeCompare(b.name)).map(u => (
               <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
             ))}
           </SelectContent>
@@ -1009,7 +1009,7 @@ export default function PtoPassoffPage() {
             <DialogTitle>Create PTO Passoff</DialogTitle>
           </DialogHeader>
           <PassoffDialog
-            users={otherUsers}
+            users={users}
             companies={(() => {
               const mine = companies.filter(c => c.assignedTo === currentUser.id);
               return mine.length > 0 ? mine : companies;
