@@ -235,6 +235,51 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
   };
 }
 
+function parseHistoricalRow(row: any): {
+  destCity: string; destState: string;
+  origCity: string; origState: string;
+  weekKey: string; margin: number; revenue: number;
+} {
+  const hasNewFormat = "Origin state" in row || "Destination state" in row || ("Origin" in row && "Destination" in row);
+  if (hasNewFormat) {
+    const destRaw = String(row["Destination"] || "").trim();
+    const destState = String(row["Destination state"] || "").trim();
+    const destCity = destRaw.includes(",") ? destRaw.split(",")[0].trim() : destRaw;
+    const origRaw = String(row["Origin"] || "").trim();
+    const origState = String(row["Origin state"] || "").trim();
+    const origCity = origRaw.includes(",") ? origRaw.split(",")[0].trim() : origRaw;
+    const weekRaw = String(row["Week"] || "").trim();
+    let weekKey = weekRaw || "";
+    if (!weekKey) {
+      const serial = Number(row["Delivery date"]);
+      if (!isNaN(serial) && serial > 40000) {
+        const d = new Date(new Date(1899, 11, 30).getTime() + serial * 86400000);
+        const y = d.getFullYear();
+        const wn = Math.ceil(((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000 + new Date(y, 0, 1).getDay() + 1) / 7);
+        weekKey = `${y}-W${wn}`;
+      }
+    }
+    return { destCity, destState, origCity, origState, weekKey, margin: Number(row["Margin $"]) || 0, revenue: Number(row["Total revenue"]) || 0 };
+  }
+  const destCity = String(row["Consignee city"] || row["consignee_city"] || "").trim();
+  const destState = String(row["Consignee state"] || row["consignee_state"] || "").trim();
+  const origCity = String(row["Shipper city"] || row["shipper_city"] || row["Origin City"] || "").trim();
+  const origState = String(row["Shipper state"] || row["shipper_state"] || row["Origin State"] || "").trim();
+  const dateStr = String(row["Date ordered"] || "").trim();
+  let weekKey = "";
+  if (dateStr) {
+    try {
+      const d = new Date(dateStr);
+      if (!isNaN(d.getTime())) {
+        const y = d.getFullYear();
+        const wn = Math.ceil(((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000 + new Date(y, 0, 1).getDay() + 1) / 7);
+        weekKey = `${y}-W${wn}`;
+      }
+    } catch {}
+  }
+  return { destCity, destState, origCity, origState, weekKey, margin: 0, revenue: 0 };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -2058,22 +2103,10 @@ export async function registerRoutes(
 
       const byDestWeek = new Map<string, Map<string, number>>();
       for (const row of allRows) {
-        const city = (row["Consignee city"] || "").trim();
-        const state = (row["Consignee state"] || "").trim();
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row);
         if (!city && !state) continue;
         const location = city && state ? `${city}, ${state}` : city || state;
-
-        let week = "unknown";
-        try {
-          const d = new Date(row["Date ordered"] || "");
-          if (!isNaN(d.getTime())) {
-            const year = d.getFullYear();
-            const startOfYear = new Date(year, 0, 1);
-            const weekNum = Math.ceil(((d.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getDay() + 1) / 7);
-            week = `${year}-W${weekNum}`;
-          }
-        } catch {}
-
+        const week = weekKey || "unknown";
         if (!byDestWeek.has(location)) byDestWeek.set(location, new Map());
         const weekMap = byDestWeek.get(location)!;
         weekMap.set(week, (weekMap.get(week) || 0) + 1);
@@ -2138,22 +2171,10 @@ export async function registerRoutes(
 
       const byDestWeek = new Map<string, Map<string, number>>();
       for (const row of allRows) {
-        const city = (row["Consignee city"] || "").trim();
-        const state = (row["Consignee state"] || "").trim();
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row);
         if (!city && !state) continue;
         const location = city && state ? `${city}, ${state}` : city || state;
-
-        let week = "unknown";
-        try {
-          const d = new Date(row["Date ordered"] || "");
-          if (!isNaN(d.getTime())) {
-            const year = d.getFullYear();
-            const startOfYear = new Date(year, 0, 1);
-            const weekNum = Math.ceil(((d.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getDay() + 1) / 7);
-            week = `${year}-W${weekNum}`;
-          }
-        } catch {}
-
+        const week = weekKey || "unknown";
         if (!byDestWeek.has(location)) byDestWeek.set(location, new Map());
         const weekMap = byDestWeek.get(location)!;
         weekMap.set(week, (weekMap.get(week) || 0) + 1);
@@ -2485,6 +2506,26 @@ export async function registerRoutes(
       const latest = uploads[uploads.length - 1];
       const raw = (latest.summaryRows as any[]) || [];
 
+      // If no summary sheet, compute from transaction rows (new ReplistNumbers format)
+      if (!raw.length) {
+        const txRows: any[] = (latest.rows as any[]) || [];
+        const byCustomer: Record<string, { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; repName: string }> = {};
+        for (const row of txRows) {
+          const customerName = String(row["Customer"] || "").trim();
+          if (!customerName) continue;
+          const margin = Number(row["Margin $"]) || 0;
+          const rep = String(row["Salesperson"] || row["Operations user"] || "").trim();
+          const orderType = String(row["Order type"] || "").toLowerCase();
+          const isSpot = orderType.includes("spot");
+          if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, repName: rep };
+          byCustomer[customerName].totalLoads++;
+          byCustomer[customerName].totalMargin += margin;
+          if (isSpot) byCustomer[customerName].spotLoads++;
+          if (!byCustomer[customerName].repName && rep) byCustomer[customerName].repName = rep;
+        }
+        return res.json(Object.values(byCustomer).filter(r => r.customerName));
+      }
+
       // Detect whether rows use named headers or __EMPTY keys (non-standard header layout)
       const firstRow = raw[0] || {};
       const usesEmptyKeys = "__EMPTY" in firstRow;
@@ -2621,18 +2662,12 @@ export async function registerRoutes(
       const destWeekly: Record<string, Record<string, number>> = {};
       const destMeta: Record<string, { city: string; state: string }> = {};
       for (const row of allRows) {
-        const city = String(row["Consignee city"] || "").trim();
-        const state = String(row["Consignee state"] || "").trim();
-        const dateStr = String(row["Date ordered"] || "").trim();
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row);
         if (!city || !state) continue;
         const key = `${city.toLowerCase()}||${state.toLowerCase()}`;
         if (!destWeekly[key]) { destWeekly[key] = {}; destMeta[key] = { city, state }; }
-        if (dateStr) {
-          const d = new Date(dateStr);
-          if (!isNaN(d.getTime())) {
-            const wk = getWeekKey(d);
-            destWeekly[key][wk] = (destWeekly[key][wk] || 0) + 1;
-          }
+        if (weekKey) {
+          destWeekly[key][weekKey] = (destWeekly[key][weekKey] || 0) + 1;
         }
       }
       const summary = Object.entries(destWeekly).map(([key, weeks]) => {
@@ -2665,18 +2700,12 @@ export async function registerRoutes(
       const destWeekly: Record<string, Record<string, number>> = {};
       const destMeta: Record<string, { city: string; state: string }> = {};
       for (const row of allRows) {
-        const city = String(row["Consignee city"] || "").trim();
-        const state = String(row["Consignee state"] || "").trim();
-        const dateStr = String(row["Date ordered"] || "").trim();
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row);
         if (!city || !state) continue;
         const key = `${city.toLowerCase()}||${state.toLowerCase()}`;
         if (!destWeekly[key]) { destWeekly[key] = {}; destMeta[key] = { city, state }; }
-        if (dateStr) {
-          const d = new Date(dateStr);
-          if (!isNaN(d.getTime())) {
-            const wk = getWeekKey(d);
-            destWeekly[key][wk] = (destWeekly[key][wk] || 0) + 1;
-          }
+        if (weekKey) {
+          destWeekly[key][weekKey] = (destWeekly[key][weekKey] || 0) + 1;
         }
       }
       const hotDests = Object.entries(destWeekly).map(([key, weeks]) => {
@@ -2743,10 +2772,7 @@ export async function registerRoutes(
       for (const upload of uploads) {
         const rows: any[] = ((upload as any).rows ?? []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
         for (const row of rows) {
-          const oc = (row["Shipper city"] || row["shipper_city"] || row["Origin City"] || "").toString().trim();
-          const os = (row["Shipper state"] || row["shipper_state"] || row["Origin State"] || "").toString().trim();
-          const dc = (row["Consignee city"] || row["consignee_city"] || row["Dest City"] || "").toString().trim();
-          const ds = (row["Consignee state"] || row["consignee_state"] || row["Dest State"] || "").toString().trim();
+          const { origCity: oc, origState: os, destCity: dc, destState: ds } = parseHistoricalRow(row);
           if (!oc || !dc) continue;
           const key = `${oc}|${os}→${dc}|${ds}`;
           if (!corridorMap[key]) {
@@ -2775,10 +2801,7 @@ export async function registerRoutes(
         const rows: any[] = (Array.isArray((upload as any).rows) ? (upload as any).rows : []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
         totalRows += rows.length;
         for (const row of rows) {
-          const dc = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
-          const ds = (row["Consignee state"] || row["consignee_state"] || "").toString().trim();
-          const oc = (row["Shipper city"] || row["shipper_city"] || "").toString().trim();
-          const os = (row["Shipper state"] || row["shipper_state"] || "").toString().trim();
+          const { destCity: dc, destState: ds, origCity: oc, origState: os } = parseHistoricalRow(row);
           if (dc) { const k = `${dc}|${ds}`; if (!deliveries[k]) deliveries[k] = { city: dc, state: ds, count: 0 }; deliveries[k].count++; }
           if (oc) { const k = `${oc}|${os}`; if (!pickups[k]) pickups[k] = { city: oc, state: os, count: 0 }; pickups[k].count++; }
         }
@@ -2815,8 +2838,7 @@ export async function registerRoutes(
       for (const upload of uploads) {
         const rows: any[] = ((upload as any).rows ?? []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
         for (const row of rows) {
-          const c = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
-          const s = (row["Consignee state"] || row["consignee_state"] || "").toString().trim();
+          const { destCity: c, destState: s } = parseHistoricalRow(row);
           if (!c) continue;
           const k = `${c}|${s}`;
           if (!deliveryMap[k]) deliveryMap[k] = { city: c, state: s, count: 0 };
@@ -2894,8 +2916,7 @@ export async function registerRoutes(
       for (const upload of uploads) {
         const rows: any[] = (Array.isArray((upload as any).rows) ? (upload as any).rows : []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
         for (const row of rows) {
-          const dc = (row["Consignee city"] || row["consignee_city"] || "").toString().trim();
-          const ds = (row["Consignee state"] || row["consignee_state"] || "").toString().trim();
+          const { destCity: dc, destState: ds, origCity: oc, origState: os } = parseHistoricalRow(row);
           if (dc) {
             const k = `${dc}|${ds}`;
             if (!ourDeliveryMap[k]) {
@@ -2904,8 +2925,6 @@ export async function registerRoutes(
             }
             if (ourDeliveryMap[k]) ourDeliveryMap[k].count++;
           }
-          const oc = (row["Shipper city"] || row["shipper_city"] || "").toString().trim();
-          const os = (row["Shipper state"] || row["shipper_state"] || "").toString().trim();
           if (oc) {
             const k = `${oc}|${os}`;
             if (!ourPickupMap[k]) {
