@@ -95,6 +95,7 @@ import { CalloutDialog } from "@/components/callout-dialog";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint } from "@shared/schema";
+type TaskWithCount = Task & { commentCount?: number };
 
 interface ResearchTask {
   rfpId: string;
@@ -267,7 +268,7 @@ export default function CompanyDetail() {
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [quickTouchType, setQuickTouchType] = useState("call");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
-  const [editingTaskItem, setEditingTaskItem] = useState<Task | undefined>();
+  const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
   const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[] } | undefined>();
   const [lanesCollapsed, setLanesCollapsed] = useState(false);
   const [scorecardPending, setScorecardPending] = useState<PendingFile[]>([]);
@@ -343,7 +344,7 @@ export default function CompanyDetail() {
     },
   });
 
-  const { data: companyTasks = [] } = useQuery<Task[]>({
+  const { data: companyTasks = [] } = useQuery<TaskWithCount[]>({
     queryKey: ["/api/tasks/company", companyId],
   });
 
@@ -1159,6 +1160,12 @@ export default function CompanyDetail() {
                         {assigneeName && <p className="text-xs text-muted-foreground">{assigneeName}</p>}
                       </div>
                       {dueBadge}
+                      {(task.commentCount ?? 0) > 0 && (
+                        <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+                          <MessageSquare className="h-3 w-3" />
+                          {task.commentCount}
+                        </span>
+                      )}
                       <button onClick={() => { setEditingTaskItem(task); setForceLanePrefill(undefined); setTaskDialogOpen(true); }} className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs" data-testid={`button-edit-company-task-${task.id}`}>Edit</button>
                       <button onClick={() => deleteTaskMutation.mutate(task.id)} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-company-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
                     </div>

@@ -66,6 +66,9 @@ import {
   ptoPassoffItems,
   type PtoPassoffItem,
   type InsertPtoPassoffItem,
+  taskComments,
+  type TaskComment,
+  type InsertTaskComment,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -123,6 +126,10 @@ export interface IStorage {
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
+  getTaskComments(taskId: string): Promise<TaskComment[]>;
+  getTaskCommentCounts(taskIds: string[]): Promise<Record<string, number>>;
+  createTaskComment(comment: InsertTaskComment): Promise<TaskComment>;
+  deleteTaskComment(id: string): Promise<boolean>;
 
   getCallouts(): Promise<Callout[]>;
   getCalloutsByCompany(companyId: string): Promise<Callout[]>;
@@ -485,6 +492,29 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTask(id: string): Promise<boolean> {
     const result = await db.delete(tasks).where(eq(tasks.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getTaskComments(taskId: string): Promise<TaskComment[]> {
+    return db.select().from(taskComments).where(eq(taskComments.taskId, taskId));
+  }
+
+  async getTaskCommentCounts(taskIds: string[]): Promise<Record<string, number>> {
+    if (taskIds.length === 0) return {};
+    const rows = await db.select({ taskId: taskComments.taskId, count: sql<number>`count(*)::int` })
+      .from(taskComments)
+      .where(inArray(taskComments.taskId, taskIds))
+      .groupBy(taskComments.taskId);
+    return Object.fromEntries(rows.map(r => [r.taskId, r.count]));
+  }
+
+  async createTaskComment(comment: InsertTaskComment): Promise<TaskComment> {
+    const [created] = await db.insert(taskComments).values(comment).returning();
+    return created;
+  }
+
+  async deleteTaskComment(id: string): Promise<boolean> {
+    const result = await db.delete(taskComments).where(eq(taskComments.id, id)).returning();
     return result.length > 0;
   }
 

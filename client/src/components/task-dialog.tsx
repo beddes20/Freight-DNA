@@ -22,8 +22,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, ChevronDown, ChevronRight, Paperclip } from "lucide-react";
-import type { Company, Task, User } from "@shared/schema";
+import { Loader2, ChevronDown, ChevronRight, Paperclip, MessageSquare, Send, Trash2 } from "lucide-react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import type { Company, Task, User, TaskComment } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
 type SafeUser = Omit<User, "password">;
@@ -65,9 +68,39 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
   const [selectedItems, setSelectedItems] = useState<Record<string, Set<number>>>({}); 
   const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [commentText, setCommentText] = useState("");
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
+  });
+
+  const { data: comments = [] } = useQuery<TaskComment[]>({
+    queryKey: ["/api/tasks", editingTask?.id, "comments"],
+    enabled: !!editingTask?.id,
+  });
+
+  const addCommentMutation = useMutation({
+    mutationFn: async (content: string) => {
+      return apiRequest("POST", `/api/tasks/${editingTask!.id}/comments`, { content });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks", editingTask?.id, "comments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      setCommentText("");
+    },
+    onError: (error: any) => {
+      toast({ title: "Error posting comment", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteCommentMutation = useMutation({
+    mutationFn: async (commentId: string) => {
+      return apiRequest("DELETE", `/api/tasks/${editingTask!.id}/comments/${commentId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks", editingTask?.id, "comments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+    },
   });
 
   const { data: companies = [] } = useQuery<Company[]>({
@@ -491,6 +524,83 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
 
           {editingTask && (
             <FileAttachmentList entityType="task" entityIds={[editingTask.id]} />
+          )}
+
+          {editingTask && !forwardingTask && (
+            <div className="space-y-3 pt-1">
+              <Separator />
+              <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <MessageSquare className="h-4 w-4" />
+                Collaboration
+                {comments.length > 0 && (
+                  <span className="ml-1 rounded-full bg-primary/10 text-primary text-xs px-2 py-0.5">{comments.length}</span>
+                )}
+              </div>
+
+              {comments.length > 0 && (
+                <ScrollArea className="max-h-52 pr-1">
+                  <div className="space-y-3">
+                    {[...comments].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(comment => {
+                      const author = teamMembers.find(u => u.id === comment.authorId);
+                      const initials = author?.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "?";
+                      const isOwn = comment.authorId === user?.id;
+                      const canDelete = isOwn || user?.role === "admin";
+                      return (
+                        <div key={comment.id} className="flex gap-2.5 group">
+                          <Avatar className="h-7 w-7 shrink-0 mt-0.5">
+                            <AvatarFallback className="text-xs bg-primary/10 text-primary">{initials}</AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-baseline gap-2">
+                              <span className="text-xs font-semibold">{author?.name || "Unknown"}</span>
+                              <span className="text-xs text-muted-foreground">{new Date(comment.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+                              {canDelete && (
+                                <button
+                                  type="button"
+                                  onClick={() => deleteCommentMutation.mutate(comment.id)}
+                                  className="ml-auto opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                                  data-testid={`button-delete-comment-${comment.id}`}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              )}
+                            </div>
+                            <p className="text-sm text-foreground mt-0.5 whitespace-pre-wrap break-words">{comment.content}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </ScrollArea>
+              )}
+
+              <div className="flex gap-2">
+                <Textarea
+                  placeholder="Add a comment or update…"
+                  value={commentText}
+                  onChange={e => setCommentText(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && commentText.trim()) {
+                      e.preventDefault();
+                      addCommentMutation.mutate(commentText);
+                    }
+                  }}
+                  className="min-h-[60px] text-sm resize-none"
+                  data-testid="textarea-task-comment"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!commentText.trim() || addCommentMutation.isPending}
+                  onClick={() => addCommentMutation.mutate(commentText)}
+                  className="self-end"
+                  data-testid="button-post-comment"
+                >
+                  {addCommentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground -mt-1">Ctrl+Enter to post</p>
+            </div>
           )}
 
           <DialogFooter>

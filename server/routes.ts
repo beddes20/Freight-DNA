@@ -1310,12 +1310,17 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const allTasks = await storage.getTasks();
-      if (user.role === "admin") return res.json(allTasks);
-      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
+      let filtered: typeof allTasks;
+      if (user.role === "admin") {
+        filtered = allTasks;
+      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(user.id);
-        return res.json(allTasks.filter(t => teamIds.includes(t.assignedTo) || teamIds.includes(t.assignedBy)));
+        filtered = allTasks.filter(t => teamIds.includes(t.assignedTo) || teamIds.includes(t.assignedBy));
+      } else {
+        filtered = allTasks.filter(t => t.assignedTo === user.id || t.assignedBy === user.id);
       }
-      return res.json(allTasks.filter(t => t.assignedTo === user.id || t.assignedBy === user.id));
+      const counts = await storage.getTaskCommentCounts(filtered.map(t => t.id));
+      return res.json(filtered.map(t => ({ ...t, commentCount: counts[t.id] ?? 0 })));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch tasks" });
     }
@@ -1329,7 +1334,8 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
       const companyTasks = await storage.getTasksByCompany(req.params.companyId);
-      res.json(companyTasks);
+      const counts = await storage.getTaskCommentCounts(companyTasks.map(t => t.id));
+      res.json(companyTasks.map(t => ({ ...t, commentCount: counts[t.id] ?? 0 })));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch company tasks" });
     }
@@ -1451,6 +1457,54 @@ export async function registerRoutes(
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete task" });
+    }
+  });
+
+  // ── Task Comments ────────────────────────────────────────────────────────
+
+  app.get("/api/tasks/:id/comments", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const comments = await storage.getTaskComments(req.params.id);
+      res.json(comments);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch comments" });
+    }
+  });
+
+  app.post("/api/tasks/:id/comments", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { content } = req.body;
+      if (!content?.trim()) return res.status(400).json({ error: "Content is required" });
+      const comment = await storage.createTaskComment({
+        taskId: req.params.id,
+        authorId: user.id,
+        content: content.trim(),
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(comment);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create comment" });
+    }
+  });
+
+  app.delete("/api/tasks/:taskId/comments/:commentId", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const comments = await storage.getTaskComments(req.params.taskId);
+      const comment = comments.find(c => c.id === req.params.commentId);
+      if (!comment) return res.status(404).json({ error: "Comment not found" });
+      if (comment.authorId !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+      await storage.deleteTaskComment(req.params.commentId);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete comment" });
     }
   });
 

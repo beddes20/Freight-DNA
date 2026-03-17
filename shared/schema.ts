@@ -403,3 +403,14 @@ export const vendorRouted = pgTable("vendor_routed", {
 export const insertVendorRoutedSchema = createInsertSchema(vendorRouted).omit({ id: true });
 export type InsertVendorRouted = z.infer<typeof insertVendorRoutedSchema>;
 export type VendorRouted = typeof vendorRouted.$inferSelect;
+
+export const taskComments = pgTable("task_comments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  taskId: varchar("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  content: text("content").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+export const insertTaskCommentSchema = createInsertSchema(taskComments).omit({ id: true });
+export type InsertTaskComment = z.infer<typeof insertTaskCommentSchema>;
+export type TaskComment = typeof taskComments.$inferSelect;

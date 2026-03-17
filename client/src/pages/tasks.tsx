@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   ListTodo, Plus, Circle, PlayCircle, CheckCircle2, Calendar, Trash2,
-  ChevronDown, ChevronUp, Bell, BellRing, Loader2,
+  ChevronDown, ChevronUp, Bell, BellRing, Loader2, MessageSquare,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -32,6 +32,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import { FileAttachmentList } from "@/components/file-attachment";
 import type { Company, Task, User, PersonalAlert } from "@shared/schema";
+type TaskWithCount = Task & { commentCount?: number };
 
 type SafeUser = Omit<User, "password">;
 
@@ -180,7 +181,7 @@ export default function TasksPage() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
-  const [editingTask, setEditingTask] = useState<Task | undefined>();
+  const [editingTask, setEditingTask] = useState<TaskWithCount | undefined>();
   const [showCompleted, setShowCompleted] = useState(true);
   const [showAlerts, setShowAlerts] = useState(true);
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
@@ -276,7 +277,7 @@ export default function TasksPage() {
   const getUserName = (userId: string) => teamMembers.find(u => u.id === userId)?.name || "";
   const getCompanyName = (companyId: string | null) => companyId ? companies?.find(c => c.id === companyId)?.name || "" : "";
 
-  const renderTaskRow = (task: Task, isCompleted = false) => {
+  const renderTaskRow = (task: TaskWithCount, isCompleted = false) => {
     const companyName = getCompanyName(task.companyId);
     const assigneeName = getUserName(task.assignedTo);
     const assignerName = getUserName(task.assignedBy);
@@ -320,6 +321,12 @@ export default function TasksPage() {
           <FileAttachmentList entityType="task" entityIds={[task.id]} />
         </div>
         {!isCompleted && dueDateBadge(task.dueDate)}
+        {(task.commentCount ?? 0) > 0 && (
+          <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0" data-testid={`badge-task-comments-${task.id}`}>
+            <MessageSquare className="h-3 w-3" />
+            {task.commentCount}
+          </span>
+        )}
         <button
           onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
           className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs"
