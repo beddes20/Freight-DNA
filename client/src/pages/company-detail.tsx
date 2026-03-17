@@ -1966,6 +1966,11 @@ export default function CompanyDetail() {
                                 <BarChart3 className="h-3 w-3" />
                                 {c.totalVolume.toLocaleString()} loads/yr
                               </span>
+                              {c.originState && c.destinationState && (
+                                <span className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded">
+                                  {c.originState} → {c.destinationState}
+                                </span>
+                              )}
                               {c.count > 1 && (
                                 <span className="text-blue-600 dark:text-blue-400 font-medium">
                                   appears {c.count}x
