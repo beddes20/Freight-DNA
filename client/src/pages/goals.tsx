@@ -47,7 +47,8 @@ function progressPct(current: number, target: number) {
 
 function fmtDate(iso: string) {
   try {
-    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   } catch { return iso; }
 }
 
@@ -275,13 +276,20 @@ interface GoalFormData {
   amId: string;
 }
 
+function toLocalDateString(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function getMonthDefaults() {
   const now = new Date();
   const first = new Date(now.getFullYear(), now.getMonth(), 1);
   const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
   return {
-    startDate: first.toISOString().slice(0, 10),
-    endDate: last.toISOString().slice(0, 10),
+    startDate: toLocalDateString(first),
+    endDate: toLocalDateString(last),
   };
 }
 
