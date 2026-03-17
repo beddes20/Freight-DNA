@@ -262,6 +262,13 @@ export default function CompanyDetail() {
   const [transferTo, setTransferTo] = useState("");
   const [viewContact, setViewContact] = useState<Contact | null>(null);
   const [laneMatchMode, setLaneMatchMode] = useState<"deliveries" | "pickups">("deliveries");
+  const [expandedDeliveries, setExpandedDeliveries] = useState<Set<number>>(new Set());
+  const [expandedPickups, setExpandedPickups] = useState<Set<number>>(new Set());
+  const toggleExpanded = (set: Set<number>, idx: number, setter: (s: Set<number>) => void) => {
+    const next = new Set(set);
+    next.has(idx) ? next.delete(idx) : next.add(idx);
+    setter(next);
+  };
   const [quickTouchOpen, setQuickTouchOpen] = useState(false);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [quickTouchType, setQuickTouchType] = useState("call");
@@ -2246,6 +2253,11 @@ export default function CompanyDetail() {
                 >
                   <ArrowDownToLine className="h-3.5 w-3.5" />
                   Our Deliveries → Their Pickups
+                  {laneMatching.ourDeliveriesToTheirPickups.length > 0 && (
+                    <span className={`text-xs rounded-full px-1.5 py-0.5 font-medium leading-none ${laneMatchMode === "deliveries" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                      {laneMatching.ourDeliveriesToTheirPickups.length}
+                    </span>
+                  )}
                 </button>
                 <button
                   onClick={() => setLaneMatchMode("pickups")}
@@ -2254,6 +2266,11 @@ export default function CompanyDetail() {
                 >
                   <ArrowUpFromLine className="h-3.5 w-3.5" />
                   Their Deliveries → Our Pickups
+                  {laneMatching.theirDeliveriesToOurPickups.length > 0 && (
+                    <span className={`text-xs rounded-full px-1.5 py-0.5 font-medium leading-none ${laneMatchMode === "pickups" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                      {laneMatching.theirDeliveriesToOurPickups.length}
+                    </span>
+                  )}
                 </button>
               </div>
             </div>
@@ -2264,59 +2281,85 @@ export default function CompanyDetail() {
                   Where we already drop freight near this customer's RFP pickup origins — we have trucks in these areas that could serve their lanes.
                 </p>
                 {!laneMatching.hasHistoricalData ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">Upload historical dispatch data on the Historical Data page to see matches.</p>
+                  <div className="text-center py-6 space-y-2">
+                    <p className="text-sm text-muted-foreground">No historical dispatch data uploaded yet.</p>
+                    <a href="/historical" className="text-xs text-primary underline underline-offset-2 hover:opacity-80">Go to Historical Data →</a>
+                  </div>
                 ) : !laneMatching.hasRfpData ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">Upload an RFP with lane data for this company to see matches.</p>
+                  <div className="text-center py-6 space-y-2">
+                    <p className="text-sm text-muted-foreground">No RFP lane data for this company yet.</p>
+                    <a href="/rfp-awards" className="text-xs text-primary underline underline-offset-2 hover:opacity-80">Go to RFP & Awards to upload →</a>
+                  </div>
                 ) : laneMatching.ourDeliveriesToTheirPickups.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">No matches found within 50 miles.</p>
+                  <p className="text-sm text-muted-foreground text-center py-6">No location matches within 50 miles. Try expanding the RFP lane data or checking more accounts.</p>
                 ) : (
                   <div className="space-y-2">
-                    {laneMatching.ourDeliveriesToTheirPickups.slice(0, 20).map((m, i) => (
-                      <div key={i} className="rounded-lg border overflow-hidden" data-testid={`match-delivery-${i}`}>
-                        <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-muted/20">
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <div className="text-sm font-semibold truncate">
-                              <span className="text-blue-600 dark:text-blue-400">{m.ourCity}, {m.ourState}</span>
-                              <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground inline mx-1.5" />
-                              <span>{m.customerCity}, {m.customerState}</span>
+                    {laneMatching.ourDeliveriesToTheirPickups.slice(0, 20).map((m, i) => {
+                      const isExpanded = expandedDeliveries.has(i);
+                      const visibleLanes = isExpanded ? m.matchingLanes : m.matchingLanes.slice(0, 3);
+                      const hiddenCount = m.matchingLanes.length - 3;
+                      const distClass = m.distance === 0
+                        ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                        : m.distance < 10
+                        ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                        : m.distance < 25
+                        ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                        : "bg-muted text-muted-foreground";
+                      return (
+                        <div key={i} className="rounded-lg border overflow-hidden" data-testid={`match-delivery-${i}`}>
+                          <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-muted/20">
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <div className="text-sm font-semibold truncate">
+                                <span className="text-blue-600 dark:text-blue-400">{m.ourCity}, {m.ourState}</span>
+                                <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground inline mx-1.5" />
+                                <span>{m.customerCity}, {m.customerState}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${distClass}`}>
+                                {m.distance === 0 ? "Exact" : `${m.distance} mi`}
+                              </span>
+                              <div className="text-xs text-muted-foreground whitespace-nowrap">
+                                {m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol
+                              </div>
+                              {canReassign && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
+                                  onClick={() => openForceTask(
+                                    `Lane Match: ${m.ourCity}, ${m.ourState} ↔ ${m.customerCity}, ${m.customerState}`,
+                                    `Lane Matching — Our Deliveries → Their Pickups\nWe Deliver To: ${m.ourCity}, ${m.ourState}\nCustomer Pickup: ${m.customerCity}, ${m.customerState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`
+                                  )}
+                                  data-testid={`button-force-task-match-delivery-${i}`}
+                                >
+                                  <Zap className="h-3 w-3 mr-1" />
+                                  Task
+                                </Button>
+                              )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <Badge variant={m.distance === 0 ? "default" : m.distance < 25 ? "default" : "secondary"} className="text-xs">
-                              {m.distance === 0 ? "Exact" : `${m.distance} mi`}
-                            </Badge>
-                            <div className="text-xs text-muted-foreground whitespace-nowrap">
-                              {m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol
-                            </div>
-                            {canReassign && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
-                                onClick={() => openForceTask(
-                                  `Lane Match: ${m.ourCity}, ${m.ourState} ↔ ${m.customerCity}, ${m.customerState}`,
-                                  `Lane Matching — Our Deliveries → Their Pickups\nWe Deliver To: ${m.ourCity}, ${m.ourState}\nCustomer Pickup: ${m.customerCity}, ${m.customerState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`
-                                )}
-                                data-testid={`button-force-task-match-delivery-${i}`}
+                          <div className="divide-y">
+                            {visibleLanes.map((l, li) => (
+                              <div key={li} className="flex items-center justify-between px-3 py-1.5 text-xs hover:bg-muted/30">
+                                <span className="text-muted-foreground truncate">{l.lane}</span>
+                                <span className="shrink-0 ml-2 text-muted-foreground">{l.volume.toLocaleString()} vol</span>
+                              </div>
+                            ))}
+                            {m.matchingLanes.length > 3 && (
+                              <button
+                                onClick={() => toggleExpanded(expandedDeliveries, i, setExpandedDeliveries)}
+                                className="w-full px-3 py-1.5 text-xs text-primary hover:bg-muted/30 text-left"
                               >
-                                <Zap className="h-3 w-3 mr-1" />
-                                Task
-                              </Button>
+                                {isExpanded ? "▲ Show less" : `▼ Show ${hiddenCount} more lane${hiddenCount !== 1 ? "s" : ""}`}
+                              </button>
                             )}
                           </div>
                         </div>
-                        <div className="divide-y">
-                          {m.matchingLanes.map((l, li) => (
-                            <div key={li} className="flex items-center justify-between px-3 py-1.5 text-xs hover:bg-muted/30">
-                              <span className="text-muted-foreground truncate">{l.lane}</span>
-                              <span className="shrink-0 ml-2 text-muted-foreground">{l.volume.toLocaleString()} vol</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                     {laneMatching.ourDeliveriesToTheirPickups.length > 20 && (
-                      <p className="text-xs text-muted-foreground text-center pt-1">+{laneMatching.ourDeliveriesToTheirPickups.length - 20} more matches</p>
+                      <p className="text-xs text-muted-foreground text-center pt-1">+{laneMatching.ourDeliveriesToTheirPickups.length - 20} more location pairs</p>
                     )}
                   </div>
                 )}
@@ -2327,59 +2370,85 @@ export default function CompanyDetail() {
                   Where this customer needs deliveries near our existing freight pickup locations — potential backhaul opportunities for us.
                 </p>
                 {!laneMatching.hasHistoricalData ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">Upload historical dispatch data on the Historical Data page to see matches.</p>
+                  <div className="text-center py-6 space-y-2">
+                    <p className="text-sm text-muted-foreground">No historical dispatch data uploaded yet.</p>
+                    <a href="/historical" className="text-xs text-primary underline underline-offset-2 hover:opacity-80">Go to Historical Data →</a>
+                  </div>
                 ) : !laneMatching.hasRfpData ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">Upload an RFP with lane data for this company to see matches.</p>
+                  <div className="text-center py-6 space-y-2">
+                    <p className="text-sm text-muted-foreground">No RFP lane data for this company yet.</p>
+                    <a href="/rfp-awards" className="text-xs text-primary underline underline-offset-2 hover:opacity-80">Go to RFP & Awards to upload →</a>
+                  </div>
                 ) : laneMatching.theirDeliveriesToOurPickups.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">No matches found within 50 miles.</p>
+                  <p className="text-sm text-muted-foreground text-center py-6">No location matches within 50 miles. Try expanding the RFP lane data or checking more accounts.</p>
                 ) : (
                   <div className="space-y-2">
-                    {laneMatching.theirDeliveriesToOurPickups.slice(0, 20).map((m, i) => (
-                      <div key={i} className="rounded-lg border overflow-hidden" data-testid={`match-pickup-${i}`}>
-                        <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-muted/20">
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <div className="text-sm font-semibold truncate">
-                              <span>{m.customerCity}, {m.customerState}</span>
-                              <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground inline mx-1.5" />
-                              <span className="text-blue-600 dark:text-blue-400">{m.ourCity}, {m.ourState}</span>
+                    {laneMatching.theirDeliveriesToOurPickups.slice(0, 20).map((m, i) => {
+                      const isExpanded = expandedPickups.has(i);
+                      const visibleLanes = isExpanded ? m.matchingLanes : m.matchingLanes.slice(0, 3);
+                      const hiddenCount = m.matchingLanes.length - 3;
+                      const distClass = m.distance === 0
+                        ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                        : m.distance < 10
+                        ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                        : m.distance < 25
+                        ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                        : "bg-muted text-muted-foreground";
+                      return (
+                        <div key={i} className="rounded-lg border overflow-hidden" data-testid={`match-pickup-${i}`}>
+                          <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-muted/20">
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <div className="text-sm font-semibold truncate">
+                                <span>{m.customerCity}, {m.customerState}</span>
+                                <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground inline mx-1.5" />
+                                <span className="text-blue-600 dark:text-blue-400">{m.ourCity}, {m.ourState}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${distClass}`}>
+                                {m.distance === 0 ? "Exact" : `${m.distance} mi`}
+                              </span>
+                              <div className="text-xs text-muted-foreground whitespace-nowrap">
+                                {m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol
+                              </div>
+                              {canReassign && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
+                                  onClick={() => openForceTask(
+                                    `Lane Match: ${m.customerCity}, ${m.customerState} ↔ ${m.ourCity}, ${m.ourState}`,
+                                    `Lane Matching — Their Deliveries → Our Pickups\nCustomer Delivers To: ${m.customerCity}, ${m.customerState}\nWe Pick Up At: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`
+                                  )}
+                                  data-testid={`button-force-task-match-pickup-${i}`}
+                                >
+                                  <Zap className="h-3 w-3 mr-1" />
+                                  Task
+                                </Button>
+                              )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <Badge variant={m.distance === 0 ? "default" : m.distance < 25 ? "default" : "secondary"} className="text-xs">
-                              {m.distance === 0 ? "Exact" : `${m.distance} mi`}
-                            </Badge>
-                            <div className="text-xs text-muted-foreground whitespace-nowrap">
-                              {m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol
-                            </div>
-                            {canReassign && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
-                                onClick={() => openForceTask(
-                                  `Lane Match: ${m.customerCity}, ${m.customerState} ↔ ${m.ourCity}, ${m.ourState}`,
-                                  `Lane Matching — Their Deliveries → Our Pickups\nCustomer Delivers To: ${m.customerCity}, ${m.customerState}\nWe Pick Up At: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`
-                                )}
-                                data-testid={`button-force-task-match-pickup-${i}`}
+                          <div className="divide-y">
+                            {visibleLanes.map((l, li) => (
+                              <div key={li} className="flex items-center justify-between px-3 py-1.5 text-xs hover:bg-muted/30">
+                                <span className="text-muted-foreground truncate">{l.lane}</span>
+                                <span className="shrink-0 ml-2 text-muted-foreground">{l.volume.toLocaleString()} vol</span>
+                              </div>
+                            ))}
+                            {m.matchingLanes.length > 3 && (
+                              <button
+                                onClick={() => toggleExpanded(expandedPickups, i, setExpandedPickups)}
+                                className="w-full px-3 py-1.5 text-xs text-primary hover:bg-muted/30 text-left"
                               >
-                                <Zap className="h-3 w-3 mr-1" />
-                                Task
-                              </Button>
+                                {isExpanded ? "▲ Show less" : `▼ Show ${hiddenCount} more lane${hiddenCount !== 1 ? "s" : ""}`}
+                              </button>
                             )}
                           </div>
                         </div>
-                        <div className="divide-y">
-                          {m.matchingLanes.map((l, li) => (
-                            <div key={li} className="flex items-center justify-between px-3 py-1.5 text-xs hover:bg-muted/30">
-                              <span className="text-muted-foreground truncate">{l.lane}</span>
-                              <span className="shrink-0 ml-2 text-muted-foreground">{l.volume.toLocaleString()} vol</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                     {laneMatching.theirDeliveriesToOurPickups.length > 20 && (
-                      <p className="text-xs text-muted-foreground text-center pt-1">+{laneMatching.theirDeliveriesToOurPickups.length - 20} more matches</p>
+                      <p className="text-xs text-muted-foreground text-center pt-1">+{laneMatching.theirDeliveriesToOurPickups.length - 20} more location pairs</p>
                     )}
                   </div>
                 )}
