@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
-import { Loader2 } from "lucide-react";
+import { Loader2, HelpCircle } from "lucide-react";
 import { useConfetti } from "@/components/confetti";
 import {
   Dialog,
@@ -28,6 +28,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -243,10 +248,52 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
                 name="relationshipBase"
                 render={({ field }) => (
                   <FormItem className="col-span-2">
-                    <FormLabel>Relationship Base</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g., 1st base, 2nd base, 3rd base, homerun" {...field} data-testid="input-contact-relationship-base" />
-                    </FormControl>
+                    <div className="flex items-center gap-1.5">
+                      <FormLabel>Relationship Base</FormLabel>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <button type="button" className="text-muted-foreground hover:text-foreground transition-colors" data-testid="button-relationship-base-info">
+                            <HelpCircle className="h-3.5 w-3.5" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent side="right" align="start" className="w-96 p-0 overflow-hidden">
+                          <div className="bg-muted/60 px-4 py-2.5 border-b">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Relationship Guide</p>
+                          </div>
+                          <div className="divide-y">
+                            <div className="px-4 py-3 space-y-1">
+                              <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">⚾ 1st Base</p>
+                              <p className="text-xs text-muted-foreground leading-relaxed">Introduction stage — email/phone, still a little uncomfortable. Purely transactional. Win a spot load, even at break-even, to build trust and relevance. Sporadic freight.</p>
+                            </div>
+                            <div className="px-4 py-3 space-y-1">
+                              <p className="text-sm font-semibold text-blue-600 dark:text-blue-400">⚾⚾ 2nd Base</p>
+                              <p className="text-xs text-muted-foreground leading-relaxed">Trust is building. Memes/GIFs in email, maybe texting. You know their outside-of-work interests and what makes them look good to their boss. Spot freight with some contract potential. Introductions starting to happen.</p>
+                            </div>
+                            <div className="px-4 py-3 space-y-1">
+                              <p className="text-sm font-semibold text-green-600 dark:text-green-400">⚾⚾⚾ 3rd Base</p>
+                              <p className="text-xs text-muted-foreground leading-relaxed">Trusted carrier — you've bailed them out. Cell-to-cell, met in person. You're becoming an extension of their supply chain. Transparency into projects and off-RFP freight. Chunks of contracted lanes. Price starts to be secondary.</p>
+                            </div>
+                            <div className="px-4 py-3 space-y-1">
+                              <p className="text-sm font-semibold text-primary">🏠 Homerun</p>
+                              <p className="text-xs text-muted-foreground leading-relaxed">They're a friend. First call for market intel, capacity crunches, and new projects. You get RFP feedback only a handful of carriers see. Talked about positively in their team meetings. Price is secondary — it's about trust.</p>
+                            </div>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                    <Select onValueChange={field.onChange} value={field.value || ""}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-contact-relationship-base">
+                          <SelectValue placeholder="Select relationship level…" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="1st Base">⚾ 1st Base — Introduction / Transactional</SelectItem>
+                        <SelectItem value="2nd Base">⚾⚾ 2nd Base — Trust Building</SelectItem>
+                        <SelectItem value="3rd Base">⚾⚾⚾ 3rd Base — Trusted Carrier</SelectItem>
+                        <SelectItem value="Homerun">🏠 Homerun — Extension of Their Team</SelectItem>
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}
