@@ -288,6 +288,7 @@ export const goals = pgTable("goals", {
   target: decimal("target", { precision: 14, scale: 2 }).notNull(),
   currentValue: decimal("current_value", { precision: 14, scale: 2 }).notNull().default("0"),
   title: text("title"),
+  customLabel: text("custom_label"),
   notes: text("notes"),
   startDate: text("start_date").notNull(),
   endDate: text("end_date").notNull(),

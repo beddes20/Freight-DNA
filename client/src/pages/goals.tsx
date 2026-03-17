@@ -14,7 +14,7 @@ import { Progress } from "@/components/ui/progress";
 import {
   Target, Plus, MessageSquare, Trash2, ChevronDown, ChevronUp,
   TrendingUp, Users, Truck, DollarSign, CalendarDays, Pencil, Send,
-  CheckCircle2, AlertCircle, BarChart3, BellRing, X,
+  CheckCircle2, AlertCircle, BarChart3, BellRing, X, Sliders,
 } from "lucide-react";
 import type { Goal, GoalComment } from "@shared/schema";
 
@@ -23,6 +23,7 @@ const METRICS = [
   { value: "touchpoints",    label: "Touchpoints",  icon: TrendingUp, color: "bg-cyan-500", unit: "touches" },
   { value: "load_count",     label: "Load Count",   icon: Truck, color: "bg-green-500", unit: "loads" },
   { value: "margin",         label: "Margin ($)",   icon: DollarSign, color: "bg-violet-500", unit: "$" },
+  { value: "custom",         label: "Custom",       icon: Sliders, color: "bg-orange-500", unit: "units" },
 ];
 
 const PERIODS = [
@@ -126,9 +127,9 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
               <MetricIcon className="h-3.5 w-3.5 text-white" />
             </div>
             <div>
-              <p className="text-sm font-semibold leading-tight">{goal.title || metric.label}</p>
+              <p className="text-sm font-semibold leading-tight">{goal.title || (goal.metric === "custom" ? (goal.customLabel || "Custom Goal") : metric.label)}</p>
               <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                <Badge variant="secondary" className="text-xs font-normal capitalize">{metric.label}</Badge>
+                <Badge variant="secondary" className="text-xs font-normal capitalize">{goal.metric === "custom" ? (goal.customLabel || "Custom") : metric.label}</Badge>
                 <Badge variant="outline" className="text-xs font-normal capitalize">{goal.period}</Badge>
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <CalendarDays className="h-3 w-3" />
@@ -267,6 +268,7 @@ interface GoalFormData {
   period: string;
   target: string;
   title: string;
+  customLabel: string;
   notes: string;
   startDate: string;
   endDate: string;
@@ -278,6 +280,7 @@ const defaultForm: GoalFormData = {
   period: "monthly",
   target: "",
   title: "",
+  customLabel: "",
   notes: "",
   startDate: new Date().toISOString().slice(0, 10),
   endDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
@@ -368,6 +371,7 @@ export default function GoalsPage() {
       period: goal.period,
       target: goal.target,
       title: goal.title || "",
+      customLabel: goal.customLabel || "",
       notes: goal.notes || "",
       startDate: goal.startDate,
       endDate: goal.endDate,
@@ -379,6 +383,10 @@ export default function GoalsPage() {
   function handleSubmit() {
     if (!form.target || !form.amId) {
       toast({ variant: "destructive", description: "Please fill in target and select an AM." });
+      return;
+    }
+    if (form.metric === "custom" && !form.customLabel.trim()) {
+      toast({ variant: "destructive", description: "Please enter a name for your custom metric." });
       return;
     }
     if (editingGoal) {
@@ -574,19 +582,30 @@ export default function GoalsPage() {
             )}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Metric</label>
-              <Select value={form.metric} onValueChange={v => setForm(f => ({ ...f, metric: v }))}>
+              <Select value={form.metric} onValueChange={v => setForm(f => ({ ...f, metric: v, customLabel: "" }))}>
                 <SelectTrigger data-testid="select-goal-metric">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {METRICS.map(m => (
-                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    <SelectItem key={m.value} value={m.value}>{m.label}{m.value === "custom" ? " — must be actionable & measurable" : ""}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+            {form.metric === "custom" && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Metric Name <span className="text-red-500">*</span></label>
+                <Input
+                  placeholder="e.g. Site Visits, QBRs, New Lanes Quoted"
+                  value={form.customLabel}
+                  onChange={e => setForm(f => ({ ...f, customLabel: e.target.value }))}
+                  data-testid="input-goal-custom-label"
+                />
+              </div>
+            )}
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Custom Label <span className="text-muted-foreground font-normal">(optional)</span></label>
+              <label className="text-sm font-medium">Goal Title <span className="text-muted-foreground font-normal">(optional)</span></label>
               <Input
                 placeholder="e.g. Q2 Contacts Push"
                 value={form.title}
@@ -609,7 +628,9 @@ export default function GoalsPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Target {getMetric(form.metric).unit !== "$" ? `(${getMetric(form.metric).unit})` : "($)"}</label>
+                <label className="text-sm font-medium">
+                  {form.metric === "custom" ? "Target (#)" : form.metric === "margin" ? "Target ($)" : `Target (${getMetric(form.metric).unit})`}
+                </label>
                 <Input
                   type="number"
                   placeholder={form.metric === "margin" ? "e.g. 50000" : "e.g. 10"}
@@ -644,6 +665,14 @@ export default function GoalsPage() {
                 <p className="text-xs text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
                   <TrendingUp className="h-3.5 w-3.5 shrink-0" />
                   New Contacts are automatically tracked from the CRM — no manual updates needed.
+                </p>
+              </div>
+            )}
+            {form.metric === "custom" && (
+              <div className="rounded-md bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-800 p-3">
+                <p className="text-xs text-orange-700 dark:text-orange-300 flex items-center gap-1.5">
+                  <Sliders className="h-3.5 w-3.5 shrink-0" />
+                  Progress is updated manually — make sure this goal is specific, measurable, and agreed upon.
                 </p>
               </div>
             )}
