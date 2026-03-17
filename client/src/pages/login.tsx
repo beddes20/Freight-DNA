@@ -47,6 +47,13 @@ export default function LoginPage() {
           className="w-72 object-contain mb-8"
         />
         <h2 className="text-3xl font-bold text-center">Growth Chart VT</h2>
+        <p className="text-blue-100/70 text-center mt-2 text-sm tracking-widest" data-testid="text-dna-tagline-login">
+          <span className="font-semibold text-white">DNA</span>
+          {" · "}
+          <span className="font-semibold text-white">D</span>own{" "}
+          <span className="font-semibold text-white">N</span>ot{" "}
+          <span className="font-semibold text-white">A</span>cross
+        </p>
         <p className="text-blue-200 text-center mt-3 max-w-sm text-lg">
           Transportation brokerage sales — org charts, RFPs, and relationship tracking in one place.
         </p>

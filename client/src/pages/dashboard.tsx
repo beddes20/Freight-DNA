@@ -817,6 +817,18 @@ export default function Dashboard() {
             {!feedLoading && feedPosts.length > 0 && (
               <Badge variant="secondary" className="ml-1 font-normal">{feedPosts.length}</Badge>
             )}
+            <Badge
+              variant="secondary"
+              className="group relative ml-auto text-[10px] font-bold tracking-wider cursor-default bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/60"
+              tabIndex={0}
+              aria-label="DNA — Down Not Across"
+              data-testid="badge-dna-dashboard"
+            >
+              DNA
+              <span className="pointer-events-none absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-foreground text-background text-[10px] px-2 py-0.5 opacity-0 group-hover:opacity-100 group-focus:opacity-100 transition-opacity">
+                Down Not Across
+              </span>
+            </Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">

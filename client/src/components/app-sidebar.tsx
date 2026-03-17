@@ -76,8 +76,15 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="p-4 border-b border-sidebar-border">
-        <div className="flex items-center justify-center py-1">
+        <div className="flex flex-col items-center justify-center py-1 gap-1">
           <img src={vtLogoWhite} alt="Value Truck" className="h-10 w-auto object-contain" />
+          <p className="text-[10px] tracking-wide text-sidebar-foreground/60 text-center" data-testid="text-dna-tagline-sidebar">
+            <span className="font-bold text-sidebar-foreground/80">DNA</span>
+            {" · "}
+            <span className="font-bold text-sidebar-foreground/80">D</span>own{" "}
+            <span className="font-bold text-sidebar-foreground/80">N</span>ot{" "}
+            <span className="font-bold text-sidebar-foreground/80">A</span>cross
+          </p>
         </div>
       </SidebarHeader>
 
