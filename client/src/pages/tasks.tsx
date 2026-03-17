@@ -345,7 +345,8 @@ export default function TasksPage() {
           if (isCompleted || task.assignedBy !== currentUser?.id || !task.dueDate) return null;
           const today = new Date(); today.setHours(0, 0, 0, 0);
           const due = new Date(task.dueDate + "T00:00:00");
-          if (due >= today) return null;
+          const daysOver = Math.floor((today.getTime() - due.getTime()) / 86400000);
+          if (daysOver < 2) return null;
           return (
             <button
               onClick={(e) => { e.stopPropagation(); bumpMutation.mutate(task.id); }}

@@ -1546,8 +1546,9 @@ export async function registerRoutes(
       if (task.status === "completed") return res.status(400).json({ error: "Task is already completed" });
       const today = new Date(); today.setHours(0, 0, 0, 0);
       const due = task.dueDate ? new Date(task.dueDate + "T00:00:00") : null;
-      if (!due || due >= today) return res.status(400).json({ error: "Task is not yet overdue" });
+      if (!due) return res.status(400).json({ error: "Task has no due date" });
       const daysOverdue = Math.floor((today.getTime() - due.getTime()) / 86400000);
+      if (daysOverdue < 2) return res.status(400).json({ error: "Task must be at least 2 days overdue to send a reminder" });
       storage.createNotification({
         userId: task.assignedTo,
         type: "task_reminder",
