@@ -26,6 +26,19 @@ import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type Pend
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
 
+const METRIC_LABELS: Record<string, string> = {
+  contacts_added: "New Contacts",
+  touchpoints: "Touchpoints",
+  load_count: "Load Count",
+  margin: "Margin",
+  custom: "Custom",
+};
+
+function getMetricLabel(metric: string, customLabel?: string | null): string {
+  if (metric === "custom") return customLabel || "Custom Metric";
+  return METRIC_LABELS[metric] || metric;
+}
+
 function dueDateBadge(dueDate: string | null) {
   if (!dueDate) return null;
   const today = new Date();
@@ -784,13 +797,18 @@ export default function Dashboard() {
                 const target = parseFloat(g.target || "0");
                 const current = parseFloat(g.currentValue || "0");
                 const pct = target > 0 ? Math.round((current / target) * 100) : 0;
+                const label = g.title || getMetricLabel(g.metric, g.customLabel);
+                const amName = teamMembers.find((u: SafeUser) => u.id === g.amId)?.name;
                 return (
                   <div key={g.id} className="flex items-center gap-3" data-testid={`goal-nudge-${g.id}`}>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{g.title || g.metric}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium truncate">{label}</p>
+                        {amName && <span className="text-xs text-muted-foreground shrink-0">· {amName}</span>}
+                      </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                          <div className="h-full bg-amber-500 rounded-full" style={{ width: `${pct}%` }} />
+                          <div className="h-full bg-amber-500 rounded-full" style={{ width: `${Math.min(pct, 100)}%` }} />
                         </div>
                         <span className="text-xs text-muted-foreground shrink-0">{pct}%</span>
                       </div>
