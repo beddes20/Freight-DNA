@@ -54,7 +54,7 @@ export default function LoginPage() {
           <span className="font-semibold text-white">A</span>cross
         </p>
         <p className="text-blue-200 text-center mt-3 max-w-sm text-lg">
-          Transportation brokerage sales — org charts, RFPs, and relationship tracking in one place.
+          From farmer to hunter.
         </p>
       </div>
 
