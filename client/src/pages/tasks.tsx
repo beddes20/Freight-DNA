@@ -285,11 +285,12 @@ export default function TasksPage() {
     return (
       <div
         key={task.id}
-        className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group ${isCompleted ? "opacity-60" : ""}`}
+        className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group cursor-pointer ${isCompleted ? "opacity-60" : ""}`}
         data-testid={`task-row-${task.id}`}
+        onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
       >
         <button
-          onClick={() => toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) })}
+          onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }}
           className="shrink-0 hover:scale-110 transition-transform"
           title={`Status: ${task.status}. Click to change.`}
           data-testid={`button-toggle-status-${task.id}`}
@@ -303,7 +304,7 @@ export default function TasksPage() {
           </p>
           <div className="flex items-center gap-2 flex-wrap mt-0.5">
             {companyName && (
-              <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`}>
+              <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`} onClick={(e) => e.stopPropagation()}>
                 {companyName}
               </Link>
             )}
@@ -329,14 +330,7 @@ export default function TasksPage() {
           </span>
         )}
         <button
-          onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
-          className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs"
-          data-testid={`button-edit-task-${task.id}`}
-        >
-          Edit
-        </button>
-        <button
-          onClick={() => deleteMutation.mutate(task.id)}
+          onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }}
           className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
           data-testid={`button-delete-task-${task.id}`}
         >
