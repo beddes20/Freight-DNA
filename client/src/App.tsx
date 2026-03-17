@@ -8,6 +8,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { useAuth } from "@/hooks/use-auth";
 import { GlobalSearch } from "@/components/global-search";
 import { NotificationBell } from "@/components/notification-bell";
+import { CrmChatbot } from "@/components/crm-chatbot";
 import { Loader2 } from "lucide-react";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -75,37 +76,40 @@ function AuthenticatedApp() {
   };
 
   return (
-    <SidebarProvider style={style as React.CSSProperties}>
-      <div className="flex h-screen w-full">
-        <AppSidebar />
-        <div className="flex flex-col flex-1 overflow-hidden">
-          <header className="flex items-center gap-2 p-2 border-b" style={{ backgroundColor: "hsl(var(--sidebar))", borderColor: "hsl(var(--sidebar-border))" }}>
-            <SidebarTrigger className="text-white/80 hover:text-white hover:bg-white/10" data-testid="button-sidebar-toggle" />
-            <div className="flex-1 flex items-center justify-center overflow-hidden px-4">
-              <p className="hidden md:flex items-center gap-0 text-xs italic text-white/60 whitespace-nowrap select-none tracking-wide">
-                {[
-                  "Service exceptionally",
-                  "Move fast",
-                  "Build relationships",
-                  "Hunt opportunities",
-                  "Grow relentlessly",
-                ].map((phrase, i) => (
-                  <span key={i} className="flex items-center gap-0">
-                    {i > 0 && <span className="mx-2.5 text-white/25 not-italic font-light">·</span>}
-                    <span className="hover:text-white transition-colors duration-200">{phrase}</span>
-                  </span>
-                ))}
-              </p>
-            </div>
-            <GlobalSearch navBar />
-            <NotificationBell navBar />
-          </header>
-          <main className="flex-1 overflow-auto">
-            <Router />
-          </main>
+    <>
+      <SidebarProvider style={style as React.CSSProperties}>
+        <div className="flex h-screen w-full">
+          <AppSidebar />
+          <div className="flex flex-col flex-1 overflow-hidden">
+            <header className="flex items-center gap-2 p-2 border-b" style={{ backgroundColor: "hsl(var(--sidebar))", borderColor: "hsl(var(--sidebar-border))" }}>
+              <SidebarTrigger className="text-white/80 hover:text-white hover:bg-white/10" data-testid="button-sidebar-toggle" />
+              <div className="flex-1 flex items-center justify-center overflow-hidden px-4">
+                <p className="hidden md:flex items-center gap-0 text-xs italic text-white/60 whitespace-nowrap select-none tracking-wide">
+                  {[
+                    "Service exceptionally",
+                    "Move fast",
+                    "Build relationships",
+                    "Hunt opportunities",
+                    "Grow relentlessly",
+                  ].map((phrase, i) => (
+                    <span key={i} className="flex items-center gap-0">
+                      {i > 0 && <span className="mx-2.5 text-white/25 not-italic font-light">·</span>}
+                      <span className="hover:text-white transition-colors duration-200">{phrase}</span>
+                    </span>
+                  ))}
+                </p>
+              </div>
+              <GlobalSearch navBar />
+              <NotificationBell navBar />
+            </header>
+            <main className="flex-1 overflow-auto">
+              <Router />
+            </main>
+          </div>
         </div>
-      </div>
-    </SidebarProvider>
+      </SidebarProvider>
+      <CrmChatbot />
+    </>
   );
 }
 

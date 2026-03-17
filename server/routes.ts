@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { registerChatbotRoutes } from "./chatbot";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -306,6 +307,8 @@ export async function registerRoutes(
     if (req.path.startsWith("/auth/")) return next();
     requireAuth(req, res, next);
   });
+
+  registerChatbotRoutes(app);
 
   app.get("/api/search", async (req, res) => {
     try {
