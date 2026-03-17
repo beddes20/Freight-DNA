@@ -250,14 +250,20 @@ export default function Financials() {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
-      <div className="rounded-xl p-6 sm:p-8 text-white" style={{ background: "linear-gradient(135deg, #001AB3 0%, #044ad3 60%, #2868ff 100%)" }}>
-        <div className="flex items-start justify-between">
+      <div
+        className="relative overflow-hidden rounded-xl px-6 py-5 text-white"
+        style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%)" }}
+      >
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full bg-white/5" />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full bg-white/5" />
+        <div className="pointer-events-none absolute top-1/2 right-24 -translate-y-1/2 h-20 w-20 rounded-full bg-white/5" />
+        <div className="relative flex items-start justify-between">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
               <BarChart3 className="h-6 w-6" />
               Numbers
             </h1>
-            <p className="text-blue-200 mt-1 text-sm">
+            <p className="text-white/60 mt-1 text-sm">
               {financialData ? `${financialData.rowCount.toLocaleString()} total records · ${financialData.fileName}` : "Upload your Excel data to get started"}
             </p>
           </div>
