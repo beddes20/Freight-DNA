@@ -28,12 +28,14 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Company, Contact } from "@shared/schema";
 
+type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
 type AccountSummaryRow = {
   customerName: string;
   totalLoads: number;
   spotLoads: number;
   totalMargin: number;
   repName: string;
+  byMonth?: Record<string, MonthBucket>;
 };
 
 type TouchpointSummary = Record<string, { week: number; month: number }>;
@@ -98,6 +100,11 @@ export default function Customers() {
   const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
     queryKey: ["/api/financials/account-summary"],
   });
+
+  const thisMonthKey = (() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+  })();
 
   const { data: tpSummary = {} } = useQuery<TouchpointSummary>({
     queryKey: ["/api/touchpoints/company-summary"],
@@ -263,20 +270,30 @@ export default function Customers() {
                       <div className="mt-3 pt-3 border-t flex items-center gap-4 flex-wrap">
                         {fin ? (
                           <>
-                            <div className="flex items-center gap-1.5 text-xs" title="Total loads (financial data)">
-                              <Truck className="h-3.5 w-3.5 text-blue-500" />
-                              <span className="font-medium text-foreground">{fin.totalLoads.toLocaleString()}</span>
-                              <span className="text-muted-foreground">loads</span>
-                            </div>
-                            <div className="flex items-center gap-1.5 text-xs" title="Total margin (financial data)">
-                              <DollarSign className="h-3.5 w-3.5 text-green-500" />
-                              <span className="font-medium text-foreground">
-                                {fin.totalMargin >= 1000
-                                  ? `$${(fin.totalMargin / 1000).toFixed(1)}k`
-                                  : `$${fin.totalMargin.toFixed(0)}`}
-                              </span>
-                              <span className="text-muted-foreground">margin</span>
-                            </div>
+                            {(() => {
+                              const m = fin.byMonth?.[thisMonthKey];
+                              const loads = m ? m.totalLoads : fin.totalLoads;
+                              const margin = m ? m.totalMargin : fin.totalMargin;
+                              const label = m ? "mo." : "";
+                              return (
+                                <>
+                                  <div className="flex items-center gap-1.5 text-xs" title={m ? "This month's loads" : "Total loads (financial data)"}>
+                                    <Truck className="h-3.5 w-3.5 text-blue-500" />
+                                    <span className="font-medium text-foreground">{loads.toLocaleString()}</span>
+                                    <span className="text-muted-foreground">loads{label ? ` ${label}` : ""}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 text-xs" title={m ? "This month's margin" : "Total margin (financial data)"}>
+                                    <DollarSign className="h-3.5 w-3.5 text-green-500" />
+                                    <span className="font-medium text-foreground">
+                                      {margin >= 1000
+                                        ? `$${(margin / 1000).toFixed(1)}k`
+                                        : `$${margin.toFixed(0)}`}
+                                    </span>
+                                    <span className="text-muted-foreground">margin{label ? ` ${label}` : ""}</span>
+                                  </div>
+                                </>
+                              );
+                            })()}
                           </>
                         ) : (
                           <span className="text-xs text-muted-foreground italic">No financial data</span>
