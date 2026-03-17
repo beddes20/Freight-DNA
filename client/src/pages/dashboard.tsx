@@ -450,6 +450,42 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Hero Banner */}
+      <div
+        className="relative overflow-hidden rounded-xl px-6 py-5 text-white"
+        style={{ background: "linear-gradient(135deg, #001433 0%, #001AB3 55%, #0a35d4 100%)" }}
+        data-testid="banner-hero"
+      >
+        {/* decorative circles */}
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full bg-white/5" />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full bg-white/5" />
+        <div className="pointer-events-none absolute top-1/2 right-24 -translate-y-1/2 h-20 w-20 rounded-full bg-white/5" />
+
+        <div className="relative flex items-center justify-between gap-4">
+          <div>
+            <p className="text-white/60 text-xs font-medium tracking-widest uppercase mb-1">
+              {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+            </p>
+            <h2 className="text-xl font-bold leading-tight">
+              {(() => {
+                const h = new Date().getHours();
+                const greeting = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+                const first = currentUser?.name?.split(" ")[0];
+                return first ? `${greeting}, ${first}` : greeting;
+              })()}
+            </h2>
+            <p className="mt-2.5 text-sm text-white/70 tracking-wide" data-testid="text-dna-tagline-hero">
+              <span className="font-bold text-white">DNA</span>
+              <span className="mx-2 text-white/30">·</span>
+              <span className="font-bold text-white">D</span>own <span className="font-bold text-white">N</span>ot <span className="font-bold text-white">A</span>cross
+            </p>
+          </div>
+          <div className="shrink-0 hidden sm:flex items-center justify-center h-14 w-14 rounded-full bg-white/10 border border-white/20">
+            <span className="text-xl font-black tracking-tight text-white">VT</span>
+          </div>
+        </div>
+      </div>
+
       {/* PTO Coverage Portlet — only shown to users who are assigned as covering someone */}
       {currentUser && passoffs.filter((p: any) => p.coveringUserId === currentUser.id).map((passoff: any) => {
         const owner = allUsers.find(u => u.id === passoff.createdById);
@@ -817,18 +853,6 @@ export default function Dashboard() {
             {!feedLoading && feedPosts.length > 0 && (
               <Badge variant="secondary" className="ml-1 font-normal">{feedPosts.length}</Badge>
             )}
-            <Badge
-              variant="secondary"
-              className="group relative ml-auto text-[10px] font-bold tracking-wider cursor-default bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/60"
-              tabIndex={0}
-              aria-label="DNA — Down Not Across"
-              data-testid="badge-dna-dashboard"
-            >
-              DNA
-              <span className="pointer-events-none absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-foreground text-background text-[10px] px-2 py-0.5 opacity-0 group-hover:opacity-100 group-focus:opacity-100 transition-opacity">
-                Down Not Across
-              </span>
-            </Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">

@@ -46,7 +46,6 @@ export default function LoginPage() {
           alt="Value Truck"
           className="w-72 object-contain mb-8"
         />
-        <h2 className="text-3xl font-bold text-center">Growth Chart VT</h2>
         <p className="text-blue-100/70 text-center mt-2 text-sm tracking-widest" data-testid="text-dna-tagline-login">
           <span className="font-semibold text-white">DNA</span>
           {" · "}
