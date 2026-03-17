@@ -1453,6 +1453,19 @@ export async function registerRoutes(
           read: false,
         }).catch((e) => console.error("Notification error:", e));
       }
+      // Notify creator when assignee marks task completed
+      if (data.status === "completed" && existing.status !== "completed" &&
+          existing.assignedBy && existing.assignedBy !== user.id) {
+        storage.createNotification({
+          userId: existing.assignedBy,
+          type: "task_completed",
+          title: `${user.name} completed a task`,
+          body: task?.title ?? existing.title,
+          link: "/tasks",
+          relatedId: existing.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
       res.json(task);
     } catch (error) {
       res.status(500).json({ error: "Failed to update task" });
@@ -3155,8 +3168,24 @@ export async function registerRoutes(
       if (!(await canAccessSession(currentUser, req.params.id))) {
         return res.status(403).json({ error: "Access denied" });
       }
+      const closedSession = await storage.getSession(req.params.id);
       const newSession = await storage.closeSession(req.params.id);
       if (!newSession) return res.status(404).json({ error: "Session not found" });
+      // Notify the other party that the session was closed
+      if (closedSession) {
+        const otherUserId = closedSession.namId === currentUser.id ? closedSession.amId : closedSession.namId;
+        if (otherUserId !== currentUser.id) {
+          storage.createNotification({
+            userId: otherUserId,
+            type: "session_closed",
+            title: `${currentUser.name} closed the 1:1 session`,
+            body: "Pending topics have been carried forward to a new session.",
+            link: "/one-on-one",
+            relatedId: newSession.id,
+            read: false,
+          }).catch(() => {});
+        }
+      }
       const topics = await storage.getTopicsBySession(newSession.id);
       res.json({ session: newSession, topics });
     } catch (error) {
@@ -3354,6 +3383,18 @@ export async function registerRoutes(
         createdAt: new Date().toISOString(),
         currentValue: "0",
       });
+      // Notify the AM that a goal has been set for them
+      if (goal.amId && goal.amId !== user.id) {
+        storage.createNotification({
+          userId: goal.amId,
+          type: "goal_set",
+          title: `${user.name} set a goal for you`,
+          body: goal.title,
+          link: "/goals",
+          relatedId: goal.id,
+          read: false,
+        }).catch(() => {});
+      }
       res.status(201).json(goal);
     } catch (error) {
       res.status(500).json({ error: "Failed to create goal" });
@@ -3369,6 +3410,31 @@ export async function registerRoutes(
       const canEdit = user.role === "admin" || existing.namId === user.id || existing.amId === user.id;
       if (!canEdit) return res.status(403).json({ error: "Access denied" });
       const updated = await storage.updateGoal(req.params.id, req.body);
+      // Notify the other party about goal updates
+      const isProgressUpdate = req.body.currentValue !== undefined && Object.keys(req.body).length === 1;
+      if (isProgressUpdate && existing.namId !== user.id) {
+        // AM updated their progress — notify NAM
+        storage.createNotification({
+          userId: existing.namId,
+          type: "goal_updated",
+          title: `${user.name} updated goal progress`,
+          body: existing.title,
+          link: "/goals",
+          relatedId: existing.id,
+          read: false,
+        }).catch(() => {});
+      } else if (!isProgressUpdate && existing.amId && existing.amId !== user.id) {
+        // NAM changed the goal definition — notify AM
+        storage.createNotification({
+          userId: existing.amId,
+          type: "goal_updated",
+          title: `${user.name} updated one of your goals`,
+          body: existing.title,
+          link: "/goals",
+          relatedId: existing.id,
+          read: false,
+        }).catch(() => {});
+      }
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update goal" });
@@ -3414,6 +3480,19 @@ export async function registerRoutes(
         body: req.body.body,
         createdAt: new Date().toISOString(),
       });
+      // Notify the other party (NAM ↔ AM) about the goal comment
+      const notifyGoalId = user.id === goal.namId ? goal.amId : goal.namId;
+      if (notifyGoalId && notifyGoalId !== user.id) {
+        storage.createNotification({
+          userId: notifyGoalId,
+          type: "goal_comment",
+          title: `${user.name} commented on a goal`,
+          body: goal.title,
+          link: "/goals",
+          relatedId: goal.id,
+          read: false,
+        }).catch(() => {});
+      }
       res.status(201).json(comment);
     } catch (error) {
       res.status(500).json({ error: "Failed to post comment" });

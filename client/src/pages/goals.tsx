@@ -318,6 +318,7 @@ export default function GoalsPage() {
 
   const { data: goals = [], isLoading } = useQuery<Goal[]>({
     queryKey: ["/api/goals"],
+    refetchInterval: 30000,
   });
 
   const { data: pairings = [] } = useQuery<Array<{ namId: string; amId: string; namName: string; amName: string }>>({

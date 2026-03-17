@@ -106,6 +106,7 @@ export default function Dashboard() {
 
   const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPostWithReplies[]>({
     queryKey: ["/api/feed-posts"],
+    refetchInterval: 30000,
   });
 
   const { data: passoffs = [] } = useQuery<any[]>({
@@ -123,10 +124,12 @@ export default function Dashboard() {
 
   const { data: oneOnOnePendingData } = useQuery<{ count: number }>({
     queryKey: ["/api/one-on-one/pending-count"],
+    refetchInterval: 30000,
   });
 
   const { data: myGoals = [] } = useQuery<any[]>({
     queryKey: ["/api/goals"],
+    refetchInterval: 30000,
   });
 
   const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string } | undefined>();
