@@ -275,6 +275,16 @@ interface GoalFormData {
   amId: string;
 }
 
+function getMonthDefaults() {
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return {
+    startDate: first.toISOString().slice(0, 10),
+    endDate: last.toISOString().slice(0, 10),
+  };
+}
+
 const defaultForm: GoalFormData = {
   metric: "contacts_added",
   period: "monthly",
@@ -282,8 +292,7 @@ const defaultForm: GoalFormData = {
   title: "",
   customLabel: "",
   notes: "",
-  startDate: new Date().toISOString().slice(0, 10),
-  endDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+  ...getMonthDefaults(),
   amId: "",
 };
 
@@ -360,7 +369,7 @@ export default function GoalsPage() {
 
   function openCreate(amId?: string) {
     setEditingGoal(null);
-    setForm({ ...defaultForm, amId: amId || (uniqueAms[0]?.amId ?? "") });
+    setForm({ ...defaultForm, ...getMonthDefaults(), amId: amId || (uniqueAms[0]?.amId ?? "") });
     setDialogOpen(true);
   }
 
