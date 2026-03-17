@@ -481,9 +481,6 @@ export default function Dashboard() {
               <span className="font-bold text-white">D</span>own <span className="font-bold text-white">N</span>ot <span className="font-bold text-white">A</span>cross
             </p>
           </div>
-          <div className="shrink-0 hidden sm:flex items-center justify-center h-14 w-14 rounded-full bg-white/10 border border-white/20 p-2">
-            <img src={vtLogoWhite} alt="Value Truck" className="w-full h-full object-contain" />
-          </div>
         </div>
       </div>
 
