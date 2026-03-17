@@ -202,6 +202,7 @@ export default function TasksPage() {
 
   const { data: allTasks = [], isLoading: tasksLoading } = useQuery<Task[]>({
     queryKey: ["/api/tasks"],
+    refetchInterval: 20000,
   });
 
   const { data: companies = [] } = useQuery<Company[]>({

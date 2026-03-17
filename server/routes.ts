@@ -1437,7 +1437,22 @@ export async function registerRoutes(
         }
         data.dueDate = req.body.dueDate;
       }
+      if (req.body.assignedTo !== undefined) {
+        data.assignedTo = req.body.assignedTo;
+      }
       const task = await storage.updateTask(req.params.id, data);
+      // Notify new assignee if reassigned to someone else
+      if (data.assignedTo && data.assignedTo !== existing.assignedTo && data.assignedTo !== user.id) {
+        storage.createNotification({
+          userId: data.assignedTo,
+          type: "task_assigned",
+          title: `${user.name} assigned you a task`,
+          body: task?.title ?? existing.title,
+          link: "/tasks",
+          relatedId: existing.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
       res.json(task);
     } catch (error) {
       res.status(500).json({ error: "Failed to update task" });

@@ -346,6 +346,7 @@ export default function CompanyDetail() {
 
   const { data: companyTasks = [] } = useQuery<TaskWithCount[]>({
     queryKey: ["/api/tasks/company", companyId],
+    refetchInterval: 20000,
   });
 
   const { data: teamMembers = [] } = useQuery<Omit<User, "password">[]>({

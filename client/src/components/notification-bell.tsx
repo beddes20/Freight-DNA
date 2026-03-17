@@ -32,7 +32,7 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],
-    refetchInterval: 30000,
+    refetchInterval: 15000,
   });
 
   const unreadCount = notifications.filter(n => !n.read).length;
