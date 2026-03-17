@@ -1525,241 +1525,6 @@ export default function CompanyDetail() {
         </CardContent>
       </Card>
 
-      {researchTasks && researchTasks.length > 0 && (() => {
-        const hasLocation = (city: string, state: string) => {
-          const valid = (s: string) => !!s && s.trim().toUpperCase() !== "N/A" && s.trim() !== "";
-          return valid(city) || valid(state);
-        };
-        const unresolvedTasks = researchTasks.filter((t) =>
-          (t.status === "open" || t.status === "contact_added") &&
-          hasLocation(t.origin, t.originState) &&
-          hasLocation(t.destination, t.destinationState)
-        );
-        const completedTasks = researchTasks.filter((t) => t.status === "researched");
-
-        return (
-          <Card className="border-2 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-lanes-needing-contacts">
-            <CardContent className="p-4">
-              <button
-                onClick={() => setLanesCollapsed(c => !c)}
-                className="w-full flex items-center justify-between mb-3 group"
-                data-testid="btn-toggle-lanes"
-              >
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-                  <h2 className="text-base font-medium text-amber-700 dark:text-amber-400">
-                    High-Volume Lanes Needing Contacts
-                  </h2>
-                </div>
-                <div className="flex items-center gap-2">
-                  {completedTasks.length > 0 && (
-                    <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400">
-                      {completedTasks.length} done
-                    </Badge>
-                  )}
-                  {openTasks.length > 0 && (
-                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
-                      {openTasks.length} open
-                    </Badge>
-                  )}
-                  <ChevronDown className={`h-4 w-4 text-amber-600 dark:text-amber-400 transition-transform duration-200 ${lanesCollapsed ? "-rotate-90" : ""}`} />
-                </div>
-              </button>
-
-              {!lanesCollapsed && (() => {
-                const fmtLoc = (city: string, state: string) => {
-                  if (!city && !state) return "—";
-                  if (!city) return state;
-                  if (!state) return city;
-                  if (city.toUpperCase().includes(state.toUpperCase())) return city;
-                  return `${city}, ${state}`;
-                };
-
-                const handleLaneSort = (col: string) => {
-                  setLaneSort((prev) =>
-                    prev.col === col
-                      ? { col, dir: prev.dir === "asc" ? "desc" : "asc" }
-                      : { col, dir: col === "volume" ? "desc" : "asc" }
-                  );
-                };
-
-                const SortIcon = ({ col }: { col: string }) => (
-                  laneSort.col === col
-                    ? <ArrowUpDown className={`h-3 w-3 ml-1 inline ${laneSort.dir === "asc" ? "rotate-180" : ""}`} />
-                    : <ChevronsUpDown className="h-3 w-3 ml-1 inline opacity-40" />
-                );
-
-                const sorted = [...unresolvedTasks].sort((a, b) => {
-                  const dir = laneSort.dir === "asc" ? 1 : -1;
-                  switch (laneSort.col) {
-                    case "origin": return dir * fmtLoc(a.origin, a.originState).localeCompare(fmtLoc(b.origin, b.originState));
-                    case "destination": return dir * fmtLoc(a.destination, a.destinationState).localeCompare(fmtLoc(b.destination, b.destinationState));
-                    case "volume": return dir * (a.volume - b.volume);
-                    case "equipment": return dir * (a.equipment || "").localeCompare(b.equipment || "");
-                    case "rfp": return dir * a.rfpTitle.localeCompare(b.rfpTitle);
-                    case "status": return dir * a.status.localeCompare(b.status);
-                    default: return 0;
-                  }
-                });
-
-                if (unresolvedTasks.length === 0) {
-                  return (
-                    <p className="text-sm text-muted-foreground">
-                      All high-volume lanes have been researched.
-                    </p>
-                  );
-                }
-
-                const thClass = "text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide py-2 px-3 cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap";
-
-                return (
-                  <div className="overflow-x-auto rounded-md border">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/50 border-b">
-                        <tr>
-                          <th className={thClass} onClick={() => handleLaneSort("origin")}>
-                            Origin <SortIcon col="origin" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("destination")}>
-                            Destination <SortIcon col="destination" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("volume")}>
-                            Volume <SortIcon col="volume" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("equipment")}>
-                            Equipment <SortIcon col="equipment" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("rfp")}>
-                            RFP <SortIcon col="rfp" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("status")}>
-                            Status <SortIcon col="status" />
-                          </th>
-                          <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide py-2 px-3 whitespace-nowrap">
-                            Action
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sorted.map((task, i) => {
-                          const linkedContact = task.contactId && contacts
-                            ? contacts.find((c) => c.id === task.contactId)
-                            : null;
-                          return (
-                            <tr
-                              key={`${task.rfpId}-${task.laneIndex}`}
-                              className="border-b last:border-0 hover:bg-muted/40 transition-colors"
-                              data-testid={`lane-task-${i}`}
-                            >
-                              <td className="py-2 px-3 font-medium">
-                                {fmtLoc(task.origin, task.originState)}
-                              </td>
-                              <td className="py-2 px-3 font-medium">
-                                {fmtLoc(task.destination, task.destinationState)}
-                              </td>
-                              <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">
-                                {Math.round(task.volume).toLocaleString()} / yr
-                              </td>
-                              <td className="py-2 px-3 text-muted-foreground">
-                                {task.equipment || "—"}
-                              </td>
-                              <td className="py-2 px-3 text-muted-foreground max-w-[180px] truncate" title={task.rfpTitle}>
-                                {task.rfpTitle}
-                              </td>
-                              <td className="py-2 px-3">
-                                {task.status === "open" ? (
-                                  <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                                    <Clock className="h-3 w-3 mr-1" />
-                                    Open
-                                  </Badge>
-                                ) : (
-                                  <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400">
-                                    <UserPlus className="h-3 w-3 mr-1" />
-                                    Contact Added
-                                  </Badge>
-                                )}
-                                {linkedContact && (
-                                  <span className="ml-2 text-xs text-green-600 dark:text-green-400">
-                                    {linkedContact.name}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-2 px-3 whitespace-nowrap">
-                                <div className="flex items-center gap-2">
-                                  {task.status === "open" ? (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
-                                      onClick={() => handleAssignTask(task)}
-                                      data-testid={`button-assign-lane-task-${i}`}
-                                    >
-                                      <UserPlus className="h-4 w-4 mr-1" />
-                                      Assign
-                                    </Button>
-                                  ) : (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400"
-                                      onClick={() => markResearchedMutation.mutate(task)}
-                                      disabled={markResearchedMutation.isPending}
-                                      data-testid={`button-mark-complete-task-${i}`}
-                                    >
-                                      Mark Complete
-                                    </Button>
-                                  )}
-                                  {canReassign && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400"
-                                      onClick={() => {
-                                        const laneName = `${task.origin}${task.originState ? `, ${task.originState}` : ""} → ${task.destination}${task.destinationState ? `, ${task.destinationState}` : ""}`;
-                                        setForceLanePrefill({
-                                          title: `Research lane: ${laneName}`,
-                                          notes: `RFP: ${task.rfpTitle}\nVolume: ${Math.round(task.volume).toLocaleString()} loads/yr${task.rate ? `\nRate: ${task.rate}` : ""}${task.equipment ? `\nEquipment: ${task.equipment}` : ""}`,
-                                          attachedLaneData: [{
-                                            type: "action_required",
-                                            label: "Action Required Lanes",
-                                            items: [{
-                                              lane: laneName,
-                                              laneId: task.laneId,
-                                              origin: task.origin,
-                                              originState: task.originState,
-                                              destination: task.destination,
-                                              destinationState: task.destinationState,
-                                              volume: task.volume,
-                                              rate: task.rate,
-                                              equipment: task.equipment,
-                                              rfpTitle: task.rfpTitle,
-                                            }],
-                                          }],
-                                        });
-                                        setEditingTaskItem(undefined);
-                                        setTaskDialogOpen(true);
-                                      }}
-                                      data-testid={`button-force-task-lane-${i}`}
-                                    >
-                                      <Zap className="h-4 w-4 mr-1" />
-                                      Force Task
-                                    </Button>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })()}
-            </CardContent>
-          </Card>
-        );
-      })()}
-
       {facilityCoverage && facilityCoverage.facilities.length > 0 && (
         <Card data-testid="card-facility-coverage">
           <CardHeader className="pb-3">
@@ -2196,6 +1961,241 @@ export default function CompanyDetail() {
           )}
         </Card>
       )}
+
+      {researchTasks && researchTasks.length > 0 && (() => {
+        const hasLocation = (city: string, state: string) => {
+          const valid = (s: string) => !!s && s.trim().toUpperCase() !== "N/A" && s.trim() !== "";
+          return valid(city) || valid(state);
+        };
+        const unresolvedTasks = researchTasks.filter((t) =>
+          (t.status === "open" || t.status === "contact_added") &&
+          hasLocation(t.origin, t.originState) &&
+          hasLocation(t.destination, t.destinationState)
+        );
+        const completedTasks = researchTasks.filter((t) => t.status === "researched");
+
+        return (
+          <Card className="border-2 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-lanes-needing-contacts">
+            <CardContent className="p-4">
+              <button
+                onClick={() => setLanesCollapsed(c => !c)}
+                className="w-full flex items-center justify-between mb-3 group"
+                data-testid="btn-toggle-lanes"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                  <h2 className="text-base font-medium text-amber-700 dark:text-amber-400">
+                    High-Volume Lanes Needing Contacts
+                  </h2>
+                </div>
+                <div className="flex items-center gap-2">
+                  {completedTasks.length > 0 && (
+                    <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400">
+                      {completedTasks.length} done
+                    </Badge>
+                  )}
+                  {openTasks.length > 0 && (
+                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
+                      {openTasks.length} open
+                    </Badge>
+                  )}
+                  <ChevronDown className={`h-4 w-4 text-amber-600 dark:text-amber-400 transition-transform duration-200 ${lanesCollapsed ? "-rotate-90" : ""}`} />
+                </div>
+              </button>
+
+              {!lanesCollapsed && (() => {
+                const fmtLoc = (city: string, state: string) => {
+                  if (!city && !state) return "—";
+                  if (!city) return state;
+                  if (!state) return city;
+                  if (city.toUpperCase().includes(state.toUpperCase())) return city;
+                  return `${city}, ${state}`;
+                };
+
+                const handleLaneSort = (col: string) => {
+                  setLaneSort((prev) =>
+                    prev.col === col
+                      ? { col, dir: prev.dir === "asc" ? "desc" : "asc" }
+                      : { col, dir: col === "volume" ? "desc" : "asc" }
+                  );
+                };
+
+                const SortIcon = ({ col }: { col: string }) => (
+                  laneSort.col === col
+                    ? <ArrowUpDown className={`h-3 w-3 ml-1 inline ${laneSort.dir === "asc" ? "rotate-180" : ""}`} />
+                    : <ChevronsUpDown className="h-3 w-3 ml-1 inline opacity-40" />
+                );
+
+                const sorted = [...unresolvedTasks].sort((a, b) => {
+                  const dir = laneSort.dir === "asc" ? 1 : -1;
+                  switch (laneSort.col) {
+                    case "origin": return dir * fmtLoc(a.origin, a.originState).localeCompare(fmtLoc(b.origin, b.originState));
+                    case "destination": return dir * fmtLoc(a.destination, a.destinationState).localeCompare(fmtLoc(b.destination, b.destinationState));
+                    case "volume": return dir * (a.volume - b.volume);
+                    case "equipment": return dir * (a.equipment || "").localeCompare(b.equipment || "");
+                    case "rfp": return dir * a.rfpTitle.localeCompare(b.rfpTitle);
+                    case "status": return dir * a.status.localeCompare(b.status);
+                    default: return 0;
+                  }
+                });
+
+                if (unresolvedTasks.length === 0) {
+                  return (
+                    <p className="text-sm text-muted-foreground">
+                      All high-volume lanes have been researched.
+                    </p>
+                  );
+                }
+
+                const thClass = "text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide py-2 px-3 cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap";
+
+                return (
+                  <div className="overflow-x-auto rounded-md border">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50 border-b">
+                        <tr>
+                          <th className={thClass} onClick={() => handleLaneSort("origin")}>
+                            Origin <SortIcon col="origin" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("destination")}>
+                            Destination <SortIcon col="destination" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("volume")}>
+                            Volume <SortIcon col="volume" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("equipment")}>
+                            Equipment <SortIcon col="equipment" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("rfp")}>
+                            RFP <SortIcon col="rfp" />
+                          </th>
+                          <th className={thClass} onClick={() => handleLaneSort("status")}>
+                            Status <SortIcon col="status" />
+                          </th>
+                          <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide py-2 px-3 whitespace-nowrap">
+                            Action
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sorted.map((task, i) => {
+                          const linkedContact = task.contactId && contacts
+                            ? contacts.find((c) => c.id === task.contactId)
+                            : null;
+                          return (
+                            <tr
+                              key={`${task.rfpId}-${task.laneIndex}`}
+                              className="border-b last:border-0 hover:bg-muted/40 transition-colors"
+                              data-testid={`lane-task-${i}`}
+                            >
+                              <td className="py-2 px-3 font-medium">
+                                {fmtLoc(task.origin, task.originState)}
+                              </td>
+                              <td className="py-2 px-3 font-medium">
+                                {fmtLoc(task.destination, task.destinationState)}
+                              </td>
+                              <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">
+                                {Math.round(task.volume).toLocaleString()} / yr
+                              </td>
+                              <td className="py-2 px-3 text-muted-foreground">
+                                {task.equipment || "—"}
+                              </td>
+                              <td className="py-2 px-3 text-muted-foreground max-w-[180px] truncate" title={task.rfpTitle}>
+                                {task.rfpTitle}
+                              </td>
+                              <td className="py-2 px-3">
+                                {task.status === "open" ? (
+                                  <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                    <Clock className="h-3 w-3 mr-1" />
+                                    Open
+                                  </Badge>
+                                ) : (
+                                  <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                                    <UserPlus className="h-3 w-3 mr-1" />
+                                    Contact Added
+                                  </Badge>
+                                )}
+                                {linkedContact && (
+                                  <span className="ml-2 text-xs text-green-600 dark:text-green-400">
+                                    {linkedContact.name}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  {task.status === "open" ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
+                                      onClick={() => handleAssignTask(task)}
+                                      data-testid={`button-assign-lane-task-${i}`}
+                                    >
+                                      <UserPlus className="h-4 w-4 mr-1" />
+                                      Assign
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-400"
+                                      onClick={() => markResearchedMutation.mutate(task)}
+                                      disabled={markResearchedMutation.isPending}
+                                      data-testid={`button-mark-complete-task-${i}`}
+                                    >
+                                      Mark Complete
+                                    </Button>
+                                  )}
+                                  {canReassign && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400"
+                                      onClick={() => {
+                                        const laneName = `${task.origin}${task.originState ? `, ${task.originState}` : ""} → ${task.destination}${task.destinationState ? `, ${task.destinationState}` : ""}`;
+                                        setForceLanePrefill({
+                                          title: `Research lane: ${laneName}`,
+                                          notes: `RFP: ${task.rfpTitle}\nVolume: ${Math.round(task.volume).toLocaleString()} loads/yr${task.rate ? `\nRate: ${task.rate}` : ""}${task.equipment ? `\nEquipment: ${task.equipment}` : ""}`,
+                                          attachedLaneData: [{
+                                            type: "action_required",
+                                            label: "Action Required Lanes",
+                                            items: [{
+                                              lane: laneName,
+                                              laneId: task.laneId,
+                                              origin: task.origin,
+                                              originState: task.originState,
+                                              destination: task.destination,
+                                              destinationState: task.destinationState,
+                                              volume: task.volume,
+                                              rate: task.rate,
+                                              equipment: task.equipment,
+                                              rfpTitle: task.rfpTitle,
+                                            }],
+                                          }],
+                                        });
+                                        setEditingTaskItem(undefined);
+                                        setTaskDialogOpen(true);
+                                      }}
+                                      data-testid={`button-force-task-lane-${i}`}
+                                    >
+                                      <Zap className="h-4 w-4 mr-1" />
+                                      Force Task
+                                    </Button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* ── Lane Matching Portlet ─────────────────────────────────────────── */}
       {laneMatching && (laneMatching.hasHistoricalData || laneMatching.hasRfpData) && (
