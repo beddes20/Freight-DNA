@@ -11,6 +11,7 @@ interface OrgChartProps {
   touchpoints?: Touchpoint[];
   onEditContact: (contact: Contact) => void;
   onViewContact?: (contact: Contact) => void;
+  onLogTouch?: (contact: Contact) => void;
 }
 
 interface ContactNode {
@@ -80,10 +81,11 @@ interface ContactCardProps {
   tps: Touchpoint[];
   onEdit: (contact: Contact) => void;
   onView?: (contact: Contact) => void;
+  onLogTouch?: (contact: Contact) => void;
   level: number;
 }
 
-function ContactCard({ contact, tps, onEdit, onView, level }: ContactCardProps) {
+function ContactCard({ contact, tps, onEdit, onView, onLogTouch, level }: ContactCardProps) {
   const initials = contact.name
     .split(" ")
     .map((n) => n[0])
@@ -149,15 +151,29 @@ function ContactCard({ contact, tps, onEdit, onView, level }: ContactCardProps) 
                   </p>
                 )}
               </div>
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={(e) => { e.stopPropagation(); onEdit(contact); }}
-                className="shrink-0"
-                data-testid={`button-edit-contact-${contact.id}`}
-              >
-                <Pencil className="h-4 w-4" />
-              </Button>
+              <div className="flex items-center gap-0.5 shrink-0">
+                {onLogTouch && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={(e) => { e.stopPropagation(); onLogTouch(contact); }}
+                    className="h-7 w-7 text-muted-foreground hover:text-primary"
+                    title="Log Touch"
+                    data-testid={`button-log-touch-org-${contact.id}`}
+                  >
+                    <PhoneCall className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={(e) => { e.stopPropagation(); onEdit(contact); }}
+                  className="h-7 w-7"
+                  data-testid={`button-edit-contact-${contact.id}`}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
 
             <div className="mt-1 flex items-center gap-2 flex-wrap">
@@ -165,7 +181,9 @@ function ContactCard({ contact, tps, onEdit, onView, level }: ContactCardProps) 
                 <PhoneCall className="h-2.5 w-2.5" />
                 {weekCount} this week
               </span>
-              <span className="text-xs text-muted-foreground">{monthCount} this month</span>
+              <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground">
+                {monthCount} this mo.
+              </span>
             </div>
 
             <div className="mt-3 space-y-2">
@@ -243,15 +261,16 @@ interface OrgNodeProps {
   tpMap: Map<string, Touchpoint[]>;
   onEdit: (contact: Contact) => void;
   onView?: (contact: Contact) => void;
+  onLogTouch?: (contact: Contact) => void;
   level: number;
 }
 
-function OrgNode({ node, tpMap, onEdit, onView, level }: OrgNodeProps) {
+function OrgNode({ node, tpMap, onEdit, onView, onLogTouch, level }: OrgNodeProps) {
   const tps = tpMap.get(node.contact.id) ?? [];
   return (
     <div className="flex flex-col items-center">
       <div className="w-72">
-        <ContactCard contact={node.contact} tps={tps} onEdit={onEdit} onView={onView} level={level} />
+        <ContactCard contact={node.contact} tps={tps} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} level={level} />
       </div>
       {node.children.length > 0 && (
         <>
@@ -267,7 +286,7 @@ function OrgNode({ node, tpMap, onEdit, onView, level }: OrgNodeProps) {
               {node.children.map((child) => (
                 <div key={child.contact.id} className="flex flex-col items-center">
                   <div className="w-px h-6 bg-border" />
-                  <OrgNode node={child} tpMap={tpMap} onEdit={onEdit} onView={onView} level={level + 1} />
+                  <OrgNode node={child} tpMap={tpMap} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} level={level + 1} />
                 </div>
               ))}
             </div>
@@ -278,7 +297,7 @@ function OrgNode({ node, tpMap, onEdit, onView, level }: OrgNodeProps) {
   );
 }
 
-export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewContact }: OrgChartProps) {
+export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewContact, onLogTouch }: OrgChartProps) {
   const tree = useMemo(() => buildOrgTree(contacts), [contacts]);
 
   const tpMap = useMemo(() => {
@@ -299,7 +318,7 @@ export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewCont
     <div className="overflow-x-auto pb-4">
       <div className="inline-flex flex-col items-center gap-4 min-w-max p-4">
         {tree.map((node) => (
-          <OrgNode key={node.contact.id} node={node} tpMap={tpMap} onEdit={onEditContact} onView={onViewContact} level={0} />
+          <OrgNode key={node.contact.id} node={node} tpMap={tpMap} onEdit={onEditContact} onView={onViewContact} onLogTouch={onLogTouch} level={0} />
         ))}
       </div>
     </div>

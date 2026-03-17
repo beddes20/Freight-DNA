@@ -1321,8 +1321,9 @@ export default function Dashboard() {
             <div className="divide-y">
               {coldContacts.slice(0, 8).map(({ contact, company, daysSince, lastType }) => {
                 const dotColor = daysSince >= 999 ? "bg-muted-foreground/40" : daysSince > 30 ? "bg-red-500" : "bg-amber-500";
-                const dayLabel = daysSince >= 999 ? "Never touched" : `${daysSince}d since last touch`;
                 const typeLabel = lastType ? ({ call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" }[lastType] ?? lastType) : null;
+                const daysNum = daysSince >= 999 ? null : daysSince;
+                const badgeClass = daysSince >= 999 ? "bg-muted text-muted-foreground" : daysSince > 30 ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400";
                 return (
                   <div
                     key={contact.id}
@@ -1338,8 +1339,11 @@ export default function Dashboard() {
                       <div className="text-right hidden group-hover:block">
                         {typeLabel && <p className="text-xs text-muted-foreground">Last: {typeLabel}</p>}
                       </div>
-                      <div className="text-right">
-                        <p className="text-xs font-medium text-amber-600 dark:text-amber-400">{dayLabel}</p>
+                      <div className={`text-right rounded-md px-2 py-0.5 ${badgeClass}`}>
+                        {daysNum !== null
+                          ? <p className="text-xs font-bold leading-tight">{daysNum}d</p>
+                          : <p className="text-xs font-medium">Never</p>
+                        }
                       </div>
                       <Button
                         size="icon"

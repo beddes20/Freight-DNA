@@ -17,7 +17,7 @@ import {
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  Phone, Mail, MapPin, Route, DollarSign, FileText, PhoneCall,
+  Phone, Mail, MapPin, Route, DollarSign, FileText, PhoneCall, Copy, Check,
   MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -83,6 +83,14 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
   const [logNotes, setLogNotes] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [tpPendingFiles, setTpPendingFiles] = useState<PendingFile[]>([]);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  function copyToClipboard(value: string, field: string) {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopiedField(field);
+      setTimeout(() => setCopiedField(null), 2000);
+    });
+  }
 
   const { data: touchpoints = [], isLoading } = useQuery<Touchpoint[]>({
     queryKey: ["/api/contacts", contact?.id, "touchpoints"],
@@ -191,16 +199,36 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
             {(contact.email || contact.phone) && (
               <div className="space-y-2">
                 {contact.email && (
-                  <a href={`mailto:${contact.email}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-                    <Mail className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{contact.email}</span>
-                  </a>
+                  <div className="flex items-center gap-2 group">
+                    <a href={`mailto:${contact.email}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground flex-1 min-w-0">
+                      <Mail className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{contact.email}</span>
+                    </a>
+                    <button
+                      onClick={() => copyToClipboard(contact.email!, "email")}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0"
+                      title="Copy email"
+                      data-testid="button-copy-email"
+                    >
+                      {copiedField === "email" ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 )}
                 {contact.phone && (
-                  <a href={`tel:${contact.phone}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-                    <Phone className="h-4 w-4 shrink-0" />
-                    <span>{contact.phone}</span>
-                  </a>
+                  <div className="flex items-center gap-2 group">
+                    <a href={`tel:${contact.phone}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground flex-1 min-w-0">
+                      <Phone className="h-4 w-4 shrink-0" />
+                      <span>{contact.phone}</span>
+                    </a>
+                    <button
+                      onClick={() => copyToClipboard(contact.phone!, "phone")}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0"
+                      title="Copy phone"
+                      data-testid="button-copy-phone"
+                    >
+                      {copiedField === "phone" ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 )}
               </div>
             )}

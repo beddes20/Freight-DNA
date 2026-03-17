@@ -94,7 +94,7 @@ import { TaskDialog } from "@/components/task-dialog";
 import { CalloutDialog } from "@/components/callout-dialog";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
-import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint } from "@shared/schema";
+import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
 interface ResearchTask {
@@ -309,6 +309,13 @@ export default function CompanyDetail() {
   const { data: contacts, isLoading: contactsLoading } = useQuery<Contact[]>({
     queryKey: ["/api/companies", companyId, "contacts"],
   });
+
+  const { data: allRfps = [] } = useQuery<Rfp[]>({ queryKey: ["/api/rfps"] });
+  const urgentRfps = allRfps.filter(r => {
+    if (r.companyId !== companyId || !r.dueDate) return false;
+    const days = Math.ceil((new Date(r.dueDate + "T00:00:00").getTime() - Date.now()) / 86400000);
+    return days >= 0 && days <= 14;
+  }).map(r => ({ ...r, daysLeft: Math.ceil((new Date(r.dueDate! + "T00:00:00").getTime() - Date.now()) / 86400000) }));
 
   const { data: companyTouchpoints = [] } = useQuery<Touchpoint[]>({
     queryKey: ["/api/companies", companyId, "touchpoints"],
@@ -884,10 +891,21 @@ export default function CompanyDetail() {
             </Button>
           )}
 
-          <Button variant="outline" onClick={() => navigate("/rfp-awards")} data-testid="button-rfp-awards">
-            <Trophy className="h-4 w-4 mr-2" />
-            RFP & Awards
-          </Button>
+          <div className="relative inline-flex">
+            <Button variant="outline" onClick={() => navigate("/rfp-awards")} data-testid="button-rfp-awards">
+              <Trophy className="h-4 w-4 mr-2" />
+              RFP & Awards
+            </Button>
+            {urgentRfps.length > 0 && (
+              <span
+                className="absolute -top-2 -right-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold px-1 shadow-sm cursor-default"
+                title={urgentRfps.map(r => `${r.title}: ${r.daysLeft}d left`).join(", ")}
+                data-testid="badge-rfp-deadline"
+              >
+                {urgentRfps[0].daysLeft === 0 ? "Today" : `${urgentRfps[0].daysLeft}d`}
+              </span>
+            )}
+          </div>
           {canReassign && (
             <Button variant="outline" onClick={() => { setTransferTo(company.assignedTo || ""); setTransferOpen(true); }} data-testid="button-transfer-account">
               <UserCheck className="h-4 w-4 mr-2" />
@@ -1543,7 +1561,13 @@ export default function CompanyDetail() {
             </div>
           </div>
           {contacts && contacts.length > 0 ? (
-            <OrgChart contacts={contacts} touchpoints={companyTouchpoints} onEditContact={handleEditContact} onViewContact={setViewContact} />
+            <OrgChart
+              contacts={contacts}
+              touchpoints={companyTouchpoints}
+              onEditContact={handleEditContact}
+              onViewContact={setViewContact}
+              onLogTouch={(c) => { setQuickTouchContactId(c.id); setQuickTouchOpen(true); }}
+            />
           ) : (
             <div className="flex flex-col items-center justify-center py-8">
               <Users className="h-10 w-10 text-muted-foreground/50 mb-3" />
