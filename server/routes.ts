@@ -3075,9 +3075,14 @@ export async function registerRoutes(
       return user.id === amId && user.managerId === namId;
     }
     if (user.role === "national_account_manager" || user.role === "director" || user.role === "sales") {
-      if (user.id !== namId) return false;
-      const am = await storage.getUser(amId);
-      return !!am && am.managerId === user.id;
+      // Downward: NAM is namId, AM reports to them
+      if (user.id === namId) {
+        const am = await storage.getUser(amId);
+        return !!am && am.managerId === user.id;
+      }
+      // Upward: NAM is amId, their manager is namId
+      if (user.id === amId && user.managerId === namId) return true;
+      return false;
     }
     return false;
   }
@@ -3155,29 +3160,42 @@ export async function registerRoutes(
         if (!currentUser.managerId) return res.json([]);
         const manager = safeUsers.find(u => u.id === currentUser.managerId);
         if (!manager) return res.json([]);
-        return res.json([{ namId: manager.id, amId: currentUser.id, namName: manager.name, amName: currentUser.name }]);
+        return res.json([{ namId: manager.id, amId: currentUser.id, namName: manager.name, amName: currentUser.name, section: "my_manager" }]);
       }
 
       if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
+        const result: { namId: string; amId: string; namName: string; amName: string; section: string }[] = [];
+        // Upward: pairing with their own manager (admin/director above them)
+        if (currentUser.managerId) {
+          const manager = safeUsers.find(u => u.id === currentUser.managerId);
+          if (manager) {
+            result.push({ namId: manager.id, amId: currentUser.id, namName: manager.name, amName: currentUser.name, section: "upward" });
+          }
+        }
+        // Downward: pairings with their AMs
         const directReports = safeUsers.filter(u => u.managerId === currentUser.id && u.role === "account_manager");
-        return res.json(directReports.map(am => ({
-          namId: currentUser.id,
-          amId: am.id,
-          namName: currentUser.name,
-          amName: am.name,
-        })));
+        for (const am of directReports) {
+          result.push({ namId: currentUser.id, amId: am.id, namName: currentUser.name, amName: am.name, section: "my_reports" });
+        }
+        return res.json(result);
       }
 
       if (currentUser.role === "admin") {
-        const pairings: { namId: string; amId: string; namName: string; amName: string }[] = [];
+        const result: { namId: string; amId: string; namName: string; amName: string; section: string; groupLabel?: string }[] = [];
+        const nams = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales"));
+        // Admin→NAM direct pairings first
+        for (const nam of nams) {
+          result.push({ namId: currentUser.id, amId: nam.id, namName: currentUser.name, amName: nam.name, section: "my_nams", groupLabel: nam.name });
+        }
+        // NAM→AM pairings grouped by NAM
         const ams = safeUsers.filter(u => u.role === "account_manager" && u.managerId);
         for (const am of ams) {
           const nam = safeUsers.find(u => u.id === am.managerId);
           if (nam) {
-            pairings.push({ namId: nam.id, amId: am.id, namName: nam.name, amName: am.name });
+            result.push({ namId: nam.id, amId: am.id, namName: nam.name, amName: am.name, section: "team", groupLabel: nam.name });
           }
         }
-        return res.json(pairings);
+        return res.json(result);
       }
 
       res.json([]);

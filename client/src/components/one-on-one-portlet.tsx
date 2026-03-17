@@ -22,6 +22,8 @@ interface Pairing {
   amId: string;
   namName: string;
   amName: string;
+  section?: string;
+  groupLabel?: string;
 }
 
 interface SessionWithTopics {
@@ -366,7 +368,21 @@ export default function OneOnOnePortlet() {
 
   const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
   const isAdmin = currentUser?.role === "admin";
-  const showSelector = (isNam || isAdmin) && pairings.length > 1;
+  const isAm = currentUser?.role === "account_manager";
+
+  // Group pairings for admin view
+  const adminNamPairings = pairings.filter(p => p.section === "my_nams");
+  const teamPairings = pairings.filter(p => p.section === "team");
+  const teamByNam = teamPairings.reduce<Record<string, Pairing[]>>((acc, p) => {
+    const key = p.groupLabel || p.namName;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(p);
+    return acc;
+  }, {});
+
+  // NAM sections
+  const upwardPairing = pairings.find(p => p.section === "upward");
+  const reportPairings = pairings.filter(p => p.section === "my_reports");
 
   if (pairingsLoading) {
     return (
@@ -404,6 +420,24 @@ export default function OneOnOnePortlet() {
     );
   }
 
+  // Helper to render a pill selector button
+  function PairingPill({ pairing, idx, label }: { pairing: Pairing; idx: number; label: string }) {
+    return (
+      <button
+        key={`${pairing.namId}-${pairing.amId}`}
+        onClick={() => setSelectedPairingIdx(idx)}
+        className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
+          idx === selectedPairingIdx
+            ? "bg-indigo-600 text-white border-indigo-600"
+            : "bg-transparent border-border text-muted-foreground hover:border-foreground"
+        }`}
+        data-testid={`button-pairing-${pairing.namId}-${pairing.amId}`}
+      >
+        {label}
+      </button>
+    );
+  }
+
   return (
     <Card data-testid="card-one-on-one">
       <CardHeader className="pb-3">
@@ -428,39 +462,112 @@ export default function OneOnOnePortlet() {
       </CardHeader>
       {!collapsed && (
         <CardContent className="space-y-3">
-          {showSelector && (
-            <div className="flex gap-1 flex-wrap" data-testid="pairing-selector">
-              {pairings.map((p, idx) => {
-                const label = isAdmin ? `${p.namName} ↔ ${p.amName}` : p.amName;
+
+          {/* AM view — single pairing, no selector */}
+          {isAm && selectedPairing && (
+            <>
+              <p className="text-xs text-muted-foreground">1:1 with {selectedPairing.namName}</p>
+              <SessionView pairing={selectedPairing} teamMembers={teamMembers} />
+            </>
+          )}
+
+          {/* NAM view — upward section + reports section */}
+          {isNam && (
+            <div className="space-y-4" data-testid="pairing-selector">
+              {/* Upward: with their manager */}
+              {upwardPairing && (() => {
+                const idx = pairings.indexOf(upwardPairing);
                 return (
-                  <button
-                    key={`${p.namId}-${p.amId}`}
-                    onClick={() => setSelectedPairingIdx(idx)}
-                    className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
-                      idx === selectedPairingIdx
-                        ? "bg-indigo-600 text-white border-indigo-600"
-                        : "bg-transparent border-border text-muted-foreground hover:border-foreground"
-                    }`}
-                    data-testid={`button-pairing-${p.namId}-${p.amId}`}
-                  >
-                    {label}
-                  </button>
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1">
+                      <span className="inline-block w-2 h-2 rounded-full bg-indigo-500" />
+                      With Your Manager
+                    </p>
+                    <div className="flex gap-1 flex-wrap mb-2">
+                      <PairingPill pairing={upwardPairing} idx={idx} label={upwardPairing.namName} />
+                    </div>
+                    {selectedPairingIdx === idx && (
+                      <SessionView pairing={upwardPairing} teamMembers={teamMembers} />
+                    )}
+                  </div>
                 );
-              })}
+              })()}
+
+              {/* Divider */}
+              {upwardPairing && reportPairings.length > 0 && (
+                <div className="border-t border-dashed border-border" />
+              )}
+
+              {/* Downward: their direct reports */}
+              {reportPairings.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1">
+                    <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                    Your Direct Reports
+                  </p>
+                  <div className="flex gap-1 flex-wrap mb-2">
+                    {reportPairings.map((p) => {
+                      const idx = pairings.indexOf(p);
+                      return <PairingPill key={`${p.namId}-${p.amId}`} pairing={p} idx={idx} label={p.amName} />;
+                    })}
+                  </div>
+                  {selectedPairing && selectedPairing.section === "my_reports" && (
+                    <SessionView pairing={selectedPairing} teamMembers={teamMembers} />
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {!showSelector && selectedPairing && (
-            <p className="text-xs text-muted-foreground">
-              {currentUser?.role === "account_manager"
-                ? `1:1 with ${selectedPairing.namName}`
-                : `1:1 with ${selectedPairing.amName}`}
-            </p>
+          {/* Admin view — their NAMs first, then team pairings grouped by NAM */}
+          {isAdmin && (
+            <div className="space-y-4" data-testid="pairing-selector">
+              {/* Direct NAM pairings */}
+              {adminNamPairings.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1">
+                    <span className="inline-block w-2 h-2 rounded-full bg-indigo-500" />
+                    Your Direct 1:1s
+                  </p>
+                  <div className="flex gap-1 flex-wrap mb-2">
+                    {adminNamPairings.map((p) => {
+                      const idx = pairings.indexOf(p);
+                      return <PairingPill key={`${p.namId}-${p.amId}`} pairing={p} idx={idx} label={p.amName} />;
+                    })}
+                  </div>
+                  {selectedPairing && selectedPairing.section === "my_nams" && (
+                    <SessionView pairing={selectedPairing} teamMembers={teamMembers} />
+                  )}
+                </div>
+              )}
+
+              {/* Divider */}
+              {adminNamPairings.length > 0 && Object.keys(teamByNam).length > 0 && (
+                <div className="border-t border-dashed border-border" />
+              )}
+
+              {/* Team 1:1s grouped by NAM */}
+              {Object.entries(teamByNam).map(([namName, namPairings]) => (
+                <div key={namName}>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1">
+                    <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                    {namName}&apos;s Team
+                  </p>
+                  <div className="flex gap-1 flex-wrap mb-2">
+                    {namPairings.map((p) => {
+                      const idx = pairings.indexOf(p);
+                      return <PairingPill key={`${p.namId}-${p.amId}`} pairing={p} idx={idx} label={p.amName} />;
+                    })}
+                  </div>
+                  {selectedPairing && selectedPairing.section === "team" && selectedPairing.namId === namPairings[0]?.namId &&
+                    namPairings.some(p => p.amId === selectedPairing.amId) && (
+                    <SessionView pairing={selectedPairing} teamMembers={teamMembers} />
+                  )}
+                </div>
+              ))}
+            </div>
           )}
 
-          {selectedPairing && (
-            <SessionView pairing={selectedPairing} teamMembers={teamMembers} />
-          )}
         </CardContent>
       )}
     </Card>
