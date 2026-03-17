@@ -235,10 +235,14 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
   };
 }
 
+function toMonthKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function parseHistoricalRow(row: any): {
   destCity: string; destState: string;
   origCity: string; origState: string;
-  weekKey: string; margin: number; revenue: number;
+  weekKey: string; monthKey: string; margin: number; revenue: number;
 } {
   const hasNewFormat = "Origin state" in row || "Destination state" in row || ("Origin" in row && "Destination" in row);
   if (hasNewFormat) {
@@ -250,16 +254,27 @@ function parseHistoricalRow(row: any): {
     const origCity = origRaw.includes(",") ? origRaw.split(",")[0].trim() : origRaw;
     const weekRaw = String(row["Week"] || "").trim();
     let weekKey = weekRaw || "";
-    if (!weekKey) {
-      const serial = Number(row["Delivery date"]);
-      if (!isNaN(serial) && serial > 40000) {
-        const d = new Date(new Date(1899, 11, 30).getTime() + serial * 86400000);
+    let monthKey = "";
+    // Prefer Delivery date serial for exact month
+    const serial = Number(row["Delivery date"]);
+    if (!isNaN(serial) && serial > 40000) {
+      const d = new Date(new Date(1899, 11, 30).getTime() + serial * 86400000);
+      monthKey = toMonthKey(d);
+      if (!weekKey) {
         const y = d.getFullYear();
         const wn = Math.ceil(((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000 + new Date(y, 0, 1).getDay() + 1) / 7);
         weekKey = `${y}-W${wn}`;
       }
     }
-    return { destCity, destState, origCity, origState, weekKey, margin: Number(row["Margin $"]) || 0, revenue: Number(row["Total revenue"]) || 0 };
+    // Fall back to parsing "2025 W44" → first day of that week
+    if (!monthKey && weekKey) {
+      const m = weekKey.match(/^(\d{4})\s*W(\d+)$/);
+      if (m) {
+        const d = new Date(parseInt(m[1]), 0, 1 + (parseInt(m[2]) - 1) * 7);
+        monthKey = toMonthKey(d);
+      }
+    }
+    return { destCity, destState, origCity, origState, weekKey, monthKey, margin: Number(row["Margin $"]) || 0, revenue: Number(row["Total revenue"]) || 0 };
   }
   const destCity = String(row["Consignee city"] || row["consignee_city"] || "").trim();
   const destState = String(row["Consignee state"] || row["consignee_state"] || "").trim();
@@ -267,6 +282,7 @@ function parseHistoricalRow(row: any): {
   const origState = String(row["Shipper state"] || row["shipper_state"] || row["Origin State"] || "").trim();
   const dateStr = String(row["Date ordered"] || "").trim();
   let weekKey = "";
+  let monthKey = "";
   if (dateStr) {
     try {
       const d = new Date(dateStr);
@@ -274,10 +290,11 @@ function parseHistoricalRow(row: any): {
         const y = d.getFullYear();
         const wn = Math.ceil(((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000 + new Date(y, 0, 1).getDay() + 1) / 7);
         weekKey = `${y}-W${wn}`;
+        monthKey = toMonthKey(d);
       }
     } catch {}
   }
-  return { destCity, destState, origCity, origState, weekKey, margin: 0, revenue: 0 };
+  return { destCity, destState, origCity, origState, weekKey, monthKey, margin: 0, revenue: 0 };
 }
 
 export async function registerRoutes(
@@ -2509,19 +2526,27 @@ export async function registerRoutes(
       // If no summary sheet, compute from transaction rows (new ReplistNumbers format)
       if (!raw.length) {
         const txRows: any[] = (latest.rows as any[]) || [];
-        const byCustomer: Record<string, { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; repName: string }> = {};
+        type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
+        type CustomerEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; repName: string; byMonth: Record<string, MonthBucket> };
+        const byCustomer: Record<string, CustomerEntry> = {};
         for (const row of txRows) {
           const customerName = String(row["Customer"] || "").trim();
           if (!customerName) continue;
-          const margin = Number(row["Margin $"]) || 0;
+          const { monthKey, margin } = parseHistoricalRow(row);
           const rep = String(row["Salesperson"] || row["Operations user"] || "").trim();
           const orderType = String(row["Order type"] || "").toLowerCase();
           const isSpot = orderType.includes("spot");
-          if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, repName: rep };
+          if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, repName: rep, byMonth: {} };
           byCustomer[customerName].totalLoads++;
           byCustomer[customerName].totalMargin += margin;
           if (isSpot) byCustomer[customerName].spotLoads++;
           if (!byCustomer[customerName].repName && rep) byCustomer[customerName].repName = rep;
+          if (monthKey) {
+            if (!byCustomer[customerName].byMonth[monthKey]) byCustomer[customerName].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0 };
+            byCustomer[customerName].byMonth[monthKey].totalLoads++;
+            byCustomer[customerName].byMonth[monthKey].totalMargin += margin;
+            if (isSpot) byCustomer[customerName].byMonth[monthKey].spotLoads++;
+          }
         }
         return res.json(Object.values(byCustomer).filter(r => r.customerName));
       }

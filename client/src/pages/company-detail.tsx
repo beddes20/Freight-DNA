@@ -357,7 +357,8 @@ export default function CompanyDetail() {
     queryKey: ["/api/callouts/company", companyId],
   });
 
-  const { data: accountSummaryAll = [] } = useQuery<Array<{ customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; repName: string }>>({
+  type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
+  const { data: accountSummaryAll = [] } = useQuery<Array<{ customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; repName: string; byMonth?: Record<string, MonthBucket> }>>({
     queryKey: ["/api/financials/account-summary"],
   });
   const matchedPerf = (() => {
@@ -378,11 +379,22 @@ export default function CompanyDetail() {
       return nameMatches(crmNorm, excelNorm);
     });
     if (!matches.length) return null;
+    const now = new Date();
+    const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthKey = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, "0")}`;
+    const sumMonth = (key: string): MonthBucket =>
+      matches.reduce((acc, r) => {
+        const b = r.byMonth?.[key];
+        if (!b) return acc;
+        return { totalLoads: acc.totalLoads + b.totalLoads, spotLoads: acc.spotLoads + b.spotLoads, totalMargin: acc.totalMargin + b.totalMargin };
+      }, { totalLoads: 0, spotLoads: 0, totalMargin: 0 });
     return {
-      totalLoads:  matches.reduce((s, r) => s + r.totalLoads, 0),
-      spotLoads:   matches.reduce((s, r) => s + r.spotLoads, 0),
-      totalMargin: matches.reduce((s, r) => s + r.totalMargin, 0),
-      repName:     matches[0].repName,
+      repName:       matches[0].repName,
+      thisMonth:     sumMonth(thisMonthKey),
+      lastMonth:     sumMonth(lastMonthKey),
+      thisMonthKey,
+      lastMonthKey,
     };
   })();
   const accountPerf = matchedPerf;
@@ -911,47 +923,58 @@ export default function CompanyDetail() {
       )}
 
       {/* Account Performance (from uploaded summary data) */}
-      {accountPerf && (
-        <Card data-testid="card-account-performance">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              Account Performance
-              {accountPerf.repName && (
-                <Badge variant="secondary" className="ml-auto text-xs font-normal">{accountPerf.repName}</Badge>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-lg bg-muted/50 p-3 text-center">
-                <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{accountPerf.totalLoads.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Total Loads</p>
+      {accountPerf && (() => {
+        const fmtMargin = (m: number) => m >= 1000 ? `$${(m / 1000).toFixed(1)}K` : `$${m.toLocaleString()}`;
+        const fmtMonth = (key: string) => {
+          const [y, mo] = key.split("-");
+          return new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+        };
+        const PerfGrid = ({ bucket, label }: { bucket: { totalLoads: number; spotLoads: number; totalMargin: number }; label: string }) => (
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">{label}</p>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-lg bg-muted/50 p-2.5 text-center">
+                <p className="text-xl font-bold text-blue-600 dark:text-blue-400">{bucket.totalLoads.toLocaleString()}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Total Loads</p>
               </div>
-              <div className="rounded-lg bg-muted/50 p-3 text-center">
-                <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{accountPerf.spotLoads.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Spot Loads</p>
+              <div className="rounded-lg bg-muted/50 p-2.5 text-center">
+                <p className="text-xl font-bold text-amber-600 dark:text-amber-400">{bucket.spotLoads.toLocaleString()}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Spot Loads</p>
               </div>
-              <div className="rounded-lg bg-muted/50 p-3 text-center">
-                <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                  {accountPerf.totalMargin >= 1000
-                    ? `$${(accountPerf.totalMargin / 1000).toFixed(1)}K`
-                    : `$${accountPerf.totalMargin.toLocaleString()}`}
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">Total Margin</p>
+              <div className="rounded-lg bg-muted/50 p-2.5 text-center">
+                <p className="text-xl font-bold text-green-600 dark:text-green-400">{fmtMargin(bucket.totalMargin)}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Margin</p>
               </div>
             </div>
-            {accountPerf.totalLoads > 0 && (
-              <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+            {bucket.totalLoads > 0 && (
+              <div className="mt-2 flex items-center gap-2 text-[10px] text-muted-foreground">
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
-                <span>{Math.round((accountPerf.spotLoads / accountPerf.totalLoads) * 100)}% spot</span>
+                <span>{Math.round((bucket.spotLoads / bucket.totalLoads) * 100)}% spot</span>
                 <span className="ml-2 inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
-                <span>{Math.round(((accountPerf.totalLoads - accountPerf.spotLoads) / accountPerf.totalLoads) * 100)}% contract</span>
+                <span>{Math.round(((bucket.totalLoads - bucket.spotLoads) / bucket.totalLoads) * 100)}% contract</span>
               </div>
             )}
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        );
+        return (
+          <Card data-testid="card-account-performance">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                Account Performance
+                {accountPerf.repName && (
+                  <Badge variant="secondary" className="ml-auto text-xs font-normal">{accountPerf.repName}</Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0 space-y-4">
+              <PerfGrid bucket={accountPerf.thisMonth} label={fmtMonth(accountPerf.thisMonthKey)} />
+              <div className="border-t" />
+              <PerfGrid bucket={accountPerf.lastMonth} label={fmtMonth(accountPerf.lastMonthKey)} />
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Financial Alias — for matching this account to uploaded financial data */}
       <Card data-testid="card-financial-alias">
