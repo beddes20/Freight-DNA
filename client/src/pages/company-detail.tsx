@@ -171,17 +171,15 @@ interface LanePatterns {
 }
 
 interface LaneMatch {
-  rfpTitle: string;
-  rfpId: string;
-  customerCity: string;
-  customerState: string;
-  customerLane: string;
-  customerVolume: number;
   ourCity: string;
   ourState: string;
+  ourWeeklyLoads: number;
+  ourTotalLoads: number;
+  customerCity: string;
+  customerState: string;
   distance: number;
-  weeklyLoads: number;
-  totalLoads: number;
+  totalVolume: number;
+  matchingLanes: Array<{ rfpTitle: string; rfpId: string; lane: string; volume: number }>;
 }
 
 interface LaneMatching {
@@ -2232,7 +2230,7 @@ export default function CompanyDetail() {
               <div className="flex items-center gap-2">
                 <Zap className="h-5 w-5 text-yellow-500" />
                 <h2 className="text-base font-medium">Lane Matching</h2>
-                <Badge variant="secondary" className="text-xs">75-mi radius</Badge>
+                <Badge variant="secondary" className="text-xs">50-mi radius</Badge>
               </div>
               <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${laneMatchingCollapsed ? "-rotate-90" : ""}`} />
             </button>
@@ -2270,45 +2268,50 @@ export default function CompanyDetail() {
                 ) : !laneMatching.hasRfpData ? (
                   <p className="text-sm text-muted-foreground text-center py-6">Upload an RFP with lane data for this company to see matches.</p>
                 ) : laneMatching.ourDeliveriesToTheirPickups.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">No matches found within 75 miles.</p>
+                  <p className="text-sm text-muted-foreground text-center py-6">No matches found within 50 miles.</p>
                 ) : (
                   <div className="space-y-2">
                     {laneMatching.ourDeliveriesToTheirPickups.slice(0, 20).map((m, i) => (
-                      <div key={i} className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/40 transition-colors" data-testid={`match-delivery-${i}`}>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{m.customerLane}</p>
-                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                            <span className="text-xs text-muted-foreground">Customer pickup:</span>
-                            <span className="text-xs font-medium">{m.customerCity}, {m.customerState}</span>
-                            <ArrowRightLeft className="h-3 w-3 text-muted-foreground" />
-                            <span className="text-xs text-muted-foreground">We deliver to:</span>
-                            <span className="text-xs font-medium">{m.ourCity}, {m.ourState}</span>
+                      <div key={i} className="rounded-lg border overflow-hidden" data-testid={`match-delivery-${i}`}>
+                        <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-muted/20">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <div className="text-sm font-semibold truncate">
+                              <span className="text-blue-600 dark:text-blue-400">{m.ourCity}, {m.ourState}</span>
+                              <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground inline mx-1.5" />
+                              <span>{m.customerCity}, {m.customerState}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Badge variant={m.distance === 0 ? "default" : m.distance < 25 ? "default" : "secondary"} className="text-xs">
+                              {m.distance === 0 ? "Exact" : `${m.distance} mi`}
+                            </Badge>
+                            <div className="text-xs text-muted-foreground whitespace-nowrap">
+                              {m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol
+                            </div>
+                            {canReassign && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
+                                onClick={() => openForceTask(
+                                  `Lane Match: ${m.ourCity}, ${m.ourState} ↔ ${m.customerCity}, ${m.customerState}`,
+                                  `Lane Matching — Our Deliveries → Their Pickups\nWe Deliver To: ${m.ourCity}, ${m.ourState}\nCustomer Pickup: ${m.customerCity}, ${m.customerState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`
+                                )}
+                                data-testid={`button-force-task-match-delivery-${i}`}
+                              >
+                                <Zap className="h-3 w-3 mr-1" />
+                                Task
+                              </Button>
+                            )}
                           </div>
                         </div>
-                        <div className="flex flex-col items-end gap-1 shrink-0">
-                          <Badge variant={m.distance < 25 ? "default" : "secondary"} className="text-xs">
-                            {m.distance === 0 ? "Exact match" : `${m.distance} mi`}
-                          </Badge>
-                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                            <TrendingUp className="h-3 w-3" />
-                            {m.weeklyLoads}/wk · {m.customerVolume.toLocaleString()} vol
-                          </div>
-                          <span className="text-xs text-muted-foreground truncate max-w-28">{m.rfpTitle}</span>
-                          {canReassign && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 mt-0.5"
-                              onClick={() => openForceTask(
-                                `Lane Match: ${m.customerLane}`,
-                                `Lane Matching — Our Deliveries → Their Pickups\nCustomer Lane: ${m.customerLane}\nCustomer Pickup: ${m.customerCity}, ${m.customerState}\nWe Deliver To: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nFrequency: ${m.weeklyLoads}/wk\nVolume: ${m.customerVolume.toLocaleString()}\nRFP: ${m.rfpTitle}`
-                              )}
-                              data-testid={`button-force-task-match-delivery-${i}`}
-                            >
-                              <Zap className="h-3.5 w-3.5 mr-1" />
-                              Force Task
-                            </Button>
-                          )}
+                        <div className="divide-y">
+                          {m.matchingLanes.map((l, li) => (
+                            <div key={li} className="flex items-center justify-between px-3 py-1.5 text-xs hover:bg-muted/30">
+                              <span className="text-muted-foreground truncate">{l.lane}</span>
+                              <span className="shrink-0 ml-2 text-muted-foreground">{l.volume.toLocaleString()} vol</span>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     ))}
@@ -2328,45 +2331,50 @@ export default function CompanyDetail() {
                 ) : !laneMatching.hasRfpData ? (
                   <p className="text-sm text-muted-foreground text-center py-6">Upload an RFP with lane data for this company to see matches.</p>
                 ) : laneMatching.theirDeliveriesToOurPickups.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">No matches found within 75 miles.</p>
+                  <p className="text-sm text-muted-foreground text-center py-6">No matches found within 50 miles.</p>
                 ) : (
                   <div className="space-y-2">
                     {laneMatching.theirDeliveriesToOurPickups.slice(0, 20).map((m, i) => (
-                      <div key={i} className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/40 transition-colors" data-testid={`match-pickup-${i}`}>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{m.customerLane}</p>
-                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                            <span className="text-xs text-muted-foreground">Customer delivery:</span>
-                            <span className="text-xs font-medium">{m.customerCity}, {m.customerState}</span>
-                            <ArrowRightLeft className="h-3 w-3 text-muted-foreground" />
-                            <span className="text-xs text-muted-foreground">We pick up at:</span>
-                            <span className="text-xs font-medium">{m.ourCity}, {m.ourState}</span>
+                      <div key={i} className="rounded-lg border overflow-hidden" data-testid={`match-pickup-${i}`}>
+                        <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-muted/20">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <div className="text-sm font-semibold truncate">
+                              <span>{m.customerCity}, {m.customerState}</span>
+                              <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground inline mx-1.5" />
+                              <span className="text-blue-600 dark:text-blue-400">{m.ourCity}, {m.ourState}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Badge variant={m.distance === 0 ? "default" : m.distance < 25 ? "default" : "secondary"} className="text-xs">
+                              {m.distance === 0 ? "Exact" : `${m.distance} mi`}
+                            </Badge>
+                            <div className="text-xs text-muted-foreground whitespace-nowrap">
+                              {m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol
+                            </div>
+                            {canReassign && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
+                                onClick={() => openForceTask(
+                                  `Lane Match: ${m.customerCity}, ${m.customerState} ↔ ${m.ourCity}, ${m.ourState}`,
+                                  `Lane Matching — Their Deliveries → Our Pickups\nCustomer Delivers To: ${m.customerCity}, ${m.customerState}\nWe Pick Up At: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`
+                                )}
+                                data-testid={`button-force-task-match-pickup-${i}`}
+                              >
+                                <Zap className="h-3 w-3 mr-1" />
+                                Task
+                              </Button>
+                            )}
                           </div>
                         </div>
-                        <div className="flex flex-col items-end gap-1 shrink-0">
-                          <Badge variant={m.distance < 25 ? "default" : "secondary"} className="text-xs">
-                            {m.distance === 0 ? "Exact match" : `${m.distance} mi`}
-                          </Badge>
-                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                            <TrendingUp className="h-3 w-3" />
-                            {m.weeklyLoads}/wk · {m.customerVolume.toLocaleString()} vol
-                          </div>
-                          <span className="text-xs text-muted-foreground truncate max-w-28">{m.rfpTitle}</span>
-                          {canReassign && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 mt-0.5"
-                              onClick={() => openForceTask(
-                                `Lane Match: ${m.customerLane}`,
-                                `Lane Matching — Their Deliveries → Our Pickups\nCustomer Lane: ${m.customerLane}\nCustomer Delivery: ${m.customerCity}, ${m.customerState}\nWe Pick Up At: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nFrequency: ${m.weeklyLoads}/wk\nVolume: ${m.customerVolume.toLocaleString()}\nRFP: ${m.rfpTitle}`
-                              )}
-                              data-testid={`button-force-task-match-pickup-${i}`}
-                            >
-                              <Zap className="h-3.5 w-3.5 mr-1" />
-                              Force Task
-                            </Button>
-                          )}
+                        <div className="divide-y">
+                          {m.matchingLanes.map((l, li) => (
+                            <div key={li} className="flex items-center justify-between px-3 py-1.5 text-xs hover:bg-muted/30">
+                              <span className="text-muted-foreground truncate">{l.lane}</span>
+                              <span className="shrink-0 ml-2 text-muted-foreground">{l.volume.toLocaleString()} vol</span>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     ))}

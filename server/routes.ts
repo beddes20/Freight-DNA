@@ -2963,9 +2963,18 @@ export async function registerRoutes(
 
       const ourDeliveries = Object.values(ourDeliveryMap);
       const ourPickups = Object.values(ourPickupMap);
-      const RADIUS_MILES = 75;
-      const ourDeliveriesToTheirPickups: any[] = [];
-      const theirDeliveriesToOurPickups: any[] = [];
+      const RADIUS_MILES = 50;
+
+      // Group by geographic pair: one entry per unique (ourCity|ourState|customerCity|customerState)
+      type GeoGroup = {
+        ourCity: string; ourState: string;
+        ourWeeklyLoads: number; ourTotalLoads: number;
+        customerCity: string; customerState: string;
+        distance: number; totalVolume: number;
+        matchingLanes: Array<{ rfpTitle: string; rfpId: string; lane: string; volume: number }>;
+      };
+      const deliveryGroups: Record<string, GeoGroup> = {};
+      const pickupGroups: Record<string, GeoGroup> = {};
 
       for (const rfp of allRfps) {
         if (rfp.companyId !== companyId) continue;
@@ -2986,14 +2995,25 @@ export async function registerRoutes(
               for (const d of ourDeliveries) {
                 const dist = haversineDistance(coords[0], coords[1], d.lat, d.lng);
                 if (dist <= RADIUS_MILES) {
-                  ourDeliveriesToTheirPickups.push({
-                    rfpTitle: rfp.title, rfpId: rfp.id,
-                    customerCity: origCity, customerState: origState, customerLane: laneStr, customerVolume: volume,
-                    ourCity: d.city, ourState: d.state,
-                    distance: Math.round(dist * 10) / 10,
-                    weeklyLoads: Math.round(d.count / 52 * 10) / 10,
-                    totalLoads: d.count,
-                  });
+                  const geoKey = `${d.city}|${d.state}|${origCity}|${origState}`;
+                  if (!deliveryGroups[geoKey]) {
+                    deliveryGroups[geoKey] = {
+                      ourCity: d.city, ourState: d.state,
+                      ourWeeklyLoads: Math.round(d.count / 52 * 10) / 10,
+                      ourTotalLoads: d.count,
+                      customerCity: origCity, customerState: origState,
+                      distance: Math.round(dist * 10) / 10,
+                      totalVolume: 0,
+                      matchingLanes: [],
+                    };
+                  }
+                  const g = deliveryGroups[geoKey];
+                  if (Math.round(dist * 10) / 10 < g.distance) g.distance = Math.round(dist * 10) / 10;
+                  g.totalVolume += volume;
+                  // Add lane if not already listed
+                  if (!g.matchingLanes.some(l => l.lane === laneStr)) {
+                    g.matchingLanes.push({ rfpTitle: rfp.title, rfpId: rfp.id, lane: laneStr, volume });
+                  }
                 }
               }
             }
@@ -3006,14 +3026,24 @@ export async function registerRoutes(
               for (const p of ourPickups) {
                 const dist = haversineDistance(coords[0], coords[1], p.lat, p.lng);
                 if (dist <= RADIUS_MILES) {
-                  theirDeliveriesToOurPickups.push({
-                    rfpTitle: rfp.title, rfpId: rfp.id,
-                    customerCity: destCity, customerState: destState, customerLane: laneStr, customerVolume: volume,
-                    ourCity: p.city, ourState: p.state,
-                    distance: Math.round(dist * 10) / 10,
-                    weeklyLoads: Math.round(p.count / 52 * 10) / 10,
-                    totalLoads: p.count,
-                  });
+                  const geoKey = `${p.city}|${p.state}|${destCity}|${destState}`;
+                  if (!pickupGroups[geoKey]) {
+                    pickupGroups[geoKey] = {
+                      ourCity: p.city, ourState: p.state,
+                      ourWeeklyLoads: Math.round(p.count / 52 * 10) / 10,
+                      ourTotalLoads: p.count,
+                      customerCity: destCity, customerState: destState,
+                      distance: Math.round(dist * 10) / 10,
+                      totalVolume: 0,
+                      matchingLanes: [],
+                    };
+                  }
+                  const g = pickupGroups[geoKey];
+                  if (Math.round(dist * 10) / 10 < g.distance) g.distance = Math.round(dist * 10) / 10;
+                  g.totalVolume += volume;
+                  if (!g.matchingLanes.some(l => l.lane === laneStr)) {
+                    g.matchingLanes.push({ rfpTitle: rfp.title, rfpId: rfp.id, lane: laneStr, volume });
+                  }
                 }
               }
             }
@@ -3021,15 +3051,12 @@ export async function registerRoutes(
         }
       }
 
-      const dedup = (arr: any[], keyFn: (x: any) => string) => {
-        const seen = new Set<string>();
-        return arr.filter(x => { const k = keyFn(x); if (seen.has(k)) return false; seen.add(k); return true; })
-          .sort((a, b) => b.customerVolume - a.customerVolume || a.distance - b.distance);
-      };
+      const sortGroups = (groups: Record<string, GeoGroup>) =>
+        Object.values(groups).sort((a, b) => b.totalVolume - a.totalVolume || a.distance - b.distance);
 
       res.json({
-        ourDeliveriesToTheirPickups: dedup(ourDeliveriesToTheirPickups, x => `${x.customerCity}|${x.ourCity}|${x.rfpId}`),
-        theirDeliveriesToOurPickups: dedup(theirDeliveriesToOurPickups, x => `${x.customerCity}|${x.ourCity}|${x.rfpId}`),
+        ourDeliveriesToTheirPickups: sortGroups(deliveryGroups),
+        theirDeliveriesToOurPickups: sortGroups(pickupGroups),
         hasHistoricalData: ourDeliveries.length > 0 || ourPickups.length > 0,
         hasRfpData: allRfps.some(r => r.companyId === companyId && (r.fileData as any)?.highVolumeLanes?.length > 0),
       });
