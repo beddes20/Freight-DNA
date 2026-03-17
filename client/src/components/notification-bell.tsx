@@ -13,6 +13,7 @@ import type { Notification } from "@shared/schema";
 
 const typeIcon: Record<string, React.ReactNode> = {
   task_assigned: <ListTodo className="h-3.5 w-3.5 text-blue-500" />,
+  task_comment: <MessageSquare className="h-3.5 w-3.5 text-blue-400" />,
   topic_added: <MessageSquare className="h-3.5 w-3.5 text-purple-500" />,
   post_reply: <MessageSquare className="h-3.5 w-3.5 text-green-500" />,
 };

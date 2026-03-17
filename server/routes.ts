@@ -1494,12 +1494,29 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { content } = req.body;
       if (!content?.trim()) return res.status(400).json({ error: "Content is required" });
+      const task = await storage.getTask(req.params.id);
+      if (!task) return res.status(404).json({ error: "Task not found" });
       const comment = await storage.createTaskComment({
         taskId: req.params.id,
         authorId: user.id,
         content: content.trim(),
         createdAt: new Date().toISOString(),
       });
+      // Notify task assignee and creator (skip the commenter themselves)
+      const notifyIds = [...new Set([task.assignedTo, task.assignedBy])].filter(
+        id => id && id !== user.id
+      );
+      for (const uid of notifyIds) {
+        storage.createNotification({
+          userId: uid,
+          type: "task_comment",
+          title: `${user.name} commented on a task`,
+          body: task.title,
+          link: "/tasks",
+          relatedId: task.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
       res.status(201).json(comment);
     } catch (error) {
       res.status(500).json({ error: "Failed to create comment" });
