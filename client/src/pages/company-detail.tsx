@@ -1526,7 +1526,15 @@ export default function CompanyDetail() {
       </Card>
 
       {researchTasks && researchTasks.length > 0 && (() => {
-        const unresolvedTasks = researchTasks.filter((t) => t.status === "open" || t.status === "contact_added");
+        const hasLocation = (city: string, state: string) => {
+          const valid = (s: string) => !!s && s.trim().toUpperCase() !== "N/A" && s.trim() !== "";
+          return valid(city) || valid(state);
+        };
+        const unresolvedTasks = researchTasks.filter((t) =>
+          (t.status === "open" || t.status === "contact_added") &&
+          hasLocation(t.origin, t.originState) &&
+          hasLocation(t.destination, t.destinationState)
+        );
         const completedTasks = researchTasks.filter((t) => t.status === "researched");
 
         return (
