@@ -1,8 +1,8 @@
-import { useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useRef, useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Paperclip, Download, FileText, Image, FileSpreadsheet, X } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { Paperclip, Download, FileText, Image, FileSpreadsheet, X, Trash2 } from "lucide-react";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -129,6 +129,9 @@ interface FileAttachmentListProps {
 }
 
 export function FileAttachmentList({ entityType, entityIds, showForEntityId }: FileAttachmentListProps) {
+  const { toast } = useToast();
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
   const { data: allAttachments = [] } = useQuery<AttachmentMeta[]>({
     queryKey: ["/api/attachments", entityType, entityIds.join(",")],
     queryFn: async () => {
@@ -143,6 +146,16 @@ export function FileAttachmentList({ entityType, entityIds, showForEntityId }: F
     enabled: entityIds.length > 0,
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/attachments/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
+      setConfirmDelete(null);
+      toast({ title: "Attachment deleted" });
+    },
+    onError: () => toast({ title: "Failed to delete attachment", variant: "destructive" }),
+  });
+
   const attachments = showForEntityId
     ? allAttachments.filter(a => a.entityId === showForEntityId)
     : allAttachments;
@@ -152,17 +165,46 @@ export function FileAttachmentList({ entityType, entityIds, showForEntityId }: F
   return (
     <div className="flex flex-wrap gap-1.5" data-testid="attachment-list">
       {attachments.map(att => (
-        <a
-          key={att.id}
-          href={`/api/attachments/${att.id}/download`}
-          className="inline-flex items-center gap-1.5 text-xs bg-muted/60 hover:bg-muted rounded-md px-2 py-1 transition-colors border"
-          title={`Download ${att.fileName}`}
-          data-testid={`attachment-download-${att.id}`}
-        >
-          {fileIcon(att.mimeType)}
-          <span className="truncate max-w-[140px]">{att.fileName}</span>
-          <Download className="h-3 w-3 text-muted-foreground shrink-0" />
-        </a>
+        <div key={att.id} className="inline-flex items-center gap-0.5 bg-muted/60 hover:bg-muted rounded-md border transition-colors group">
+          <a
+            href={`/api/attachments/${att.id}/download`}
+            className="inline-flex items-center gap-1.5 text-xs px-2 py-1"
+            title={`Download ${att.fileName}`}
+            data-testid={`attachment-download-${att.id}`}
+          >
+            {fileIcon(att.mimeType)}
+            <span className="truncate max-w-[140px]">{att.fileName}</span>
+            <Download className="h-3 w-3 text-muted-foreground shrink-0" />
+          </a>
+          {confirmDelete === att.id ? (
+            <div className="flex items-center gap-0.5 pr-1">
+              <button
+                className="text-xs text-red-600 hover:text-red-700 px-1 py-0.5 font-medium"
+                onClick={() => deleteMutation.mutate(att.id)}
+                disabled={deleteMutation.isPending}
+                data-testid={`button-confirm-delete-attachment-${att.id}`}
+              >
+                Delete
+              </button>
+              <button
+                className="text-xs text-muted-foreground hover:text-foreground px-1 py-0.5"
+                onClick={() => setConfirmDelete(null)}
+                data-testid={`button-cancel-delete-attachment-${att.id}`}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              className="opacity-0 group-hover:opacity-100 p-1 text-muted-foreground hover:text-red-600 transition-all"
+              onClick={() => setConfirmDelete(att.id)}
+              title="Delete attachment"
+              data-testid={`button-delete-attachment-${att.id}`}
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       ))}
     </div>
   );

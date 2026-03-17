@@ -14,6 +14,7 @@ export const companies = pgTable("companies", {
   portalUsername: text("portal_username"),
   portalPassword: text("portal_password"),
   archivedAt: text("archived_at"),
+  financialAlias: text("financial_alias"),
 });
 
 export const insertCompanySchema = createInsertSchema(companies).omit({

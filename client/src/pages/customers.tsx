@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,8 +19,13 @@ import {
   DollarSign,
   Truck,
   Phone,
+  PhoneCall,
 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CompanyDialog } from "@/components/company-dialog";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { Company, Contact } from "@shared/schema";
 
 type AccountSummaryRow = {
@@ -46,9 +51,26 @@ function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummar
 }
 
 export default function Customers() {
+  const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [quickTouch, setQuickTouch] = useState<{ company: Company; contacts: Contact[] } | null>(null);
+  const [quickTouchContactId, setQuickTouchContactId] = useState("");
+  const [quickTouchType, setQuickTouchType] = useState("call");
+
+  const logTouchMutation = useMutation({
+    mutationFn: ({ contactId, type }: { contactId: string; type: string }) =>
+      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes: "" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
+      toast({ title: "Touch logged!" });
+      setQuickTouch(null);
+      setQuickTouchContactId("");
+      setQuickTouchType("call");
+    },
+    onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
+  });
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -172,7 +194,7 @@ export default function Customers() {
           {displayList.map((company) => {
             const contacts = contactsByCompany.get(company.id) || [];
             const openTasks = openTasksByCompany.get(company.id) || 0;
-            const fin = matchFinancials(company.name, accountSummary);
+            const fin = (company.financialAlias ? matchFinancials(company.financialAlias, accountSummary) : null) || matchFinancials(company.name, accountSummary);
             const tps = tpSummary[company.id] || { week: 0, month: 0 };
             return (
               <Link key={company.id} href={`/companies/${company.id}`}>
@@ -197,6 +219,21 @@ export default function Customers() {
                           </p>
                         </div>
                       </div>
+                      {contacts.length > 0 && !company.archivedAt && (
+                        <button
+                          className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                          title="Quick log touch"
+                          data-testid={`button-quick-touch-${company.id}`}
+                          onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setQuickTouch({ company, contacts });
+                            setQuickTouchContactId(contacts[0]?.id ?? "");
+                          }}
+                        >
+                          <PhoneCall className="h-4 w-4" />
+                        </button>
+                      )}
                       <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
                     </div>
 
@@ -286,6 +323,62 @@ export default function Customers() {
       )}
 
       <CompanyDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+
+      <Dialog open={!!quickTouch} onOpenChange={open => { if (!open) setQuickTouch(null); }}>
+        <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PhoneCall className="h-4 w-4 text-primary" />
+              Log Touch — {quickTouch?.company.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Contact</label>
+              <Select value={quickTouchContactId} onValueChange={setQuickTouchContactId}>
+                <SelectTrigger data-testid="select-quick-touch-contact">
+                  <SelectValue placeholder="Pick a contact" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(quickTouch?.contacts ?? []).map(c => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}{c.title ? ` · ${c.title}` : ""}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Touch Type</label>
+              <div className="flex gap-2">
+                {[{ value: "call", label: "Call" }, { value: "email", label: "Email" }, { value: "text", label: "Text" }, { value: "site_visit", label: "Site Visit" }].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setQuickTouchType(opt.value)}
+                    data-testid={`button-touch-type-${opt.value}`}
+                    className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${
+                      quickTouchType === opt.value
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button variant="outline" className="flex-1" onClick={() => setQuickTouch(null)} data-testid="button-cancel-quick-touch">Cancel</Button>
+              <Button
+                className="flex-1"
+                disabled={!quickTouchContactId || logTouchMutation.isPending}
+                onClick={() => logTouchMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType })}
+                data-testid="button-submit-quick-touch"
+              >
+                Log Touch
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

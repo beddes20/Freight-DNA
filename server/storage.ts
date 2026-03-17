@@ -187,6 +187,7 @@ export interface IStorage {
   getAttachmentsByEntities(entityType: string, entityIds: string[]): Promise<Attachment[]>;
   createAttachment(attachment: InsertAttachment): Promise<Attachment>;
   getAttachment(id: string): Promise<Attachment | undefined>;
+  deleteAttachment(id: string): Promise<boolean>;
 
   getGoals(filter: { namId?: string; amId?: string }): Promise<Goal[]>;
   getGoal(id: string): Promise<Goal | undefined>;
@@ -1038,6 +1039,11 @@ export class DatabaseStorage implements IStorage {
   async getAttachment(id: string): Promise<Attachment | undefined> {
     const [att] = await db.select().from(attachments).where(eq(attachments.id, id));
     return att;
+  }
+
+  async deleteAttachment(id: string): Promise<boolean> {
+    const result = await db.delete(attachments).where(eq(attachments.id, id)).returning();
+    return result.length > 0;
   }
 
   async getPersonalAlerts(userId: string): Promise<PersonalAlert[]> {

@@ -11,7 +11,7 @@ import {
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
-  Phone, Mail, Package, FileText, Shield,
+  Phone, Mail, Package, FileText, Shield, Clock, Target,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -114,6 +114,21 @@ export default function Dashboard() {
     queryKey: ["/api/sync-alert"],
     enabled: currentUser?.role === "admin",
   });
+
+  const { data: allRfps = [] } = useQuery<any[]>({
+    queryKey: ["/api/rfps"],
+  });
+
+  const { data: oneOnOnePendingData } = useQuery<{ count: number }>({
+    queryKey: ["/api/one-on-one/pending-count"],
+  });
+
+  const { data: myGoals = [] } = useQuery<any[]>({
+    queryKey: ["/api/goals"],
+  });
+
+  const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string } | undefined>();
+  const [prefillDialogOpen, setPrefillDialogOpen] = useState(false);
 
   const dismissSyncAlertMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/sync-alert/dismiss"),
@@ -259,6 +274,29 @@ export default function Dashboard() {
 
 
   const isLoading = companiesLoading || contactsLoading;
+
+  // T004: RFP deadline warnings — within 14 days or overdue
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const urgentRfps = allRfps.filter((r: any) => {
+    if (!r.dueDate || r.status === "awarded" || r.status === "lost") return false;
+    const due = new Date(r.dueDate + "T00:00:00");
+    const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
+    return diffDays <= 14;
+  }).sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
+
+  // T005: Goals mid-month nudge — after 15th, flag goals < 50% progress
+  const dayOfMonth = new Date().getDate();
+  const behindGoals = dayOfMonth >= 15
+    ? myGoals.filter((g: any) => {
+        const target = parseFloat(g.target || "0");
+        const current = parseFloat(g.currentValue || "0");
+        return target > 0 && current / target < 0.5;
+      })
+    : [];
+
+  // T007: 1:1 pending topics count
+  const pendingTopicsCount = oneOnOnePendingData?.count ?? 0;
 
   const myTasks = allTasks
     .filter(t => t.assignedTo === currentUser?.id)
@@ -643,7 +681,99 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      <OneOnOnePortlet />
+      {urgentRfps.length > 0 && (
+        <Card className="border-red-300 dark:border-red-700" data-testid="card-rfp-deadline-alert">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base text-red-700 dark:text-red-400">
+              <Clock className="h-4 w-4" />
+              RFP Deadlines Approaching
+              <Badge className="ml-auto bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300 font-normal border-red-300">
+                {urgentRfps.length} RFP{urgentRfps.length !== 1 ? "s" : ""}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-2">
+            {urgentRfps.map((rfp: any) => {
+              const due = new Date(rfp.dueDate + "T00:00:00");
+              const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
+              const isOverdue = diffDays < 0;
+              return (
+                <Link key={rfp.id} href={`/companies/${rfp.companyId}`}>
+                  <div className="flex items-center justify-between gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer" data-testid={`rfp-deadline-row-${rfp.id}`}>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{rfp.title}</p>
+                      <p className="text-xs text-muted-foreground">Due {due.toLocaleDateString()}</p>
+                    </div>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${
+                      isOverdue ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                      : diffDays === 0 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                      : "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
+                    }`}>
+                      {isOverdue ? `${Math.abs(diffDays)}d overdue` : diffDays === 0 ? "Due today" : `${diffDays}d left`}
+                    </span>
+                  </div>
+                </Link>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {behindGoals.length > 0 && (
+        <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goals-nudge">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
+              <Target className="h-4 w-4" />
+              Goals Need Attention
+              <Badge className="ml-auto bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300 font-normal border-amber-300">
+                {behindGoals.length} goal{behindGoals.length !== 1 ? "s" : ""} behind
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <p className="text-sm text-muted-foreground mb-3">
+              You're past the halfway point of the month and these goals are under 50% complete:
+            </p>
+            <div className="space-y-2">
+              {behindGoals.map((g: any) => {
+                const target = parseFloat(g.target || "0");
+                const current = parseFloat(g.currentValue || "0");
+                const pct = target > 0 ? Math.round((current / target) * 100) : 0;
+                return (
+                  <div key={g.id} className="flex items-center gap-3" data-testid={`goal-nudge-${g.id}`}>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{g.title || g.metric}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div className="h-full bg-amber-500 rounded-full" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-muted-foreground shrink-0">{pct}%</span>
+                      </div>
+                    </div>
+                    <span className="text-xs text-muted-foreground shrink-0">{current.toLocaleString()} / {target.toLocaleString()}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <Link href="/goals">
+              <Button size="sm" variant="outline" className="h-7 text-xs mt-3" data-testid="button-go-to-goals-nudge">
+                Update Progress →
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="relative">
+        {pendingTopicsCount > 0 && (
+          <div className="absolute -top-2 -right-2 z-10">
+            <span className="inline-flex items-center justify-center h-5 min-w-5 px-1.5 rounded-full bg-primary text-primary-foreground text-xs font-bold" data-testid="badge-pending-topics">
+              {pendingTopicsCount}
+            </span>
+          </div>
+        )}
+        <OneOnOnePortlet />
+      </div>
 
       {canSeeTeam && missingMonthlyGoals.length > 0 && (
         <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goal-alert">
@@ -1151,18 +1281,35 @@ export default function Dashboard() {
                 return (
                   <div
                     key={contact.id}
-                    className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 cursor-pointer transition-colors"
-                    onClick={() => setViewContact(contact)}
+                    className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors group"
                     data-testid={`cold-contact-row-${contact.id}`}
                   >
                     <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${dotColor}`} />
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewContact(contact)}>
                       <p className="text-sm font-medium truncate">{contact.name}</p>
                       <p className="text-xs text-muted-foreground truncate">{company.name}{contact.title ? ` · ${contact.title}` : ""}</p>
                     </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-xs font-medium text-amber-600 dark:text-amber-400">{dayLabel}</p>
-                      {typeLabel && <p className="text-xs text-muted-foreground">Last: {typeLabel}</p>}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right hidden group-hover:block">
+                        {typeLabel && <p className="text-xs text-muted-foreground">Last: {typeLabel}</p>}
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-medium text-amber-600 dark:text-amber-400">{dayLabel}</p>
+                      </div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Create task for this contact"
+                        data-testid={`button-task-cold-${contact.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTaskPrefill({ title: `Follow up with ${contact.name}`, companyId: company.id });
+                          setPrefillDialogOpen(true);
+                        }}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
                     </div>
                   </div>
                 );
@@ -1176,6 +1323,13 @@ export default function Dashboard() {
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
         editingTask={editingTask}
+      />
+
+      <TaskDialog
+        open={prefillDialogOpen}
+        onOpenChange={(open) => { setPrefillDialogOpen(open); if (!open) setTaskPrefill(undefined); }}
+        companyId={taskPrefill?.companyId}
+        prefillData={taskPrefill?.title ? { title: taskPrefill.title } : undefined}
       />
 
       <ContactDetailSheet

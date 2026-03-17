@@ -535,6 +535,22 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/companies/:id/financial-alias", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { financialAlias } = req.body;
+      const company = await storage.updateCompany(req.params.id, { financialAlias: financialAlias || null } as any);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update financial alias" });
+    }
+  });
+
   app.patch("/api/companies/:id/reassign", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
@@ -2871,6 +2887,44 @@ export async function registerRoutes(
     return canAccessPairing(user, session.namId, session.amId);
   }
 
+  app.get("/api/one-on-one/pending-count", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const allUsers = await storage.getUsers();
+      let pairs: Array<{ namId: string; amId: string }> = [];
+
+      if (user.role === "account_manager") {
+        if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
+      } else if (user.role === "admin") {
+        const ams = allUsers.filter(u => u.role === "account_manager");
+        const nams = allUsers.filter(u => u.role === "national_account_manager" || u.role === "director" || u.role === "sales");
+        for (const am of ams) {
+          if (am.managerId) pairs.push({ namId: am.managerId, amId: am.id });
+        }
+        for (const nam of nams) {
+          const reports = ams.filter(a => a.managerId === nam.id);
+          for (const am of reports) pairs.push({ namId: nam.id, amId: am.id });
+        }
+      } else {
+        const reports = allUsers.filter(u => u.managerId === user.id && u.role === "account_manager");
+        for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
+        if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
+      }
+
+      let count = 0;
+      for (const { namId, amId } of pairs) {
+        const session = await storage.getOrCreateActiveSession(namId, amId);
+        const topics = await storage.getTopicsBySession(session.id);
+        count += topics.filter(t => t.status === "pending").length;
+      }
+      res.json({ count });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch pending count" });
+    }
+  });
+
   app.get("/api/one-on-one/session", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
@@ -3527,6 +3581,22 @@ export async function registerRoutes(
       res.send(buffer);
     } catch (error) {
       res.status(500).json({ error: "Failed to download attachment" });
+    }
+  });
+
+  app.delete("/api/attachments/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const att = await storage.getAttachment(req.params.id);
+      if (!att) return res.status(404).json({ error: "Attachment not found" });
+      if (!(await canAccessAttachmentEntity(user, att.entityType, att.entityId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      await storage.deleteAttachment(req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete attachment" });
     }
   });
 

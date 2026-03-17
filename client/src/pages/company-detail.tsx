@@ -79,6 +79,7 @@ import {
   ArchiveX,
   Upload,
   FileSpreadsheet,
+  DollarSign,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -189,6 +190,52 @@ interface LaneMatching {
   hasRfpData: boolean;
 }
 
+function FinancialAliasEditor({ company }: { company: Company }) {
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(company.financialAlias ?? "");
+
+  const saveMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/companies/${company.id}/financial-alias`, { financialAlias: value.trim() || null }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", company.id] });
+      toast({ title: "Financial alias updated" });
+      setEditing(false);
+    },
+    onError: () => toast({ title: "Failed to update alias", variant: "destructive" }),
+  });
+
+  return (
+    <div className="flex items-center gap-2" data-testid="card-content-financial-alias">
+      <DollarSign className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <span className="text-xs font-medium text-muted-foreground shrink-0">Financial Name:</span>
+      {editing ? (
+        <div className="flex items-center gap-1.5 flex-1">
+          <input
+            autoFocus
+            className="flex-1 border rounded px-2 py-0.5 text-xs bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            placeholder={`Default: ${company.name}`}
+            data-testid="input-financial-alias"
+          />
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-financial-alias">Save</Button>
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => { setEditing(false); setValue(company.financialAlias ?? ""); }} data-testid="button-cancel-financial-alias">Cancel</Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <span className="text-xs text-foreground truncate" data-testid="text-financial-alias">
+            {company.financialAlias ?? <span className="text-muted-foreground italic">{company.name} (default)</span>}
+          </span>
+          <button className="ml-auto text-muted-foreground hover:text-foreground shrink-0" onClick={() => setEditing(true)} data-testid="button-edit-financial-alias">
+            <Pencil className="h-3 w-3" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CompanyDetail() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -216,6 +263,9 @@ export default function CompanyDetail() {
   const [transferTo, setTransferTo] = useState("");
   const [viewContact, setViewContact] = useState<Contact | null>(null);
   const [laneMatchMode, setLaneMatchMode] = useState<"deliveries" | "pickups">("deliveries");
+  const [quickTouchOpen, setQuickTouchOpen] = useState(false);
+  const [quickTouchContactId, setQuickTouchContactId] = useState("");
+  const [quickTouchType, setQuickTouchType] = useState("call");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<Task | undefined>();
   const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[] } | undefined>();
@@ -313,14 +363,17 @@ export default function CompanyDetail() {
     // Normalize: lowercase, collapse whitespace, strip punctuation
     const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     const crmNorm = normalize(company.name);
+    const aliasNorm = company.financialAlias ? normalize(company.financialAlias) : null;
+    const nameMatches = (crmToTest: string, excelNorm: string) => {
+      if (excelNorm === crmToTest) return true;
+      const shorter = crmToTest.length <= excelNorm.length ? crmToTest : excelNorm;
+      const longer  = crmToTest.length <= excelNorm.length ? excelNorm : crmToTest;
+      return shorter.length >= 5 && longer.includes(shorter);
+    };
     const matches = accountSummaryAll.filter(r => {
       const excelNorm = normalize(r.customerName);
-      // Exact normalized match
-      if (excelNorm === crmNorm) return true;
-      // Substring: one fully contains the other (min 8 chars to avoid noise)
-      const shorter = crmNorm.length <= excelNorm.length ? crmNorm : excelNorm;
-      const longer  = crmNorm.length <= excelNorm.length ? excelNorm : crmNorm;
-      return shorter.length >= 5 && longer.includes(shorter);
+      if (aliasNorm && nameMatches(aliasNorm, excelNorm)) return true;
+      return nameMatches(crmNorm, excelNorm);
     });
     if (!matches.length) return null;
     return {
@@ -426,6 +479,19 @@ export default function CompanyDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       toast({ title: "Task deleted" });
     },
+  });
+
+  const logTouchFromDetailMutation = useMutation({
+    mutationFn: ({ contactId, type }: { contactId: string; type: string }) =>
+      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes: "" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
+      toast({ title: "Touch logged!" });
+      setQuickTouchOpen(false);
+      setQuickTouchContactId("");
+      setQuickTouchType("call");
+    },
+    onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
   });
 
   const canReassign = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
@@ -786,6 +852,16 @@ export default function CompanyDetail() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {contacts && contacts.length > 0 && !company.archivedAt && (
+            <Button
+              variant="outline"
+              onClick={() => { setQuickTouchOpen(true); setQuickTouchContactId(contacts[0]?.id ?? ""); }}
+              data-testid="button-log-touch-header"
+            >
+              <PhoneCall className="h-4 w-4 mr-2" />
+              Log Touch
+            </Button>
+          )}
           <Button variant="outline" onClick={handleExport} data-testid="button-export">
             <Download className="h-4 w-4 mr-2" />
             Export Org Chart + Contacts
@@ -877,6 +953,13 @@ export default function CompanyDetail() {
           </CardContent>
         </Card>
       )}
+
+      {/* Financial Alias — for matching this account to uploaded financial data */}
+      <Card data-testid="card-financial-alias">
+        <CardContent className="pt-4 pb-3">
+          <FinancialAliasEditor company={company} />
+        </CardContent>
+      </Card>
 
       {/* Customer Portal Information */}
       <Card data-testid="card-portal-info">
@@ -2493,6 +2576,62 @@ export default function CompanyDetail() {
         onClose={() => setViewContact(null)}
         onEdit={(c) => { setViewContact(null); handleEditContact(c); }}
       />
+
+      <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); } }}>
+        <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch-detail">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PhoneCall className="h-4 w-4 text-primary" />
+              Log Touch — {company.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Contact</label>
+              <Select value={quickTouchContactId} onValueChange={setQuickTouchContactId}>
+                <SelectTrigger data-testid="select-quick-touch-contact-detail">
+                  <SelectValue placeholder="Pick a contact" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(contacts ?? []).map((c: Contact) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}{c.title ? ` · ${c.title}` : ""}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Touch Type</label>
+              <div className="flex gap-2">
+                {[{ value: "call", label: "Call" }, { value: "email", label: "Email" }, { value: "text", label: "Text" }, { value: "site_visit", label: "Site Visit" }].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setQuickTouchType(opt.value)}
+                    data-testid={`button-touch-type-detail-${opt.value}`}
+                    className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${
+                      quickTouchType === opt.value
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button variant="outline" className="flex-1" onClick={() => setQuickTouchOpen(false)} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
+              <Button
+                className="flex-1"
+                disabled={!quickTouchContactId || logTouchFromDetailMutation.isPending}
+                onClick={() => logTouchFromDetailMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType })}
+                data-testid="button-submit-quick-touch-detail"
+              >
+                Log Touch
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

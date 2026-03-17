@@ -649,6 +649,15 @@ function PassoffCard({
     },
   });
 
+  const closeMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/pto-passoffs/${passoff.id}`, { status: "closed" }).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] });
+      toast({ title: "Passoff closed — accounts returned!" });
+    },
+    onError: () => toast({ title: "Failed to close passoff", variant: "destructive" }),
+  });
+
   const addItemMutation = useMutation({
     mutationFn: (companyId: string) =>
       apiRequest("POST", `/api/pto-passoffs/${passoff.id}/items`, { companyId, priority: "medium" }).then(r => r.json()),
@@ -717,6 +726,19 @@ function PassoffCard({
               <div className="flex items-center gap-2 shrink-0">
                 {(isOwner || isAdmin) && (
                   <>
+                    {isOwner && passoff.status === "active" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs gap-1 border-green-500 text-green-700 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20"
+                        onClick={e => { e.stopPropagation(); closeMutation.mutate(); }}
+                        disabled={closeMutation.isPending}
+                        data-testid={`button-close-passoff-${passoff.id}`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Close & Return Accounts
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon"
