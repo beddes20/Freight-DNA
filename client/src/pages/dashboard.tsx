@@ -454,7 +454,7 @@ export default function Dashboard() {
       {/* Hero Banner */}
       <div
         className="relative overflow-hidden rounded-xl px-6 py-5 text-white"
-        style={{ background: "linear-gradient(135deg, #001433 0%, #001AB3 55%, #0a35d4 100%)" }}
+        style={{ background: "linear-gradient(135deg, #001433 0%, #001AB3 60%, #ffffff 100%)" }}
         data-testid="banner-hero"
       >
         {/* decorative circles */}
@@ -481,8 +481,8 @@ export default function Dashboard() {
               <span className="font-bold text-white">D</span>own <span className="font-bold text-white">N</span>ot <span className="font-bold text-white">A</span>cross
             </p>
           </div>
-          <div className="shrink-0 hidden sm:flex items-center justify-center h-14 w-14 rounded-full bg-white/10 border border-white/20 p-2">
-            <img src={vtLogoWhite} alt="Value Truck" className="w-full h-full object-contain" />
+          <div className="shrink-0 hidden sm:flex items-center justify-center h-14 w-14 rounded-full bg-white border border-white/30 p-2">
+            <img src={vtLogoWhite} alt="Value Truck" className="w-full h-full object-contain invert" />
           </div>
         </div>
       </div>
