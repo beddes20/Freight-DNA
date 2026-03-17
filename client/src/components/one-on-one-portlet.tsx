@@ -56,6 +56,7 @@ function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/pending-count"] });
     },
   });
 
@@ -65,6 +66,7 @@ function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/pending-count"] });
       toast({ title: "Topic deleted" });
     },
   });
@@ -161,6 +163,7 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session", pairing.namId, pairing.amId] });
       queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/pending-count"] });
       setTopicText("");
       setSelectedTag(null);
       setShowTagSelector(false);
@@ -179,6 +182,7 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session", pairing.namId, pairing.amId] });
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/archived", pairing.namId, pairing.amId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/pending-count"] });
       toast({ title: "Session closed. Pending topics carried over." });
     },
     onError: () => {
@@ -364,7 +368,11 @@ export default function OneOnOnePortlet() {
     enabled: !!selectedPairing,
   });
 
-  const unresolvedCount = sessionData?.topics?.filter(t => t.status === "pending").length || 0;
+  // Total pending across ALL pairings (for the card header badge)
+  const { data: pendingCountData } = useQuery<{ count: number }>({
+    queryKey: ["/api/one-on-one/pending-count"],
+  });
+  const unresolvedCount = pendingCountData?.count || 0;
 
   const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
   const isAdmin = currentUser?.role === "admin";

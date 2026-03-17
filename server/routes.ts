@@ -3104,16 +3104,18 @@ export async function registerRoutes(
       if (user.role === "account_manager") {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       } else if (user.role === "admin") {
-        const ams = allUsers.filter(u => u.role === "account_manager");
-        const nams = allUsers.filter(u => u.role === "national_account_manager" || u.role === "director" || u.role === "sales");
+        const ams = allUsers.filter(u => u.role === "account_manager" && u.managerId);
+        // NAM↔AM pairings (deduplicated — only one loop)
         for (const am of ams) {
-          if (am.managerId) pairs.push({ namId: am.managerId, amId: am.id });
+          pairs.push({ namId: am.managerId!, amId: am.id });
         }
+        // Admin↔NAM direct pairings
+        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales"));
         for (const nam of nams) {
-          const reports = ams.filter(a => a.managerId === nam.id);
-          for (const am of reports) pairs.push({ namId: nam.id, amId: am.id });
+          pairs.push({ namId: user.id, amId: nam.id });
         }
       } else {
+        // NAM: downward (their AMs) + upward (their manager)
         const reports = allUsers.filter(u => u.managerId === user.id && u.role === "account_manager");
         for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
