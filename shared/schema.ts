@@ -435,3 +435,14 @@ export const chatMessages = pgTable("chat_messages", {
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true });
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatMessage = typeof chatMessages.$inferSelect;
+
+export const appSuggestions = pgTable("app_suggestions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  submittedById: varchar("submitted_by_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  content: text("content").notNull(),
+  status: text("status").notNull().default("new"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertAppSuggestionSchema = createInsertSchema(appSuggestions).omit({ id: true, createdAt: true });
+export type InsertAppSuggestion = z.infer<typeof insertAppSuggestionSchema>;
+export type AppSuggestion = typeof appSuggestions.$inferSelect;

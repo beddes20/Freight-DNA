@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2 } from "lucide-react";
+import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -55,6 +55,9 @@ export function CrmChatbot() {
   const [open, setOpen] = useState(false);
   const [activeConvoId, setActiveConvoId] = useState<number | null>(null);
   const [showConvoList, setShowConvoList] = useState(false);
+  const [showSuggest, setShowSuggest] = useState(false);
+  const [suggestionText, setSuggestionText] = useState("");
+  const [suggestionSent, setSuggestionSent] = useState(false);
   const [input, setInput] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -99,6 +102,18 @@ export function CrmChatbot() {
       qc.invalidateQueries({ queryKey: ["/api/chatbot/conversations"] });
       setActiveConvoId(null);
       setLocalMessages([]);
+    },
+  });
+
+  const submitSuggestion = useMutation({
+    mutationFn: (content: string) => apiRequest("POST", "/api/chatbot/suggest", { content }),
+    onSuccess: () => {
+      setSuggestionSent(true);
+      setTimeout(() => {
+        setSuggestionSent(false);
+        setSuggestionText("");
+        setShowSuggest(false);
+      }, 2500);
     },
   });
 
@@ -240,7 +255,16 @@ export function CrmChatbot() {
                 size="icon"
                 variant="ghost"
                 className="h-7 w-7 text-white/80 hover:text-white hover:bg-white/20"
-                onClick={() => setShowConvoList((v) => !v)}
+                onClick={() => { setShowSuggest((v) => !v); setShowConvoList(false); }}
+                title="Suggest a feature"
+              >
+                <Lightbulb className="h-4 w-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-white/80 hover:text-white hover:bg-white/20"
+                onClick={() => { setShowConvoList((v) => !v); setShowSuggest(false); }}
                 title="Chat history"
               >
                 <MessageSquare className="h-4 w-4" />
@@ -256,6 +280,52 @@ export function CrmChatbot() {
               </Button>
             </div>
           </div>
+
+          {/* Suggestion form overlay */}
+          {showSuggest && (
+            <div className="absolute inset-0 top-[57px] bg-background z-10 flex flex-col rounded-b-2xl">
+              <div className="flex items-center gap-2 px-4 py-2.5 border-b">
+                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setShowSuggest(false)}>
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <Lightbulb className="h-4 w-4 text-amber-500" />
+                <span className="text-sm font-medium">Suggest a Feature</span>
+              </div>
+
+              {suggestionSent ? (
+                <div className="flex flex-col items-center justify-center flex-1 gap-3 px-6 text-center">
+                  <CheckCircle2 className="h-10 w-10 text-green-500" />
+                  <p className="text-sm font-medium">Thanks for the suggestion!</p>
+                  <p className="text-xs text-muted-foreground">Your idea has been sent to the admin team.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col flex-1 p-4 gap-3">
+                  <p className="text-sm text-muted-foreground">
+                    Got an idea to improve the app? Describe it below and it'll go straight to the admin team.
+                  </p>
+                  <Textarea
+                    placeholder="e.g. It would be great if we could filter contacts by relationship base on the customers list..."
+                    className="flex-1 resize-none text-sm min-h-[160px]"
+                    value={suggestionText}
+                    onChange={(e) => setSuggestionText(e.target.value)}
+                    data-testid="suggestion-input"
+                  />
+                  <Button
+                    className="w-full bg-[#001AB3] hover:bg-[#044ad3]"
+                    disabled={!suggestionText.trim() || submitSuggestion.isPending}
+                    onClick={() => submitSuggestion.mutate(suggestionText)}
+                    data-testid="suggestion-submit"
+                  >
+                    {submitSuggestion.isPending ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Sending…</>
+                    ) : (
+                      <><Send className="h-4 w-4 mr-2" /> Send to Admin</>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Conversation list overlay */}
           {showConvoList && (

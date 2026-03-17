@@ -5,7 +5,7 @@ import pg from "pg";
 import { eq, and, desc, gte, inArray } from "drizzle-orm";
 import {
   companies, contacts, touchpoints, rfps, goals, tasks, users,
-  chatConversations, chatMessages,
+  chatConversations, chatMessages, appSuggestions, notifications,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -255,6 +255,70 @@ Guidelines:
       } else {
         res.status(500).json({ error: "Failed to process message" });
       }
+    }
+  });
+
+  // Submit an app suggestion — saves to app_suggestions and notifies all admins
+  app.post("/api/chatbot/suggest", async (req: Request, res: Response) => {
+    if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
+    const { content } = req.body;
+    if (!content?.trim()) return res.status(400).json({ error: "Suggestion content required" });
+
+    try {
+      const [submitter] = await db.select().from(users).where(eq(users.id, req.session.userId));
+      if (!submitter) return res.status(401).json({ error: "User not found" });
+
+      // Save the suggestion
+      const [suggestion] = await db.insert(appSuggestions).values({
+        submittedById: req.session.userId,
+        content: content.trim(),
+        status: "new",
+      }).returning();
+
+      // Notify all admin users
+      const admins = await db.select().from(users).where(eq(users.role, "admin"));
+      for (const admin of admins) {
+        await db.insert(notifications).values({
+          userId: admin.id,
+          type: "app_suggestion",
+          title: `App Suggestion from ${submitter.name}`,
+          body: content.trim().length > 120 ? content.trim().slice(0, 120) + "…" : content.trim(),
+          read: false,
+          relatedId: suggestion.id,
+        });
+      }
+
+      res.json({ ok: true, suggestionId: suggestion.id });
+    } catch (err) {
+      console.error("Suggestion error:", err);
+      res.status(500).json({ error: "Failed to submit suggestion" });
+    }
+  });
+
+  // Get all suggestions (admin only) — for Ben to review
+  app.get("/api/chatbot/suggestions", async (req: Request, res: Response) => {
+    if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
+    try {
+      const [currentUser] = await db.select().from(users).where(eq(users.id, req.session.userId));
+      if (!currentUser || currentUser.role !== "admin") return res.status(403).json({ error: "Admins only" });
+
+      const results = await db
+        .select({
+          id: appSuggestions.id,
+          content: appSuggestions.content,
+          status: appSuggestions.status,
+          createdAt: appSuggestions.createdAt,
+          submitterName: users.name,
+          submitterRole: users.role,
+        })
+        .from(appSuggestions)
+        .innerJoin(users, eq(users.id, appSuggestions.submittedById))
+        .orderBy(desc(appSuggestions.createdAt))
+        .limit(100);
+
+      res.json(results);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load suggestions" });
     }
   });
 }
