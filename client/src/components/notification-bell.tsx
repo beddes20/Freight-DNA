@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users } from "lucide-react";
+import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -12,6 +12,7 @@ import { useLocation } from "wouter";
 import type { Notification } from "@shared/schema";
 
 const typeIcon: Record<string, React.ReactNode> = {
+  task_reminder: <BellRing className="h-3.5 w-3.5 text-red-500" />,
   task_assigned: <ListTodo className="h-3.5 w-3.5 text-blue-500" />,
   task_comment: <MessageSquare className="h-3.5 w-3.5 text-blue-400" />,
   task_completed: <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />,

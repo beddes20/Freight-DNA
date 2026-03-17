@@ -265,6 +265,18 @@ export default function TasksPage() {
     },
   });
 
+  const bumpMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("POST", `/api/tasks/${id}/bump`, {});
+    },
+    onSuccess: () => {
+      toast({ title: "Reminder sent", description: "The assignee has been notified." });
+    },
+    onError: () => {
+      toast({ title: "Could not send reminder", variant: "destructive" });
+    },
+  });
+
   const deleteAlertMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/alerts/${id}`);
@@ -329,6 +341,22 @@ export default function TasksPage() {
             {task.commentCount}
           </span>
         )}
+        {(() => {
+          if (isCompleted || task.assignedBy !== currentUser?.id || !task.dueDate) return null;
+          const today = new Date(); today.setHours(0, 0, 0, 0);
+          const due = new Date(task.dueDate + "T00:00:00");
+          if (due >= today) return null;
+          return (
+            <button
+              onClick={(e) => { e.stopPropagation(); bumpMutation.mutate(task.id); }}
+              className="shrink-0 text-amber-500 hover:text-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Send overdue reminder to assignee"
+              data-testid={`button-bump-task-${task.id}`}
+            >
+              <BellRing className="h-3.5 w-3.5" />
+            </button>
+          );
+        })()}
         <button
           onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }}
           className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"

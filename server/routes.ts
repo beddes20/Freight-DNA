@@ -1536,6 +1536,33 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/tasks/:id/bump", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const task = await storage.getTask(req.params.id);
+      if (!task) return res.status(404).json({ error: "Task not found" });
+      if (task.assignedBy !== user.id) return res.status(403).json({ error: "Only the task creator can send a reminder" });
+      if (task.status === "completed") return res.status(400).json({ error: "Task is already completed" });
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const due = task.dueDate ? new Date(task.dueDate + "T00:00:00") : null;
+      if (!due || due >= today) return res.status(400).json({ error: "Task is not yet overdue" });
+      const daysOverdue = Math.floor((today.getTime() - due.getTime()) / 86400000);
+      storage.createNotification({
+        userId: task.assignedTo,
+        type: "task_reminder",
+        title: `Reminder from ${user.name}`,
+        body: `"${task.title}" is ${daysOverdue} day${daysOverdue !== 1 ? "s" : ""} overdue`,
+        link: "/tasks",
+        relatedId: task.id,
+        read: false,
+      }).catch((e) => console.error("Notification error:", e));
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to send reminder" });
+    }
+  });
+
   app.delete("/api/tasks/:taskId/comments/:commentId", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
