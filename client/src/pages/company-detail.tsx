@@ -862,10 +862,7 @@ export default function CompanyDetail() {
               Log Touch
             </Button>
           )}
-          <Button variant="outline" onClick={handleExport} data-testid="button-export">
-            <Download className="h-4 w-4 mr-2" />
-            Export Org Chart + Contacts
-          </Button>
+
           <Button variant="outline" onClick={() => navigate("/rfp-awards")} data-testid="button-rfp-awards">
             <Trophy className="h-4 w-4 mr-2" />
             RFP & Awards
