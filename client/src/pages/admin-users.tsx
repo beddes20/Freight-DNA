@@ -72,6 +72,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/team-members"] });
       toast({ title: user ? "User updated" : "User created" });
       onClose();
     },
@@ -161,6 +162,7 @@ export default function AdminUsers() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/team-members"] });
       toast({ title: "User deleted" });
     },
     onError: (error: any) => {
