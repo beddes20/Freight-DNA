@@ -12,7 +12,7 @@ import {
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
-  Phone, Mail, Package, FileText, Shield, Clock, Target,
+  Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -626,6 +626,16 @@ export default function Dashboard() {
               )}
             </CardTitle>
             <div className="flex items-center gap-2">
+              <Link href="/tasks">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="gap-1 text-muted-foreground"
+                  data-testid="button-open-tasks"
+                >
+                  <ListTodo className="h-3 w-3" /> Open Tasks
+                </Button>
+              </Link>
               <Link href="/tasks#completed">
                 <Button
                   size="sm"
