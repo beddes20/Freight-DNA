@@ -60,7 +60,7 @@ export default function Dashboard() {
   const [editingTask, setEditingTask] = useState<Task | undefined>();
   const [viewContact, setViewContact] = useState<Contact | null>(null);
   const [feedContent, setFeedContent] = useState("");
-  const [feedCategory, setFeedCategory] = useState<"trend" | "growth" | "idea">("idea");
+  const [feedCategory, setFeedCategory] = useState<"trend" | "growth" | "idea" | "celebrate">("idea");
   const [mentionState, setMentionState] = useState<{ mentionStart: number; query: string } | null>(null);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
@@ -683,7 +683,7 @@ export default function Dashboard() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Lightbulb className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-            Trends / Growth / Ideas
+            Trends / Growth / Ideas / Celebrate
             {!feedLoading && feedPosts.length > 0 && (
               <Badge variant="secondary" className="ml-1 font-normal">{feedPosts.length}</Badge>
             )}
@@ -692,7 +692,7 @@ export default function Dashboard() {
         <CardContent className="space-y-4">
           <div className="relative">
             <div className="flex gap-1 mb-2 flex-wrap">
-              {(["trend", "growth", "idea"] as const).map(cat => (
+              {(["trend", "growth", "idea", "celebrate"] as const).map(cat => (
                 <button
                   key={cat}
                   onClick={() => setFeedCategory(cat)}
@@ -701,11 +701,12 @@ export default function Dashboard() {
                     feedCategory === cat
                       ? cat === "trend" ? "bg-purple-600 text-white border-purple-600"
                         : cat === "growth" ? "bg-green-600 text-white border-green-600"
+                        : cat === "celebrate" ? "bg-amber-500 text-white border-amber-500"
                         : "bg-blue-600 text-white border-blue-600"
                       : "bg-transparent border-border text-muted-foreground hover:border-foreground"
                   }`}
                 >
-                  {cat === "trend" ? "📈 Trend" : cat === "growth" ? "🚀 Growth" : "💡 Idea"}
+                  {cat === "trend" ? "📈 Trend" : cat === "growth" ? "🚀 Growth" : cat === "celebrate" ? "🎉 Celebrate" : "💡 Idea"}
                 </button>
               ))}
             </div>
@@ -716,7 +717,7 @@ export default function Dashboard() {
                   value={feedContent}
                   onChange={handleFeedChange}
                   onKeyDown={handleFeedKeyDown}
-                  placeholder="Share a trend, growth win, or idea… Type @ to mention someone (Ctrl+Enter to post)"
+                  placeholder="Share a trend, growth win, idea, or celebrate a win… Type @ to mention someone (Ctrl+Enter to post)"
                   className="resize-none text-sm min-h-[72px]"
                   data-testid="textarea-feed-content"
                 />
@@ -774,8 +775,9 @@ export default function Dashboard() {
                   trend: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
                   growth: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
                   idea: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+                  celebrate: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
                 };
-                const catIcon: Record<string, string> = { trend: "📈", growth: "🚀", idea: "💡" };
+                const catIcon: Record<string, string> = { trend: "📈", growth: "🚀", idea: "💡", celebrate: "🎉" };
                 const isReplying = replyingTo === post.id;
                 return (
                   <div key={post.id} className="rounded-lg border border-border/50 bg-card" data-testid={`feed-post-${post.id}`}>
