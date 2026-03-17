@@ -272,6 +272,7 @@ export default function CompanyDetail() {
   const [quickTouchOpen, setQuickTouchOpen] = useState(false);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [quickTouchType, setQuickTouchType] = useState("call");
+  const [quickTouchNote, setQuickTouchNote] = useState("");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
   const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[] } | undefined>();
@@ -501,14 +502,15 @@ export default function CompanyDetail() {
   });
 
   const logTouchFromDetailMutation = useMutation({
-    mutationFn: ({ contactId, type }: { contactId: string; type: string }) =>
-      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes: "" }),
+    mutationFn: ({ contactId, type, notes }: { contactId: string; type: string; notes: string }) =>
+      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
       toast({ title: "Touch logged!" });
       setQuickTouchOpen(false);
       setQuickTouchContactId("");
       setQuickTouchType("call");
+      setQuickTouchNote("");
     },
     onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
   });
@@ -2710,7 +2712,7 @@ export default function CompanyDetail() {
         onEdit={(c) => { setViewContact(null); handleEditContact(c); }}
       />
 
-      <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); } }}>
+      <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); setQuickTouchNote(""); } }}>
         <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch-detail">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -2751,12 +2753,23 @@ export default function CompanyDetail() {
                 ))}
               </div>
             </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Notes <span className="font-normal">(optional)</span></label>
+              <textarea
+                value={quickTouchNote}
+                onChange={e => setQuickTouchNote(e.target.value)}
+                placeholder="What did you discuss? Any follow-ups?"
+                rows={3}
+                data-testid="textarea-quick-touch-note-detail"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+              />
+            </div>
             <div className="flex gap-2 pt-1">
-              <Button variant="outline" className="flex-1" onClick={() => setQuickTouchOpen(false)} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
+              <Button variant="outline" className="flex-1" onClick={() => { setQuickTouchOpen(false); setQuickTouchNote(""); }} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
               <Button
                 className="flex-1"
                 disabled={!quickTouchContactId || logTouchFromDetailMutation.isPending}
-                onClick={() => logTouchFromDetailMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType })}
+                onClick={() => logTouchFromDetailMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote })}
                 data-testid="button-submit-quick-touch-detail"
               >
                 Log Touch
