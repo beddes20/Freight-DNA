@@ -1939,9 +1939,15 @@ export default function CompanyDetail() {
               </TabsList>
 
               <TabsContent value="corridors" className="mt-3">
-                {lanePatterns.topCorridors.length > 0 ? (
+                {(() => {
+                  const validLoc = (s: string) => !!s && s.trim().toUpperCase() !== "N/A" && s.trim() !== "";
+                  const filteredCorridors = lanePatterns.topCorridors.filter(c =>
+                    (validLoc(c.origin) || validLoc(c.originState)) &&
+                    (validLoc(c.destination) || validLoc(c.destinationState))
+                  );
+                  return filteredCorridors.length > 0 ? (
                   <div className="space-y-2">
-                    {lanePatterns.topCorridors.map((c, i) => (
+                    {filteredCorridors.map((c, i) => (
                       <div
                         key={i}
                         className={`flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors ${
@@ -2010,16 +2016,20 @@ export default function CompanyDetail() {
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground text-center py-6">No corridor data available</p>
-                )}
+                );
+                })()}
               </TabsContent>
 
               <TabsContent value="hubs" className="mt-3">
-                {lanePatterns.hubs.length > 0 ? (
+                {(() => {
+                  const validLoc = (s: string) => !!s && s.trim().toUpperCase() !== "N/A" && s.trim() !== "";
+                  const filteredHubs = lanePatterns.hubs.filter(h => validLoc(h.facility) || validLoc(h.state));
+                  return filteredHubs.length > 0 ? (
                   <div className="space-y-2">
                     <p className="text-xs text-muted-foreground mb-2">
                       Facilities that appear as both origins and destinations — likely managed by dedicated planners.
                     </p>
-                    {lanePatterns.hubs.map((h, i) => (
+                    {filteredHubs.map((h, i) => (
                       <div
                         key={i}
                         className="flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors"
@@ -2091,11 +2101,15 @@ export default function CompanyDetail() {
                   <p className="text-sm text-muted-foreground text-center py-6">
                     No facilities appear as both origins and destinations
                   </p>
-                )}
+                );
+                })()}
               </TabsContent>
 
               <TabsContent value="states" className="mt-3">
-                {lanePatterns.stateCorridors.length > 0 ? (
+                {(() => {
+                  const validLoc = (s: string) => !!s && s.trim().toUpperCase() !== "N/A" && s.trim() !== "";
+                  const filteredStates = lanePatterns.stateCorridors.filter(s => validLoc(s.originState) && validLoc(s.destinationState));
+                  return filteredStates.length > 0 ? (
                   <div className="overflow-x-auto rounded-md border">
                     <table className="w-full text-sm">
                       <thead>
@@ -2110,8 +2124,8 @@ export default function CompanyDetail() {
                       </thead>
                       <tbody>
                         {(() => {
-                          const maxVol = Math.max(...lanePatterns.stateCorridors.map(s => s.totalVolume));
-                          return lanePatterns.stateCorridors.map((s, i) => (
+                          const maxVol = Math.max(...filteredStates.map(s => s.totalVolume));
+                          return filteredStates.map((s, i) => (
                             <tr key={i} className="border-b last:border-0 hover:bg-muted/30 transition-colors" data-testid={`state-corridor-${i}`}>
                               <td className="px-3 py-2">
                                 <span className="font-medium">{s.corridor}</span>
@@ -2169,7 +2183,8 @@ export default function CompanyDetail() {
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground text-center py-6">No state corridor data available</p>
-                )}
+                );
+                })()}
               </TabsContent>
             </Tabs>
           </CardContent>
