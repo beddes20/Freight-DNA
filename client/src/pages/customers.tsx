@@ -382,7 +382,12 @@ export default function Customers() {
                         {fin ? (
                           <>
                             {(() => {
+                              const hasMonthly = fin.byMonth && Object.keys(fin.byMonth).length > 0;
                               const m = fin.byMonth?.[thisMonthKey];
+                              // If monthly data exists, only show current month (not all-time totals)
+                              if (hasMonthly && !m) return (
+                                <span className="text-xs text-muted-foreground italic">No loads this month</span>
+                              );
                               const loads = m ? m.totalLoads : fin.totalLoads;
                               const margin = m ? m.totalMargin : fin.totalMargin;
                               const label = m ? "mo." : "";
@@ -395,8 +400,8 @@ export default function Customers() {
                                   </div>
                                   <div className="flex items-center gap-1.5 text-xs" title={m ? "This month's margin" : "Total margin (financial data)"}>
                                     <DollarSign className="h-3.5 w-3.5 text-green-500" />
-                                    <span className="font-medium text-foreground">
-                                      {margin >= 1000
+                                    <span className={`font-medium ${margin < 0 ? "text-red-500 dark:text-red-400" : "text-foreground"}`}>
+                                      {margin >= 1000 || margin <= -1000
                                         ? `$${(margin / 1000).toFixed(1)}k`
                                         : `$${margin.toFixed(0)}`}
                                     </span>
