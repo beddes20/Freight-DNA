@@ -1,6 +1,6 @@
 import { Switch, Route } from "wouter";
-import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "./lib/queryClient";
+import { QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -9,7 +9,8 @@ import { useAuth } from "@/hooks/use-auth";
 import { GlobalSearch } from "@/components/global-search";
 import { NotificationBell } from "@/components/notification-bell";
 import { CrmChatbot } from "@/components/crm-chatbot";
-import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Loader2, UserX } from "lucide-react";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import CompanyDetail from "@/pages/company-detail";
@@ -58,6 +59,17 @@ function Router() {
 function AuthenticatedApp() {
   const { user, isLoading } = useAuth();
 
+  const stopImpersonatingMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/stop-impersonating");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.clear();
+      window.location.href = "/admin/users";
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -81,6 +93,24 @@ function AuthenticatedApp() {
         <div className="flex h-screen w-full">
           <AppSidebar />
           <div className="flex flex-col flex-1 overflow-hidden">
+            {user?.isImpersonating && (
+              <div className="flex items-center justify-between px-4 py-2 bg-amber-400 text-amber-950 text-sm font-medium shrink-0" data-testid="banner-impersonation">
+                <div className="flex items-center gap-2">
+                  <UserX className="w-4 h-4" />
+                  <span>You are viewing as <strong>{user.name}</strong> ({user.role?.replace(/_/g, " ")})</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs border-amber-700 text-amber-900 hover:bg-amber-500"
+                  onClick={() => stopImpersonatingMutation.mutate()}
+                  disabled={stopImpersonatingMutation.isPending}
+                  data-testid="button-stop-impersonating"
+                >
+                  {stopImpersonatingMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Return to my account"}
+                </Button>
+              </div>
+            )}
             <header className="flex items-center gap-2 p-2 border-b" style={{ backgroundColor: "hsl(var(--sidebar))", borderColor: "hsl(var(--sidebar-border))" }}>
               <SidebarTrigger className="text-white/80 hover:text-white hover:bg-white/10" data-testid="button-sidebar-toggle" />
               <div className="flex-1 flex items-center justify-center overflow-hidden px-4">

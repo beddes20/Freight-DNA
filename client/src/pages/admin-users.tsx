@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn } from "lucide-react";
 import type { User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
@@ -170,6 +170,20 @@ export default function AdminUsers() {
     },
   });
 
+  const impersonateMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("POST", `/api/admin/impersonate/${userId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.clear();
+      window.location.href = "/";
+    },
+    onError: (error: any) => {
+      toast({ title: "Could not switch account", description: error.message, variant: "destructive" });
+    },
+  });
+
   const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
 
   if (currentUser?.role !== "admin" && !isNAM) {
@@ -247,6 +261,19 @@ export default function AdminUsers() {
                     <Badge className={ROLE_COLORS[u.role]} data-testid={`badge-user-role-${u.id}`}>
                       {ROLE_LABELS[u.role] || u.role}
                     </Badge>
+                    {currentUser?.role === "admin" && u.role !== "admin" && u.id !== currentUser?.id && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-blue-500 hover:text-blue-700"
+                        title="Login as this user"
+                        onClick={() => impersonateMutation.mutate(u.id)}
+                        disabled={impersonateMutation.isPending}
+                        data-testid={`button-login-as-${u.id}`}
+                      >
+                        <LogIn className="w-4 h-4" />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon"

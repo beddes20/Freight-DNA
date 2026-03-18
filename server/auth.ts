@@ -10,6 +10,7 @@ const PgStore = connectPgSimple(session);
 declare module "express-session" {
   interface SessionData {
     userId: string;
+    impersonatingAdminId?: string;
   }
 }
 
@@ -108,7 +109,41 @@ export function setupAuth(app: any) {
       return res.status(401).json({ error: "User not found" });
     }
     const { password: _, ...safeUser } = user;
-    res.json(safeUser);
+    const isImpersonating = !!req.session.impersonatingAdminId;
+    let impersonatingAdminName: string | null = null;
+    if (isImpersonating) {
+      const admin = await storage.getUser(req.session.impersonatingAdminId!);
+      if (admin) impersonatingAdminName = admin.name;
+    }
+    res.json({ ...safeUser, isImpersonating, impersonatingAdminName });
+  });
+
+  app.post("/api/admin/impersonate/:userId", async (req: Request, res: Response) => {
+    if (!req.session.userId) return res.status(401).json({ error: "Not authenticated" });
+    const adminId = req.session.impersonatingAdminId || req.session.userId;
+    const admin = await storage.getUser(adminId);
+    if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin only" });
+
+    const target = await storage.getUser(req.params.userId);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    if (target.role === "admin") return res.status(400).json({ error: "Cannot impersonate another admin" });
+
+    req.session.impersonatingAdminId = adminId;
+    req.session.userId = target.id;
+
+    const { password: _, ...safeTarget } = target;
+    res.json({ ...safeTarget, isImpersonating: true, impersonatingAdminName: admin.name });
+  });
+
+  app.post("/api/admin/stop-impersonating", async (req: Request, res: Response) => {
+    if (!req.session.impersonatingAdminId) return res.status(400).json({ error: "Not impersonating" });
+    req.session.userId = req.session.impersonatingAdminId;
+    delete req.session.impersonatingAdminId;
+
+    const admin = await storage.getUser(req.session.userId);
+    if (!admin) return res.status(404).json({ error: "Admin not found" });
+    const { password: _, ...safeAdmin } = admin;
+    res.json({ ...safeAdmin, isImpersonating: false, impersonatingAdminName: null });
   });
 }
 

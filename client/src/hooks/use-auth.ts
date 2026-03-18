@@ -2,7 +2,10 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, getQueryFn } from "@/lib/queryClient";
 import type { User } from "@shared/schema";
 
-type SafeUser = Omit<User, "password">;
+export type SafeUser = Omit<User, "password"> & {
+  isImpersonating?: boolean;
+  impersonatingAdminName?: string | null;
+};
 
 export function useAuth() {
   const { data: user, isLoading } = useQuery<SafeUser | null>({
