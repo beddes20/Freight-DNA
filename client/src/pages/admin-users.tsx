@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network } from "lucide-react";
 import type { User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
@@ -64,6 +64,163 @@ const ROLE_ICONS: Record<string, any> = {
   logistics_coordinator: UserCircle,
 };
 
+const AVATAR_COLORS: Record<string, string> = {
+  admin: "bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300",
+  director: "bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300",
+  national_account_manager: "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300",
+  account_manager: "bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300",
+  sales: "bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-300",
+  sales_director: "bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300",
+  logistics_manager: "bg-teal-100 dark:bg-teal-900 text-teal-700 dark:text-teal-300",
+  logistics_coordinator: "bg-cyan-100 dark:bg-cyan-900 text-cyan-700 dark:text-cyan-300",
+};
+
+const SHORT_ROLE_LABELS: Record<string, string> = {
+  admin: "Admin",
+  director: "Director",
+  national_account_manager: "NAM",
+  account_manager: "Acct Mgr",
+  sales: "Sales",
+  sales_director: "Sales Dir.",
+  logistics_manager: "Log. Mgr.",
+  logistics_coordinator: "Log. Coord.",
+};
+
+// ─── Org Chart ────────────────────────────────────────────────────────────────
+
+const NODE_W = 152;
+const CHILD_GAP = 20;
+const CONN_H = 36;
+
+function subtreeWidth(userId: string, all: SafeUser[]): number {
+  const kids = all.filter(u => u.managerId === userId);
+  if (kids.length === 0) return NODE_W;
+  return kids.reduce((s, k, i) => s + subtreeWidth(k.id, all) + (i < kids.length - 1 ? CHILD_GAP : 0), 0);
+}
+
+function OrgChartNode({ user, allUsers }: { user: SafeUser; allUsers: SafeUser[] }) {
+  const children = allUsers
+    .filter(u => u.managerId === user.id)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const initials = user.name
+    .split(" ")
+    .filter(Boolean)
+    .map(n => n[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+  const childWidths = children.map(c => subtreeWidth(c.id, allUsers));
+  const totalW = childWidths.reduce((s, w, i) => s + w + (i < children.length - 1 ? CHILD_GAP : 0), 0);
+  const mySubtreeW = Math.max(totalW, NODE_W);
+
+  const childCenters: number[] = [];
+  let offset = 0;
+  for (let i = 0; i < children.length; i++) {
+    childCenters.push(offset + childWidths[i] / 2);
+    offset += childWidths[i] + (i < children.length - 1 ? CHILD_GAP : 0);
+  }
+
+  return (
+    <div className="flex flex-col items-center" style={{ width: mySubtreeW }}>
+      {/* Node card */}
+      <div
+        className="bg-card border border-border rounded-lg p-2.5 shadow-sm hover:shadow-md transition-shadow flex-shrink-0"
+        style={{ width: NODE_W }}
+        data-testid={`org-node-${user.id}`}
+      >
+        <div className="flex flex-col items-center gap-1 text-center">
+          <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${AVATAR_COLORS[user.role] || "bg-muted text-muted-foreground"}`}>
+            {initials}
+          </div>
+          <p className="text-xs font-semibold leading-tight line-clamp-2 w-full">{user.name}</p>
+          <Badge className={`${ROLE_COLORS[user.role]} text-[10px] px-1.5 py-0 pointer-events-none`}>
+            {SHORT_ROLE_LABELS[user.role] || user.role}
+          </Badge>
+          {children.length > 0 && (
+            <p className="text-[10px] text-muted-foreground">
+              {children.length} report{children.length !== 1 ? "s" : ""}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Connectors + children */}
+      {children.length > 0 && (
+        <>
+          {/* Connector lines */}
+          <div className="relative flex-shrink-0" style={{ width: totalW, height: CONN_H }}>
+            {/* Vertical from node center down */}
+            <div
+              className="absolute bg-border"
+              style={{ left: totalW / 2 - 0.5, top: 0, width: 1, height: CONN_H / 2 }}
+            />
+            {/* Horizontal bar (only for multiple children) */}
+            {children.length > 1 && (
+              <div
+                className="absolute bg-border"
+                style={{
+                  left: childCenters[0],
+                  top: CONN_H / 2,
+                  width: childCenters[childCenters.length - 1] - childCenters[0],
+                  height: 1,
+                }}
+              />
+            )}
+            {/* Vertical drops to each child */}
+            {childCenters.map((cx, i) => (
+              <div
+                key={i}
+                className="absolute bg-border"
+                style={{
+                  left: cx - 0.5,
+                  top: children.length === 1 ? 0 : CONN_H / 2,
+                  width: 1,
+                  height: children.length === 1 ? CONN_H : CONN_H / 2,
+                }}
+              />
+            ))}
+          </div>
+
+          {/* Children row */}
+          <div className="flex items-start flex-shrink-0" style={{ gap: CHILD_GAP }}>
+            {children.map(child => (
+              <OrgChartNode key={child.id} user={child} allUsers={allUsers} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function OrgChartView({ users }: { users: SafeUser[] }) {
+  const roots = users.filter(u => !u.managerId).sort((a, b) => a.name.localeCompare(b.name));
+
+  if (users.length === 0) {
+    return <p className="text-center py-12 text-muted-foreground">No users to display.</p>;
+  }
+
+  return (
+    <div className="overflow-x-auto overflow-y-auto pb-6">
+      <div className="min-w-max px-6 pt-4 pb-8">
+        {roots.length === 0 ? (
+          <p className="text-center py-12 text-muted-foreground">Everyone has a manager assigned — no root nodes found.</p>
+        ) : (
+          <div className="flex gap-12 justify-start">
+            {roots.map(root => (
+              <OrgChartNode key={root.id} user={root} allUsers={users} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── User Dialog ──────────────────────────────────────────────────────────────
+
 function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: SafeUser[]; onClose: () => void; isNAM?: boolean }) {
   const [name, setName] = useState(user?.name || "");
   const [username, setUsername] = useState(user?.username || "");
@@ -101,8 +258,6 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
     }
     mutation.mutate(data);
   };
-
-  const managers = users;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -146,7 +301,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">None</SelectItem>
-                {managers.filter(m => m.id !== user?.id).sort((a, b) => a.name.localeCompare(b.name)).map(m => (
+                {users.filter(m => m.id !== user?.id).sort((a, b) => a.name.localeCompare(b.name)).map(m => (
                   <SelectItem key={m.id} value={m.id}>{m.name} ({ROLE_LABELS[m.role]})</SelectItem>
                 ))}
               </SelectContent>
@@ -161,6 +316,8 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
     </form>
   );
 }
+
+// ─── Bulk Import ──────────────────────────────────────────────────────────────
 
 function BulkImportDialog() {
   const [open, setOpen] = useState(false);
@@ -293,6 +450,7 @@ function BulkImportDialog() {
   );
 }
 
+// ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AdminUsers() {
   const { user: currentUser } = useAuth();
@@ -300,6 +458,7 @@ export default function AdminUsers() {
   const [editUser, setEditUser] = useState<SafeUser | undefined>();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<SafeUser | null>(null);
+  const [viewMode, setViewMode] = useState<"list" | "org">("list");
   const { toast } = useToast();
 
   const deleteMutation = useMutation({
@@ -346,8 +505,8 @@ export default function AdminUsers() {
   };
 
   return (
-    <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-admin-title">
             <Users className="w-6 h-6 text-blue-600" />
@@ -355,26 +514,48 @@ export default function AdminUsers() {
           </h1>
           <p className="text-muted-foreground mt-1">{users.length} users</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* View toggle */}
+          <div className="flex rounded-lg border border-border overflow-hidden" data-testid="view-toggle">
+            <Button
+              variant={viewMode === "list" ? "default" : "ghost"}
+              size="sm"
+              className="rounded-none gap-1.5 px-3"
+              onClick={() => setViewMode("list")}
+              data-testid="button-view-list"
+            >
+              <List className="w-4 h-4" /> List
+            </Button>
+            <Button
+              variant={viewMode === "org" ? "default" : "ghost"}
+              size="sm"
+              className="rounded-none gap-1.5 px-3 border-l border-border"
+              onClick={() => setViewMode("org")}
+              data-testid="button-view-org"
+            >
+              <Network className="w-4 h-4" /> Org Chart
+            </Button>
+          </div>
+
           {currentUser?.role === "admin" && <BulkImportDialog />}
           <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
-          <DialogTrigger asChild>
-            <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" data-testid="button-add-user">
-              <Plus className="w-4 h-4 mr-2" /> {isNAM ? "Add Account Manager" : "Add User"}
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editUser ? "Edit User" : isNAM ? "Add Account Manager" : "Add User"}</DialogTitle>
-            </DialogHeader>
-            <UserDialog
-              user={editUser}
-              users={users}
-              isNAM={isNAM}
-              onClose={() => { setDialogOpen(false); setEditUser(undefined); }}
-            />
-          </DialogContent>
-        </Dialog>
+            <DialogTrigger asChild>
+              <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" data-testid="button-add-user">
+                <Plus className="w-4 h-4 mr-2" /> {isNAM ? "Add Account Manager" : "Add User"}
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editUser ? "Edit User" : isNAM ? "Add Account Manager" : "Add User"}</DialogTitle>
+              </DialogHeader>
+              <UserDialog
+                user={editUser}
+                users={users}
+                isNAM={isNAM}
+                onClose={() => { setDialogOpen(false); setEditUser(undefined); }}
+              />
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 
@@ -382,6 +563,8 @@ export default function AdminUsers() {
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
+      ) : viewMode === "org" ? (
+        <OrgChartView users={users} />
       ) : (
         <div className="grid gap-4">
           {users.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => {
