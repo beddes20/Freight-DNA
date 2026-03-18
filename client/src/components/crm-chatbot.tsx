@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2 } from "lucide-react";
+import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 
 interface Conversation {
@@ -21,11 +22,18 @@ interface ChatMessage {
   createdAt: string;
 }
 
-const SUGGESTIONS = [
+const MY_TEAM_SUGGESTIONS = [
   "Which contacts haven't been touched in 30+ days?",
   "What RFPs are due soon?",
   "Show me my open tasks",
   "Who are my key contacts at my top accounts?",
+];
+
+const EVERYONE_SUGGESTIONS = [
+  "Who has the most new contacts this month?",
+  "Which rep has the most touchpoints this month?",
+  "Show me open RFPs across all accounts",
+  "Which accounts have the most contacts?",
 ];
 
 function MarkdownText({ content }: { content: string }) {
@@ -52,6 +60,7 @@ function MarkdownText({ content }: { content: string }) {
 }
 
 export function CrmChatbot() {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [activeConvoId, setActiveConvoId] = useState<number | null>(null);
   const [showConvoList, setShowConvoList] = useState(false);
@@ -62,9 +71,16 @@ export function CrmChatbot() {
   const [streamingContent, setStreamingContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
+  const [scope, setScope] = useState<"my_team" | "everyone">("my_team");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const qc = useQueryClient();
+
+  const isAdminOrDirector = user?.role === "admin" || user?.role === "director";
+  const showScopeToggle = !isAdminOrDirector && !!user;
+  const effectiveScope = isAdminOrDirector ? "everyone" : scope;
+
+  const SUGGESTIONS = effectiveScope === "everyone" ? EVERYONE_SUGGESTIONS : MY_TEAM_SUGGESTIONS;
 
   const { data: conversations = [] } = useQuery<Conversation[]>({
     queryKey: ["/api/chatbot/conversations"],
@@ -154,7 +170,7 @@ export function CrmChatbot() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ content: text.trim() }),
+        body: JSON.stringify({ content: text.trim(), scope: effectiveScope }),
       });
 
       if (!response.ok) throw new Error("Request failed");
@@ -237,7 +253,7 @@ export function CrmChatbot() {
       {/* Chat panel */}
       {open && (
         <div className={cn(
-          "fixed bottom-24 right-6 z-50 w-[380px] h-[560px] rounded-2xl shadow-2xl border border-border/50",
+          "fixed bottom-24 right-6 z-50 w-[390px] h-[580px] rounded-2xl shadow-2xl border border-border/50",
           "bg-background flex flex-col overflow-hidden",
           "animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
         )}>
@@ -248,7 +264,9 @@ export function CrmChatbot() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold leading-none">GrowthBot</p>
-              <p className="text-xs text-white/70 mt-0.5">Your CRM assistant</p>
+              <p className="text-xs text-white/70 mt-0.5">
+                {isAdminOrDirector ? "Viewing: All Teams" : "Your CRM assistant"}
+              </p>
             </div>
             <div className="flex items-center gap-1">
               <Button
@@ -382,8 +400,13 @@ export function CrmChatbot() {
                     <div className="h-7 w-7 rounded-full bg-[#001AB3]/10 flex items-center justify-center shrink-0 mt-0.5">
                       <Bot className="h-4 w-4 text-[#001AB3]" />
                     </div>
-                    <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[280px]">
-                      <p className="text-sm">Hi! I'm GrowthBot. I have live access to your CRM data. Ask me anything about your accounts, contacts, RFPs, or tasks.</p>
+                    <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[290px]">
+                      <p className="text-sm">
+                        Hi! I'm GrowthBot. I have live access to your CRM data.
+                        {isAdminOrDirector
+                          ? " As an admin/director, I can see data across all teams."
+                          : " Use the toggle below to switch between your team's data or the entire org."}
+                      </p>
                     </div>
                   </div>
                   <div className="space-y-2">
@@ -409,7 +432,7 @@ export function CrmChatbot() {
                     </div>
                   )}
                   <div className={cn(
-                    "rounded-2xl px-3.5 py-2.5 max-w-[280px]",
+                    "rounded-2xl px-3.5 py-2.5 max-w-[290px]",
                     msg.role === "user"
                       ? "bg-[#001AB3] text-white rounded-tr-sm"
                       : "bg-muted rounded-tl-sm"
@@ -428,7 +451,7 @@ export function CrmChatbot() {
                   <div className="h-7 w-7 rounded-full bg-[#001AB3]/10 flex items-center justify-center shrink-0 mt-0.5">
                     <Bot className="h-4 w-4 text-[#001AB3]" />
                   </div>
-                  <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[280px]">
+                  <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[290px]">
                     <MarkdownText content={streamingContent} />
                   </div>
                 </div>
@@ -450,6 +473,37 @@ export function CrmChatbot() {
             </div>
           </ScrollArea>
 
+          {/* Scope toggle for NAM / AM */}
+          {showScopeToggle && (
+            <div className="px-3 pt-2 pb-0 flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground mr-1">Viewing:</span>
+              <button
+                onClick={() => setScope("my_team")}
+                className={cn(
+                  "flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors",
+                  scope === "my_team"
+                    ? "bg-[#001AB3] text-white border-[#001AB3]"
+                    : "text-muted-foreground border-border hover:border-[#001AB3]/40 hover:text-foreground"
+                )}
+                data-testid="scope-my-team"
+              >
+                <Users className="h-3 w-3" /> My Team
+              </button>
+              <button
+                onClick={() => setScope("everyone")}
+                className={cn(
+                  "flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors",
+                  scope === "everyone"
+                    ? "bg-[#001AB3] text-white border-[#001AB3]"
+                    : "text-muted-foreground border-border hover:border-[#001AB3]/40 hover:text-foreground"
+                )}
+                data-testid="scope-everyone"
+              >
+                <Globe className="h-3 w-3" /> Everyone
+              </button>
+            </div>
+          )}
+
           {/* Input */}
           <div className="p-3 border-t bg-background/95">
             <div className="flex gap-2 items-end">
@@ -458,7 +512,11 @@ export function CrmChatbot() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask about your accounts, contacts, RFPs..."
+                placeholder={
+                  effectiveScope === "everyone"
+                    ? "Ask about any rep, team, or account…"
+                    : "Ask about your accounts, contacts, RFPs…"
+                }
                 className="resize-none min-h-[38px] max-h-[120px] text-sm py-2 px-3 rounded-xl"
                 rows={1}
                 disabled={isStreaming}
