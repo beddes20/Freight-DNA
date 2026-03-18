@@ -638,6 +638,18 @@ export async function registerRoutes(
       if (!existing) return res.status(404).json({ error: "Company not found" });
       const company = await storage.updateCompany(req.params.id, { ...existing, assignedTo });
       if (!company) return res.status(404).json({ error: "Company not found" });
+      // Notify the new assignee if they're different from the actor
+      if (assignedTo !== currentUser.id && assignedTo !== existing.assignedTo) {
+        storage.createNotification({
+          userId: assignedTo,
+          type: "account_assigned",
+          title: `${currentUser.name} assigned you an account`,
+          body: existing.name,
+          link: `/companies/${existing.id}`,
+          relatedId: existing.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
       res.json(company);
     } catch (error) {
       res.status(500).json({ error: "Failed to reassign company" });
@@ -4357,6 +4369,18 @@ export async function registerRoutes(
         status: status || "draft",
         createdAt: new Date().toISOString(),
       });
+      // Notify the covering person if assigned and passoff is active
+      if (coveringUserId && coveringUserId !== currentUser.id && (status === "active" || !status || status === "draft")) {
+        storage.createNotification({
+          userId: coveringUserId,
+          type: "pto_covering",
+          title: `${currentUser.name} named you as a cover`,
+          body: `Covering ${startDate} – ${endDate}`,
+          link: "/pto-passoff",
+          relatedId: passoff.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
       res.status(201).json({ ...passoff, items: [] });
     } catch (error) {
       res.status(500).json({ error: "Failed to create PTO passoff" });
@@ -4373,6 +4397,33 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
       const updated = await storage.updatePtoPassoff(req.params.id, req.body);
+      // Notify new covering person if coveringUserId changed
+      const newCovering = req.body.coveringUserId;
+      if (newCovering && newCovering !== passoff.coveringUserId && newCovering !== currentUser.id) {
+        storage.createNotification({
+          userId: newCovering,
+          type: "pto_covering",
+          title: `${currentUser.name} named you as a cover`,
+          body: `Covering ${passoff.startDate} – ${passoff.endDate}`,
+          link: "/pto-passoff",
+          relatedId: passoff.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
+      // Notify covering person when passoff status becomes active
+      const activating = req.body.status === "active" && passoff.status !== "active";
+      const covering = updated?.coveringUserId || passoff.coveringUserId;
+      if (activating && covering && covering !== currentUser.id) {
+        storage.createNotification({
+          userId: covering,
+          type: "pto_covering",
+          title: `${currentUser.name}'s PTO passoff is now active`,
+          body: `You're covering ${passoff.startDate} – ${passoff.endDate}`,
+          link: "/pto-passoff",
+          relatedId: passoff.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update PTO passoff" });
@@ -4434,6 +4485,28 @@ export async function registerRoutes(
       // Covering user can only update acknowledged field
       const allowedFields = isOwner || isAdmin ? req.body : { acknowledged: req.body.acknowledged };
       const updated = await storage.updatePtoPassoffItem(req.params.itemId, allowedFields);
+      // Notify passoff owner when covering person acknowledges an account
+      const justAcknowledged = req.body.acknowledged === true && isCovering && !isOwner;
+      if (justAcknowledged && passoff.createdById !== currentUser.id) {
+        (async () => {
+          const items = await storage.getPtoPassoffItems(req.params.id);
+          const item = items.find(i => i.id === req.params.itemId);
+          let body = "Account acknowledged in your passoff";
+          if (item?.companyId) {
+            const company = await storage.getCompany(item.companyId);
+            if (company) body = `Acknowledged: ${company.name}`;
+          }
+          storage.createNotification({
+            userId: passoff.createdById,
+            type: "pto_acknowledged",
+            title: `${currentUser.name} acknowledged an account`,
+            body,
+            link: "/pto-passoff",
+            relatedId: passoff.id,
+            read: false,
+          }).catch((e) => console.error("Notification error:", e));
+        })();
+      }
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update passoff item" });

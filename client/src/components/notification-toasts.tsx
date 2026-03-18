@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import {
   Bell, X, BellRing, ListTodo, MessageSquare, CheckCircle2,
   Target, Users, Megaphone, CornerDownRight, ExternalLink,
+  Building2, CalendarOff, SquareCheck,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Notification } from "@shared/schema";
@@ -21,6 +22,9 @@ const TYPE_CONFIG: Record<string, { icon: React.ReactNode; accent: string; label
   session_closed:  { icon: <Users className="h-4 w-4" />,          accent: "text-purple-400", label: "Session Closed" },
   post_reply:      { icon: <MessageSquare className="h-4 w-4" />,  accent: "text-green-500",  label: "Feed Reply" },
   new_post:        { icon: <Megaphone className="h-4 w-4" />,      accent: "text-indigo-500", label: "New Post" },
+  account_assigned: { icon: <Building2 className="h-4 w-4" />,    accent: "text-blue-500",   label: "Account Assigned" },
+  pto_covering:    { icon: <CalendarOff className="h-4 w-4" />,   accent: "text-amber-500",  label: "PTO Cover Request" },
+  pto_acknowledged: { icon: <SquareCheck className="h-4 w-4" />,  accent: "text-green-500",  label: "PTO Acknowledged" },
 };
 
 function timeAgo(dateStr: string) {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing } from "lucide-react";
+import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing, Building2, CalendarOff, SquareCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -24,6 +24,9 @@ const typeIcon: Record<string, React.ReactNode> = {
   session_closed: <Users className="h-3.5 w-3.5 text-purple-400" />,
   post_reply: <MessageSquare className="h-3.5 w-3.5 text-green-500" />,
   new_post: <MessageSquare className="h-3.5 w-3.5 text-indigo-500" />,
+  account_assigned: <Building2 className="h-3.5 w-3.5 text-blue-500" />,
+  pto_covering: <CalendarOff className="h-3.5 w-3.5 text-amber-500" />,
+  pto_acknowledged: <SquareCheck className="h-3.5 w-3.5 text-green-500" />,
 };
 
 function timeAgo(dateStr: string) {
