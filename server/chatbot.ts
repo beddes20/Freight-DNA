@@ -42,7 +42,7 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
 
     ctx += `=== TEAM MEMBERS (${accountManagerUsers.length}) ===\n`;
     accountManagerUsers.forEach(u => {
-      const myCompanies = allCompanies.filter(c => c.accountManagerId === u.id);
+      const myCompanies = allCompanies.filter(c => c.assignedTo === u.id);
       const myContactIds = allContacts.filter(c => myCompanies.some(co => co.id === c.companyId)).map(c => c.id);
       const contactsThisMonth = allContacts.filter(c =>
         myCompanies.some(co => co.id === c.companyId) && c.createdAt && c.createdAt >= firstOfMonth
@@ -56,7 +56,7 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
 
     ctx += `\n=== ALL ACCOUNTS (${allCompanies.length}) ===\n`;
     allCompanies.slice(0, 120).forEach(c => {
-      const rep = allUsers.find(u => u.id === c.accountManagerId);
+      const rep = allUsers.find(u => u.id === c.assignedTo);
       ctx += `- ${c.name}${c.financialAlias ? ` (alias: ${c.financialAlias})` : ""} → ${rep?.name || "Unassigned"}\n`;
     });
     if (allCompanies.length > 120) ctx += `  ...and ${allCompanies.length - 120} more accounts\n`;
@@ -78,14 +78,14 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
     ctx += `\n=== OPEN RFPs (${allRfps.length}) ===\n`;
     allRfps.forEach(r => {
       const company = allCompanies.find(co => co.id === r.companyId);
-      const rep = allUsers.find(u => u.id === company?.accountManagerId);
+      const rep = allUsers.find(u => u.id === company?.assignedTo);
       ctx += `- ${r.name} @ ${company?.name || "Unknown"} [Rep: ${rep?.name || "?"}] | Due: ${r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "No due date"}\n`;
     });
 
     ctx += `\n=== OPEN TASKS (${allTasks.length}) ===\n`;
     allTasks.slice(0, 60).forEach(t => {
-      const assignee = allUsers.find(u => u.id === t.assignedToId);
-      const assigner = allUsers.find(u => u.id === t.assignedById);
+      const assignee = allUsers.find(u => u.id === t.assignedTo);
+      const assigner = allUsers.find(u => u.id === t.assignedBy);
       ctx += `- ${t.title} | Assigned to: ${assignee?.name || "?"} | By: ${assigner?.name || "?"} | Due: ${t.dueDate ? new Date(t.dueDate).toLocaleDateString() : "None"}\n`;
     });
     if (allTasks.length > 60) ctx += `  ...and ${allTasks.length - 60} more tasks\n`;
@@ -114,9 +114,9 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
     } else if (userRole === "national_account_manager" || userRole === "director" || userRole === "sales") {
       const subordinates = await db.select({ id: users.id }).from(users).where(eq(users.managerId, userId));
       const subIds = [userId, ...subordinates.map((s) => s.id)];
-      visibleCompanies = await db.select().from(companies).where(inArray(companies.accountManagerId, subIds)).limit(300);
+      visibleCompanies = await db.select().from(companies).where(inArray(companies.assignedTo, subIds)).limit(300);
     } else {
-      visibleCompanies = await db.select().from(companies).where(eq(companies.accountManagerId, userId)).limit(200);
+      visibleCompanies = await db.select().from(companies).where(eq(companies.assignedTo, userId)).limit(200);
     }
 
     const companyIds = visibleCompanies.map((c) => c.id);
@@ -150,7 +150,7 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
     }
 
     let openTasks: (typeof tasks.$inferSelect)[] = [];
-    openTasks = await db.select().from(tasks).where(and(eq(tasks.assignedToId, userId), eq(tasks.status, "open"))).limit(30);
+    openTasks = await db.select().from(tasks).where(and(eq(tasks.assignedTo, userId), eq(tasks.status, "open"))).limit(30);
 
     const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
     const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
