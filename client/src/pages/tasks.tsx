@@ -405,6 +405,7 @@ export default function TasksPage() {
   const { toast } = useToast();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskWithCount | undefined>();
+  const [focusComments, setFocusComments] = useState(false);
   const [showCompleted, setShowCompleted] = useState(true);
   const [showAlerts, setShowAlerts] = useState(true);
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
@@ -523,7 +524,7 @@ export default function TasksPage() {
         key={task.id}
         className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group cursor-pointer ${isCompleted ? "opacity-60" : ""}`}
         data-testid={`task-row-${task.id}`}
-        onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
+        onClick={() => { setEditingTask(task); setFocusComments(false); setTaskDialogOpen(true); }}
       >
         <button
           onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }}
@@ -560,10 +561,15 @@ export default function TasksPage() {
         </div>
         {!isCompleted && dueDateBadge(task.dueDate)}
         {(task.commentCount ?? 0) > 0 && (
-          <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0" data-testid={`badge-task-comments-${task.id}`}>
+          <button
+            onClick={(e) => { e.stopPropagation(); setEditingTask(task); setFocusComments(true); setTaskDialogOpen(true); }}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary shrink-0 transition-colors"
+            title="View collaboration notes"
+            data-testid={`badge-task-comments-${task.id}`}
+          >
             <MessageSquare className="h-3 w-3" />
             {task.commentCount}
-          </span>
+          </button>
         )}
         {(() => {
           if (isCompleted || task.assignedBy !== currentUser?.id || !task.dueDate) return null;
@@ -826,8 +832,9 @@ export default function TasksPage() {
 
       <TaskDialog
         open={taskDialogOpen}
-        onOpenChange={setTaskDialogOpen}
+        onOpenChange={(open) => { setTaskDialogOpen(open); if (!open) setFocusComments(false); }}
         editingTask={editingTask}
+        focusComments={focusComments}
       />
 
       <AlertDialog

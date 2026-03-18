@@ -283,6 +283,7 @@ export default function CompanyDetail() {
   const [quickTouchNote, setQuickTouchNote] = useState("");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
+  const [focusTaskComments, setFocusTaskComments] = useState(false);
   const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[] } | undefined>();
   const [lanesCollapsed, setLanesCollapsed] = useState(false);
   const [scorecardPending, setScorecardPending] = useState<PendingFile[]>([]);
@@ -1418,12 +1419,17 @@ export default function CompanyDetail() {
                       </div>
                       {dueBadge}
                       {(task.commentCount ?? 0) > 0 && (
-                        <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setEditingTaskItem(task); setForceLanePrefill(undefined); setFocusTaskComments(true); setTaskDialogOpen(true); }}
+                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary shrink-0 transition-colors"
+                          title="View collaboration notes"
+                          data-testid={`badge-task-comments-${task.id}`}
+                        >
                           <MessageSquare className="h-3 w-3" />
                           {task.commentCount}
-                        </span>
+                        </button>
                       )}
-                      <button onClick={() => { setEditingTaskItem(task); setForceLanePrefill(undefined); setTaskDialogOpen(true); }} className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs" data-testid={`button-edit-company-task-${task.id}`}>Edit</button>
+                      <button onClick={() => { setEditingTaskItem(task); setForceLanePrefill(undefined); setFocusTaskComments(false); setTaskDialogOpen(true); }} className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs" data-testid={`button-edit-company-task-${task.id}`}>Edit</button>
                       <button onClick={() => deleteTaskMutation.mutate(task.id)} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-company-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
                     </div>
                   );
@@ -1591,11 +1597,12 @@ export default function CompanyDetail() {
         open={taskDialogOpen}
         onOpenChange={(open) => {
           setTaskDialogOpen(open);
-          if (!open) setForceLanePrefill(undefined);
+          if (!open) { setForceLanePrefill(undefined); setFocusTaskComments(false); }
         }}
         companyId={companyId}
         editingTask={editingTaskItem}
         prefillData={forceLanePrefill}
+        focusComments={focusTaskComments}
       />
 
       <CalloutDialog

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -50,11 +50,13 @@ interface TaskDialogProps {
   editingTask?: Task;
   forwardingTask?: Task;
   prefillData?: PrefillData;
+  focusComments?: boolean;
 }
 
-export function TaskDialog({ open, onOpenChange, companyId, editingTask, forwardingTask, prefillData }: TaskDialogProps) {
+export function TaskDialog({ open, onOpenChange, companyId, editingTask, forwardingTask, prefillData, focusComments }: TaskDialogProps) {
   const { user } = useAuth();
   const { toast } = useToast();
+  const commentsRef = useRef<HTMLDivElement>(null);
 
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
@@ -160,6 +162,15 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
       }
     }
   }, [open, editingTask, forwardingTask, prefillData, companyId, user?.id]);
+
+  useEffect(() => {
+    if (open && focusComments && commentsRef.current) {
+      const timer = setTimeout(() => {
+        commentsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [open, focusComments]);
 
   const toggleType = (type: string) => {
     setSelectedTypes(prev => {
@@ -527,7 +538,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
           )}
 
           {editingTask && !forwardingTask && (
-            <div className="space-y-3 pt-1">
+            <div className="space-y-3 pt-1" ref={commentsRef}>
               <Separator />
               <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <MessageSquare className="h-4 w-4" />
