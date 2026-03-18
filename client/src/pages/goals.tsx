@@ -145,6 +145,12 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
                   <CalendarDays className="h-3 w-3" />
                   {fmtDate(goal.startDate)} – {fmtDate(goal.endDate)}
                 </span>
+                {goal.amId !== currentUserId && (
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <span className="text-muted-foreground/40">·</span>
+                    <span className="font-medium text-foreground/70">{amName}</span>
+                  </span>
+                )}
               </div>
             </div>
           </div>
