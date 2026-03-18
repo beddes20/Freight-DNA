@@ -1817,6 +1817,42 @@ export async function registerRoutes(
         createdAt: new Date().toISOString(),
         parentId: null,
       });
+      // Fan out notification to team members who can see this post
+      (async () => {
+        try {
+          const allUsers = await storage.getUsers();
+          const directReports = allUsers.filter(u => u.managerId === user.id).map(u => u.id);
+          const grandReports = allUsers.filter(u => directReports.includes(u.managerId ?? "")).map(u => u.id);
+          let recipientIds: string[];
+          if (user.role === "admin") {
+            recipientIds = allUsers.filter(u => u.id !== user.id).map(u => u.id);
+          } else if (user.role === "director") {
+            recipientIds = [...new Set([...directReports, ...grandReports])];
+          } else {
+            recipientIds = [...new Set([...directReports, ...grandReports])];
+            if (user.managerId) recipientIds.push(user.managerId);
+          }
+          const categoryLabel = category === "growth" ? "Growth Win" : category === "trend" ? "Trend" : "Idea";
+          const preview = trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed;
+          await Promise.all(
+            recipientIds
+              .filter(id => id !== user.id)
+              .map(id =>
+                storage.createNotification({
+                  userId: id,
+                  type: "new_post",
+                  title: `${user.name} posted a ${categoryLabel}`,
+                  body: preview,
+                  link: "/feed",
+                  relatedId: post.id,
+                  read: false,
+                }).catch(() => {})
+              )
+          );
+        } catch (e) {
+          console.error("Feed notification fan-out error:", e);
+        }
+      })();
       res.status(201).json(post);
     } catch (error) {
       res.status(500).json({ error: "Failed to create feed post" });
@@ -3370,6 +3406,22 @@ export async function registerRoutes(
         text: text.trim(),
         createdAt: new Date().toISOString(),
       });
+      // Notify the other party in the 1:1 session
+      const session = await storage.getSession(topic.sessionId);
+      if (session) {
+        const otherUserId = session.namId === currentUser.id ? session.amId : session.namId;
+        if (otherUserId !== currentUser.id) {
+          storage.createNotification({
+            userId: otherUserId,
+            type: "topic_reply",
+            title: `${currentUser.name} replied to a 1:1 topic`,
+            body: text.trim().length > 80 ? text.trim().slice(0, 80) + "…" : text.trim(),
+            link: "/one-on-one",
+            relatedId: reply.id,
+            read: false,
+          }).catch((e) => console.error("Notification error:", e));
+        }
+      }
       res.status(201).json(reply);
     } catch (error) {
       res.status(500).json({ error: "Failed to add reply" });

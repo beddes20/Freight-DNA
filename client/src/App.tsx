@@ -8,6 +8,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { useAuth } from "@/hooks/use-auth";
 import { GlobalSearch } from "@/components/global-search";
 import { NotificationBell } from "@/components/notification-bell";
+import { NotificationToasts } from "@/components/notification-toasts";
 import { CrmChatbot } from "@/components/crm-chatbot";
 import { Button } from "@/components/ui/button";
 import { Loader2, UserX } from "lucide-react";
@@ -139,6 +140,7 @@ function AuthenticatedApp() {
         </div>
       </SidebarProvider>
       <CrmChatbot />
+      <NotificationToasts />
     </>
   );
 }

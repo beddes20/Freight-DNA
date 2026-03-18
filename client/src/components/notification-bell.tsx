@@ -20,8 +20,10 @@ const typeIcon: Record<string, React.ReactNode> = {
   goal_updated: <Target className="h-3.5 w-3.5 text-orange-400" />,
   goal_comment: <MessageSquare className="h-3.5 w-3.5 text-orange-400" />,
   topic_added: <MessageSquare className="h-3.5 w-3.5 text-purple-500" />,
+  topic_reply: <MessageSquare className="h-3.5 w-3.5 text-purple-400" />,
   session_closed: <Users className="h-3.5 w-3.5 text-purple-400" />,
   post_reply: <MessageSquare className="h-3.5 w-3.5 text-green-500" />,
+  new_post: <MessageSquare className="h-3.5 w-3.5 text-indigo-500" />,
 };
 
 function timeAgo(dateStr: string) {
