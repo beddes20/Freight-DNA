@@ -102,7 +102,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
     mutation.mutate(data);
   };
 
-  const managers = users.filter(u => u.role === "admin" || u.role === "director" || u.role === "national_account_manager" || u.role === "sales_director");
+  const managers = users;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
