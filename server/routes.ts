@@ -2458,50 +2458,6 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/demo/teardown", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
-
-      const allUsers    = await storage.getUsers();
-      const allCompanies = await storage.getCompanies();
-
-      const demoUsers     = allUsers.filter((u: any) => u.username.startsWith("demo."));
-      const demoCompanies = allCompanies.filter((c: any) => c.name.startsWith("DEMO:"));
-      const demoUserIds   = new Set(demoUsers.map((u: any) => u.id));
-
-      // Delete tasks assigned to or by demo users
-      const allTasks = await storage.getTasks();
-      for (const t of allTasks) {
-        if (demoUserIds.has(t.assignedTo) || demoUserIds.has(t.assignedBy)) await storage.deleteTask(t.id);
-      }
-
-      // Delete goals belonging to demo users
-      const allGoals = await storage.getGoals({});
-      for (const g of allGoals) {
-        if (demoUserIds.has(g.amId) || demoUserIds.has(g.namId)) await storage.deleteGoal(g.id);
-      }
-
-      // Delete callouts authored by demo users
-      const allCallouts = await storage.getCallouts();
-      for (const c of allCallouts) {
-        if (demoUserIds.has(c.authorId)) await storage.deleteCallout(c.id);
-      }
-
-      // Delete companies (cascades contacts, RFPs, touchpoints, awards)
-      for (const c of demoCompanies) await storage.deleteCompany(c.id);
-
-      // Delete users
-      for (const u of demoUsers) await storage.deleteUser(u.id);
-
-      res.json({ ok: true, removed: { companies: demoCompanies.length, users: demoUsers.length } });
-    } catch (error) {
-      console.error("Demo teardown error:", error);
-      res.status(500).json({ error: "Failed to tear down demo environment", details: String(error) });
-    }
-  });
-  // ── END DEMO ──────────────────────────────────────────────────────────────
-
   app.get("/api/financials/account-summary", requireAuth, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploads();
