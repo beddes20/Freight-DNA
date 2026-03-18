@@ -2352,6 +2352,42 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/financials/uploads/:id/download", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+      const uploads = await storage.getFinancialUploads();
+      const upload = uploads.find(u => u.id === req.params.id);
+      if (!upload) return res.status(404).json({ error: "Upload not found" });
+
+      const wb = XLSX.utils.book_new();
+      const rows = Array.isArray(upload.rows) ? upload.rows as any[] : [];
+      const summaryRows = Array.isArray(upload.summaryRows) ? upload.summaryRows as any[] : [];
+
+      if (rows.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, "Data");
+      }
+      if (summaryRows.length > 0) {
+        const ws2 = XLSX.utils.json_to_sheet(summaryRows);
+        XLSX.utils.book_append_sheet(wb, ws2, "Summary");
+      }
+      if (rows.length === 0 && summaryRows.length === 0) {
+        const ws = XLSX.utils.aoa_to_sheet([["No data available"]]);
+        XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+      }
+
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      const safeFileName = upload.fileName.replace(/[^\w\-. ]/g, "_");
+      const downloadName = safeFileName.endsWith(".xlsx") ? safeFileName : `${safeFileName}.xlsx`;
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${downloadName}"`);
+      res.send(buf);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to generate download" });
+    }
+  });
+
   app.post("/api/financials/upload", requireAuth, upload.single("file"), async (req, res) => {
     try {
       const user = await getCurrentUser(req);

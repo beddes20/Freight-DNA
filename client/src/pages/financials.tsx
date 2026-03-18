@@ -29,6 +29,7 @@ import {
   Pencil,
   Link,
   Database,
+  Download,
 } from "lucide-react";
 
 type FinancialRow = {
@@ -440,20 +441,31 @@ export default function Financials() {
                 ) : (
                   uploads.map(u => (
                     <div key={u.id} className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium truncate">{u.fileName}</p>
                         <p className="text-xs text-muted-foreground">{u.rowCount.toLocaleString()} rows · {formatDate(u.uploadedAt)}</p>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="shrink-0 text-muted-foreground hover:text-destructive"
-                        onClick={() => deleteMutation.mutate(u.id)}
-                        disabled={deleteMutation.isPending}
-                        data-testid={`button-delete-upload-${u.id}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <a
+                          href={`/api/financials/uploads/${u.id}/download`}
+                          download
+                          title="Download as Excel"
+                          data-testid={`button-download-upload-${u.id}`}
+                          className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                        >
+                          <Download className="h-4 w-4" />
+                        </a>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-muted-foreground hover:text-destructive"
+                          onClick={() => deleteMutation.mutate(u.id)}
+                          disabled={deleteMutation.isPending}
+                          data-testid={`button-delete-upload-${u.id}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                   ))
                 )}

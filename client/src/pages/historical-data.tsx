@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   MapPin, Flame, TrendingUp, Package, Search, Compass,
   Upload, FileSpreadsheet, Loader2, Trash2, History, Map, Target, ArrowRight, Building2, User,
-  ArrowDownToLine, ArrowUpFromLine, Layers,
+  ArrowDownToLine, ArrowUpFromLine, Layers, Download,
 } from "lucide-react";
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DestSummary = { destination: string; city: string; state: string; totalLoads: number; avgWeekly: number; maxWeekly: number; weekCount: number; isHotZone: boolean };
@@ -526,17 +526,28 @@ export default function HistoricalData() {
               <div className="divide-y rounded-lg border">
                 {uploads.map(u => (
                   <div key={u.id} className="flex items-center justify-between px-3 py-2">
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
                       <FileSpreadsheet className="h-4 w-4 text-muted-foreground shrink-0" />
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate" data-testid={`text-upload-name-${u.id}`}>{u.fileName}</p>
                         <p className="text-xs text-muted-foreground">{u.rowCount.toLocaleString()} rows · {new Date(u.uploadedAt).toLocaleDateString()}</p>
                       </div>
                     </div>
-                    <Button variant="ghost" size="icon" className="shrink-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => deleteMutation.mutate(u.id)} disabled={deleteMutation.isPending} data-testid={`button-delete-upload-${u.id}`}>
-                      {deleteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                    </Button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <a
+                        href={`/api/financials/uploads/${u.id}/download`}
+                        download
+                        title="Download as Excel"
+                        data-testid={`button-download-upload-${u.id}`}
+                        className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                      >
+                        <Download className="h-4 w-4" />
+                      </a>
+                      <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive"
+                        onClick={() => deleteMutation.mutate(u.id)} disabled={deleteMutation.isPending} data-testid={`button-delete-upload-${u.id}`}>
+                        {deleteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
