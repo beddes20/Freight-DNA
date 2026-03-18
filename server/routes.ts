@@ -1965,11 +1965,13 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { text, tag } = req.body;
       if (!text?.trim()) return res.status(400).json({ error: "Text required" });
-      const topic = await storage.addTopic({
+      const topic = await storage.createTopic({
         sessionId: req.params.id,
         addedById: user.id,
         text: text.trim(),
         tag: tag || "fyi",
+        status: "pending",
+        createdAt: new Date().toISOString(),
       });
       res.status(201).json(topic);
     } catch (error) {

@@ -163,6 +163,7 @@ export interface IStorage {
   getTopic(id: string): Promise<OneOnOneTopic | undefined>;
   createTopic(topic: InsertOneOnOneTopic): Promise<OneOnOneTopic>;
   toggleTopicStatus(topicId: string): Promise<OneOnOneTopic | undefined>;
+  updateTopicStatus(topicId: string, status: string): Promise<OneOnOneTopic | undefined>;
   deleteTopic(topicId: string): Promise<boolean>;
   getArchivedSessions(namId: string, amId: string): Promise<OneOnOneSession[]>;
   updateSessionNotes(sessionId: string, notes: string): Promise<OneOnOneSession | undefined>;
@@ -749,6 +750,14 @@ export class DatabaseStorage implements IStorage {
     const newStatus = topic.status === "pending" ? "discussed" : "pending";
     const [updated] = await db.update(oneOnOneTopics)
       .set({ status: newStatus })
+      .where(eq(oneOnOneTopics.id, topicId))
+      .returning();
+    return updated;
+  }
+
+  async updateTopicStatus(topicId: string, status: string): Promise<OneOnOneTopic | undefined> {
+    const [updated] = await db.update(oneOnOneTopics)
+      .set({ status })
       .where(eq(oneOnOneTopics.id, topicId))
       .returning();
     return updated;
