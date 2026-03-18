@@ -3514,6 +3514,40 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/one-on-one/per-pairing-counts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const allUsers = await storage.getUsers();
+      let pairs: Array<{ namId: string; amId: string }> = [];
+
+      if (user.role === "account_manager") {
+        if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
+      } else if (user.role === "admin") {
+        const ams = allUsers.filter(u => u.role === "account_manager" && u.managerId);
+        for (const am of ams) pairs.push({ namId: am.managerId!, amId: am.id });
+        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales"));
+        for (const nam of nams) pairs.push({ namId: user.id, amId: nam.id });
+      } else {
+        const reports = allUsers.filter(u => u.managerId === user.id && u.role === "account_manager");
+        for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
+        if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
+      }
+
+      const results = await Promise.all(pairs.map(async ({ namId, amId }) => {
+        const session = await storage.getOrCreateActiveSession(namId, amId);
+        const topics = await storage.getTopicsBySession(session.id);
+        const pending = topics.filter(t => t.status === "pending").length;
+        return { namId, amId, pendingCount: pending };
+      }));
+
+      res.json(results);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch per-pairing counts" });
+    }
+  });
+
   app.get("/api/one-on-one/session", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
@@ -3598,7 +3632,7 @@ export async function registerRoutes(
       if (!(await canAccessSession(currentUser, sessionId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const validTags = ["Action Item", "Question", "FYI", "Follow-up"];
+      const validTags = ["Action Item", "Question", "FYI", "Follow-up", "Shoutout", "Let's Work On", "shoutout", "lets_work_on", "fyi", "action_item", "question", "follow_up"];
       const validatedTag = tag && validTags.includes(tag) ? tag : null;
       const topic = await storage.createTopic({
         sessionId,

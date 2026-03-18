@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { Link } from "wouter";
 import type { OneOnOneSession, OneOnOneTopic, User } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
@@ -59,6 +60,7 @@ function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic;
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session"] });
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/pending-count"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/per-pairing-counts"] });
     },
   });
 
@@ -69,6 +71,7 @@ function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic;
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session"] });
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/pending-count"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/per-pairing-counts"] });
       toast({ title: "Topic deleted" });
     },
   });
@@ -166,6 +169,7 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/session", pairing.namId, pairing.amId] });
       queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/pending-count"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/per-pairing-counts"] });
       setTopicText("");
       setSelectedTag(null);
       setShowTagSelector(false);
@@ -349,6 +353,7 @@ export default function OneOnOnePortlet() {
   const { user: currentUser } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
   const [selectedPairingIdx, setSelectedPairingIdx] = useState(0);
+  const [autoSelected, setAutoSelected] = useState(false);
 
   const { data: pairings = [], isLoading: pairingsLoading } = useQuery<Pairing[]>({
     queryKey: ["/api/one-on-one/pairings"],
@@ -358,17 +363,27 @@ export default function OneOnOnePortlet() {
     queryKey: ["/api/team-members"],
   });
 
-  const selectedPairing = pairings[selectedPairingIdx];
-
-  const { data: sessionData } = useQuery<SessionWithTopics>({
-    queryKey: ["/api/one-on-one/session", selectedPairing?.namId, selectedPairing?.amId],
-    queryFn: async () => {
-      const res = await fetch(`/api/one-on-one/session?namId=${selectedPairing!.namId}&amId=${selectedPairing!.amId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch");
-      return res.json();
-    },
-    enabled: !!selectedPairing,
+  // Per-pairing pending counts — used to badge pills and auto-select best pairing
+  const { data: pairingCounts = [] } = useQuery<{ namId: string; amId: string; pendingCount: number }[]>({
+    queryKey: ["/api/one-on-one/per-pairing-counts"],
   });
+
+  // Auto-select the first pairing that has pending topics (once counts load)
+  useEffect(() => {
+    if (autoSelected || pairings.length === 0 || pairingCounts.length === 0) return;
+    const firstWithTopics = pairings.findIndex(p =>
+      pairingCounts.some(c => c.namId === p.namId && c.amId === p.amId && c.pendingCount > 0)
+    );
+    if (firstWithTopics >= 0) {
+      setSelectedPairingIdx(firstWithTopics);
+    }
+    setAutoSelected(true);
+  }, [pairings, pairingCounts, autoSelected]);
+
+  const getPendingCount = (namId: string, amId: string) =>
+    pairingCounts.find(c => c.namId === namId && c.amId === amId)?.pendingCount ?? 0;
+
+  const selectedPairing = pairings[selectedPairingIdx];
 
   // Total pending across ALL pairings (for the card header badge)
   const { data: pendingCountData } = useQuery<{ count: number }>({
@@ -432,18 +447,27 @@ export default function OneOnOnePortlet() {
 
   // Helper to render a pill selector button
   function PairingPill({ pairing, idx, label }: { pairing: Pairing; idx: number; label: string }) {
+    const count = getPendingCount(pairing.namId, pairing.amId);
+    const isSelected = idx === selectedPairingIdx;
     return (
       <button
         key={`${pairing.namId}-${pairing.amId}`}
         onClick={() => setSelectedPairingIdx(idx)}
-        className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
-          idx === selectedPairingIdx
+        className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
+          isSelected
             ? "bg-indigo-600 text-white border-indigo-600"
             : "bg-transparent border-border text-muted-foreground hover:border-foreground"
         }`}
         data-testid={`button-pairing-${pairing.namId}-${pairing.amId}`}
       >
         {label}
+        {count > 0 && (
+          <span className={`inline-flex items-center justify-center min-w-[16px] h-4 rounded-full text-[10px] font-semibold px-1 ${
+            isSelected ? "bg-white/30 text-white" : "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+          }`}>
+            {count}
+          </span>
+        )}
       </button>
     );
   }
@@ -468,6 +492,9 @@ export default function OneOnOnePortlet() {
               )}
             </CardTitle>
           </button>
+          <Link href="/one-on-one" className="text-xs text-muted-foreground hover:text-foreground transition-colors" data-testid="link-one-on-one-full">
+            View all →
+          </Link>
         </div>
       </CardHeader>
       {!collapsed && (
