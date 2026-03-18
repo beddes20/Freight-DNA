@@ -2523,6 +2523,9 @@ export async function registerRoutes(
         for (const row of txRows) {
           const customerName = String(row["Customer"] || "").trim();
           if (!customerName) continue;
+          // Skip loads with no billed revenue — they are cancelled or error entries
+          const revenue = Number(row["Total revenue"] || row["Revenue"] || 0);
+          if (revenue === 0) continue;
           const { monthKey, margin } = parseHistoricalRow(row);
           const rep = String(row["Salesperson"] || row["Operations user"] || "").trim();
           const orderType = String(row["Order type"] || "").toLowerCase();
