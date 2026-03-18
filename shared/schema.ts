@@ -18,6 +18,8 @@ export const companies = pgTable("companies", {
   tenderStyle: text("tender_style"),
   accountQuirks: text("account_quirks"),
   processNotes: text("process_notes"),
+  spotProcess: text("spot_process"),
+  dlEmail: varchar("dl_email"),
 });
 
 export const insertCompanySchema = createInsertSchema(companies).omit({

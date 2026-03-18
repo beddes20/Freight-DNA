@@ -64,6 +64,11 @@ export async function runMigrations() {
     await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS process_notes text`);
     console.log("[migrations] account intelligence columns added to companies");
 
+    // Add spot process and DL email to companies
+    await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS spot_process text`);
+    await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS dl_email varchar(255)`);
+    console.log("[migrations] spot_process and dl_email added to companies");
+
     // Add parent_id to task_comments for threaded replies
     await client.query(`ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS parent_id varchar`);
     console.log("[migrations] parent_id added to task_comments");

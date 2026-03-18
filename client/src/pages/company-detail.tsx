@@ -82,6 +82,7 @@ import {
   DollarSign,
   AlertCircle,
   FileText,
+  Mail,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -195,52 +196,6 @@ interface LaneMatching {
   hasRfpData: boolean;
 }
 
-function FinancialAliasEditor({ company }: { company: Company }) {
-  const { toast } = useToast();
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(company.financialAlias ?? "");
-
-  const saveMutation = useMutation({
-    mutationFn: () => apiRequest("PATCH", `/api/companies/${company.id}/financial-alias`, { financialAlias: value.trim() || null }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", company.id] });
-      toast({ title: "Financial alias updated" });
-      setEditing(false);
-    },
-    onError: () => toast({ title: "Failed to update alias", variant: "destructive" }),
-  });
-
-  return (
-    <div className="flex items-center gap-2" data-testid="card-content-financial-alias">
-      <DollarSign className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-      <span className="text-xs font-medium text-muted-foreground shrink-0">Financial Name:</span>
-      {editing ? (
-        <div className="flex items-center gap-1.5 flex-1">
-          <input
-            autoFocus
-            className="flex-1 border rounded px-2 py-0.5 text-xs bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-            value={value}
-            onChange={e => setValue(e.target.value)}
-            placeholder={`Default: ${company.name}`}
-            data-testid="input-financial-alias"
-          />
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-financial-alias">Save</Button>
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => { setEditing(false); setValue(company.financialAlias ?? ""); }} data-testid="button-cancel-financial-alias">Cancel</Button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-1.5 flex-1 min-w-0">
-          <span className="text-xs text-foreground truncate" data-testid="text-financial-alias">
-            {company.financialAlias ?? <span className="text-muted-foreground italic">{company.name} (default)</span>}
-          </span>
-          <button className="ml-auto text-muted-foreground hover:text-foreground shrink-0" onClick={() => setEditing(true)} data-testid="button-edit-financial-alias">
-            <Pencil className="h-3 w-3" />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function CompanyDetail() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -267,6 +222,9 @@ export default function CompanyDetail() {
   const [tenderStyle, setTenderStyle] = useState("");
   const [accountQuirks, setAccountQuirks] = useState("");
   const [processNotes, setProcessNotes] = useState("");
+  const [spotProcess, setSpotProcess] = useState("");
+  const [dlEmail, setDlEmail] = useState("");
+  const [financialAliasEdit, setFinancialAliasEdit] = useState("");
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState("");
   const [viewContact, setViewContact] = useState<Contact | null>(null);
@@ -590,9 +548,12 @@ export default function CompanyDetail() {
         portalUrl: portalUrl || null,
         portalUsername: portalUsername || null,
         portalPassword: portalPassword || null,
+        financialAlias: financialAliasEdit.trim() || null,
         tenderStyle: tenderStyle || null,
         accountQuirks: accountQuirks || null,
         processNotes: processNotes || null,
+        spotProcess: spotProcess || null,
+        dlEmail: dlEmail || null,
       });
     },
     onSuccess: () => {
@@ -621,9 +582,12 @@ export default function CompanyDetail() {
     setPortalUrl(company?.portalUrl || "");
     setPortalUsername(company?.portalUsername || "");
     setPortalPassword(company?.portalPassword || "");
+    setFinancialAliasEdit(company?.financialAlias || "");
     setTenderStyle(company?.tenderStyle || "");
     setAccountQuirks(company?.accountQuirks || "");
     setProcessNotes(company?.processNotes || "");
+    setSpotProcess(company?.spotProcess || "");
+    setDlEmail(company?.dlEmail || "");
     setPortalEdit(true);
   };
 
@@ -1074,13 +1038,6 @@ export default function CompanyDetail() {
         );
       })()}
 
-      {/* Financial Alias — for matching this account to uploaded financial data */}
-      <Card data-testid="card-financial-alias">
-        <CardContent className="pt-4 pb-3">
-          <FinancialAliasEditor company={company} />
-        </CardContent>
-      </Card>
-
       {/* RFP Track Record */}
       {companyRfps.length > 0 && (
         <Card data-testid="card-rfp-track-record">
@@ -1188,6 +1145,17 @@ export default function CompanyDetail() {
                       </button>
                     </div>
                   </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><DollarSign className="h-3 w-3" /> Financial Name</label>
+                    <input
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                      placeholder={`Default: ${company!.name}`}
+                      value={financialAliasEdit}
+                      onChange={e => setFinancialAliasEdit(e.target.value)}
+                      data-testid="input-financial-alias"
+                    />
+                    <p className="text-[11px] text-muted-foreground">Alternate name used to match this account in uploaded financial data.</p>
+                  </div>
                 </div>
               </div>
 
@@ -1196,13 +1164,34 @@ export default function CompanyDetail() {
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Intelligence</p>
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><TruckIcon className="h-3 w-3" /> Tender Style</label>
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><TruckIcon className="h-3 w-3" /> Tendering Process</label>
                     <input
                       className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
                       placeholder="e.g. TMS portal, email, phone, EDI…"
                       value={tenderStyle}
                       onChange={e => setTenderStyle(e.target.value)}
                       data-testid="input-tender-style"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Zap className="h-3 w-3" /> Spot Process</label>
+                    <input
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                      placeholder="e.g. Portal, Email…"
+                      value={spotProcess}
+                      onChange={e => setSpotProcess(e.target.value)}
+                      data-testid="input-spot-process"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Mail className="h-3 w-3" /> D/L Email</label>
+                    <input
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                      type="email"
+                      placeholder="dispatch@customer.com"
+                      value={dlEmail}
+                      onChange={e => setDlEmail(e.target.value)}
+                      data-testid="input-dl-email"
                     />
                   </div>
                   <div className="space-y-1">
@@ -1243,7 +1232,7 @@ export default function CompanyDetail() {
               {/* Portal Credentials */}
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Portal Credentials</p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Globe className="h-3 w-3" /> Portal URL</p>
                     {company.portalUrl ? (
@@ -1271,18 +1260,36 @@ export default function CompanyDetail() {
                       <p className="text-sm text-muted-foreground italic">Not set</p>
                     )}
                   </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><DollarSign className="h-3 w-3" /> Financial Name</p>
+                    <p className="text-sm" data-testid="text-financial-alias">
+                      {company.financialAlias ?? <span className="text-muted-foreground italic">{company.name} (default)</span>}
+                    </p>
+                  </div>
                 </div>
               </div>
 
               {/* Account Intelligence */}
-              {(company.tenderStyle || company.accountQuirks || company.processNotes) && (
+              {(company.tenderStyle || company.spotProcess || company.dlEmail || company.accountQuirks || company.processNotes) && (
                 <div className="border-t pt-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Account Intelligence</p>
                   <div className="space-y-3">
                     {company.tenderStyle && (
                       <div>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><TruckIcon className="h-3 w-3" /> Tender Style</p>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><TruckIcon className="h-3 w-3" /> Tendering Process</p>
                         <p className="text-sm" data-testid="text-tender-style">{company.tenderStyle}</p>
+                      </div>
+                    )}
+                    {company.spotProcess && (
+                      <div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Zap className="h-3 w-3" /> Spot Process</p>
+                        <p className="text-sm" data-testid="text-spot-process">{company.spotProcess}</p>
+                      </div>
+                    )}
+                    {company.dlEmail && (
+                      <div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Mail className="h-3 w-3" /> D/L Email</p>
+                        <a href={`mailto:${company.dlEmail}`} className="text-sm text-blue-600 dark:text-blue-400 hover:underline" data-testid="text-dl-email">{company.dlEmail}</a>
                       </div>
                     )}
                     {company.accountQuirks && (
@@ -1302,10 +1309,10 @@ export default function CompanyDetail() {
               )}
 
               {/* Empty state nudge for intelligence section */}
-              {!company.tenderStyle && !company.accountQuirks && !company.processNotes && (
+              {!company.tenderStyle && !company.spotProcess && !company.dlEmail && !company.accountQuirks && !company.processNotes && (
                 <div className="border-t pt-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Intelligence</p>
-                  <p className="text-xs text-muted-foreground italic">No account intelligence captured yet. Click Edit to add tender style, quirks, and process notes.</p>
+                  <p className="text-xs text-muted-foreground italic">No account intelligence captured yet. Click Edit to add tendering process, spot process, D/L email, quirks, and process notes.</p>
                 </div>
               )}
             </div>
