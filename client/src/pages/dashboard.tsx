@@ -316,12 +316,16 @@ export default function Dashboard() {
     return diffDays <= 14;
   }).sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
 
-  // T005: Goals mid-month nudge — after 15th, flag goals < 50% progress
+  // T005: Goals mid-month nudge — after 15th, flag active goals < 50% progress
   const dayOfMonth = new Date().getDate();
+  const todayStr = new Date().toISOString().slice(0, 10);
   const behindGoals = dayOfMonth >= 15
     ? myGoals.filter((g: any) => {
+        // Only flag goals whose date range covers today
+        if (g.startDate > todayStr || g.endDate < todayStr) return false;
         const target = parseFloat(g.target || "0");
-        const current = parseFloat(g.currentValue || "0");
+        // Use auto-computed value (from financial data / touchpoints / contacts) when available
+        const current = g.computedValue != null ? g.computedValue : parseFloat(g.currentValue || "0");
         return target > 0 && current / target < 0.5;
       })
     : [];
@@ -839,7 +843,7 @@ export default function Dashboard() {
             <div className="space-y-2">
               {behindGoals.map((g: any) => {
                 const target = parseFloat(g.target || "0");
-                const current = parseFloat(g.currentValue || "0");
+                const current = g.computedValue != null ? g.computedValue : parseFloat(g.currentValue || "0");
                 const pct = target > 0 ? Math.round((current / target) * 100) : 0;
                 const label = g.title || getMetricLabel(g.metric, g.customLabel);
                 const amName = teamMembers.find((u: SafeUser) => u.id === g.amId)?.name;

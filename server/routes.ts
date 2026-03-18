@@ -3533,7 +3533,56 @@ export async function registerRoutes(
       } else {
         goalsList = await storage.getGoals({ amId: user.id });
       }
-      res.json(goalsList);
+
+      // Enrich goals with auto-computed values so dashboard alerts use accurate data
+      const allUsers = await storage.getUsers();
+      const uploads = await storage.getFinancialUploads();
+      const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
+
+      const enriched = await Promise.all(goalsList.map(async (goal) => {
+        let computedValue: number | null = null;
+        if (goal.metric === "contacts_added") {
+          computedValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "touchpoints") {
+          computedValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "margin" && latestUpload) {
+          const amUser = allUsers.find(u => u.id === goal.amId);
+          const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
+          if (repKey) {
+            const repKeyLower = repKey.toLowerCase();
+            const raw = (latestUpload.summaryRows as any[]) || [];
+            let total = 0;
+            if (!raw.length) {
+              const txRows: any[] = (latestUpload.rows as any[]) || [];
+              const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+              const byRep: Record<string, Record<string, number>> = {};
+              for (const row of txRows) {
+                const { monthKey, margin } = parseHistoricalRow(row);
+                const rep = String(row["Operations user"] || row["Salesperson"] || "").trim().toLowerCase();
+                if (!rep) continue;
+                if (!byRep[rep]) byRep[rep] = {};
+                if (monthKey) byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
+              }
+              if (goalMonthKey) total = (byRep[repKeyLower] || {})[goalMonthKey] || 0;
+            } else {
+              const firstRow = raw[0] || {};
+              const usesEmptyKeys = "__EMPTY" in firstRow;
+              let rows = raw;
+              if (usesEmptyKeys) rows = raw.filter((r: any) => { const n = String(r["__EMPTY"] || "").trim(); return n && n !== "Customer Name" && n !== "TOTAL" && n !== "Customer code"; });
+              for (const r of rows) {
+                let repName: string, totalMargin: number;
+                if (usesEmptyKeys) { repName = String(r["__EMPTY_6"] || "").trim(); totalMargin = Number(r["__EMPTY_3"] ?? 0); }
+                else { repName = String(r["Rep Name"] || r["Rep"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim(); totalMargin = Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0); }
+                if (repName.toLowerCase() === repKeyLower) total += totalMargin;
+              }
+            }
+            if (total > 0) computedValue = Math.round(total);
+          }
+        }
+        return { ...goal, computedValue };
+      }));
+
+      res.json(enriched);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch goals" });
     }
