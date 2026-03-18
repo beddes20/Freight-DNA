@@ -7,6 +7,7 @@ import { initMonthlyGoalScheduler } from "./monthlyGoalScheduler";
 import { initMonthlyDataRefreshScheduler } from "./monthlyDataRefreshScheduler";
 import { initRfpDeadlineScheduler } from "./rfpDeadlineScheduler";
 import { initDailyDigestScheduler } from "./dailyDigestScheduler";
+import { runMigrations } from "./runMigrations";
 
 const app = express();
 const httpServer = createServer(app);
@@ -66,6 +67,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await runMigrations();
   setupAuth(app);
   await registerRoutes(httpServer, app);
 
