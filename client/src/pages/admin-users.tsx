@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, AlertTriangle } from "lucide-react";
 import type { User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
@@ -170,6 +170,19 @@ export default function AdminUsers() {
     },
   });
 
+  const teardownDemoMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", "/api/demo/teardown"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/team-members"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      toast({ title: "Demo data removed", description: "All demo users, accounts, contacts, and related data have been deleted." });
+    },
+    onError: () => toast({ title: "Failed to remove demo data", variant: "destructive" }),
+  });
+
+  const [confirmTeardown, setConfirmTeardown] = useState(false);
+
   const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
 
   if (currentUser?.role !== "admin" && !isNAM) {
@@ -195,24 +208,54 @@ export default function AdminUsers() {
           </h1>
           <p className="text-muted-foreground mt-1">{users.length} users</p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
-          <DialogTrigger asChild>
-            <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" data-testid="button-add-user">
-              <Plus className="w-4 h-4 mr-2" /> {isNAM ? "Add Account Manager" : "Add User"}
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editUser ? "Edit User" : isNAM ? "Add Account Manager" : "Add User"}</DialogTitle>
-            </DialogHeader>
-            <UserDialog
-              user={editUser}
-              users={users}
-              isNAM={isNAM}
-              onClose={() => { setDialogOpen(false); setEditUser(undefined); }}
-            />
-          </DialogContent>
-        </Dialog>
+        <div className="flex items-center gap-2">
+          {currentUser?.role === "admin" && (
+            confirmTeardown ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-red-600 font-medium">Remove all demo data?</span>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => { teardownDemoMutation.mutate(); setConfirmTeardown(false); }}
+                  disabled={teardownDemoMutation.isPending}
+                  data-testid="button-confirm-teardown-demo"
+                >
+                  {teardownDemoMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Yes, remove"}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmTeardown(false)}>Cancel</Button>
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-red-600 border-red-200 hover:bg-red-50 dark:hover:bg-red-950/30 gap-1.5"
+                onClick={() => setConfirmTeardown(true)}
+                data-testid="button-remove-demo-data"
+              >
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Remove Demo Data
+              </Button>
+            )
+          )}
+          <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
+            <DialogTrigger asChild>
+              <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" data-testid="button-add-user">
+                <Plus className="w-4 h-4 mr-2" /> {isNAM ? "Add Account Manager" : "Add User"}
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editUser ? "Edit User" : isNAM ? "Add Account Manager" : "Add User"}</DialogTitle>
+              </DialogHeader>
+              <UserDialog
+                user={editUser}
+                users={users}
+                isNAM={isNAM}
+                onClose={() => { setDialogOpen(false); setEditUser(undefined); }}
+              />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {isLoading ? (

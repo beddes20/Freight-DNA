@@ -186,18 +186,6 @@ export default function Financials() {
     },
   });
 
-  const seedDemoMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/financials/seed-demo"),
-    onSuccess: async (res: any) => {
-      const data = await res.json();
-      queryClient.invalidateQueries({ queryKey: ["/api/financials"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/financials/uploads"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/financials/account-summary"] });
-      toast({ title: "Demo data loaded", description: `${data.rowCount.toLocaleString()} load records and ${data.summaryCount} account summaries inserted.` });
-    },
-    onError: () => toast({ title: "Failed to load demo data", variant: "destructive" }),
-  });
-
   const handleFile = useCallback((file: File) => {
     if (!file.name.match(/\.(xlsx|xls|csv)$/i)) {
       toast({ title: "Invalid file type", description: "Please upload an Excel or CSV file.", variant: "destructive" });
@@ -411,27 +399,6 @@ export default function Financials() {
                 </div>
               )}
             </div>
-
-            <div className="flex items-center gap-2">
-              <div className="flex-1 border-t border-border" />
-              <span className="text-xs text-muted-foreground">or</span>
-              <div className="flex-1 border-t border-border" />
-            </div>
-
-            <Button
-              variant="outline"
-              className="w-full gap-2 text-muted-foreground"
-              onClick={() => seedDemoMutation.mutate()}
-              disabled={seedDemoMutation.isPending}
-              data-testid="button-load-demo-data"
-            >
-              {seedDemoMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Database className="h-4 w-4" />
-              )}
-              {seedDemoMutation.isPending ? "Loading demo data…" : "Load Demo Data"}
-            </Button>
 
             {uploads.length > 0 && (
               <div className="space-y-2">

@@ -338,7 +338,6 @@ const MODULES: TrainingModule[] = [
       "KPI tiles: total revenue, freight cost, load count, avg rate",
       "Searchable load-level table with origin/destination, rate, and charges",
       "Per-account summary on company profiles (total loads, spot loads, margin)",
-      "Admin-only 'Load Demo Data' button for testing",
       "Automatic monthly OneDrive sync with failure alerting",
     ],
     tips: [
