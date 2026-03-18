@@ -414,6 +414,7 @@ export const taskComments = pgTable("task_comments", {
   authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   content: text("content").notNull(),
   createdAt: text("created_at").notNull(),
+  parentId: varchar("parent_id"),
 });
 export const insertTaskCommentSchema = createInsertSchema(taskComments).omit({ id: true });
 export type InsertTaskComment = z.infer<typeof insertTaskCommentSchema>;

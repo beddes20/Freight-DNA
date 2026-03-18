@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, ChevronDown, ChevronRight, Paperclip, MessageSquare, Send, Trash2 } from "lucide-react";
+import { Loader2, ChevronDown, ChevronRight, Paperclip, MessageSquare, Send, Trash2, Reply, X } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -71,6 +71,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
   const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [commentText, setCommentText] = useState("");
+  const [replyToComment, setReplyToComment] = useState<TaskComment | null>(null);
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
@@ -82,13 +83,14 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
   });
 
   const addCommentMutation = useMutation({
-    mutationFn: async (content: string) => {
-      return apiRequest("POST", `/api/tasks/${editingTask!.id}/comments`, { content });
+    mutationFn: async ({ content, parentId }: { content: string; parentId?: string }) => {
+      return apiRequest("POST", `/api/tasks/${editingTask!.id}/comments`, { content, parentId: parentId || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks", editingTask?.id, "comments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       setCommentText("");
+      setReplyToComment(null);
     },
     onError: (error: any) => {
       toast({ title: "Error posting comment", description: error.message, variant: "destructive" });
@@ -548,69 +550,111 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
                 )}
               </div>
 
-              {comments.length > 0 && (
-                <ScrollArea className="max-h-52 pr-1">
-                  <div className="space-y-3">
-                    {[...comments].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(comment => {
-                      const author = teamMembers.find(u => u.id === comment.authorId);
-                      const initials = author?.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "?";
-                      const isOwn = comment.authorId === user?.id;
-                      const canDelete = isOwn || user?.role === "admin";
-                      return (
-                        <div key={comment.id} className="flex gap-2.5 group">
-                          <Avatar className="h-7 w-7 shrink-0 mt-0.5">
-                            <AvatarFallback className="text-xs bg-primary/10 text-primary">{initials}</AvatarFallback>
-                          </Avatar>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-baseline gap-2">
-                              <span className="text-xs font-semibold">{author?.name || "Unknown"}</span>
-                              <span className="text-xs text-muted-foreground">{new Date(comment.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+              {comments.length > 0 && (() => {
+                const sorted = [...comments].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+                const topLevel = sorted.filter(c => !c.parentId);
+                const repliesFor = (parentId: string) => sorted.filter(c => c.parentId === parentId);
+
+                const renderComment = (comment: TaskComment, isReply = false) => {
+                  const author = teamMembers.find(u => u.id === comment.authorId);
+                  const initials = author?.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "?";
+                  const isOwn = comment.authorId === user?.id;
+                  const canDelete = isOwn || user?.role === "admin";
+                  const replies = repliesFor(comment.id);
+                  return (
+                    <div key={comment.id}>
+                      <div className={`flex gap-2.5 group ${isReply ? "ml-8 mt-2" : ""}`}>
+                        {isReply && <div className="w-px bg-border self-stretch shrink-0 -ml-5 mr-2.5" />}
+                        <Avatar className="h-7 w-7 shrink-0 mt-0.5">
+                          <AvatarFallback className="text-xs bg-primary/10 text-primary">{initials}</AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-baseline gap-2 flex-wrap">
+                            <span className="text-xs font-semibold">{author?.name || "Unknown"}</span>
+                            <span className="text-xs text-muted-foreground">{new Date(comment.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+                            <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              {!isReply && (
+                                <button
+                                  type="button"
+                                  onClick={() => { setReplyToComment(comment); setCommentText(""); }}
+                                  className="text-muted-foreground hover:text-primary flex items-center gap-1 text-xs"
+                                  data-testid={`button-reply-comment-${comment.id}`}
+                                >
+                                  <Reply className="h-3 w-3" /> Reply
+                                </button>
+                              )}
                               {canDelete && (
                                 <button
                                   type="button"
                                   onClick={() => deleteCommentMutation.mutate(comment.id)}
-                                  className="ml-auto opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                                  className="text-muted-foreground hover:text-destructive"
                                   data-testid={`button-delete-comment-${comment.id}`}
                                 >
                                   <Trash2 className="h-3 w-3" />
                                 </button>
                               )}
                             </div>
-                            <p className="text-sm text-foreground mt-0.5 whitespace-pre-wrap break-words">{comment.content}</p>
                           </div>
+                          <p className="text-sm text-foreground mt-0.5 whitespace-pre-wrap break-words">{comment.content}</p>
                         </div>
-                      );
-                    })}
-                  </div>
-                </ScrollArea>
-              )}
+                      </div>
+                      {replies.map(r => renderComment(r, true))}
+                    </div>
+                  );
+                };
 
-              <div className="flex gap-2">
-                <Textarea
-                  placeholder="Add a comment or update…"
-                  value={commentText}
-                  onChange={e => setCommentText(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && commentText.trim()) {
-                      e.preventDefault();
-                      addCommentMutation.mutate(commentText);
-                    }
-                  }}
-                  className="min-h-[60px] text-sm resize-none"
-                  data-testid="textarea-task-comment"
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!commentText.trim() || addCommentMutation.isPending}
-                  onClick={() => addCommentMutation.mutate(commentText)}
-                  className="self-end"
-                  data-testid="button-post-comment"
+                return (
+                  <ScrollArea className="max-h-64 pr-1">
+                    <div className="space-y-3">
+                      {topLevel.map(c => renderComment(c))}
+                    </div>
+                  </ScrollArea>
+                );
+              })()}
+
+              <div className="space-y-1.5">
+                {replyToComment && (() => {
+                  const replyAuthor = teamMembers.find(u => u.id === replyToComment.authorId);
+                  const preview = replyToComment.content.length > 60 ? replyToComment.content.slice(0, 60) + "…" : replyToComment.content;
+                  return (
+                    <div className="flex items-start gap-2 rounded-md bg-muted/60 border-l-2 border-primary px-2.5 py-1.5 text-xs text-muted-foreground">
+                      <Reply className="h-3 w-3 mt-0.5 shrink-0 text-primary" />
+                      <span className="flex-1 min-w-0 truncate">
+                        <span className="font-semibold text-foreground">{replyAuthor?.name || "Unknown"}:</span> {preview}
+                      </span>
+                      <button type="button" onClick={() => setReplyToComment(null)} className="shrink-0 hover:text-foreground" data-testid="button-cancel-reply">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  );
+                })()}
+                <div className="flex gap-2">
+                  <Textarea
+                    placeholder={replyToComment ? "Write your reply…" : "Add a comment or update…"}
+                    value={commentText}
+                    onChange={e => setCommentText(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && commentText.trim()) {
+                        e.preventDefault();
+                        addCommentMutation.mutate({ content: commentText, parentId: replyToComment?.id });
+                      }
+                    }}
+                    className="min-h-[60px] text-sm resize-none"
+                    data-testid="textarea-task-comment"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!commentText.trim() || addCommentMutation.isPending}
+                    onClick={() => addCommentMutation.mutate({ content: commentText, parentId: replyToComment?.id })}
+                    className="self-end"
+                    data-testid="button-post-comment"
                 >
                   {addCommentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground -mt-1">Ctrl+Enter to post</p>
+              </div>
             </div>
           )}
 

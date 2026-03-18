@@ -1570,7 +1570,7 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { content } = req.body;
+      const { content, parentId } = req.body;
       if (!content?.trim()) return res.status(400).json({ error: "Content is required" });
       const task = await storage.getTask(req.params.id);
       if (!task) return res.status(404).json({ error: "Task not found" });
@@ -1579,6 +1579,7 @@ export async function registerRoutes(
         authorId: user.id,
         content: content.trim(),
         createdAt: new Date().toISOString(),
+        parentId: parentId || null,
       });
       // Notify task assignee and creator (skip the commenter themselves)
       const notifyIds = [...new Set([task.assignedTo, task.assignedBy])].filter(

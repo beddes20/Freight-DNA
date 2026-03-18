@@ -63,6 +63,10 @@ export async function runMigrations() {
     await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS account_quirks text`);
     await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS process_notes text`);
     console.log("[migrations] account intelligence columns added to companies");
+
+    // Add parent_id to task_comments for threaded replies
+    await client.query(`ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS parent_id varchar`);
+    console.log("[migrations] parent_id added to task_comments");
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {
