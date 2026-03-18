@@ -3920,10 +3920,8 @@ export async function registerRoutes(
                 }
                 for (const entry of Object.values(byCustomer)) {
                   if (entry.repName.toLowerCase() !== repKeyLower) continue;
-                  if (goalMonthKey && entry.byMonth[goalMonthKey] !== undefined) {
-                    total += entry.byMonth[goalMonthKey].totalMargin;
-                  } else {
-                    total += entry.totalMargin;
+                  if (goalMonthKey) {
+                    total += entry.byMonth[goalMonthKey]?.totalMargin ?? 0;
                   }
                 }
               } else {
