@@ -76,9 +76,9 @@ export function CrmChatbot() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const qc = useQueryClient();
 
-  const isAdminOrDirector = user?.role === "admin" || user?.role === "director";
+  const isAdminOrDirector = user?.role === "admin" || user?.role === "director" || user?.role === "sales_director";
   const showScopeToggle = !isAdminOrDirector && !!user;
-  const effectiveScope = isAdminOrDirector ? "everyone" : scope;
+  const effectiveScope = user?.role === "admin" ? "everyone" : (isAdminOrDirector ? "my_team" : scope);
 
   const SUGGESTIONS = effectiveScope === "everyone" ? EVERYONE_SUGGESTIONS : MY_TEAM_SUGGESTIONS;
 

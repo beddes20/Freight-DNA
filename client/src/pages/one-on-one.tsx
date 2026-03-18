@@ -576,7 +576,7 @@ function TopicRow({ topic, addedByName, onToggle, onDelete, dimmed, currentUserI
   const [replyText, setReplyText] = useState("");
   const replyInputRef = useRef<HTMLInputElement>(null);
   const currentUser = allUsers.find(u => u.id === currentUserId);
-  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director";
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director";
 
   const { data: replies = [], isLoading: repliesLoading } = useQuery<OneOnOneTopicReply[]>({
     queryKey: ["/api/one-on-one/topics", topic.id, "replies"],
@@ -877,7 +877,7 @@ export default function OneOnOnePage() {
 
   if (!user) return null;
 
-  const isAM = user.role === "account_manager";
+  const isAM = user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator";
   const showNamLabel = user.role === "admin";
 
   const activePairingKey = selectedKey ?? (pairings.length > 0 ? `${pairings[0].namId}::${pairings[0].amId}` : null);

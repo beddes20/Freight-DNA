@@ -159,7 +159,7 @@ export default function TeamPerformancePage() {
     queryKey: ["/api/financials/account-summary"],
   });
 
-  if (!user || user.role === "account_manager") {
+  if (!user || user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
         <p>Access denied</p>
@@ -182,8 +182,8 @@ export default function TeamPerformancePage() {
   const totalLoadsAll = Object.values(repLoadsMap).reduce((s, v) => s + v.loads, 0);
   const totalMarginAll = Object.values(repLoadsMap).reduce((s, v) => s + v.margin, 0);
 
-  const ams = reps.filter(r => r.role === "account_manager");
-  const nams = reps.filter(r => r.role === "national_account_manager" || r.role === "director");
+  const ams = reps.filter(r => r.role === "account_manager" || r.role === "logistics_manager" || r.role === "logistics_coordinator");
+  const nams = reps.filter(r => r.role === "national_account_manager" || r.role === "director" || r.role === "sales_director");
 
   const totalOpenTasks = reps.reduce((sum, r) => sum + r.openTasks, 0);
   const totalOverdue = reps.reduce((sum, r) => sum + r.overdueTasks, 0);

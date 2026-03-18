@@ -144,7 +144,7 @@ export default function Customers() {
 
   // Derive AM users for the rep filter dropdown
   const amUsers = useMemo(() => {
-    return teamMembers.filter(u => u.role === "account_manager" || u.role === "sales");
+    return teamMembers.filter(u => u.role === "account_manager" || u.role === "sales" || u.role === "logistics_manager" || u.role === "logistics_coordinator");
   }, [teamMembers]);
 
   const activeFiltersCount = [repFilter !== "all", industryFilter !== "all", touchFilter !== "all"].filter(Boolean).length;

@@ -99,7 +99,7 @@ export const insertAwardSchema = createInsertSchema(awards).omit({
 export type InsertAward = z.infer<typeof insertAwardSchema>;
 export type Award = typeof awards.$inferSelect;
 
-export const userRoles = ["admin", "director", "national_account_manager", "account_manager", "sales"] as const;
+export const userRoles = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director", "logistics_manager", "logistics_coordinator"] as const;
 export type UserRole = typeof userRoles[number];
 
 export const users = pgTable("users", {

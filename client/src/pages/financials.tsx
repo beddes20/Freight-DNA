@@ -96,8 +96,8 @@ export default function Financials() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const isAdminOrNam = user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales";
-  const canSyncOneDrive = user?.role === "admin" || user?.role === "national_account_manager" || user?.role === "sales";
+  const isAdminOrNam = user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales" || user?.role === "sales_director";
+  const canSyncOneDrive = user?.role === "admin" || user?.role === "national_account_manager" || user?.role === "sales" || user?.role === "sales_director";
 
   const [oneDriveUrlInput, setOneDriveUrlInput] = useState("");
   const [editingUrl, setEditingUrl] = useState(false);

@@ -360,8 +360,8 @@ export default function GoalsPage() {
   const [form, setForm] = useState<GoalFormData>(defaultForm);
   const [alertDismissed, setAlertDismissed] = useState(false);
 
-  const isNam = user?.role === "national_account_manager" || user?.role === "director" || user?.role === "sales" || user?.role === "admin";
-  const isAm = user?.role === "account_manager";
+  const isNam = user?.role === "national_account_manager" || user?.role === "director" || user?.role === "sales" || user?.role === "admin" || user?.role === "sales_director";
+  const isAm = user?.role === "account_manager" || user?.role === "logistics_manager" || user?.role === "logistics_coordinator";
 
   const { data: goals = [], isLoading } = useQuery<Goal[]>({
     queryKey: ["/api/goals"],

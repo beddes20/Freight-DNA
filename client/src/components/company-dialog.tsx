@@ -51,7 +51,7 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
   const { fire: fireConfetti, ConfettiOverlay } = useConfetti();
   const isEditing = !!company;
   const isAdmin = currentUser?.role === "admin";
-  const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
+  const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
   const canAssign = isAdmin || isNAM;
 
   const { data: users = [] } = useQuery<SafeUser[]>({

@@ -25,7 +25,7 @@ function findSheetByName(workbook: XLSX.WorkBook, preferredName: string): string
 
 async function getVisibleFeedAuthorIds(user: { id: string; role: string; managerId: string | null }): Promise<string[] | undefined> {
   if (user.role === "admin") return undefined;
-  if (user.role === "director") {
+  if (user.role === "director" || user.role === "sales_director") {
     return storage.getTeamMemberIds(user.id);
   }
   if (user.role === "national_account_manager" || user.role === "sales") {
@@ -337,7 +337,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
         return res.status(403).json({ error: "Access required" });
       }
       const allUsers = await storage.getUsers();
@@ -354,7 +354,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
         return res.status(403).json({ error: "Access required" });
       }
       const { username, password, name, role, managerId } = req.body;
@@ -366,7 +366,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Username already exists" });
       }
       const hashedPassword = await bcrypt.hash(password, 10);
-      const isNamOrDirector = currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales";
+      const isNamOrDirector = currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director";
       const requestedRole = role || "account_manager";
       if (!userRoles.includes(requestedRole)) {
         return res.status(400).json({ error: "Invalid role" });
@@ -391,10 +391,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
         return res.status(403).json({ error: "Access required" });
       }
-      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
           return res.status(403).json({ error: "Cannot edit this user" });
@@ -426,10 +426,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
         return res.status(403).json({ error: "Access required" });
       }
-      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
           return res.status(403).json({ error: "Cannot delete this user" });
@@ -494,7 +494,7 @@ export async function registerRoutes(
       if (currentUser.role === "admin") {
         return res.json(safeUsers);
       }
-      if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales") {
+      if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         const visibleIds = new Set([...teamIds, currentUser.id]);
         return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
@@ -546,7 +546,7 @@ export async function registerRoutes(
       const data = { ...parsed.data };
       if (currentUser.role === "admin") {
         // admin can assign to anyone — leave assignedTo as-is
-      } else if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales") {
+      } else if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         if (data.assignedTo) {
           const teamIds = await storage.getTeamMemberIds(currentUser.id);
           if (!teamIds.includes(data.assignedTo)) {
@@ -623,7 +623,7 @@ export async function registerRoutes(
       if (!(await canAccessCompany(currentUser, req.params.id))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales") {
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
         return res.status(403).json({ error: "Only admins, directors and NAMs can reassign accounts" });
       }
       const { assignedTo } = req.body;
@@ -1390,7 +1390,7 @@ export async function registerRoutes(
       let filtered: typeof allTasks;
       if (user.role === "admin") {
         filtered = allTasks;
-      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
+      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         filtered = allTasks.filter(t => teamIds.includes(t.assignedTo) || teamIds.includes(t.assignedBy));
       } else {
@@ -1438,7 +1438,7 @@ export async function registerRoutes(
       let assignableIds: Set<string>;
       if (user.role === "admin") {
         assignableIds = new Set(allUsers.map(u => u.id));
-      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
+      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         assignableIds = new Set(teamIds);
       } else {
@@ -1818,7 +1818,7 @@ export async function registerRoutes(
       }
 
       // Top-level post: managers and above only
-      const canPost = user.role === "admin" || user.role === "director" || user.role === "national_account_manager" || user.role === "sales";
+      const canPost = user.role === "admin" || user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director";
       if (!canPost) return res.status(403).json({ error: "Only managers and above can post to the feed" });
       const validCategories = ["trend", "growth", "idea"];
       if (!validCategories.includes(category)) return res.status(400).json({ error: "Invalid category" });
@@ -1838,7 +1838,7 @@ export async function registerRoutes(
           let recipientIds: string[];
           if (user.role === "admin") {
             recipientIds = allUsers.filter(u => u.id !== user.id).map(u => u.id);
-          } else if (user.role === "director") {
+          } else if (user.role === "director" || user.role === "sales_director") {
             recipientIds = [...new Set([...directReports, ...grandReports])];
           } else {
             recipientIds = [...new Set([...directReports, ...grandReports])];
@@ -1923,7 +1923,7 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role !== "admin" && user.role !== "director") {
+      if (user.role !== "admin" && user.role !== "director" && user.role !== "sales_director") {
         return res.status(403).json({ error: "Only admins and directors can react" });
       }
       const { emoji } = req.body;
@@ -1997,7 +1997,7 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { managerId, repId } = req.query as { managerId?: string; repId?: string };
       if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
-      const isAdmin = user.role === "admin" || user.role === "director";
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
       const isInvolved = user.id === managerId || user.id === repId;
       if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
       const session = await storage.getOrCreateActiveSession(managerId, repId);
@@ -2071,7 +2071,7 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { managerId, repId } = req.query as { managerId?: string; repId?: string };
       if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
-      const isAdmin = user.role === "admin" || user.role === "director";
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
       const isInvolved = user.id === managerId || user.id === repId;
       if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
       const sessions = await storage.getArchivedSessions(managerId, repId);
@@ -2090,7 +2090,7 @@ export async function registerRoutes(
       const session = await storage.getSession(req.params.id);
       if (!session) return res.status(404).json({ error: "Session not found" });
       if (session.status !== "active") return res.status(400).json({ error: "Cannot update notes on an archived session" });
-      const isAdmin = user.role === "admin" || user.role === "director";
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
       const isInvolved = user.id === session.namId || user.id === session.amId;
       if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
       const updated = await storage.updateSessionNotes(req.params.id, notes);
@@ -2107,7 +2107,7 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { managerId, repId } = req.query as { managerId?: string; repId?: string };
       if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
-      const isAdmin = user.role === "admin" || user.role === "director";
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
       const isInvolved = user.id === managerId || user.id === repId;
       if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
       const actionItems = await storage.getActionItemsByPairing(managerId, repId);
@@ -2123,7 +2123,7 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { managerId } = req.query as { managerId?: string };
       if (!managerId) return res.status(400).json({ error: "managerId required" });
-      const isAdmin = user.role === "admin" || user.role === "director";
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
       const isSelf = user.id === managerId;
       if (!isAdmin && !isSelf) return res.status(403).json({ error: "Access denied" });
       const activeSessions = await storage.getActiveSessionsForManager(managerId);
@@ -2152,7 +2152,7 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales") {
+      if (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales" && user.role !== "sales_director") {
         return res.status(403).json({ error: "Forbidden" });
       }
 
@@ -2167,7 +2167,7 @@ export async function registerRoutes(
       }
       allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
-      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
@@ -2229,7 +2229,7 @@ export async function registerRoutes(
       }
       allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
-      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
@@ -2237,7 +2237,7 @@ export async function registerRoutes(
           const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
           return teamNames.some(n => op.includes(n) || n.includes(op));
         });
-      } else if (user.role === "account_manager") {
+      } else if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
         const userName = user.name.toLowerCase();
         allRows = allRows.filter((r: any) => {
           const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
@@ -2365,7 +2365,7 @@ export async function registerRoutes(
   app.get("/api/financials", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
-      if (!user || (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales")) {
+      if (!user || (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales" && user.role !== "sales_director")) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const upload = await storage.getLatestFinancialUpload();
@@ -2373,7 +2373,7 @@ export async function registerRoutes(
 
       let rows = ((upload.rows as any[]) || []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
 
-      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
@@ -3147,10 +3147,10 @@ export async function registerRoutes(
 
   async function canAccessPairing(user: { id: string; role: string; managerId: string | null }, namId: string, amId: string): Promise<boolean> {
     if (user.role === "admin") return true;
-    if (user.role === "account_manager") {
+    if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
       return user.id === amId && user.managerId === namId;
     }
-    if (user.role === "national_account_manager" || user.role === "director" || user.role === "sales") {
+    if (user.role === "national_account_manager" || user.role === "director" || user.role === "sales" || user.role === "sales_director") {
       // Downward: NAM is namId, AM reports to them
       if (user.id === namId) {
         const am = await storage.getUser(amId);
@@ -3177,22 +3177,23 @@ export async function registerRoutes(
       const allUsers = await storage.getUsers();
       let pairs: Array<{ namId: string; amId: string }> = [];
 
-      if (user.role === "account_manager") {
+      const amLikeRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+      if (amLikeRoles.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       } else if (user.role === "admin") {
-        const ams = allUsers.filter(u => u.role === "account_manager" && u.managerId);
+        const ams = allUsers.filter(u => amLikeRoles.includes(u.role) && u.managerId);
         // NAM↔AM pairings (deduplicated — only one loop)
         for (const am of ams) {
           pairs.push({ namId: am.managerId!, amId: am.id });
         }
         // Admin↔NAM direct pairings
-        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales"));
+        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
         for (const nam of nams) {
           pairs.push({ namId: user.id, amId: nam.id });
         }
       } else {
         // NAM: downward (their AMs) + upward (their manager)
-        const reports = allUsers.filter(u => u.managerId === user.id && u.role === "account_manager");
+        const reports = allUsers.filter(u => u.managerId === user.id && amLikeRoles.includes(u.role));
         for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       }
@@ -3217,15 +3218,16 @@ export async function registerRoutes(
       const allUsers = await storage.getUsers();
       let pairs: Array<{ namId: string; amId: string }> = [];
 
-      if (user.role === "account_manager") {
+      const amLikeRoles2 = ["account_manager", "logistics_manager", "logistics_coordinator"];
+      if (amLikeRoles2.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       } else if (user.role === "admin") {
-        const ams = allUsers.filter(u => u.role === "account_manager" && u.managerId);
+        const ams = allUsers.filter(u => amLikeRoles2.includes(u.role) && u.managerId);
         for (const am of ams) pairs.push({ namId: am.managerId!, amId: am.id });
-        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales"));
+        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
         for (const nam of nams) pairs.push({ namId: user.id, amId: nam.id });
       } else {
-        const reports = allUsers.filter(u => u.managerId === user.id && u.role === "account_manager");
+        const reports = allUsers.filter(u => u.managerId === user.id && amLikeRoles2.includes(u.role));
         for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       }
@@ -3268,14 +3270,14 @@ export async function registerRoutes(
       const allUsers = await storage.getUsers();
       const safeUsers = allUsers.map(({ password, ...u }) => u);
 
-      if (currentUser.role === "account_manager") {
+      if (currentUser.role === "account_manager" || currentUser.role === "logistics_manager" || currentUser.role === "logistics_coordinator") {
         if (!currentUser.managerId) return res.json([]);
         const manager = safeUsers.find(u => u.id === currentUser.managerId);
         if (!manager) return res.json([]);
         return res.json([{ namId: manager.id, amId: currentUser.id, namName: manager.name, amName: currentUser.name, section: "my_manager" }]);
       }
 
-      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         const result: { namId: string; amId: string; namName: string; amName: string; section: string }[] = [];
         // Upward: pairing with their own manager (admin/director above them)
         if (currentUser.managerId) {
@@ -3285,7 +3287,7 @@ export async function registerRoutes(
           }
         }
         // Downward: pairings with their AMs
-        const directReports = safeUsers.filter(u => u.managerId === currentUser.id && u.role === "account_manager");
+        const directReports = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator"));
         for (const am of directReports) {
           result.push({ namId: currentUser.id, amId: am.id, namName: currentUser.name, amName: am.name, section: "my_reports" });
         }
@@ -3294,13 +3296,14 @@ export async function registerRoutes(
 
       if (currentUser.role === "admin") {
         const result: { namId: string; amId: string; namName: string; amName: string; section: string; groupLabel?: string }[] = [];
-        const nams = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales"));
+        const nams = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
         // Admin→NAM direct pairings first
         for (const nam of nams) {
           result.push({ namId: currentUser.id, amId: nam.id, namName: currentUser.name, amName: nam.name, section: "my_nams", groupLabel: nam.name });
         }
         // NAM→AM pairings grouped by NAM
-        const ams = safeUsers.filter(u => u.role === "account_manager" && u.managerId);
+        const amRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+        const ams = safeUsers.filter(u => amRoles.includes(u.role) && u.managerId);
         for (const am of ams) {
           const nam = safeUsers.find(u => u.id === am.managerId);
           if (nam) {
@@ -3611,11 +3614,12 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role === "account_manager") return res.status(403).json({ error: "Access denied" });
+      const amEquivRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+      if (amEquivRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
       let teamIds: string[];
       if (user.role === "admin") {
         const allUsers = await storage.getUsers();
-        teamIds = allUsers.filter(u => u.role === "account_manager" || u.role === "national_account_manager").map(u => u.id);
+        teamIds = allUsers.filter(u => u.role === "account_manager" || u.role === "national_account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator").map(u => u.id);
       } else {
         teamIds = await storage.getTeamMemberIds(user.id);
       }
@@ -3641,7 +3645,7 @@ export async function registerRoutes(
       let goalsList;
       if (user.role === "admin") {
         goalsList = await storage.getGoals({});
-      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales") {
+      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         goalsList = await storage.getGoals({ namId: user.id });
       } else {
         goalsList = await storage.getGoals({ amId: user.id });
@@ -3705,7 +3709,7 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role === "account_manager") return res.json([]);
+      if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.json([]);
       const namId = user.role === "admin" ? undefined : user.id;
       const missing = await storage.getAmsMissingMonthlyGoals(namId);
       res.json(missing);
@@ -3810,7 +3814,7 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role === "account_manager") return res.status(403).json({ error: "Only NAMs can create goals" });
+      if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.status(403).json({ error: "Only NAMs can create goals" });
       const goal = await storage.createGoal({
         ...req.body,
         namId: user.role === "admin" ? (req.body.namId || user.id) : user.id,
@@ -4143,7 +4147,7 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const days = parseInt(req.query.days as string) || 30;
-      const scopedUserId = (user.role === "admin" || user.role === "director") ? null : user.id;
+      const scopedUserId = (user.role === "admin" || user.role === "director" || user.role === "sales_director") ? null : user.id;
       const results = await storage.getColdContacts(scopedUserId, days);
       res.json(results);
     } catch (error) {
@@ -4335,7 +4339,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const isAdminOrDirector = currentUser.role === "admin" || currentUser.role === "director";
+      const isAdminOrDirector = currentUser.role === "admin" || currentUser.role === "director" || currentUser.role === "sales_director";
       const passoffs = isAdminOrDirector
         ? await storage.getPtoPassoffs({ all: true })
         : await storage.getPtoPassoffs({ createdById: currentUser.id, coveringUserId: currentUser.id });

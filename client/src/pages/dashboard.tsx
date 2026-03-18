@@ -103,7 +103,7 @@ export default function Dashboard() {
     refetchInterval: 20000,
   });
 
-  const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
+  const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
 
   const { data: missingMonthlyGoals = [] } = useQuery<Array<{ amId: string; amName: string }>>({
     queryKey: ["/api/goals/monthly-check"],
@@ -413,8 +413,8 @@ export default function Dashboard() {
     },
   ];
 
-  const nams = allUsers.filter((u) => u.role === "national_account_manager" || u.role === "director" || u.role === "sales");
-  const ams = allUsers.filter((u) => u.role === "account_manager");
+  const nams = allUsers.filter((u) => u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director");
+  const ams = allUsers.filter((u) => u.role === "account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator");
 
   const companyCountFor = (userId: string) =>
     companies?.filter((c) => c.assignedTo === userId).length ?? 0;

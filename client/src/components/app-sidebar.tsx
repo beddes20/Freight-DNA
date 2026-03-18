@@ -27,7 +27,7 @@ const navItems = [
     title: "Team Performance",
     url: "/team-performance",
     icon: TrendingUp,
-    roles: ["admin", "director", "national_account_manager", "sales"],
+    roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
   },
   { title: "Goals",       url: "/goals",       icon: Target },
   { title: "PTO Passoff", url: "/pto-passoff", icon: Plane  },
@@ -48,6 +48,10 @@ const ROLE_LABELS: Record<string, string> = {
   director: "Director",
   national_account_manager: "National Account Manager",
   account_manager: "Account Manager",
+  sales: "Sales",
+  sales_director: "Sales Director",
+  logistics_manager: "Logistics Manager",
+  logistics_coordinator: "Logistics Coordinator",
 };
 
 function NavLink({ item, isActive }: { item: { title: string; url: string; icon: React.ElementType }; isActive: boolean }) {
@@ -122,7 +126,7 @@ export function AppSidebar() {
         </SidebarGroup>
 
         {/* ── Admin / Team ── */}
-        {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales") && (
+        {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales" || user?.role === "sales_director") && (
           <SidebarGroup>
             <SidebarGroupLabel>{user?.role === "admin" ? "Admin" : "Team"}</SidebarGroupLabel>
             <SidebarGroupContent>

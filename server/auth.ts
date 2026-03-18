@@ -163,7 +163,7 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
 export async function getVisibleCompanyIds(user: User): Promise<string[] | null> {
   if (user.role === "admin") return null;
 
-  if (user.role === "director" || user.role === "national_account_manager") {
+  if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales_director") {
     const teamIds = await storage.getTeamMemberIds(user.id);
     const allCompanies = await storage.getCompanies();
     return allCompanies

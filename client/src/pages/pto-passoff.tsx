@@ -864,7 +864,7 @@ export default function PtoPassoffPage() {
 
   if (!currentUser) return null;
 
-  const isAdmin = currentUser.role === "admin" || currentUser.role === "director";
+  const isAdmin = currentUser.role === "admin" || currentUser.role === "director" || currentUser.role === "sales_director";
 
   const myPassoffs = passoffs.filter(p => p.createdById === currentUser.id);
   const coveringPassoffs = passoffs.filter(p => p.coveringUserId === currentUser.id && p.createdById !== currentUser.id);

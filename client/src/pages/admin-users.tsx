@@ -37,6 +37,9 @@ const ROLE_LABELS: Record<string, string> = {
   national_account_manager: "National Account Manager",
   account_manager: "Account Manager",
   sales: "Sales",
+  sales_director: "Sales Director",
+  logistics_manager: "Logistics Manager",
+  logistics_coordinator: "Logistics Coordinator",
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -45,6 +48,9 @@ const ROLE_COLORS: Record<string, string> = {
   national_account_manager: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
   account_manager: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
   sales: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  sales_director: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
+  logistics_manager: "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200",
+  logistics_coordinator: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200",
 };
 
 const ROLE_ICONS: Record<string, any> = {
@@ -53,6 +59,9 @@ const ROLE_ICONS: Record<string, any> = {
   national_account_manager: ShieldCheck,
   account_manager: UserCircle,
   sales: UserCircle,
+  sales_director: Crown,
+  logistics_manager: UserCircle,
+  logistics_coordinator: UserCircle,
 };
 
 function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: SafeUser[]; onClose: () => void; isNAM?: boolean }) {
@@ -93,7 +102,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
     mutation.mutate(data);
   };
 
-  const managers = users.filter(u => u.role === "admin" || u.role === "director" || u.role === "national_account_manager");
+  const managers = users.filter(u => u.role === "admin" || u.role === "director" || u.role === "national_account_manager" || u.role === "sales_director");
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -123,6 +132,9 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
                 <SelectItem value="national_account_manager">National Account Manager</SelectItem>
                 <SelectItem value="account_manager">Account Manager</SelectItem>
                 <SelectItem value="sales">Sales</SelectItem>
+                <SelectItem value="sales_director">Sales Director</SelectItem>
+                <SelectItem value="logistics_manager">Logistics Manager</SelectItem>
+                <SelectItem value="logistics_coordinator">Logistics Coordinator</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -186,7 +198,7 @@ export default function AdminUsers() {
     },
   });
 
-  const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
+  const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
 
   if (currentUser?.role !== "admin" && !isNAM) {
     return (

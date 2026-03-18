@@ -477,7 +477,7 @@ export default function CompanyDetail() {
   };
 
   const REACTION_EMOJIS = ["👍", "❤️", "🔥", "💡", "✅"];
-  const canReact = currentUser?.role === "admin" || currentUser?.role === "director";
+  const canReact = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director";
 
   const calloutIds = topLevelCompanyCallouts.map(c => c.id);
   const { data: calloutReactions = [] } = useQuery<CalloutReaction[]>({
@@ -535,7 +535,7 @@ export default function CompanyDetail() {
     onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
   });
 
-  const canReassign = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
+  const canReassign = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
   const { data: assignableUsers = [] } = useQuery<Omit<User, "password">[]>({
     queryKey: ["/api/users"],
     enabled: canReassign,

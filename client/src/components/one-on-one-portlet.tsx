@@ -56,7 +56,7 @@ function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic;
   const initials = author?.name?.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "?";
   const isNam = author?.role === "national_account_manager" || author?.role === "director" || author?.role === "sales";
   const currentUser = teamMembers.find(u => u.id === currentUserId);
-  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director";
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director";
 
   const { data: replies = [], isLoading: repliesLoading } = useQuery<OneOnOneTopicReply[]>({
     queryKey: ["/api/one-on-one/topics", topic.id, "replies"],
@@ -533,9 +533,9 @@ export default function OneOnOnePortlet() {
   });
   const unresolvedCount = pendingCountData?.count || 0;
 
-  const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales";
+  const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
   const isAdmin = currentUser?.role === "admin";
-  const isAm = currentUser?.role === "account_manager";
+  const isAm = currentUser?.role === "account_manager" || currentUser?.role === "logistics_manager" || currentUser?.role === "logistics_coordinator";
 
   // Group pairings for admin view
   const adminNamPairings = pairings.filter(p => p.section === "my_nams");

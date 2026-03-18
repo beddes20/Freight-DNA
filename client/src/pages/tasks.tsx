@@ -442,7 +442,7 @@ export default function TasksPage() {
     queryKey: ["/api/alerts"],
   });
 
-  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director";
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
 
   const myTasks = isAdmin
     ? allTasks
