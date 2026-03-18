@@ -1654,9 +1654,14 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const allCallouts = await storage.getCallouts();
       const visibleIds = await getVisibleCompanyIds(user);
+      const visibleAuthorIds = await getVisibleFeedAuthorIds(user);
       const filtered = visibleIds === null
         ? allCallouts
-        : allCallouts.filter(c => !c.companyId || visibleIds.includes(c.companyId));
+        : allCallouts.filter(c => {
+            const companyOk = !c.companyId || visibleIds.includes(c.companyId);
+            const authorOk = !visibleAuthorIds || visibleAuthorIds.includes(c.authorId);
+            return companyOk && authorOk;
+          });
       res.json(filtered);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch callouts" });
