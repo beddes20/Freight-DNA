@@ -3212,15 +3212,17 @@ export async function registerRoutes(
         .map(([monthKey, b]) => ({ monthKey, ...b }))
         .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
 
-      const destinations = Object.values(destMap)
+      const topDestinations = Object.values(destMap)
         .sort((a, b) => b.count - a.count)
-        .slice(0, 15);
+        .slice(0, 15)
+        .map(d => ({ destination: d.state ? `${d.city}, ${d.state}` : d.city, loads: d.count }));
 
-      const corridors = Object.values(corrMap)
+      const topCorridors = Object.values(corrMap)
         .sort((a, b) => b.loads - a.loads)
-        .slice(0, 15);
+        .slice(0, 15)
+        .map(({ origin, destination, loads }) => ({ origin, destination, loads }));
 
-      res.json({ months, destinations, corridors, totalLoads, spotLoads, totalMargin });
+      res.json({ months, topDestinations, topCorridors, totalLoads, spotLoads, totalMargin });
     } catch (err) {
       console.error("Company historical trends error:", err);
       res.status(500).json({ error: "Failed to compute trends" });
