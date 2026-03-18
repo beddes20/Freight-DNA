@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Phone, Mail, MapPin, Route, DollarSign, FileText, PhoneCall, Copy, Check,
-  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo,
+  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo, X,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -160,7 +160,12 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
       <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
         <SheetContent className="w-full sm:max-w-lg overflow-y-auto" data-testid="contact-detail-sheet">
           <SheetHeader className="pb-4">
-            <SheetTitle>Contact Detail</SheetTitle>
+            <div className="flex items-center justify-between">
+              <SheetTitle>Contact Detail</SheetTitle>
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onClose} data-testid="button-close-contact-sheet" aria-label="Close">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </SheetHeader>
 
           <div className="space-y-6">

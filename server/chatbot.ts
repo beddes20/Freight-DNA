@@ -28,7 +28,7 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
       db.select().from(users).limit(200),
       db.select().from(companies).limit(500),
       db.select().from(contacts).limit(2000),
-      db.select().from(touchpoints).where(gte(touchpoints.touchedAt, thirtyDaysAgo)).limit(2000),
+      db.select().from(touchpoints).where(gte(touchpoints.date, thirtyDaysAgo)).limit(2000),
       db.select().from(goals).limit(200),
       db.select().from(tasks).where(eq(tasks.status, "open")).limit(200),
       db.select().from(rfps).where(eq(rfps.status, "open")).limit(100),
@@ -48,7 +48,7 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
         myCompanies.some(co => co.id === c.companyId) && c.createdAt && c.createdAt >= firstOfMonth
       ).length;
       const touchpointsThisMonth = allTouchpoints.filter(tp =>
-        myContactIds.includes(tp.contactId) && tp.touchedAt >= firstOfMonth
+        myContactIds.includes(tp.contactId) && tp.date >= firstOfMonth
       ).length;
       const touchpoints30d = allTouchpoints.filter(tp => myContactIds.includes(tp.contactId)).length;
       ctx += `- ${u.name} (${u.role.replace(/_/g, " ")}): ${myCompanies.length} accounts, ${myContactIds.length} contacts total, ${contactsThisMonth} new contacts this month, ${touchpointsThisMonth} touchpoints this month, ${touchpoints30d} touchpoints last 30d\n`;
@@ -64,9 +64,9 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
     ctx += `\n=== ALL CONTACTS (${allContacts.length}) ===\n`;
     allContacts.slice(0, 200).forEach(c => {
       const company = allCompanies.find(co => co.id === c.companyId);
-      const rep = allUsers.find(u => u.id === company?.accountManagerId);
+      const rep = allUsers.find(u => u.id === company?.assignedTo);
       const lastTouch = allTouchpoints.find(tp => tp.contactId === c.id);
-      const daysAgo = lastTouch ? Math.floor((Date.now() - new Date(lastTouch.touchedAt).getTime()) / 86400000) : null;
+      const daysAgo = lastTouch ? Math.floor((Date.now() - new Date(lastTouch.date).getTime()) / 86400000) : null;
       ctx += `- ${c.name}${c.title ? ` (${c.title})` : ""} @ ${company?.name || "Unknown"} [Rep: ${rep?.name || "?"}]`;
       if (daysAgo !== null) ctx += ` | Last touch: ${daysAgo}d ago (${lastTouch!.type})`;
       else ctx += ` | Last touch: >30 days or never`;
@@ -132,8 +132,8 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
     if (contactList.length > 0) {
       const contactIds = contactList.map((c) => c.id);
       recentTouchpoints = await db.select().from(touchpoints)
-        .where(and(inArray(touchpoints.contactId, contactIds), gte(touchpoints.touchedAt, thirtyDaysAgo.toISOString())))
-        .orderBy(desc(touchpoints.touchedAt))
+        .where(and(inArray(touchpoints.contactId, contactIds), gte(touchpoints.date, thirtyDaysAgo.toISOString())))
+        .orderBy(desc(touchpoints.date))
         .limit(200);
     }
 
@@ -169,7 +169,7 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
       ctx += `- ${c.name}${c.title ? ` (${c.title})` : ""} @ ${company?.name || "Unknown"}`;
       if (c.relationshipBase) ctx += ` | Relationship: ${c.relationshipBase}`;
       if (lastTouch) {
-        const daysAgo = Math.floor((Date.now() - new Date(lastTouch.touchedAt).getTime()) / 86400000);
+        const daysAgo = Math.floor((Date.now() - new Date(lastTouch.date).getTime()) / 86400000);
         ctx += ` | Last touch: ${daysAgo}d ago (${lastTouch.type})`;
       } else {
         ctx += ` | Last touch: >30 days or never`;

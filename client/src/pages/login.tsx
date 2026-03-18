@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +15,7 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [, navigate] = useLocation();
   const { login, register } = useAuth();
   const { toast } = useToast();
 
@@ -25,6 +27,7 @@ export default function LoginPage() {
       } else {
         await login.mutateAsync({ username, password });
       }
+      navigate("/");
     } catch (error: any) {
       const msg = error?.message || "Authentication failed";
       let description = msg;
