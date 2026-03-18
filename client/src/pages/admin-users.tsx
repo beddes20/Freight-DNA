@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -6,12 +6,12 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward } from "lucide-react";
 import type { User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
@@ -162,6 +162,137 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
   );
 }
 
+function BulkImportDialog() {
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [defaultPassword, setDefaultPassword] = useState("Shipping123!");
+  const [result, setResult] = useState<{ created: string[]; skipped: string[]; errors: string[]; total: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  const handleImport = async () => {
+    if (!file) return;
+    setLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("defaultPassword", defaultPassword);
+      const res = await fetch("/api/users/bulk-import", { method: "POST", body: fd, credentials: "include" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Import failed");
+      setResult(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+    } catch (err: any) {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClose = () => {
+    setOpen(false);
+    setFile(null);
+    setResult(null);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); else setOpen(true); }}>
+      <DialogTrigger asChild>
+        <Button variant="outline" data-testid="button-bulk-import">
+          <Upload className="w-4 h-4 mr-2" /> Bulk Import
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Bulk Import Users</DialogTitle>
+        </DialogHeader>
+        {result ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="rounded-lg bg-green-50 dark:bg-green-950 p-3">
+                <p className="text-2xl font-bold text-green-600">{result.created.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">Created</p>
+              </div>
+              <div className="rounded-lg bg-amber-50 dark:bg-amber-950 p-3">
+                <p className="text-2xl font-bold text-amber-600">{result.skipped.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">Already Exist</p>
+              </div>
+              <div className="rounded-lg bg-red-50 dark:bg-red-950 p-3">
+                <p className="text-2xl font-bold text-red-600">{result.errors.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">Errors</p>
+              </div>
+            </div>
+            {result.created.length > 0 && (
+              <div>
+                <p className="text-sm font-medium mb-2 flex items-center gap-1"><CheckCircle2 className="w-4 h-4 text-green-500" /> Created</p>
+                <div className="max-h-40 overflow-y-auto text-sm space-y-1">
+                  {result.created.map(n => <p key={n} className="text-muted-foreground">{n}</p>)}
+                </div>
+              </div>
+            )}
+            {result.skipped.length > 0 && (
+              <div>
+                <p className="text-sm font-medium mb-2 flex items-center gap-1"><SkipForward className="w-4 h-4 text-amber-500" /> Skipped (already exist)</p>
+                <div className="max-h-32 overflow-y-auto text-sm space-y-1">
+                  {result.skipped.map(n => <p key={n} className="text-muted-foreground">{n}</p>)}
+                </div>
+              </div>
+            )}
+            <Button className="w-full" onClick={handleClose}>Done</Button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Upload an Excel file with columns: <strong>display_name</strong>, <strong>Email</strong>, <strong>title</strong>. Roles are mapped automatically from the title column.
+            </p>
+            <div className="space-y-2">
+              <Label>Excel File (.xlsx)</Label>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                data-testid="input-bulk-import-file"
+                className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-950 dark:file:text-blue-300"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Default Password for New Users</Label>
+              <Input
+                data-testid="input-bulk-import-password"
+                value={defaultPassword}
+                onChange={(e) => setDefaultPassword(e.target.value)}
+                placeholder="Default password"
+              />
+              <p className="text-xs text-muted-foreground">All newly created users will have this password. They can change it after logging in.</p>
+            </div>
+            <div className="bg-muted/40 rounded-lg p-3 text-xs text-muted-foreground space-y-1">
+              <p className="font-medium text-foreground mb-1">Title → Role mapping:</p>
+              <p>Account Manager → Account Manager</p>
+              <p>National Account Manager → NAM</p>
+              <p>Logistics Manager → Logistics Manager</p>
+              <p>Logistics Coordinator → Logistics Coordinator</p>
+              <p>Sales → Sales &nbsp;|&nbsp; Sales Director → Sales Director</p>
+              <p>Admin → Admin &nbsp;|&nbsp; Director → Director</p>
+            </div>
+            <Button
+              className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
+              disabled={!file || !defaultPassword || loading}
+              onClick={handleImport}
+              data-testid="button-confirm-bulk-import"
+            >
+              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {loading ? "Importing..." : `Import Users`}
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function AdminUsers() {
   const { user: currentUser } = useAuth();
   const { data: users = [], isLoading } = useQuery<SafeUser[]>({ queryKey: ["/api/users"] });
@@ -223,7 +354,9 @@ export default function AdminUsers() {
           </h1>
           <p className="text-muted-foreground mt-1">{users.length} users</p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
+        <div className="flex items-center gap-2">
+          {currentUser?.role === "admin" && <BulkImportDialog />}
+          <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
           <DialogTrigger asChild>
             <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" data-testid="button-add-user">
               <Plus className="w-4 h-4 mr-2" /> {isNAM ? "Add Account Manager" : "Add User"}
@@ -241,6 +374,7 @@ export default function AdminUsers() {
             />
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {isLoading ? (

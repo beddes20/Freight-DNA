@@ -387,6 +387,60 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/users/bulk-import", upload.single("file"), async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const TITLE_TO_ROLE: Record<string, string> = {
+        "Account Manager": "account_manager",
+        "Admin": "admin",
+        "Logistics Coordinator": "logistics_coordinator",
+        "Logistics Manager": "logistics_manager",
+        "National Account Manager": "national_account_manager",
+        "Sales": "sales",
+        "Sales Director": "sales_director",
+        "Director": "director",
+      };
+
+      const defaultPassword = req.body.defaultPassword || "Shipping123!";
+      const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
+
+      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+      const created: string[] = [];
+      const skipped: string[] = [];
+      const errors: string[] = [];
+
+      for (const row of rows) {
+        const name = String(row["display_name"] || "").trim();
+        const email = String(row["Email"] || row["user_principle_name"] || "").trim();
+        const title = String(row["title"] || "").trim();
+        const role = TITLE_TO_ROLE[title] || "account_manager";
+
+        if (!name || !email) {
+          errors.push(`Skipped row — missing name or email`);
+          continue;
+        }
+        const existing = await storage.getUserByUsername(email);
+        if (existing) {
+          skipped.push(name);
+          continue;
+        }
+        await storage.createUser({ username: email, password: hashedPassword, name, role, managerId: null });
+        created.push(name);
+      }
+
+      res.json({ created, skipped, errors, total: rows.length });
+    } catch (error) {
+      console.error("Bulk import error:", error);
+      res.status(500).json({ error: "Failed to import users" });
+    }
+  });
+
   app.patch("/api/users/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
