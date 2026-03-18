@@ -2519,6 +2519,242 @@ export async function registerRoutes(
     }
   });
 
+  // ── DEMO SEED ────────────────────────────────────────────────────────────────
+  app.post("/api/demo/seed", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+
+      const hashedPw = await bcrypt.hash("DemoVT2026!", 10);
+      const today = new Date();
+      const dateStr = (offsetDays: number) => {
+        const d = new Date(today);
+        d.setDate(d.getDate() + offsetDays);
+        return d.toISOString().slice(0, 10);
+      };
+      const tsStr = (offsetDays: number) => {
+        const d = new Date(today);
+        d.setDate(d.getDate() + offsetDays);
+        return d.toISOString();
+      };
+
+      // ── 1. Demo Users ──────────────────────────────────────────────────────
+      const existingUsers = await storage.getUsers();
+      const existingUsernames = new Set(existingUsers.map((u: any) => u.username));
+
+      const ensureUser = async (username: string, name: string, role: any) => {
+        if (existingUsernames.has(username)) return existingUsers.find((u: any) => u.username === username)!;
+        return storage.createUser({ username, password: hashedPw, name, role });
+      };
+
+      const demoAdmin = await ensureUser("demo.admin@valuetruck.com", "Demo Admin", "admin");
+      const demoNam   = await ensureUser("demo.nam@valuetruck.com",   "Alex Rivera",  "national_account_manager");
+      const demoAm1   = await ensureUser("demo.am1@valuetruck.com",   "Jordan Blake",  "account_manager");
+      const demoAm2   = await ensureUser("demo.am2@valuetruck.com",   "Sam Carter",    "account_manager");
+
+      await storage.updateUser(demoAm1.id, { managerId: demoNam.id });
+      await storage.updateUser(demoAm2.id, { managerId: demoNam.id });
+
+      // ── 2. Companies ───────────────────────────────────────────────────────
+      const allCompanies = await storage.getCompanies();
+      const existingNames = new Set(allCompanies.map((c: any) => c.name));
+
+      const ensureCompany = async (data: any) => {
+        if (existingNames.has(data.name)) return allCompanies.find((c: any) => c.name === data.name)!;
+        return storage.createCompany(data);
+      };
+
+      const c1 = await ensureCompany({ name: "DEMO: Pacific Coast Distribution", industry: "Distribution & Logistics", website: "pacificcoastdist.com", notes: "Regional distributor covering the Western US. Strong volume on CA-WA lanes. QBR scheduled for Q2.", assignedTo: demoAm1.id, financialAlias: "Pacific Coast Distribution" });
+      const c2 = await ensureCompany({ name: "DEMO: MidWest Food Group", industry: "Food & Beverage", website: "midwestfoodgroup.com", notes: "Multi-temp shipper with high spot freight ratio. Decision maker is open to new carrier relationships.", assignedTo: demoAm1.id, financialAlias: "MidWest Food Group" });
+      const c3 = await ensureCompany({ name: "DEMO: Atlas Steel Works", industry: "Manufacturing", website: "atlassteelworks.com", notes: "Heavy freight, flatbed and step-deck requirements. Active RFP in progress.", assignedTo: demoAm1.id, financialAlias: "Atlas Steel Works" });
+      const c4 = await ensureCompany({ name: "DEMO: SunBelt Logistics", industry: "3PL / Brokerage", website: "sunbeltlogistics.com", notes: "Southeast-focused carrier. Interested in expanding into the Midwest market.", assignedTo: demoAm2.id, financialAlias: "SunBelt Logistics" });
+      const c5 = await ensureCompany({ name: "DEMO: Keystone Manufacturing", industry: "Manufacturing", website: "keystonemfg.com", notes: "Automotive parts supplier with just-in-time delivery requirements.", assignedTo: demoAm2.id, financialAlias: "Keystone Manufacturing" });
+
+      // ── 3. Contacts with org charts ────────────────────────────────────────
+      const allContacts = await storage.getContacts();
+      const existingContactNames = new Set(allContacts.map((c: any) => `${c.name}__${c.companyId}`));
+
+      const ensureContact = async (data: any) => {
+        const key = `${data.name}__${data.companyId}`;
+        if (existingContactNames.has(key)) return allContacts.find((c: any) => c.name === data.name && c.companyId === data.companyId)!;
+        return storage.createContact({ ...data, createdAt: tsStr(-30), createdBy: demoAm1.id });
+      };
+
+      // Pacific Coast Distribution
+      const p1 = await ensureContact({ companyId: c1.id, name: "Tom Richards", title: "VP of Logistics", email: "t.richards@pacificcoastdist.com", phone: "503-555-0101", relationshipBase: "Champion", freightSpend: "4200000", lanes: ["CA → WA", "OR → NV", "WA → CA"], regions: ["Pacific Northwest", "California"], notes: "Key decision maker. Prefers weekly cadence emails. Golf enthusiast.", interests: "Capacity security on CA-WA corridor, rate transparency" });
+      const p2 = await ensureContact({ companyId: c1.id, name: "Maria Santos", title: "Director of Transportation", email: "m.santos@pacificcoastdist.com", phone: "503-555-0102", reportsToId: p1.id, relationshipBase: "Ally", freightSpend: "2100000", lanes: ["CA → OR", "WA → ID"], notes: "Day-to-day operational contact. Manages carrier scorecard.", interests: "On-time performance metrics, carrier compliance" });
+      const p3 = await ensureContact({ companyId: c1.id, name: "Jake Wu", title: "Procurement Manager", email: "j.wu@pacificcoastdist.com", phone: "503-555-0103", reportsToId: p2.id, relationshipBase: "Neutral", freightSpend: "800000", lanes: ["CA → WA"], notes: "Runs the bid process. Numbers-driven, needs strong data.", interests: "Rate benchmarking, spot vs contract analysis" });
+      const p4 = await ensureContact({ companyId: c1.id, name: "Lisa Chen", title: "Freight Coordinator", email: "l.chen@pacificcoastdist.com", phone: "503-555-0104", reportsToId: p3.id, relationshipBase: "Neutral", freightSpend: "300000", notes: "Books the spot freight. Good relationship, calls frequently." });
+
+      // MidWest Food Group
+      const m1 = await ensureContact({ companyId: c2.id, name: "Dave Peterson", title: "SVP Supply Chain", email: "d.peterson@midwestfoodgroup.com", phone: "312-555-0201", relationshipBase: "Champion", freightSpend: "6500000", lanes: ["IL → TX", "MN → FL", "WI → GA"], regions: ["Midwest", "Southeast"], notes: "Executive sponsor. Introduced to VT through industry event.", interests: "Reefer capacity, food-grade compliance" });
+      const m2 = await ensureContact({ companyId: c2.id, name: "Karen Mills", title: "Transportation Director", email: "k.mills@midwestfoodgroup.com", phone: "312-555-0202", reportsToId: m1.id, relationshipBase: "Ally", freightSpend: "3200000", lanes: ["IL → TX", "MN → FL"], notes: "Handles carrier compliance and scorecards. Very process-oriented." });
+      const m3 = await ensureContact({ companyId: c2.id, name: "Rob Evans", title: "Carrier Relations Manager", email: "r.evans@midwestfoodgroup.com", phone: "312-555-0203", reportsToId: m2.id, relationshipBase: "Neutral", freightSpend: "1100000", notes: "Primary contact for day-to-day operations. Texts frequently." });
+
+      // Atlas Steel Works
+      const a1 = await ensureContact({ companyId: c3.id, name: "Patricia Nguyen", title: "Chief Operations Officer", email: "p.nguyen@atlassteelworks.com", phone: "216-555-0301", relationshipBase: "Neutral", freightSpend: "9000000", lanes: ["OH → TX", "PA → OH", "IN → MI"], regions: ["Midwest", "Great Lakes"], notes: "C-suite sponsor. Very data-driven, asks for monthly reports.", interests: "Flatbed availability, step-deck capacity, rate stability" });
+      const a2 = await ensureContact({ companyId: c3.id, name: "Marcus Thompson", title: "Logistics Director", email: "m.thompson@atlassteelworks.com", phone: "216-555-0302", reportsToId: a1.id, relationshipBase: "Ally", freightSpend: "5500000", lanes: ["OH → TX", "PA → OH"], notes: "Key RFP contact. Oversees all carrier bids.", interests: "Lane coverage, flatbed network depth" });
+      const a3 = await ensureContact({ companyId: c3.id, name: "Amy Johnson", title: "Freight Manager", email: "a.johnson@atlassteelworks.com", phone: "216-555-0303", reportsToId: a2.id, relationshipBase: "Ally", freightSpend: "2200000", notes: "Manages day-to-day freight booking. Strong operational knowledge." });
+      const a4 = await ensureContact({ companyId: c3.id, name: "Tyler Moore", title: "Traffic Coordinator", email: "t.moore@atlassteelworks.com", phone: "216-555-0304", reportsToId: a3.id, relationshipBase: "Neutral", freightSpend: "500000", notes: "Books spot loads. Good relationship with ops team." });
+
+      // SunBelt Logistics
+      const s1 = await ensureContact({ companyId: c4.id, name: "Robert Kim", title: "Director of Procurement", email: "r.kim@sunbeltlogistics.com", phone: "404-555-0401", relationshipBase: "Champion", freightSpend: "3800000", lanes: ["GA → TX", "FL → NC", "AL → TN"], regions: ["Southeast"], notes: "Strong advocate for VT. Wants to expand the partnership to Midwest lanes.", interests: "Southeast capacity, Midwest expansion opportunities", createdBy: demoAm2.id });
+      const s2 = await ensureContact({ companyId: c4.id, name: "Sandra Lee", title: "Network Planning Manager", email: "s.lee@sunbeltlogistics.com", phone: "404-555-0402", reportsToId: s1.id, relationshipBase: "Ally", freightSpend: "1900000", notes: "Builds the annual bid model. Great relationship.", createdBy: demoAm2.id });
+      const s3 = await ensureContact({ companyId: c4.id, name: "Chris Davis", title: "Lane Analyst", email: "c.davis@sunbeltlogistics.com", phone: "404-555-0403", reportsToId: s2.id, relationshipBase: "Neutral", freightSpend: "600000", notes: "Runs lane-level analysis for RFPs. Requests data frequently.", createdBy: demoAm2.id });
+
+      // Keystone Manufacturing
+      const k1 = await ensureContact({ companyId: c5.id, name: "George Williams", title: "VP Operations", email: "g.williams@keystonemfg.com", phone: "313-555-0501", relationshipBase: "Ally", freightSpend: "5100000", lanes: ["MI → OH", "IN → KY", "MI → TN"], regions: ["Midwest", "Great Lakes"], notes: "Strategic partner. JIT delivery requirements are non-negotiable.", interests: "On-time delivery, JIT reliability, auto-industry compliance", createdBy: demoAm2.id });
+      const k2 = await ensureContact({ companyId: c5.id, name: "Diana Brown", title: "Supply Chain Manager", email: "d.brown@keystonemfg.com", phone: "313-555-0502", reportsToId: k1.id, relationshipBase: "Champion", freightSpend: "2800000", notes: "Day-to-day lead. Has been a VT advocate internally.", createdBy: demoAm2.id });
+      const k3 = await ensureContact({ companyId: c5.id, name: "Kevin Martinez", title: "Logistics Coordinator", email: "k.martinez@keystonemfg.com", phone: "313-555-0503", reportsToId: k2.id, relationshipBase: "Neutral", freightSpend: "900000", notes: "Handles spot freight and overflow capacity needs.", createdBy: demoAm2.id });
+      const k4 = await ensureContact({ companyId: c5.id, name: "Ashley Wilson", title: "Carrier Manager", email: "a.wilson@keystonemfg.com", phone: "313-555-0504", reportsToId: k2.id, relationshipBase: "Neutral", freightSpend: "700000", notes: "Manages the approved carrier list. Focused on compliance.", createdBy: demoAm2.id });
+
+      // ── 4. RFPs ────────────────────────────────────────────────────────────
+      const allRfps = await storage.getRfps();
+      const existingRfpTitles = new Set(allRfps.map((r: any) => r.title));
+
+      const ensureRfp = async (data: any) => {
+        if (existingRfpTitles.has(data.title)) return allRfps.find((r: any) => r.title === data.title)!;
+        return storage.createRfp(data);
+      };
+
+      await ensureRfp({ companyId: c1.id, title: "DEMO: Pacific Coast Q2 2026 Full Network RFP", status: "pending", value: "1800000", dueDate: dateStr(28), notes: "Full network bid covering all Western US lanes. 85 total lanes. Strong opportunity for 15-20 lane awards.", laneCount: 85, totalVolume: "4200", originStates: ["CA", "OR", "WA", "NV"], destinationStates: ["CA", "OR", "WA", "ID", "MT", "UT"] });
+      await ensureRfp({ companyId: c3.id, title: "DEMO: Atlas Steel Works Flatbed Division RFP", status: "in_review", value: "3400000", dueDate: dateStr(12), notes: "Flatbed and step-deck RFP. 120 lanes across Midwest and Southeast. High-value opportunity.", laneCount: 120, totalVolume: "6800", originStates: ["OH", "PA", "IN", "MI"], destinationStates: ["TX", "GA", "TN", "NC", "VA"] });
+      await ensureRfp({ companyId: c5.id, title: "DEMO: Keystone Manufacturing Annual Carrier Bid", status: "awarded", value: "2100000", dueDate: dateStr(-15), notes: "Awarded 28 lanes out of 65 submitted. Excellent win rate at 43%. JIT lanes prioritized.", laneCount: 65, totalVolume: "3900", originStates: ["MI", "IN", "OH"], destinationStates: ["OH", "KY", "TN", "IL"] });
+
+      // ── 5. Goals ───────────────────────────────────────────────────────────
+      const allGoals = await storage.getGoals({});
+      const existingGoalKeys = new Set(allGoals.map((g: any) => `${g.amId}__${g.metric}__${g.period}`));
+      const period = today.toISOString().slice(0, 7); // e.g. "2026-03"
+
+      const ensureGoal = async (data: any) => {
+        const key = `${data.amId}__${data.metric}__${data.period}`;
+        if (existingGoalKeys.has(key)) return;
+        return storage.createGoal({ ...data, namId: demoNam.id, createdById: demoNam.id, createdAt: tsStr(-25), currentValue: data.currentValue || "0" });
+      };
+
+      await ensureGoal({ amId: demoAm1.id, metric: "contacts_added", period, target: "8", currentValue: "5", startDate: dateStr(-17), endDate: dateStr(14), title: "New Contacts — March" });
+      await ensureGoal({ amId: demoAm1.id, metric: "touchpoints", period, target: "40", currentValue: "18", startDate: dateStr(-17), endDate: dateStr(14), title: "Touchpoints — March" });
+      await ensureGoal({ amId: demoAm1.id, metric: "load_count", period, target: "120", currentValue: "67", startDate: dateStr(-17), endDate: dateStr(14), title: "Load Count — March" });
+      await ensureGoal({ amId: demoAm2.id, metric: "contacts_added", period, target: "6", currentValue: "4", startDate: dateStr(-17), endDate: dateStr(14), title: "New Contacts — March" });
+      await ensureGoal({ amId: demoAm2.id, metric: "touchpoints", period, target: "35", currentValue: "14", startDate: dateStr(-17), endDate: dateStr(14), title: "Touchpoints — March" });
+      await ensureGoal({ amId: demoAm2.id, metric: "margin", period, target: "45000", currentValue: "19200", startDate: dateStr(-17), endDate: dateStr(14), title: "Margin $ — March" });
+
+      // ── 6. Tasks ───────────────────────────────────────────────────────────
+      const allTasks = await storage.getTasks();
+      const existingTaskTitles = new Set(allTasks.map((t: any) => t.title));
+
+      const ensureTask = async (data: any) => {
+        if (existingTaskTitles.has(data.title)) return;
+        return storage.createTask({ ...data, createdAt: tsStr(-10) });
+      };
+
+      await ensureTask({ title: "DEMO: Follow up on Q2 RFP — Pacific Coast Distribution", notes: "Tom Richards needs lane-level coverage analysis before submission. Due this week.", status: "open", dueDate: dateStr(5), assignedTo: demoAm1.id, assignedBy: demoNam.id, companyId: c1.id });
+      await ensureTask({ title: "DEMO: Schedule QBR with Pacific Coast Distribution", notes: "Q1 QBR agenda includes volume recap, rate trends, and Q2 RFP kickoff.", status: "in_progress", dueDate: dateStr(10), assignedTo: demoAm1.id, assignedBy: demoNam.id, companyId: c1.id });
+      await ensureTask({ title: "DEMO: Submit flatbed capacity deck to Atlas Steel Works", notes: "Marcus needs equipment overview before the RFP due date. Include spot capacity data.", status: "open", dueDate: dateStr(8), assignedTo: demoAm1.id, assignedBy: demoNam.id, companyId: c3.id });
+      await ensureTask({ title: "DEMO: Send MidWest Food Group intro email", notes: "Dave Peterson requested a carrier capability deck. Follow up if no response in 3 days.", status: "completed", dueDate: dateStr(-2), assignedTo: demoAm1.id, assignedBy: demoNam.id, companyId: c2.id });
+      await ensureTask({ title: "DEMO: Prepare Keystone Manufacturing lane review", notes: "Annual bid awarded — set up monthly lane performance review cadence.", status: "open", dueDate: dateStr(14), assignedTo: demoAm2.id, assignedBy: demoNam.id, companyId: c5.id });
+      await ensureTask({ title: "DEMO: SunBelt Midwest expansion proposal", notes: "Robert Kim requested a proposal for adding 10 Midwest lanes to the current contract.", status: "in_progress", dueDate: dateStr(7), assignedTo: demoAm2.id, assignedBy: demoNam.id, companyId: c4.id });
+
+      // ── 7. Touchpoints ────────────────────────────────────────────────────
+      const touchData = [
+        { contactId: p1.id, companyId: c1.id, loggedById: demoAm1.id, type: "Call", notes: "Intro call — discussed Q2 RFP timeline and lane priorities", daysAgo: 2 },
+        { contactId: p1.id, companyId: c1.id, loggedById: demoAm1.id, type: "Email", notes: "Sent Q1 capacity overview and Western US coverage map", daysAgo: 8 },
+        { contactId: p2.id, companyId: c1.id, loggedById: demoAm1.id, type: "Call", notes: "Reviewed carrier scorecard — VT rated 94% OTP last quarter", daysAgo: 5 },
+        { contactId: p2.id, companyId: c1.id, loggedById: demoAm1.id, type: "Email", notes: "Shared compliance documentation and insurance certificates", daysAgo: 12 },
+        { contactId: p3.id, companyId: c1.id, loggedById: demoAm1.id, type: "Email", notes: "Responded to RFP data request — sent lane-level rate history", daysAgo: 3 },
+        { contactId: m1.id, companyId: c2.id, loggedById: demoAm1.id, type: "Site Visit", notes: "On-site tour of the Chicago distribution center. Met the full logistics team.", daysAgo: 14 },
+        { contactId: m1.id, companyId: c2.id, loggedById: demoAm1.id, type: "Call", notes: "Followed up on site visit — confirmed next steps for Q2 partnership discussion", daysAgo: 10 },
+        { contactId: m2.id, companyId: c2.id, loggedById: demoAm1.id, type: "Email", notes: "Sent reefer capacity summary for IL → TX and MN → FL lanes", daysAgo: 7 },
+        { contactId: a2.id, companyId: c3.id, loggedById: demoAm1.id, type: "Call", notes: "RFP kickoff call — reviewed lane list and timeline", daysAgo: 4 },
+        { contactId: a2.id, companyId: c3.id, loggedById: demoAm1.id, type: "Email", notes: "Sent flatbed network overview with equipment photos", daysAgo: 9 },
+        { contactId: a3.id, companyId: c3.id, loggedById: demoAm1.id, type: "Text", notes: "Quick check-in — confirmed receipt of equipment deck", daysAgo: 1 },
+        { contactId: s1.id, companyId: c4.id, loggedById: demoAm2.id, type: "Call", notes: "Discussed Midwest expansion — Robert very enthusiastic about 10 new lanes", daysAgo: 3 },
+        { contactId: s1.id, companyId: c4.id, loggedById: demoAm2.id, type: "Email", notes: "Sent Midwest capacity overview and rate benchmarks", daysAgo: 8 },
+        { contactId: s2.id, companyId: c4.id, loggedById: demoAm2.id, type: "Call", notes: "Walked through bid model together — identified 3 target corridors", daysAgo: 6 },
+        { contactId: k1.id, companyId: c5.id, loggedById: demoAm2.id, type: "Call", notes: "Post-award debrief — set up monthly lane performance review", daysAgo: 5 },
+        { contactId: k2.id, companyId: c5.id, loggedById: demoAm2.id, type: "Email", notes: "Sent awarded lane confirmation and onboarding checklist", daysAgo: 3 },
+        { contactId: k2.id, companyId: c5.id, loggedById: demoAm2.id, type: "Site Visit", notes: "Plant visit in Detroit — toured the automotive line, met ops team", daysAgo: 20 },
+      ];
+
+      for (const tp of touchData) {
+        const dateVal = tsStr(-tp.daysAgo);
+        await storage.createTouchpoint({ contactId: tp.contactId, companyId: tp.companyId, loggedById: tp.loggedById, type: tp.type, notes: tp.notes || null, date: dateVal, createdAt: dateVal });
+      }
+
+      // ── 8. Callouts / Feed Posts ───────────────────────────────────────────
+      const allCallouts = await storage.getCallouts();
+      const existingCalloutTitles = new Set(allCallouts.map((c: any) => c.title));
+
+      const ensureCallout = async (data: any) => {
+        if (existingCalloutTitles.has(data.title)) return;
+        return storage.createCallout({ ...data, createdAt: tsStr(data.daysAgo || -5) });
+      };
+
+      await ensureCallout({ title: "DEMO: Reefer capacity tightening on MN → FL lanes", body: "Seeing strong demand on reefer moves out of Minneapolis heading to Florida. Spot rates up ~12% vs January. Flag for any food & beverage accounts.", tag: "Trend", authorId: demoNam.id, daysAgo: -3 });
+      await ensureCallout({ title: "DEMO: Atlas Steel RFP — strong coverage opportunity", body: "Just got off the kickoff call with Marcus Thompson at Atlas Steel. 120-lane bid, heavy flatbed. We have great coverage in Ohio and Indiana. Let's put our best foot forward.", tag: "Callout", authorId: demoAm1.id, companyId: c3.id, daysAgo: -4 });
+      await ensureCallout({ title: "DEMO: Idea — weekly lane heat map for the team", body: "What if we shared a quick weekly snapshot of where we're seeing the most volume and best margins by corridor? Would help the whole team prioritize accounts.", tag: "Idea", authorId: demoAm2.id, daysAgo: -7 });
+
+      res.json({
+        ok: true,
+        message: "Demo environment seeded successfully",
+        credentials: {
+          admin: { username: "demo.admin@valuetruck.com", password: "DemoVT2026!" },
+          nam:   { username: "demo.nam@valuetruck.com",   password: "DemoVT2026!" },
+          am1:   { username: "demo.am1@valuetruck.com",   password: "DemoVT2026!" },
+          am2:   { username: "demo.am2@valuetruck.com",   password: "DemoVT2026!" },
+        },
+        summary: { companies: 5, contacts: [p1,p2,p3,p4,m1,m2,m3,a1,a2,a3,a4,s1,s2,s3,k1,k2,k3,k4].length, rfps: 3, goals: 6, tasks: 6, touchpoints: touchData.length, callouts: 3 },
+      });
+    } catch (error) {
+      console.error("Demo seed error:", error);
+      res.status(500).json({ error: "Failed to seed demo environment", details: String(error) });
+    }
+  });
+
+  app.delete("/api/demo/teardown", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+
+      const allUsers    = await storage.getUsers();
+      const allCompanies = await storage.getCompanies();
+
+      const demoUsers     = allUsers.filter((u: any) => u.username.startsWith("demo."));
+      const demoCompanies = allCompanies.filter((c: any) => c.name.startsWith("DEMO:"));
+      const demoUserIds   = new Set(demoUsers.map((u: any) => u.id));
+
+      // Delete tasks assigned to or by demo users
+      const allTasks = await storage.getTasks();
+      for (const t of allTasks) {
+        if (demoUserIds.has(t.assignedTo) || demoUserIds.has(t.assignedBy)) await storage.deleteTask(t.id);
+      }
+
+      // Delete goals belonging to demo users
+      const allGoals = await storage.getGoals({});
+      for (const g of allGoals) {
+        if (demoUserIds.has(g.amId) || demoUserIds.has(g.namId)) await storage.deleteGoal(g.id);
+      }
+
+      // Delete callouts authored by demo users
+      const allCallouts = await storage.getCallouts();
+      for (const c of allCallouts) {
+        if (demoUserIds.has(c.authorId)) await storage.deleteCallout(c.id);
+      }
+
+      // Delete companies (cascades contacts, RFPs, touchpoints, awards)
+      for (const c of demoCompanies) await storage.deleteCompany(c.id);
+
+      // Delete users
+      for (const u of demoUsers) await storage.deleteUser(u.id);
+
+      res.json({ ok: true, removed: { companies: demoCompanies.length, users: demoUsers.length } });
+    } catch (error) {
+      console.error("Demo teardown error:", error);
+      res.status(500).json({ error: "Failed to tear down demo environment", details: String(error) });
+    }
+  });
+  // ── END DEMO ──────────────────────────────────────────────────────────────
+
   app.get("/api/financials/account-summary", requireAuth, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploads();
