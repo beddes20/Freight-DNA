@@ -27,6 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { CompanyDialog } from "@/components/company-dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import type { Company, Contact, User } from "@shared/schema";
 
 type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
@@ -54,6 +55,7 @@ function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummar
 }
 
 export default function Customers() {
+  const { user: currentUser } = useAuth();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -142,10 +144,16 @@ export default function Customers() {
     return Array.from(set).sort();
   }, [companies]);
 
-  // Derive AM users for the rep filter dropdown
+  // Derive NAM + AM users for the rep filter dropdown (admins/directors only see core sales hierarchy)
+  const isAdminOrDirector = currentUser?.role === "admin" || currentUser?.role === "director";
   const amUsers = useMemo(() => {
-    return teamMembers.filter(u => u.role === "account_manager" || u.role === "sales" || u.role === "logistics_manager" || u.role === "logistics_coordinator");
+    return teamMembers
+      .filter(u => u.role === "national_account_manager" || u.role === "account_manager")
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [teamMembers]);
+
+  // Set of NAM/AM user IDs so we can filter company lists
+  const namAmIds = useMemo(() => new Set(amUsers.map(u => u.id)), [amUsers]);
 
   const activeFiltersCount = [repFilter !== "all", industryFilter !== "all", touchFilter !== "all"].filter(Boolean).length;
 
@@ -156,6 +164,7 @@ export default function Customers() {
         const q = searchQuery.toLowerCase();
         if (!company.name.toLowerCase().includes(q) && !company.industry?.toLowerCase().includes(q)) return false;
       }
+      if (isAdminOrDirector && repFilter === "all" && company.assignedTo && !namAmIds.has(company.assignedTo)) return false;
       if (repFilter !== "all" && company.assignedTo !== repFilter) return false;
       if (industryFilter !== "all" && company.industry !== industryFilter) return false;
       if (touchFilter !== "all") {
