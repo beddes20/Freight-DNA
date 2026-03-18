@@ -633,7 +633,10 @@ function TopicRow({ topic, addedByName, onToggle, onDelete, dimmed, currentUserI
             : <Circle className="h-5 w-5" />}
         </button>
         <div className="flex-1 min-w-0">
-          <p className={`text-sm ${dimmed ? "line-through text-muted-foreground" : "text-foreground"}`}>{topic.text}</p>
+          <p
+            className={`text-sm cursor-pointer select-none ${dimmed ? "line-through text-muted-foreground" : "text-foreground"}`}
+            onClick={() => { setShowReplies(v => !v); if (!showReplies) setTimeout(() => replyInputRef.current?.focus(), 100); }}
+          >{topic.text}</p>
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
             <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${tag.color}`}>{tag.label}</span>
             <span className="text-xs text-muted-foreground">Added by {addedByName}</span>

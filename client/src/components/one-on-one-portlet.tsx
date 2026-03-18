@@ -148,7 +148,11 @@ function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic;
         </button>
 
         <div className="flex-1 min-w-0">
-          <p className={`text-sm ${topic.status === "discussed" ? "line-through text-muted-foreground" : ""}`} data-testid={`text-topic-${topic.id}`}>
+          <p
+            className={`text-sm cursor-pointer select-none ${topic.status === "discussed" ? "line-through text-muted-foreground" : ""}`}
+            onClick={() => showReplies ? setShowReplies(false) : handleOpenReplies()}
+            data-testid={`text-topic-${topic.id}`}
+          >
             {topic.text}
           </p>
           <div className="flex items-center gap-1.5 flex-wrap mt-1">
@@ -498,7 +502,7 @@ export default function OneOnOnePortlet() {
   });
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
-    queryKey: ["/api/team-members"],
+    queryKey: ["/api/users"],
   });
 
   // Per-pairing pending counts — used to badge pills and auto-select best pairing
