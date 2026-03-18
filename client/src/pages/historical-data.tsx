@@ -40,11 +40,12 @@ function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
 
-    import("leaflet").then((leaflet) => {
-      Object.assign(window, { L: leaflet });
+    import("leaflet").then((leafletModule) => {
+      const leaflet = (leafletModule as any).default ?? leafletModule;
+      (window as any).L = leaflet;
       // @ts-expect-error leaflet.heat is a UMD plugin with no published type definitions
       return import("leaflet.heat").then(() => leaflet);
-    }).then((L) => {
+    }).then((L: typeof import("leaflet") & { heatLayer: (...args: any[]) => any }) => {
       if (!mapRef.current || mapInstanceRef.current) return;
 
       delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -95,6 +96,8 @@ function DeliveryMap({ data, mode }: { data: HeatmapResponse; mode: MapMode }) {
       const currentMode = modeRef.current;
       if (currentMode === "inbound" || currentMode === "both") deliveryGroup.addTo(map);
       if (currentMode === "outbound" || currentMode === "both") pickupGroup.addTo(map);
+    }).catch(err => {
+      console.error("[DeliveryMap] Failed to initialize:", err);
     });
 
     return () => {
