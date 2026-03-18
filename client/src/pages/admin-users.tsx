@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn } from "lucide-react";
 import type { User } from "@shared/schema";
@@ -154,6 +155,7 @@ export default function AdminUsers() {
   const { data: users = [], isLoading } = useQuery<SafeUser[]>({ queryKey: ["/api/users"] });
   const [editUser, setEditUser] = useState<SafeUser | undefined>();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<SafeUser | null>(null);
   const { toast } = useToast();
 
   const deleteMutation = useMutation({
@@ -287,7 +289,7 @@ export default function AdminUsers() {
                         variant="ghost"
                         size="icon"
                         className="text-red-500 hover:text-red-700"
-                        onClick={() => deleteMutation.mutate(u.id)}
+                        onClick={() => setUserToDelete(u)}
                         disabled={deleteMutation.isPending}
                         data-testid={`button-delete-user-${u.id}`}
                       >
@@ -301,6 +303,27 @@ export default function AdminUsers() {
           })}
         </div>
       )}
+
+      <AlertDialog open={!!userToDelete} onOpenChange={(open) => { if (!open) setUserToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {userToDelete?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <strong>{userToDelete?.name}</strong> and remove all of their data including touchpoints, callouts, and goals. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={() => { if (userToDelete) { deleteMutation.mutate(userToDelete.id); setUserToDelete(null); } }}
+              data-testid="button-confirm-delete-user"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
