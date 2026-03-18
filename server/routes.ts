@@ -4600,45 +4600,5 @@ export async function registerRoutes(
     next(err);
   });
 
-  app.post("/api/admin/seed-missing-companies", async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser || currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-
-      const COMPANIES_TO_CREATE = [
-        { name: "GMCCA (General Motors Customer Care & Aftermarket)", financialAlias: "GMCCPOMI", opsEmail: "jason.allen@valuetruck.com" },
-        { name: "MKB Construction", financialAlias: "MKBCTEAZ", opsEmail: "dallin.meier@valuetruck.com" },
-        { name: "BLOOM ENERGY", financialAlias: "BLOOSACA", opsEmail: "sam.davis@valuetruck.com" },
-        { name: "Brooklyn Bedding DBA Southerland", financialAlias: "BROOGLA1", opsEmail: "dallin.meier@valuetruck.com" },
-        { name: "360 LION USA INC.", financialAlias: "WISEGACA", opsEmail: "legrand.toia@valuetruck.com" },
-        { name: "Rock Run Industries", financialAlias: "ROCKMIIN", opsEmail: "dallin.meier@valuetruck.com" },
-        { name: "Waupaca Northwoods LLC", financialAlias: "WAUPWAWI", opsEmail: "ethan.allen@valuetruck.com" },
-      ];
-
-      const allCompanies = await storage.getCompanies();
-      const existingNames = new Set(allCompanies.map((c: any) => c.name.toLowerCase()));
-      const existingAliases = new Set(allCompanies.map((c: any) => (c.financialAlias || "").toLowerCase()).filter(Boolean));
-
-      const created: string[] = [];
-      const skipped: string[] = [];
-
-      for (const item of COMPANIES_TO_CREATE) {
-        if (existingNames.has(item.name.toLowerCase()) || existingAliases.has(item.financialAlias.toLowerCase())) {
-          skipped.push(item.name);
-          continue;
-        }
-        const opsUser = await storage.getUserByUsername(item.opsEmail);
-        const assignedTo = opsUser?.id || null;
-        await storage.createCompany({ name: item.name, financialAlias: item.financialAlias, assignedTo } as any);
-        created.push(`${item.name} → ${opsUser?.name || item.opsEmail}`);
-      }
-
-      res.json({ created, skipped });
-    } catch (error) {
-      console.error("Seed companies error:", error);
-      res.status(500).json({ error: "Failed to seed companies" });
-    }
-  });
-
   return httpServer;
 }

@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, Building2 } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward } from "lucide-react";
 import type { User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
@@ -293,97 +293,6 @@ function BulkImportDialog() {
   );
 }
 
-function SeedCompaniesButton() {
-  const [open, setOpen] = useState(false);
-  const [result, setResult] = useState<{ created: string[]; skipped: string[] } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const { toast } = useToast();
-
-  const handleSeed = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/admin/seed-missing-companies", { method: "POST", credentials: "include" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed");
-      setResult(data);
-      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
-    } catch (err: any) {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-      setOpen(false);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setResult(null); }}>
-      <DialogTrigger asChild>
-        <Button variant="outline" data-testid="button-seed-companies">
-          <Building2 className="w-4 h-4 mr-2" /> Add Missing Accounts
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Add Missing Accounts</DialogTitle>
-        </DialogHeader>
-        {result ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 text-center">
-              <div className="rounded-lg bg-green-50 dark:bg-green-950 p-3">
-                <p className="text-2xl font-bold text-green-600">{result.created.length}</p>
-                <p className="text-xs text-muted-foreground mt-1">Created</p>
-              </div>
-              <div className="rounded-lg bg-amber-50 dark:bg-amber-950 p-3">
-                <p className="text-2xl font-bold text-amber-600">{result.skipped.length}</p>
-                <p className="text-xs text-muted-foreground mt-1">Already Existed</p>
-              </div>
-            </div>
-            {result.created.length > 0 && (
-              <div>
-                <p className="text-sm font-medium mb-2 flex items-center gap-1"><CheckCircle2 className="w-4 h-4 text-green-500" /> Created</p>
-                <div className="space-y-1 text-sm">
-                  {result.created.map(n => <p key={n} className="text-muted-foreground">{n}</p>)}
-                </div>
-              </div>
-            )}
-            {result.skipped.length > 0 && (
-              <div>
-                <p className="text-sm font-medium mb-2 flex items-center gap-1"><SkipForward className="w-4 h-4 text-amber-500" /> Already existed</p>
-                <div className="space-y-1 text-sm">
-                  {result.skipped.map(n => <p key={n} className="text-muted-foreground">{n}</p>)}
-                </div>
-              </div>
-            )}
-            <Button className="w-full" onClick={() => setOpen(false)}>Done</Button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">This will create the 7 accounts that are active in March 2026 (5+ loads) but missing from the system:</p>
-            <div className="rounded-lg bg-muted/40 p-3 text-sm space-y-1">
-              <p><strong>GMCCA</strong> (General Motors) → Jason Allen</p>
-              <p><strong>MKB Construction</strong> → Dallin Meier</p>
-              <p><strong>BLOOM ENERGY</strong> → Sam Davis</p>
-              <p><strong>Brooklyn Bedding DBA Southerland</strong> → Dallin Meier</p>
-              <p><strong>360 LION USA INC.</strong> → Legrand Toia</p>
-              <p><strong>Rock Run Industries</strong> → Dallin Meier</p>
-              <p><strong>Waupaca Northwoods LLC</strong> → Ethan Van Allen</p>
-            </div>
-            <p className="text-xs text-muted-foreground">Already-existing accounts are skipped automatically. Financial alias is set to the customer short code so financial uploads auto-match.</p>
-            <Button
-              className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
-              onClick={handleSeed}
-              disabled={loading}
-              data-testid="button-confirm-seed-companies"
-            >
-              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {loading ? "Creating..." : "Create Accounts"}
-            </Button>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 export default function AdminUsers() {
   const { user: currentUser } = useAuth();
@@ -447,7 +356,6 @@ export default function AdminUsers() {
           <p className="text-muted-foreground mt-1">{users.length} users</p>
         </div>
         <div className="flex items-center gap-2">
-          {currentUser?.role === "admin" && <SeedCompaniesButton />}
           {currentUser?.role === "admin" && <BulkImportDialog />}
           <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
           <DialogTrigger asChild>

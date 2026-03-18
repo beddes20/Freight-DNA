@@ -84,6 +84,70 @@ export async function runMigrations() {
       )
     `);
     console.log("[migrations] one_on_one_topic_replies table created");
+
+    // Set financial aliases (short codes) for all companies where not already set
+    const companyAliases: [string, string][] = [
+      ['ACH Food Companies, Inc.', 'ACHFOAIL'],
+      ['ACUITY C/O RXO', 'ACUICHNC'],
+      ['ALF Inc', 'ALFISEWA'],
+      ['AMERICAN BOTTLING CO C/O RYDER LOGISTICS', 'AMERNOMI'],
+      ['American Woodmark Corporation (AWC)', 'AMERWIVA'],
+      ['Armstrong World Industries', 'ARMSLAPA'],
+      ['BAE MARITIME SOLUTIONS 0273 CO CTIS', 'BAESMETN'],
+      ['BAY VALLEY FOODS', 'BAYVOAIL'],
+      ['Ball Metal Beverage Container Corp', 'BALLWEC1'],
+      ['Brooklyn Bedding LLC', 'BROOGLAZ'],
+      ['CTSI C/o Rheem WH 1827', 'CTSIMIGA'],
+      ['Conagra', 'CONAOMNE'],
+      ['Covestro LLC C/O Cass Information System', 'COVESTMO'],
+      ['DE WELL SUPPLY CHAIN MANAGEMENT', 'DEWESACA'],
+      ['DOW CHEMICAL', 'DOWCMIMI'],
+      ['Ferrara', 'FERRCHIL'],
+      ['Ferrero', 'FERRPANJ'],
+      ['Food In Transit', 'FOODCHIL'],
+      ['HP HOOD CO', 'HPHOVENY'],
+      ['Honeywell International Inc.', 'HONEMONJ'],
+      ['Idahoan Foods', 'IDAHIDID'],
+      ['International Food Solutions', 'INTEOVFL'],
+      ['JBS FOODS', 'JBSFGRCO'],
+      ['JOHNSON CONTROLS - . Intelligent Audit', 'JOHNMEWI'],
+      ['Keurig Green Mountain', 'KEURNOMI'],
+      ['Lactalis American Group', 'LACTBUNY'],
+      ['MASONITE CORPORATION - MONTERREY', 'MASOMONX'],
+      ['MASONITE CORPORATION - US', 'MASOTAFL'],
+      ['MASONITE MEXICO SA DE CV', 'MASOCINX'],
+      ['MOHAWK', 'MOHACAGA'],
+      ['MOTTS C/O RYDER FREIGHT BILL PROCESSING', 'MOTTNOMI'],
+      ['MS International LLC', 'MSINORCA'],
+      ['National Food Group', 'NATINOMI'],
+      ['Nestle Purina Petcare C/O Cass', 'NESTSTMO'],
+      ['Nortek', 'NORTOKOK'],
+      ['POOL CORP C/O CASS INFORMATION SYSTEMS', 'POOLBRMO'],
+      ['Rheem (Laredo)', 'COCTMETN'],
+      ['Rick Miles Produce Service, Inc', 'RICKIDID'],
+      ['SDDC DOMESTIC BUSINESS', 'SDDCSCIL'],
+      ['Signode Industrial Group LLC', 'SIGNTAFL'],
+      ['Staples Inc', 'STAPCOSC'],
+      ['SurfacePrep', 'SURFBYMI'],
+      ['Terra Express Logistics Corp', 'TERRSACA'],
+      ['Vertiv Mexico VERUSD CO Data2Logistics', 'VERTFOFL'],
+      ['Wada Farms Marketing Group', 'WADAIDID'],
+      ['GMCCA (General Motors Customer Care & Aftermarket)', 'GMCCPOMI'],
+      ['MKB Construction', 'MKBCTEAZ'],
+      ['BLOOM ENERGY', 'BLOOSACA'],
+      ['Brooklyn Bedding DBA Southerland', 'BROOGLA1'],
+      ['360 LION USA INC.', 'WISEGACA'],
+      ['Rock Run Industries', 'ROCKMIIN'],
+      ['Waupaca Northwoods LLC', 'WAUPWAWI'],
+    ];
+
+    for (const [name, alias] of companyAliases) {
+      await client.query(
+        `UPDATE companies SET financial_alias = $1 WHERE name = $2 AND (financial_alias IS NULL OR financial_alias = '')`,
+        [alias, name]
+      );
+    }
+    console.log("[migrations] financial aliases set for all companies");
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {
