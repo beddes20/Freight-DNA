@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,13 +7,13 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   MessageSquare, ChevronDown, ChevronRight, Plus, Check,
-  Circle, Trash2, Archive, History, Tag,
+  Circle, Trash2, Archive, History, Tag, CornerDownRight, RotateCcw,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link } from "wouter";
-import type { OneOnOneSession, OneOnOneTopic, User } from "@shared/schema";
+import type { OneOnOneSession, OneOnOneTopic, OneOnOneTopicReply, User } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
 type SafeUser = Omit<User, "password">;
@@ -49,9 +49,24 @@ const tagColors: Record<string, string> = {
 
 function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic; teamMembers: SafeUser[]; currentUserId: string }) {
   const { toast } = useToast();
+  const [showReplies, setShowReplies] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const replyInputRef = useRef<HTMLInputElement>(null);
   const author = teamMembers.find(u => u.id === topic.addedById);
   const initials = author?.name?.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "?";
   const isNam = author?.role === "national_account_manager" || author?.role === "director" || author?.role === "sales";
+  const currentUser = teamMembers.find(u => u.id === currentUserId);
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director";
+
+  const { data: replies = [], isLoading: repliesLoading } = useQuery<OneOnOneTopicReply[]>({
+    queryKey: ["/api/one-on-one/topics", topic.id, "replies"],
+    queryFn: async () => {
+      const res = await fetch(`/api/one-on-one/topics/${topic.id}/replies`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch replies");
+      return res.json();
+    },
+    enabled: showReplies,
+  });
 
   const toggleMutation = useMutation({
     mutationFn: async () => {
@@ -76,49 +91,172 @@ function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic;
     },
   });
 
+  const addReplyMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const res = await apiRequest("POST", `/api/one-on-one/topics/${topic.id}/replies`, { text });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/topics", topic.id, "replies"] });
+      setReplyText("");
+    },
+    onError: () => toast({ title: "Failed to post reply", variant: "destructive" }),
+  });
+
+  const deleteReplyMutation = useMutation({
+    mutationFn: async (replyId: string) => {
+      await apiRequest("DELETE", `/api/one-on-one/topic-replies/${replyId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/topics", topic.id, "replies"] });
+    },
+  });
+
+  const handleOpenReplies = () => {
+    setShowReplies(true);
+    setTimeout(() => replyInputRef.current?.focus(), 100);
+  };
+
+  const getUserInitials = (userId: string) => {
+    const u = teamMembers.find(m => m.id === userId);
+    return u?.name?.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "?";
+  };
+  const getUserName = (userId: string) => teamMembers.find(m => m.id === userId)?.name || "Unknown";
+  const getUserIsNam = (userId: string) => {
+    const u = teamMembers.find(m => m.id === userId);
+    return u?.role === "national_account_manager" || u?.role === "director" || u?.role === "sales" || u?.role === "admin";
+  };
+
   return (
     <div
-      className={`flex items-start gap-2 p-2 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group ${topic.status === "discussed" ? "opacity-50" : ""}`}
+      className={`rounded-lg border border-transparent hover:border-border transition-all group ${topic.status === "discussed" ? "opacity-60" : ""}`}
       data-testid={`topic-row-${topic.id}`}
     >
-      <button
-        onClick={() => toggleMutation.mutate()}
-        className="shrink-0 mt-0.5 hover:scale-110 transition-transform"
-        title={topic.status === "discussed" ? "Mark as pending" : "Mark as discussed"}
-        data-testid={`button-toggle-topic-${topic.id}`}
-      >
-        {topic.status === "discussed" ? (
-          <Check className="h-4 w-4 text-green-500" />
-        ) : (
-          <Circle className="h-4 w-4 text-muted-foreground" />
-        )}
-      </button>
-      <div className="flex-1 min-w-0">
-        <p className={`text-sm ${topic.status === "discussed" ? "line-through text-muted-foreground" : ""}`} data-testid={`text-topic-${topic.id}`}>
-          {topic.text}
-        </p>
-        <div className="flex items-center gap-1.5 flex-wrap mt-1">
-          {topic.tag && (
-            <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${tagColors[topic.tag] || "bg-muted text-muted-foreground"}`} data-testid={`badge-topic-tag-${topic.id}`}>
-              {topic.tag}
-            </span>
+      <div className="flex items-start gap-2 p-2 hover:bg-muted/50 rounded-lg">
+        {/* Toggle button — shows undo affordance when discussed */}
+        <button
+          onClick={() => toggleMutation.mutate()}
+          className="shrink-0 mt-0.5 hover:scale-110 transition-transform"
+          title={topic.status === "discussed" ? "Mark as pending (undo)" : "Mark as discussed"}
+          data-testid={`button-toggle-topic-${topic.id}`}
+        >
+          {topic.status === "discussed" ? (
+            <Check className="h-4 w-4 text-green-500" />
+          ) : (
+            <Circle className="h-4 w-4 text-muted-foreground" />
           )}
-          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-            <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${isNam ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"}`}>
-              {initials}
+        </button>
+
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm ${topic.status === "discussed" ? "line-through text-muted-foreground" : ""}`} data-testid={`text-topic-${topic.id}`}>
+            {topic.text}
+          </p>
+          <div className="flex items-center gap-1.5 flex-wrap mt-1">
+            {topic.tag && (
+              <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${tagColors[topic.tag] || "bg-muted text-muted-foreground"}`} data-testid={`badge-topic-tag-${topic.id}`}>
+                {topic.tag}
+              </span>
+            )}
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${isNam ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"}`}>
+                {initials}
+              </span>
+              {author?.name || "Unknown"}
             </span>
-            {author?.name || "Unknown"}
-          </span>
+            {/* Undo button — clearly visible on discussed topics */}
+            {topic.status === "discussed" && (
+              <button
+                onClick={() => toggleMutation.mutate()}
+                className="flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 hover:underline ml-1"
+                data-testid={`button-undo-topic-${topic.id}`}
+              >
+                <RotateCcw className="h-3 w-3" /> Undo
+              </button>
+            )}
+            {/* Reply toggle */}
+            <button
+              onClick={() => showReplies ? setShowReplies(false) : handleOpenReplies()}
+              className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground ml-1 transition-colors"
+              data-testid={`button-reply-topic-${topic.id}`}
+            >
+              <CornerDownRight className="h-3 w-3" />
+              {showReplies ? "Hide" : "Reply"}
+            </button>
+          </div>
+          <FileAttachmentList entityType="one_on_one_topic" entityIds={[topic.id]} />
         </div>
-        <FileAttachmentList entityType="one_on_one_topic" entityIds={[topic.id]} />
+
+        <button
+          onClick={() => deleteMutation.mutate()}
+          className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity mt-0.5"
+          data-testid={`button-delete-topic-${topic.id}`}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
       </div>
-      <button
-        onClick={() => deleteMutation.mutate()}
-        className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity mt-0.5"
-        data-testid={`button-delete-topic-${topic.id}`}
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
+
+      {/* Reply thread */}
+      {showReplies && (
+        <div className="ml-8 mr-2 mb-2 border-l-2 border-indigo-200 dark:border-indigo-800 pl-3 space-y-2" data-testid={`reply-thread-${topic.id}`}>
+          {repliesLoading ? (
+            <div className="py-1"><Skeleton className="h-6 w-32" /></div>
+          ) : replies.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-1 italic">No replies yet — be the first to respond</p>
+          ) : (
+            replies.map(reply => {
+              const rInitials = getUserInitials(reply.authorId);
+              const rIsNam = getUserIsNam(reply.authorId);
+              const canDelete = reply.authorId === currentUserId || isAdmin;
+              return (
+                <div key={reply.id} className="flex items-start gap-1.5 group/reply" data-testid={`reply-${reply.id}`}>
+                  <span className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold mt-0.5 ${rIsNam ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"}`}>
+                    {rInitials}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs font-medium">{getUserName(reply.authorId)}</span>
+                    <span className="text-[10px] text-muted-foreground ml-1.5">{new Date(reply.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
+                    <p className="text-xs text-foreground mt-0.5 break-words">{reply.text}</p>
+                  </div>
+                  {canDelete && (
+                    <button
+                      onClick={() => deleteReplyMutation.mutate(reply.id)}
+                      className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/reply:opacity-100 transition-opacity mt-0.5"
+                      data-testid={`button-delete-reply-${reply.id}`}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          )}
+          {/* Reply input */}
+          <div className="flex gap-1.5 pt-1">
+            <input
+              ref={replyInputRef}
+              value={replyText}
+              onChange={e => setReplyText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter" && !e.shiftKey && replyText.trim()) {
+                  e.preventDefault();
+                  addReplyMutation.mutate(replyText.trim());
+                }
+              }}
+              placeholder="Write a reply…"
+              className="flex-1 text-xs h-7 px-2 rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              data-testid={`input-reply-${topic.id}`}
+            />
+            <button
+              onClick={() => replyText.trim() && addReplyMutation.mutate(replyText.trim())}
+              disabled={!replyText.trim() || addReplyMutation.isPending}
+              className="h-7 px-2 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+              data-testid={`button-send-reply-${topic.id}`}
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

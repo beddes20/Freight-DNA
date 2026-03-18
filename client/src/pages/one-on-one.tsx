@@ -9,12 +9,12 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Users, Plus, CheckCircle2, Circle, Trash2, ChevronDown, ChevronUp,
   Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle,
-  StickyNote, ClipboardList,
+  StickyNote, ClipboardList, CornerDownRight,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
-import type { OneOnOneSession, OneOnOneTopic, User } from "@shared/schema";
+import type { OneOnOneSession, OneOnOneTopic, OneOnOneTopicReply, User } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
 type SafeUser = Omit<User, "password">;
@@ -491,6 +491,8 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
                         addedByName={getUserName(topic.addedById)}
                         onToggle={() => toggleMutation.mutate({ topicId: topic.id, status: "discussed" })}
                         onDelete={() => deleteMutation.mutate(topic.id)}
+                        currentUserId={currentUserId}
+                        allUsers={allUsers}
                       />
                     ))}
                   </div>
@@ -508,6 +510,8 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
                         onToggle={() => toggleMutation.mutate({ topicId: topic.id, status: "pending" })}
                         onDelete={() => deleteMutation.mutate(topic.id)}
                         dimmed
+                        currentUserId={currentUserId}
+                        allUsers={allUsers}
                       />
                     ))}
                   </div>
@@ -557,43 +561,166 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
 
 // ─── Topic Row ────────────────────────────────────────────────────────────────
 
-function TopicRow({ topic, addedByName, onToggle, onDelete, dimmed }: {
+function TopicRow({ topic, addedByName, onToggle, onDelete, dimmed, currentUserId, allUsers }: {
   topic: OneOnOneTopic;
   addedByName: string;
   onToggle: () => void;
   onDelete: () => void;
   dimmed?: boolean;
+  currentUserId: string;
+  allUsers: SafeUser[];
 }) {
+  const { toast } = useToast();
   const tag = TAG_CONFIG[topic.tag] || TAG_CONFIG.fyi;
+  const [showReplies, setShowReplies] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const replyInputRef = useRef<HTMLInputElement>(null);
+  const currentUser = allUsers.find(u => u.id === currentUserId);
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director";
+
+  const { data: replies = [], isLoading: repliesLoading } = useQuery<OneOnOneTopicReply[]>({
+    queryKey: ["/api/one-on-one/topics", topic.id, "replies"],
+    queryFn: async () => {
+      const res = await fetch(`/api/one-on-one/topics/${topic.id}/replies`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: showReplies,
+  });
+
+  const addReplyMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const res = await apiRequest("POST", `/api/one-on-one/topics/${topic.id}/replies`, { text });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/topics", topic.id, "replies"] });
+      setReplyText("");
+    },
+    onError: () => toast({ title: "Failed to post reply", variant: "destructive" }),
+  });
+
+  const deleteReplyMutation = useMutation({
+    mutationFn: async (replyId: string) => {
+      await apiRequest("DELETE", `/api/one-on-one/topic-replies/${replyId}`);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/one-on-one/topics", topic.id, "replies"] }),
+  });
+
+  const getUserName = (userId: string) => allUsers.find(u => u.id === userId)?.name || "Unknown";
+  const getUserInitials = (userId: string) => {
+    const u = allUsers.find(m => m.id === userId);
+    return u?.name?.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "?";
+  };
+  const getUserIsNam = (userId: string) => {
+    const u = allUsers.find(m => m.id === userId);
+    return u?.role === "national_account_manager" || u?.role === "director" || u?.role === "sales" || u?.role === "admin";
+  };
+
   return (
     <div
-      className={`flex items-start gap-3 p-3 rounded-xl border border-transparent hover:border-border hover:bg-muted/30 transition-all group ${dimmed ? "opacity-60" : ""}`}
+      className={`rounded-xl border border-transparent hover:border-border transition-all group ${dimmed ? "opacity-60" : ""}`}
       data-testid={`row-topic-${topic.id}`}
     >
-      <button
-        onClick={onToggle}
-        className="mt-0.5 shrink-0 text-muted-foreground hover:text-primary transition-colors"
-        data-testid={`btn-toggle-topic-${topic.id}`}
-      >
-        {topic.status === "discussed"
-          ? <CheckCircle2 className="h-5 w-5 text-green-500" />
-          : <Circle className="h-5 w-5" />}
-      </button>
-      <div className="flex-1 min-w-0">
-        <p className={`text-sm ${dimmed ? "line-through text-muted-foreground" : "text-foreground"}`}>{topic.text}</p>
-        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${tag.color}`}>{tag.label}</span>
-          <span className="text-xs text-muted-foreground">Added by {addedByName}</span>
+      <div className="flex items-start gap-3 p-3 hover:bg-muted/30 rounded-xl">
+        <button
+          onClick={onToggle}
+          className="mt-0.5 shrink-0 text-muted-foreground hover:text-primary transition-colors"
+          data-testid={`btn-toggle-topic-${topic.id}`}
+        >
+          {topic.status === "discussed"
+            ? <CheckCircle2 className="h-5 w-5 text-green-500" />
+            : <Circle className="h-5 w-5" />}
+        </button>
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm ${dimmed ? "line-through text-muted-foreground" : "text-foreground"}`}>{topic.text}</p>
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${tag.color}`}>{tag.label}</span>
+            <span className="text-xs text-muted-foreground">Added by {addedByName}</span>
+            {dimmed && (
+              <button
+                onClick={onToggle}
+                className="flex items-center gap-0.5 text-xs text-amber-600 dark:text-amber-400 hover:underline"
+                data-testid={`btn-undo-topic-${topic.id}`}
+              >
+                <RotateCcw className="h-3 w-3" /> Undo
+              </button>
+            )}
+            <button
+              onClick={() => { setShowReplies(v => !v); if (!showReplies) setTimeout(() => replyInputRef.current?.focus(), 100); }}
+              className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              data-testid={`btn-reply-topic-${topic.id}`}
+            >
+              <CornerDownRight className="h-3 w-3" />
+              {showReplies ? "Hide" : "Reply"}
+            </button>
+          </div>
+          <FileAttachmentList entityType="one_on_one_topic" entityIds={[topic.id]} />
         </div>
-        <FileAttachmentList entityType="one_on_one_topic" entityIds={[topic.id]} />
+        <button
+          onClick={onDelete}
+          className="opacity-0 group-hover:opacity-100 shrink-0 text-muted-foreground hover:text-destructive transition-all mt-0.5"
+          data-testid={`btn-delete-topic-${topic.id}`}
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
       </div>
-      <button
-        onClick={onDelete}
-        className="opacity-0 group-hover:opacity-100 shrink-0 text-muted-foreground hover:text-destructive transition-all mt-0.5"
-        data-testid={`btn-delete-topic-${topic.id}`}
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
+
+      {/* Reply thread */}
+      {showReplies && (
+        <div className="ml-11 mr-3 mb-3 border-l-2 border-indigo-200 dark:border-indigo-800 pl-3 space-y-2" data-testid={`reply-thread-${topic.id}`}>
+          {repliesLoading ? (
+            <Skeleton className="h-6 w-32" />
+          ) : replies.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-1 italic">No replies yet — be the first to respond</p>
+          ) : (
+            replies.map(reply => {
+              const rInitials = getUserInitials(reply.authorId);
+              const rIsNam = getUserIsNam(reply.authorId);
+              const canDelete = reply.authorId === currentUserId || isAdmin;
+              return (
+                <div key={reply.id} className="flex items-start gap-1.5 group/reply" data-testid={`reply-${reply.id}`}>
+                  <span className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold mt-0.5 ${rIsNam ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"}`}>
+                    {rInitials}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs font-medium">{getUserName(reply.authorId)}</span>
+                    <span className="text-[10px] text-muted-foreground ml-1.5">{new Date(reply.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
+                    <p className="text-xs text-foreground mt-0.5 break-words">{reply.text}</p>
+                  </div>
+                  {canDelete && (
+                    <button
+                      onClick={() => deleteReplyMutation.mutate(reply.id)}
+                      className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/reply:opacity-100 transition-opacity mt-0.5"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          )}
+          <div className="flex gap-1.5 pt-1">
+            <input
+              ref={replyInputRef}
+              value={replyText}
+              onChange={e => setReplyText(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && replyText.trim()) { e.preventDefault(); addReplyMutation.mutate(replyText.trim()); } }}
+              placeholder="Write a reply…"
+              className="flex-1 text-xs h-7 px-2 rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              data-testid={`input-reply-${topic.id}`}
+            />
+            <button
+              onClick={() => replyText.trim() && addReplyMutation.mutate(replyText.trim())}
+              disabled={!replyText.trim() || addReplyMutation.isPending}
+              className="h-7 px-2 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+              data-testid={`btn-send-reply-${topic.id}`}
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

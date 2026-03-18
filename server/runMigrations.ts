@@ -72,6 +72,18 @@ export async function runMigrations() {
     // Add parent_id to task_comments for threaded replies
     await client.query(`ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS parent_id varchar`);
     console.log("[migrations] parent_id added to task_comments");
+
+    // Add topic replies table for 1:1 threaded dialogue
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS one_on_one_topic_replies (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        topic_id varchar NOT NULL REFERENCES one_on_one_topics(id) ON DELETE CASCADE,
+        author_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        text text NOT NULL,
+        created_at text NOT NULL
+      )
+    `);
+    console.log("[migrations] one_on_one_topic_replies table created");
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

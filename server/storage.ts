@@ -16,6 +16,7 @@ import {
   feedPostReactions,
   oneOnOneSessions,
   oneOnOneTopics,
+  oneOnOneTopicReplies,
   goals,
   goalComments,
   touchpoints,
@@ -43,6 +44,8 @@ import {
   type InsertOneOnOneSession,
   type OneOnOneTopic,
   type InsertOneOnOneTopic,
+  type OneOnOneTopicReply,
+  type InsertOneOnOneTopicReply,
   type Notification,
   type InsertNotification,
   notifications,
@@ -165,6 +168,9 @@ export interface IStorage {
   toggleTopicStatus(topicId: string): Promise<OneOnOneTopic | undefined>;
   updateTopicStatus(topicId: string, status: string): Promise<OneOnOneTopic | undefined>;
   deleteTopic(topicId: string): Promise<boolean>;
+  getTopicReplies(topicId: string): Promise<OneOnOneTopicReply[]>;
+  addTopicReply(reply: InsertOneOnOneTopicReply): Promise<OneOnOneTopicReply>;
+  deleteTopicReply(replyId: string): Promise<boolean>;
   getArchivedSessions(namId: string, amId: string): Promise<OneOnOneSession[]>;
   updateSessionNotes(sessionId: string, notes: string): Promise<OneOnOneSession | undefined>;
   getActionItemsByPairing(namId: string, amId: string): Promise<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>;
@@ -765,6 +771,22 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTopic(topicId: string): Promise<boolean> {
     const result = await db.delete(oneOnOneTopics).where(eq(oneOnOneTopics.id, topicId)).returning();
+    return result.length > 0;
+  }
+
+  async getTopicReplies(topicId: string): Promise<OneOnOneTopicReply[]> {
+    return db.select().from(oneOnOneTopicReplies)
+      .where(eq(oneOnOneTopicReplies.topicId, topicId))
+      .orderBy(oneOnOneTopicReplies.createdAt);
+  }
+
+  async addTopicReply(reply: InsertOneOnOneTopicReply): Promise<OneOnOneTopicReply> {
+    const [created] = await db.insert(oneOnOneTopicReplies).values(reply).returning();
+    return created;
+  }
+
+  async deleteTopicReply(replyId: string): Promise<boolean> {
+    const result = await db.delete(oneOnOneTopicReplies).where(eq(oneOnOneTopicReplies.id, replyId)).returning();
     return result.length > 0;
   }
 

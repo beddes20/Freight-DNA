@@ -243,6 +243,18 @@ export const insertOneOnOneTopicSchema = createInsertSchema(oneOnOneTopics).omit
 export type InsertOneOnOneTopic = z.infer<typeof insertOneOnOneTopicSchema>;
 export type OneOnOneTopic = typeof oneOnOneTopics.$inferSelect;
 
+export const oneOnOneTopicReplies = pgTable("one_on_one_topic_replies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  topicId: varchar("topic_id").notNull().references(() => oneOnOneTopics.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  text: text("text").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertOneOnOneTopicReplySchema = createInsertSchema(oneOnOneTopicReplies).omit({ id: true });
+export type InsertOneOnOneTopicReply = z.infer<typeof insertOneOnOneTopicReplySchema>;
+export type OneOnOneTopicReply = typeof oneOnOneTopicReplies.$inferSelect;
+
 export const feedPostReactions = pgTable("feed_post_reactions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   feedPostId: varchar("feed_post_id").notNull().references(() => feedPosts.id, { onDelete: "cascade" }),

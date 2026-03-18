@@ -3342,6 +3342,52 @@ export async function registerRoutes(
     }
   });
 
+  // Topic replies — threaded dialogue within a 1:1 topic
+  app.get("/api/one-on-one/topics/:id/replies", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const topic = await storage.getTopic(req.params.id);
+      if (!topic) return res.status(404).json({ error: "Topic not found" });
+      const replies = await storage.getTopicReplies(req.params.id);
+      res.json(replies);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch replies" });
+    }
+  });
+
+  app.post("/api/one-on-one/topics/:id/replies", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const topic = await storage.getTopic(req.params.id);
+      if (!topic) return res.status(404).json({ error: "Topic not found" });
+      const { text } = req.body;
+      if (!text?.trim()) return res.status(400).json({ error: "Text required" });
+      const reply = await storage.addTopicReply({
+        topicId: req.params.id,
+        authorId: currentUser.id,
+        text: text.trim(),
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(reply);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to add reply" });
+    }
+  });
+
+  app.delete("/api/one-on-one/topic-replies/:id", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const deleted = await storage.deleteTopicReply(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Reply not found" });
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete reply" });
+    }
+  });
+
   app.post("/api/one-on-one/sessions/:id/close", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
