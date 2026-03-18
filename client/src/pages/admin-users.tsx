@@ -195,8 +195,11 @@ function OrgChartNode({ user, allUsers }: { user: SafeUser; allUsers: SafeUser[]
   );
 }
 
+const SALES_ROLES = new Set(["sales", "sales_director"]);
+
 function OrgChartView({ users }: { users: SafeUser[] }) {
-  const roots = users.filter(u => !u.managerId).sort((a, b) => a.name.localeCompare(b.name));
+  const chartUsers = users.filter(u => !SALES_ROLES.has(u.role));
+  const roots = chartUsers.filter(u => !u.managerId).sort((a, b) => a.name.localeCompare(b.name));
 
   if (users.length === 0) {
     return <p className="text-center py-12 text-muted-foreground">No users to display.</p>;
@@ -210,7 +213,7 @@ function OrgChartView({ users }: { users: SafeUser[] }) {
         ) : (
           <div className="flex gap-12 justify-start">
             {roots.map(root => (
-              <OrgChartNode key={root.id} user={root} allUsers={users} />
+              <OrgChartNode key={root.id} user={root} allUsers={chartUsers} />
             ))}
           </div>
         )}
