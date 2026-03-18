@@ -3734,6 +3734,98 @@ export async function registerRoutes(
     }
   });
 
+  // ── Goals Leaderboard ─────────────────────────────────────────────────────
+  app.get("/api/goals/leaderboard", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      // All goals across the org (NAMs see company-wide leaderboard)
+      const allGoals = await storage.getGoals({});
+      const allUsers = await storage.getUsers();
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const activeGoals = allGoals.filter(g => g.startDate <= todayStr && g.endDate >= todayStr);
+
+      const uploads = await storage.getFinancialUploads();
+      const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
+
+      type GoalEntry = { metric: string; customLabel: string | null; amId: string; amName: string; currentValue: number; target: number; pct: number };
+      const goalEntries: GoalEntry[] = [];
+
+      for (const goal of activeGoals) {
+        const amUser = allUsers.find(u => u.id === goal.amId);
+        if (!amUser) continue;
+
+        let effectiveValue = parseFloat(goal.currentValue || "0");
+
+        if (goal.metric === "contacts_added") {
+          effectiveValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "touchpoints") {
+          effectiveValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "margin" && latestUpload) {
+          const repKey = (amUser as any).financialRepId as string | null;
+          if (repKey) {
+            const raw = (latestUpload.summaryRows as any[]) || [];
+            const repKeyLower = repKey.toLowerCase();
+            let total = 0;
+            if (!raw.length) {
+              const txRows: any[] = (latestUpload.rows as any[]) || [];
+              const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+              const byRep: Record<string, Record<string, number>> = {};
+              for (const row of txRows) {
+                const { monthKey, margin } = parseHistoricalRow(row);
+                const rep = String(row["Operations user"] || row["Salesperson"] || "").trim().toLowerCase();
+                if (!rep) continue;
+                if (!byRep[rep]) byRep[rep] = {};
+                if (monthKey) byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
+              }
+              const repMonths = byRep[repKeyLower] || {};
+              if (goalMonthKey) total = repMonths[goalMonthKey] || 0;
+            } else {
+              const firstRow = raw[0] || {};
+              const usesEmptyKeys = "__EMPTY" in firstRow;
+              let rows = raw;
+              if (usesEmptyKeys) rows = raw.filter((r: any) => { const n = String(r["__EMPTY"] || "").trim(); return n && n !== "Customer Name" && n !== "TOTAL" && n !== "Customer code"; });
+              for (const r of rows) {
+                let repName: string, totalMargin: number;
+                if (usesEmptyKeys) { repName = String(r["__EMPTY_6"] || "").trim(); totalMargin = Number(r["__EMPTY_3"] ?? 0); }
+                else { repName = String(r["Rep Name"] || r["Rep"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim(); totalMargin = Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0); }
+                if (repName.toLowerCase() === repKeyLower) total += totalMargin;
+              }
+            }
+            if (total > 0) effectiveValue = Math.round(total);
+          }
+        }
+
+        const target = parseFloat(goal.target || "0");
+        const pct = target > 0 ? Math.min((effectiveValue / target) * 100, 999) : 0;
+        goalEntries.push({ metric: goal.metric, customLabel: goal.customLabel, amId: goal.amId, amName: amUser.name, currentValue: effectiveValue, target, pct });
+      }
+
+      // Group by metric (custom uses label as sub-key), take top 3 by pct
+      const metricGroups = new Map<string, GoalEntry[]>();
+      for (const entry of goalEntries) {
+        const key = entry.metric === "custom" ? `custom:${entry.customLabel || ""}` : entry.metric;
+        if (!metricGroups.has(key)) metricGroups.set(key, []);
+        metricGroups.get(key)!.push(entry);
+      }
+
+      const METRIC_ORDER = ["margin", "touchpoints", "contacts_added", "load_count", "custom"];
+      const leaderboard: { metric: string; customLabel: string | null; entries: { rank: number; amId: string; amName: string; currentValue: number; target: number; pct: number }[] }[] = [];
+
+      for (const [, entries] of metricGroups) {
+        const sorted = [...entries].sort((a, b) => b.pct - a.pct).slice(0, 3);
+        leaderboard.push({ metric: sorted[0].metric, customLabel: sorted[0].customLabel, entries: sorted.map((e, i) => ({ rank: i + 1, amId: e.amId, amName: e.amName, currentValue: e.currentValue, target: e.target, pct: e.pct })) });
+      }
+
+      leaderboard.sort((a, b) => METRIC_ORDER.indexOf(a.metric) - METRIC_ORDER.indexOf(b.metric));
+      res.json(leaderboard);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch leaderboard" });
+    }
+  });
+
   app.post("/api/goals", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

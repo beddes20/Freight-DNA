@@ -145,6 +145,16 @@ export default function Dashboard() {
     refetchInterval: 30000,
   });
 
+  const { data: leaderboard = [], isLoading: leaderboardLoading } = useQuery<{
+    metric: string;
+    customLabel: string | null;
+    entries: { rank: number; amId: string; amName: string; currentValue: number; target: number; pct: number }[];
+  }[]>({
+    queryKey: ["/api/goals/leaderboard"],
+    enabled: canSeeTeam,
+    refetchInterval: 60000,
+  });
+
   const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string } | undefined>();
   const [prefillDialogOpen, setPrefillDialogOpen] = useState(false);
 
@@ -1325,6 +1335,78 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {canSeeTeam && (leaderboardLoading || leaderboard.length > 0) && (
+        <Card data-testid="card-leaderboard">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Crown className="h-4 w-4 text-yellow-500" />
+              Goal Progress Leaderboard
+              <span className="ml-auto text-xs font-normal text-muted-foreground">Top 3 per metric · goal %</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {leaderboardLoading ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {[1,2,3].map(i => <Skeleton key={i} className="h-32 w-full rounded-lg" />)}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {leaderboard.map(group => {
+                  const metricLabel = group.metric === "custom"
+                    ? (group.customLabel || "Custom")
+                    : group.metric === "contacts_added" ? "New Contacts"
+                    : group.metric === "touchpoints" ? "Touchpoints"
+                    : group.metric === "load_count" ? "Load Count"
+                    : group.metric === "margin" ? "Margin $"
+                    : group.metric;
+
+                  const medalColors = ["text-yellow-500", "text-slate-400", "text-amber-700"];
+                  const medalBg = ["bg-yellow-50 dark:bg-yellow-950/20", "bg-slate-50 dark:bg-slate-800/20", "bg-amber-50 dark:bg-amber-950/20"];
+                  const medals = ["🥇", "🥈", "🥉"];
+
+                  return (
+                    <div key={`${group.metric}:${group.customLabel}`} className="rounded-lg border bg-card p-3 space-y-2" data-testid={`leaderboard-group-${group.metric}`}>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{metricLabel}</p>
+                      {group.entries.map((entry, idx) => {
+                        const pct = Math.min(entry.pct, 100);
+                        const overGoal = entry.pct >= 100;
+                        return (
+                          <div key={entry.amId} className={`rounded-md p-2 ${medalBg[idx] || ""}`} data-testid={`leaderboard-entry-${group.metric}-${entry.rank}`}>
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-base leading-none">{medals[idx]}</span>
+                                <span className="text-sm font-medium truncate">{entry.amName.split(" ")[0]}</span>
+                              </div>
+                              <span className={`text-xs font-bold tabular-nums shrink-0 ${overGoal ? "text-green-600 dark:text-green-400" : medalColors[idx]}`}>
+                                {Math.round(entry.pct)}%
+                              </span>
+                            </div>
+                            <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all ${overGoal ? "bg-green-500" : idx === 0 ? "bg-yellow-500" : idx === 1 ? "bg-slate-400" : "bg-amber-700"}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              {group.metric === "margin"
+                                ? `$${Math.round(entry.currentValue).toLocaleString()} / $${Math.round(entry.target).toLocaleString()}`
+                                : `${Math.round(entry.currentValue).toLocaleString()} / ${Math.round(entry.target).toLocaleString()}`}
+                            </p>
+                          </div>
+                        );
+                      })}
+                      {group.entries.length === 0 && (
+                        <p className="text-xs text-muted-foreground py-2">No active goals</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {coldContacts.length > 0 && (
         <Card data-testid="card-cold-contacts">

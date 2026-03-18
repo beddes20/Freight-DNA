@@ -640,52 +640,61 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2" data-testid="text-tasks-heading">
-            <ListTodo className="h-6 w-6 text-blue-600 dark:text-blue-400" />
-            Tasks
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1" data-testid="text-tasks-subtitle">
-            {isAdmin ? "All team tasks" : "Your tasks in one place"}
-          </p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          {/* View toggle */}
-          <div className="flex rounded-md border overflow-hidden" data-testid="view-toggle">
-            <button
-              className={`px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors ${viewMode === "list" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
-              onClick={() => setViewMode("list")}
-              data-testid="button-view-list"
-            >
-              <List className="h-3.5 w-3.5" /> List
-            </button>
-            <button
-              className={`px-3 py-1.5 text-sm flex items-center gap-1.5 border-l transition-colors ${viewMode === "calendar" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
-              onClick={() => setViewMode("calendar")}
-              data-testid="button-view-calendar"
-            >
-              <Calendar className="h-3.5 w-3.5" /> Calendar
-            </button>
-          </div>
-          <Button
-            variant="outline"
-            className="gap-1"
-            onClick={() => setAlertDialogOpen(true)}
-            data-testid="button-add-alert"
-          >
-            <Bell className="h-4 w-4" /> Add Alert
-          </Button>
-          <Button
-            className="gap-1"
-            onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
-            data-testid="button-add-task-page"
-          >
-            <Plus className="h-4 w-4" /> Add Task
-          </Button>
-        </div>
+    <div className="flex gap-0 p-4 sm:p-6 max-w-5xl mx-auto w-full">
+      {/* Left vertical tab strip */}
+      <div className="flex flex-col gap-1 w-36 shrink-0 pt-12 pr-3" data-testid="tasks-tab-nav">
+        <button
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left
+            ${viewMode === "list"
+              ? "bg-primary text-primary-foreground shadow-sm"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+          onClick={() => setViewMode("list")}
+          data-testid="button-view-list"
+        >
+          <List className="h-4 w-4 shrink-0" /> List
+        </button>
+        <button
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left
+            ${viewMode === "calendar"
+              ? "bg-primary text-primary-foreground shadow-sm"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+          onClick={() => setViewMode("calendar")}
+          data-testid="button-view-calendar"
+        >
+          <Calendar className="h-4 w-4 shrink-0" /> Calendar
+        </button>
       </div>
+
+      {/* Main content */}
+      <div className="flex-1 min-w-0 flex flex-col gap-6">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2" data-testid="text-tasks-heading">
+              <ListTodo className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+              Tasks
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1" data-testid="text-tasks-subtitle">
+              {isAdmin ? "All team tasks" : "Your tasks in one place"}
+            </p>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              className="gap-1"
+              onClick={() => setAlertDialogOpen(true)}
+              data-testid="button-add-alert"
+            >
+              <Bell className="h-4 w-4" /> Add Alert
+            </Button>
+            <Button
+              className="gap-1"
+              onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
+              data-testid="button-add-task-page"
+            >
+              <Plus className="h-4 w-4" /> Add Task
+            </Button>
+          </div>
+        </div>
 
       {viewMode === "calendar" && (
         <TaskCalendarView
@@ -826,6 +835,7 @@ export default function TasksPage() {
         onOpenChange={setAlertDialogOpen}
         companies={companies}
       />
+      </div>
     </div>
   );
 }
