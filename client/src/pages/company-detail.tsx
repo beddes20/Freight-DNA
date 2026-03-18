@@ -1148,13 +1148,14 @@ export default function CompanyDetail() {
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><DollarSign className="h-3 w-3" /> Financial Name</label>
                     <input
-                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-muted text-muted-foreground cursor-not-allowed select-none"
                       placeholder={`Default: ${company!.name}`}
                       value={financialAliasEdit}
-                      onChange={e => setFinancialAliasEdit(e.target.value)}
+                      readOnly
+                      tabIndex={-1}
                       data-testid="input-financial-alias"
                     />
-                    <p className="text-[11px] text-muted-foreground">Alternate name used to match this account in uploaded financial data.</p>
+                    <p className="text-[11px] text-muted-foreground">Set automatically from uploaded financial data — contact an admin to update.</p>
                   </div>
                 </div>
               </div>
