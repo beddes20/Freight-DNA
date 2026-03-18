@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, Building2, List, Network } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network } from "lucide-react";
 import type { User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
@@ -455,113 +455,6 @@ function BulkImportDialog() {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-function getInitials(name: string): string {
-  return name
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
-}
-
-const AVATAR_COLORS: Record<string, string> = {
-  admin: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
-  director: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300",
-  national_account_manager: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
-  account_manager: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
-  sales: "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
-  sales_director: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
-  logistics_manager: "bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300",
-  logistics_coordinator: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300",
-};
-
-function OrgNode({ user, childrenMap, depth }: { user: SafeUser; childrenMap: Map<string | null, SafeUser[]>; depth: number }) {
-  const children = childrenMap.get(user.id) || [];
-  const directReportCount = children.length;
-
-  return (
-    <div className="flex flex-col items-center" data-testid={`org-node-${user.id}`}>
-      <div className="flex flex-col items-center">
-        <div
-          className="w-48 rounded-xl border bg-card shadow-sm p-3 flex flex-col items-center gap-2 text-center"
-        >
-          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${AVATAR_COLORS[user.role] || "bg-gray-100 text-gray-700"}`}>
-            {getInitials(user.name)}
-          </div>
-          <div>
-            <p className="font-medium text-sm leading-tight" data-testid={`org-name-${user.id}`}>{user.name}</p>
-            <Badge className={`mt-1 text-xs ${ROLE_COLORS[user.role]}`} data-testid={`org-role-${user.id}`}>
-              {ROLE_LABELS[user.role] || user.role}
-            </Badge>
-          </div>
-          {directReportCount > 0 && (
-            <p className="text-xs text-muted-foreground" data-testid={`org-reports-${user.id}`}>
-              {directReportCount} direct report{directReportCount !== 1 ? "s" : ""}
-            </p>
-          )}
-        </div>
-      </div>
-
-      {children.length > 0 && (
-        <div className="flex flex-col items-center">
-          <div className="w-px h-6 bg-border" />
-          <div className="flex items-start gap-4 relative">
-            {children.length > 1 && (
-              <div
-                className="absolute top-0 h-px bg-border"
-                style={{
-                  left: "calc(50% / " + children.length + " + 0.5rem)",
-                  right: "calc(50% / " + children.length + " + 0.5rem)",
-                }}
-              />
-            )}
-            {children.map((child) => (
-              <div key={child.id} className="flex flex-col items-center">
-                <div className="w-px h-6 bg-border" />
-                <OrgNode user={child} childrenMap={childrenMap} depth={depth + 1} />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function OrgChart({ users }: { users: SafeUser[] }) {
-  const childrenMap = new Map<string | null, SafeUser[]>();
-
-  for (const user of users) {
-    const key = user.managerId || null;
-    if (!childrenMap.has(key)) childrenMap.set(key, []);
-    childrenMap.get(key)!.push(user);
-  }
-
-  for (const [key, children] of childrenMap.entries()) {
-    childrenMap.set(key, children.slice().sort((a, b) => a.name.localeCompare(b.name)));
-  }
-
-  const roots = childrenMap.get(null) || [];
-
-  if (roots.length === 0) {
-    return (
-      <div className="flex items-center justify-center py-16 text-muted-foreground" data-testid="org-chart-empty">
-        No users to display in org chart
-      </div>
-    );
-  }
-
-  return (
-    <div className="overflow-x-auto pb-8" data-testid="org-chart">
-      <div className="flex gap-8 justify-center min-w-max px-8 pt-6">
-        {roots.map((root) => (
-          <OrgNode key={root.id} user={root} childrenMap={childrenMap} depth={0} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export default function AdminUsers() {
   const { user: currentUser } = useAuth();
   const { data: users = [], isLoading } = useQuery<SafeUser[]>({ queryKey: ["/api/users"] });
@@ -647,7 +540,6 @@ export default function AdminUsers() {
             </Button>
           </div>
 
-          {currentUser?.role === "admin" && <SeedCompaniesButton />}
           {currentUser?.role === "admin" && <BulkImportDialog />}
           <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
             <DialogTrigger asChild>
