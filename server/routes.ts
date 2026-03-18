@@ -3154,7 +3154,7 @@ export async function registerRoutes(
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const uploads = await storage.getFinancialUploads();
-      if (!uploads.length) return res.json({ months: [], destinations: [], corridors: [], totalLoads: 0, spotLoads: 0, totalMargin: 0 });
+      if (!uploads.length) return res.json({ months: [], topDestinations: [], topCorridors: [], totalLoads: 0, spotLoads: 0, totalMargin: 0 });
 
       // Same normalize + nameMatches logic as the frontend
       const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();

@@ -439,6 +439,7 @@ export default function HistoricalData() {
   const { data: trendsData, isLoading: trendsLoading } = useQuery<HistoricalTrends>({
     queryKey: ["/api/companies", trendsCompanyId, "historical-trends"],
     enabled: !!trendsCompanyId,
+    staleTime: 0,
   });
 
   const uploadMutation = useMutation({
@@ -753,7 +754,7 @@ export default function HistoricalData() {
                 <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
               )}
 
-              {trendsCompanyId && !trendsLoading && trendsData && trendsData.totalLoads === 0 && (
+              {trendsCompanyId && !trendsLoading && trendsData && (trendsData.totalLoads ?? 0) === 0 && (
                 <div className="py-12 text-center">
                   <TrendingUp className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
                   <p className="text-sm text-muted-foreground">No freight history found for this account.</p>
@@ -761,14 +762,14 @@ export default function HistoricalData() {
                 </div>
               )}
 
-              {trendsCompanyId && !trendsLoading && trendsData && trendsData.totalLoads > 0 && (
+              {trendsCompanyId && !trendsLoading && trendsData && (trendsData.totalLoads ?? 0) > 0 && (
                 <div className="space-y-6">
                   {/* KPI tiles */}
                   <div className="grid grid-cols-3 gap-3">
                     {[
-                      { label: "Total Loads", value: trendsData.totalLoads.toLocaleString() },
-                      { label: "Spot Loads", value: `${trendsData.spotLoads.toLocaleString()} (${Math.round((trendsData.spotLoads / trendsData.totalLoads) * 100)}%)` },
-                      { label: "Total Margin", value: `$${trendsData.totalMargin.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` },
+                      { label: "Total Loads", value: (trendsData.totalLoads ?? 0).toLocaleString() },
+                      { label: "Spot Loads", value: `${(trendsData.spotLoads ?? 0).toLocaleString()} (${trendsData.totalLoads ? Math.round(((trendsData.spotLoads ?? 0) / trendsData.totalLoads) * 100) : 0}%)` },
+                      { label: "Total Margin", value: `$${(trendsData.totalMargin ?? 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` },
                     ].map(kpi => (
                       <div key={kpi.label} className="rounded-lg border bg-muted/40 px-4 py-3 text-center">
                         <div className="text-lg font-semibold">{kpi.value}</div>
@@ -778,18 +779,20 @@ export default function HistoricalData() {
                   </div>
 
                   {/* Monthly chart */}
-                  {trendsData.months.length > 1 && (
+                  {(trendsData.months ?? []).length > 1 && (
                     <div>
                       <p className="text-sm font-semibold mb-3">Monthly Trend</p>
                       <ResponsiveContainer width="100%" height={240}>
                         <ComposedChart
-                          data={trendsData.months.map(m => {
-                            const [y, mo] = m.monthKey.split("-");
+                          data={(trendsData.months ?? []).map(m => {
+                            const parts = (m.monthKey || "").split("-");
+                            const y = parseInt(parts[0] || "2024");
+                            const mo = parseInt(parts[1] || "1");
                             return {
-                              month: new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" }),
-                              loads: m.totalLoads,
-                              spot: m.spotLoads,
-                              margin: Math.round(m.totalMargin),
+                              month: new Date(y, mo - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" }),
+                              loads: m.totalLoads ?? 0,
+                              spot: m.spotLoads ?? 0,
+                              margin: Math.round(m.totalMargin ?? 0),
                             };
                           })}
                           margin={{ top: 5, right: 10, left: 10, bottom: 5 }}
@@ -817,27 +820,27 @@ export default function HistoricalData() {
 
                   {/* Top destinations + corridors */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {trendsData.topDestinations.length > 0 && (
+                    {(trendsData.topDestinations ?? []).length > 0 && (
                       <div>
                         <p className="text-sm font-semibold mb-2">Top Destinations</p>
                         <div className="rounded-lg border divide-y">
-                          {trendsData.topDestinations.slice(0, 8).map((d, i) => (
+                          {(trendsData.topDestinations ?? []).slice(0, 8).map((d, i) => (
                             <div key={d.destination} className="flex items-center justify-between px-3 py-2">
                               <div className="flex items-center gap-2">
                                 <span className="text-xs text-muted-foreground w-4 text-right">{i + 1}</span>
                                 <span className="text-sm">{d.destination}</span>
                               </div>
-                              <span className="text-sm font-medium">{d.loads.toLocaleString()}</span>
+                              <span className="text-sm font-medium">{(d.loads ?? 0).toLocaleString()}</span>
                             </div>
                           ))}
                         </div>
                       </div>
                     )}
-                    {trendsData.topCorridors.length > 0 && (
+                    {(trendsData.topCorridors ?? []).length > 0 && (
                       <div>
                         <p className="text-sm font-semibold mb-2">Top Corridors</p>
                         <div className="rounded-lg border divide-y">
-                          {trendsData.topCorridors.slice(0, 8).map((c, i) => (
+                          {(trendsData.topCorridors ?? []).slice(0, 8).map((c, i) => (
                             <div key={`${c.origin}-${c.destination}`} className="flex items-center justify-between px-3 py-2">
                               <div className="flex items-center gap-2">
                                 <span className="text-xs text-muted-foreground w-4 text-right">{i + 1}</span>
