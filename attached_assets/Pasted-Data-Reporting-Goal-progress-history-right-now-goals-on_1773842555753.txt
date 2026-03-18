@@ -1,0 +1,19 @@
+Data & Reporting
+
+Goal progress history — right now goals only show the current value, not a trend line. A simple week-by-week sparkline would let NAMs spot reps who are stalling early in the month.
+Rep leaderboard — a simple ranked view of all AMs on margin, touchpoints, and contacts added for the current month. NAMs could see this at a glance instead of clicking into each rep's goals individually.
+Export to Excel — let users export account lists, touchpoint summaries, or goal progress to a spreadsheet for use in external reporting or leadership reviews.
+Workflow & Usability
+
+Task calendar view — a monthly calendar showing task due dates alongside PTO passoffs. Right now everything is list-based, which gets hard to scan when there are 30+ tasks.
+Bulk task assignment — NAMs frequently need to assign multiple tasks at once (e.g. after an RFP lands). Having to create them one by one is tedious.
+Company filtering — the customer list has search but no filters (by rep, region, RFP status, last touchpoint date). For admins or NAMs managing 50+ accounts it's hard to slice the list.
+Engagement & Accountability
+
+Email or push notifications — in-app notifications are good, but reps miss them when they're out in the field. Even a daily digest email (tasks due today, pending 1:1 topics) would improve responsiveness.
+Overdue RFP alerts — the dashboard already has an RFP deadline card, but there's no alert when an award has been sitting unactioned for 30+ days after being won.
+Financial Data
+
+Multi-month trend on goals — since you have the full historical data in ReplistNumbers, you could show each rep their margin by month for the past 6 months, not just the current goal period. This gives context for whether March is on pace or off track.
+Data freshness banner — show when the financial file was last uploaded so reps know if the numbers are current.
+Biggest quick wins in my view would be the rep leaderboard and company filtering — both are high-visibility and would reduce how often NAMs need to dig around to get an answer they need in a meeting.

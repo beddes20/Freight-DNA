@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -18,15 +18,16 @@ import {
   ArchiveX,
   DollarSign,
   Truck,
-  Phone,
   PhoneCall,
+  SlidersHorizontal,
+  X,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CompanyDialog } from "@/components/company-dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Company, Contact } from "@shared/schema";
+import type { Company, Contact, User } from "@shared/schema";
 
 type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
 type AccountSummaryRow = {
@@ -57,6 +58,10 @@ export default function Customers() {
   const [searchQuery, setSearchQuery] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [repFilter, setRepFilter] = useState("all");
+  const [industryFilter, setIndustryFilter] = useState("all");
+  const [touchFilter, setTouchFilter] = useState("all");
   const [quickTouch, setQuickTouch] = useState<{ company: Company; contacts: Contact[] } | null>(null);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [quickTouchType, setQuickTouchType] = useState("call");
@@ -103,6 +108,10 @@ export default function Customers() {
     queryKey: ["/api/financials/account-summary"],
   });
 
+  const { data: teamMembers = [] } = useQuery<Omit<User, "password">[]>({
+    queryKey: ["/api/team-members"],
+  });
+
   const thisMonthKey = (() => {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
@@ -126,22 +135,46 @@ export default function Customers() {
     }
   });
 
-  const activeList = companies
-    ?.filter((company) =>
-      company.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      company.industry?.toLowerCase().includes(searchQuery.toLowerCase())
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
+  // Derive unique industries for the filter dropdown
+  const uniqueIndustries = useMemo(() => {
+    const set = new Set<string>();
+    companies?.forEach(c => { if (c.industry) set.add(c.industry); });
+    return Array.from(set).sort();
+  }, [companies]);
 
-  const archivedList = archivedCompanies
-    ?.filter((company) =>
-      company.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      company.industry?.toLowerCase().includes(searchQuery.toLowerCase())
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
+  // Derive AM users for the rep filter dropdown
+  const amUsers = useMemo(() => {
+    return teamMembers.filter(u => u.role === "account_manager" || u.role === "sales");
+  }, [teamMembers]);
 
-  const displayList = showArchived ? archivedList : activeList;
+  const activeFiltersCount = [repFilter !== "all", industryFilter !== "all", touchFilter !== "all"].filter(Boolean).length;
+
+  function applyFilters(list: Company[] | undefined) {
+    if (!list) return [];
+    return list.filter(company => {
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        if (!company.name.toLowerCase().includes(q) && !company.industry?.toLowerCase().includes(q)) return false;
+      }
+      if (repFilter !== "all" && company.assignedTo !== repFilter) return false;
+      if (industryFilter !== "all" && company.industry !== industryFilter) return false;
+      if (touchFilter !== "all") {
+        const tps = tpSummary[company.id] || { week: 0, month: 0 };
+        if (touchFilter === "not_this_month" && tps.month > 0) return false;
+        if (touchFilter === "not_this_week" && tps.week > 0) return false;
+      }
+      return true;
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  const displayList = applyFilters(showArchived ? archivedCompanies : companies);
   const isLoading = showArchived ? archivedLoading : companiesLoading;
+
+  function clearFilters() {
+    setRepFilter("all");
+    setIndustryFilter("all");
+    setTouchFilter("all");
+  }
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6">
@@ -175,16 +208,92 @@ export default function Customers() {
         </div>
       </div>
 
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder={showArchived ? "Search archived..." : "Search customers..."}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
-          data-testid="input-search-customers"
-        />
+      {/* Search + Filter bar */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder={showArchived ? "Search archived..." : "Search customers..."}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+            data-testid="input-search-customers"
+          />
+        </div>
+        {!showArchived && (
+          <Button
+            variant={showFilters || activeFiltersCount > 0 ? "default" : "outline"}
+            size="sm"
+            className="gap-1.5 h-9"
+            onClick={() => setShowFilters(v => !v)}
+            data-testid="button-toggle-filters"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            Filters
+            {activeFiltersCount > 0 && (
+              <Badge className="ml-1 h-4 w-4 p-0 flex items-center justify-center text-[10px] bg-white text-primary">
+                {activeFiltersCount}
+              </Badge>
+            )}
+          </Button>
+        )}
+        {activeFiltersCount > 0 && (
+          <Button variant="ghost" size="sm" className="h-9 gap-1 text-muted-foreground" onClick={clearFilters} data-testid="button-clear-filters">
+            <X className="h-3.5 w-3.5" /> Clear
+          </Button>
+        )}
+        {!isLoading && (
+          <span className="text-sm text-muted-foreground ml-auto">
+            {displayList.length} account{displayList.length !== 1 ? "s" : ""}
+          </span>
+        )}
       </div>
+
+      {showFilters && !showArchived && (
+        <div className="flex items-center gap-3 flex-wrap p-3 bg-muted/40 rounded-lg border" data-testid="filter-bar">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Rep</span>
+            <Select value={repFilter} onValueChange={setRepFilter}>
+              <SelectTrigger className="h-8 text-sm w-[160px]" data-testid="select-filter-rep">
+                <SelectValue placeholder="All reps" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All reps</SelectItem>
+                {amUsers.map(u => (
+                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Industry</span>
+            <Select value={industryFilter} onValueChange={setIndustryFilter}>
+              <SelectTrigger className="h-8 text-sm w-[160px]" data-testid="select-filter-industry">
+                <SelectValue placeholder="All industries" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All industries</SelectItem>
+                {uniqueIndustries.map(ind => (
+                  <SelectItem key={ind} value={ind}>{ind}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Activity</span>
+            <Select value={touchFilter} onValueChange={setTouchFilter}>
+              <SelectTrigger className="h-8 text-sm w-[180px]" data-testid="select-filter-touch">
+                <SelectValue placeholder="Any activity" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Any activity</SelectItem>
+                <SelectItem value="not_this_week">Not touched this week</SelectItem>
+                <SelectItem value="not_this_month">Not touched this month</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -300,12 +409,12 @@ export default function Customers() {
                         ) : (
                           <span className="text-xs text-muted-foreground italic">No financial data</span>
                         )}
-                        <div className="flex items-center gap-1.5 text-xs ml-auto" title="Touchpoints this week / this month">
-                          <Phone className="h-3.5 w-3.5 text-violet-500" />
-                          <span className="font-medium text-foreground">{tps.week}</span>
-                          <span className="text-muted-foreground">/ {tps.month}</span>
-                          <span className="text-muted-foreground">touches</span>
-                        </div>
+                        {(tps.week > 0 || tps.month > 0) && (
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground ml-auto">
+                            <PhoneCall className="h-3 w-3" />
+                            <span>{tps.week > 0 ? `${tps.week} this wk` : `${tps.month} this mo.`}</span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </CardContent>
@@ -315,97 +424,73 @@ export default function Customers() {
           })}
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center py-16">
-          {showArchived ? (
-            <>
-              <Archive className="h-12 w-12 text-muted-foreground/30 mb-4" />
-              <p className="text-muted-foreground text-center">No archived accounts</p>
-              <p className="text-sm text-muted-foreground/70 text-center mt-1">
-                Accounts you archive will appear here
-              </p>
-            </>
-          ) : (
-            <>
-              <Building2 className="h-12 w-12 text-muted-foreground/30 mb-4" />
-              <p className="text-muted-foreground text-center">
-                {searchQuery ? "No customers match your search" : "No customers yet"}
-              </p>
-              {!searchQuery && (
-                <Button className="mt-4" onClick={() => setDialogOpen(true)}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add First Customer
-                </Button>
-              )}
-            </>
+        <div className="text-center py-16 text-muted-foreground">
+          <Building2 className="h-12 w-12 mx-auto mb-3 opacity-30" />
+          <p className="font-medium">
+            {activeFiltersCount > 0 || searchQuery ? "No accounts match your filters" : (showArchived ? "No archived accounts" : "No customers yet")}
+          </p>
+          {(activeFiltersCount > 0 || searchQuery) && (
+            <Button variant="ghost" size="sm" className="mt-3" onClick={() => { clearFilters(); setSearchQuery(""); }}>
+              Clear all filters
+            </Button>
           )}
         </div>
       )}
 
       <CompanyDialog open={dialogOpen} onOpenChange={setDialogOpen} />
 
-      <Dialog open={!!quickTouch} onOpenChange={open => { if (!open) { setQuickTouch(null); setQuickTouchContactId(""); setQuickTouchType("call"); setQuickTouchNote(""); } }}>
-        <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch">
+      <Dialog open={!!quickTouch} onOpenChange={() => { setQuickTouch(null); }}>
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <PhoneCall className="h-4 w-4 text-primary" />
-              Log Touch — {quickTouch?.company.name}
-            </DialogTitle>
+            <DialogTitle>Quick Log Touch — {quickTouch?.company.name}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 pt-2">
+          <div className="space-y-3 py-2">
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Contact</label>
+              <label className="text-sm font-medium block mb-1">Contact</label>
               <Select value={quickTouchContactId} onValueChange={setQuickTouchContactId}>
                 <SelectTrigger data-testid="select-quick-touch-contact">
-                  <SelectValue placeholder="Pick a contact" />
+                  <SelectValue placeholder="Select contact..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {(quickTouch?.contacts ?? []).map(c => (
-                    <SelectItem key={c.id} value={c.id}>{c.name}{c.title ? ` · ${c.title}` : ""}</SelectItem>
+                  {quickTouch?.contacts.map(c => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Touch Type</label>
-              <div className="flex gap-2">
-                {[{ value: "call", label: "Call" }, { value: "email", label: "Email" }, { value: "text", label: "Text" }, { value: "site_visit", label: "Site Visit" }].map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setQuickTouchType(opt.value)}
-                    data-testid={`button-touch-type-${opt.value}`}
-                    className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${
-                      quickTouchType === opt.value
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "border-border text-muted-foreground hover:bg-muted"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
+              <label className="text-sm font-medium block mb-1">Type</label>
+              <Select value={quickTouchType} onValueChange={setQuickTouchType}>
+                <SelectTrigger data-testid="select-quick-touch-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="call">Call</SelectItem>
+                  <SelectItem value="email">Email</SelectItem>
+                  <SelectItem value="text">Text</SelectItem>
+                  <SelectItem value="site_visit">Site Visit</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Notes <span className="font-normal">(optional)</span></label>
-              <textarea
+              <label className="text-sm font-medium block mb-1">Note (optional)</label>
+              <Input
+                placeholder="Quick note..."
                 value={quickTouchNote}
                 onChange={e => setQuickTouchNote(e.target.value)}
-                placeholder="What did you discuss? Any follow-ups?"
-                rows={3}
-                data-testid="textarea-quick-touch-note"
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                data-testid="input-quick-touch-note"
               />
             </div>
-            <div className="flex gap-2 pt-1">
-              <Button variant="outline" className="flex-1" onClick={() => { setQuickTouch(null); setQuickTouchNote(""); }} data-testid="button-cancel-quick-touch">Cancel</Button>
-              <Button
-                className="flex-1"
-                disabled={!quickTouchContactId || logTouchMutation.isPending}
-                onClick={() => logTouchMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote })}
-                data-testid="button-submit-quick-touch"
-              >
-                Log Touch
-              </Button>
-            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setQuickTouch(null)}>Cancel</Button>
+            <Button
+              onClick={() => logTouchMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote })}
+              disabled={!quickTouchContactId || logTouchMutation.isPending}
+              data-testid="button-submit-quick-touch"
+            >
+              Log Touch
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

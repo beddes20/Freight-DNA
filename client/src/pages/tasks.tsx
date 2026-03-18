@@ -25,6 +25,7 @@ import {
 import {
   ListTodo, Plus, Circle, PlayCircle, CheckCircle2, Calendar, Trash2,
   ChevronDown, ChevronUp, Bell, BellRing, Loader2, MessageSquare,
+  List, ChevronLeft, ChevronRight as ChevronRightIcon, Plane,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -35,6 +36,228 @@ import type { Company, Task, User, PersonalAlert } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
 type SafeUser = Omit<User, "password">;
+
+type PtoPassoff = {
+  id: string; userId: string; coveringUserId: string;
+  startDate: string; endDate: string; status: string;
+  coveringUser?: { name: string };
+  user?: { name: string };
+};
+
+function TaskCalendarView({
+  tasks,
+  companies,
+  teamMembers,
+  currentUser,
+  onTaskClick,
+}: {
+  tasks: TaskWithCount[];
+  companies: Company[];
+  teamMembers: SafeUser[];
+  currentUser: { id: string; role: string } | null;
+  onTaskClick: (task: TaskWithCount) => void;
+}) {
+  const today = new Date();
+  const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+
+  const { data: passoffs = [] } = useQuery<PtoPassoff[]>({ queryKey: ["/api/pto-passoffs"] });
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const firstDow = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+  // Group tasks by due date string (YYYY-MM-DD)
+  const tasksByDay = new Map<number, TaskWithCount[]>();
+  tasks.forEach(t => {
+    if (!t.dueDate) return;
+    const d = new Date(t.dueDate + "T00:00:00");
+    if (d.getFullYear() === year && d.getMonth() === month) {
+      const day = d.getDate();
+      if (!tasksByDay.has(day)) tasksByDay.set(day, []);
+      tasksByDay.get(day)!.push(t);
+    }
+  });
+
+  // Active PTO passoffs that overlap this month
+  const activePassoffs = passoffs.filter(p => {
+    const start = new Date(p.startDate + "T00:00:00");
+    const end = new Date(p.endDate + "T00:00:00");
+    const mStart = new Date(year, month, 1);
+    const mEnd = new Date(year, month + 1, 0);
+    return start <= mEnd && end >= mStart && (p.status === "active" || p.status === "draft");
+  });
+
+  function ptoOnDay(day: number) {
+    const d = new Date(year, month, day);
+    return activePassoffs.filter(p => {
+      const start = new Date(p.startDate + "T00:00:00");
+      const end = new Date(p.endDate + "T00:00:00");
+      return d >= start && d <= end;
+    });
+  }
+
+  const prevMonth = () => { setViewDate(new Date(year, month - 1, 1)); setSelectedDay(null); };
+  const nextMonth = () => { setViewDate(new Date(year, month + 1, 1)); setSelectedDay(null); };
+
+  const monthLabel = viewDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  const selectedTasks = selectedDay ? (tasksByDay.get(selectedDay) || []) : [];
+
+  function statusDot(status: string) {
+    if (status === "completed") return "bg-green-500";
+    if (status === "in_progress") return "bg-blue-500";
+    return "bg-amber-500";
+  }
+
+  const getCompanyName = (id: string | null) => id ? companies.find(c => c.id === id)?.name || "" : "";
+
+  return (
+    <div className="space-y-4" data-testid="task-calendar-view">
+      {/* Month nav */}
+      <div className="flex items-center justify-between">
+        <button onClick={prevMonth} className="p-1 rounded hover:bg-muted transition-colors" data-testid="button-prev-month">
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+        <h2 className="text-base font-semibold" data-testid="text-calendar-month">{monthLabel}</h2>
+        <button onClick={nextMonth} className="p-1 rounded hover:bg-muted transition-colors" data-testid="button-next-month">
+          <ChevronRightIcon className="h-5 w-5" />
+        </button>
+      </div>
+
+      {/* Legend */}
+      {activePassoffs.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap text-xs text-muted-foreground">
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-violet-200 dark:bg-violet-900 inline-block" /> PTO Coverage</span>
+          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500 inline-block" /> Open task</span>
+          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500 inline-block" /> In progress</span>
+          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-green-500 inline-block" /> Completed</span>
+        </div>
+      )}
+
+      {/* Calendar grid */}
+      <div className="border rounded-lg overflow-hidden">
+        <div className="grid grid-cols-7 bg-muted/50">
+          {dayNames.map(d => (
+            <div key={d} className="py-2 text-center text-xs font-medium text-muted-foreground">{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 divide-x divide-y border-t">
+          {Array.from({ length: firstDow }).map((_, i) => (
+            <div key={`pad-${i}`} className="h-24 bg-muted/20" />
+          ))}
+          {Array.from({ length: daysInMonth }).map((_, i) => {
+            const day = i + 1;
+            const dayKey = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+            const isToday = dayKey === todayKey;
+            const isSelected = day === selectedDay;
+            const dayTasks = tasksByDay.get(day) || [];
+            const ptos = ptoOnDay(day);
+            const openCount = dayTasks.filter(t => t.status === "open").length;
+            const ipCount = dayTasks.filter(t => t.status === "in_progress").length;
+            const doneCount = dayTasks.filter(t => t.status === "completed").length;
+
+            return (
+              <div
+                key={day}
+                className={`h-24 p-1.5 cursor-pointer transition-colors relative overflow-hidden
+                  ${isSelected ? "bg-primary/10 ring-1 ring-inset ring-primary" : "hover:bg-muted/40"}
+                  ${ptos.length > 0 ? "bg-violet-50 dark:bg-violet-950/20" : ""}
+                `}
+                onClick={() => setSelectedDay(day === selectedDay ? null : day)}
+                data-testid={`calendar-day-${day}`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className={`text-xs font-medium w-5 h-5 flex items-center justify-center rounded-full
+                    ${isToday ? "bg-primary text-primary-foreground" : "text-foreground"}`}>
+                    {day}
+                  </span>
+                  {ptos.length > 0 && <Plane className="h-3 w-3 text-violet-500 shrink-0" />}
+                </div>
+                {/* Task dots */}
+                {dayTasks.length > 0 && (
+                  <div className="flex flex-wrap gap-0.5 mt-0.5">
+                    {dayTasks.slice(0, 4).map(t => (
+                      <span key={t.id} className={`h-1.5 w-1.5 rounded-full ${statusDot(t.status)}`} />
+                    ))}
+                    {dayTasks.length > 4 && (
+                      <span className="text-[9px] text-muted-foreground">+{dayTasks.length - 4}</span>
+                    )}
+                  </div>
+                )}
+                {/* Task titles (compact) */}
+                {dayTasks.slice(0, 2).map(t => (
+                  <p key={t.id} className="text-[10px] leading-tight text-muted-foreground truncate mt-0.5">{t.title}</p>
+                ))}
+                {dayTasks.length > 2 && (
+                  <p className="text-[9px] text-muted-foreground">+{dayTasks.length - 2} more</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Selected day task list */}
+      {selectedDay && (
+        <Card data-testid="card-selected-day-tasks">
+          <CardHeader className="pb-2 pt-3 px-4">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-primary" />
+              {new Date(year, month, selectedDay).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+              {selectedTasks.length > 0 && <Badge variant="secondary" className="font-normal">{selectedTasks.length}</Badge>}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            {selectedTasks.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">No tasks due this day</p>
+            ) : (
+              <div className="space-y-1">
+                {selectedTasks.map(task => {
+                  const company = getCompanyName(task.companyId);
+                  const assignee = teamMembers.find(u => u.id === task.assignedTo)?.name;
+                  return (
+                    <div
+                      key={task.id}
+                      className="flex items-center gap-2 p-2 rounded hover:bg-muted/50 cursor-pointer group"
+                      onClick={() => onTaskClick(task)}
+                      data-testid={`calendar-task-row-${task.id}`}
+                    >
+                      <span className={`h-2 w-2 rounded-full shrink-0 ${statusDot(task.status)}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`}>{task.title}</p>
+                        {(company || assignee) && (
+                          <p className="text-xs text-muted-foreground truncate">
+                            {[company, assignee ? `→ ${assignee}` : ""].filter(Boolean).join(" ")}
+                          </p>
+                        )}
+                      </div>
+                      <Badge variant="outline" className="text-xs capitalize shrink-0">{task.status.replace("_", " ")}</Badge>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* PTO for selected day */}
+            {ptoOnDay(selectedDay).map(p => (
+              <div key={p.id} className="flex items-center gap-2 p-2 rounded bg-violet-50 dark:bg-violet-950/30 mt-2">
+                <Plane className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+                <p className="text-xs text-violet-700 dark:text-violet-300">
+                  PTO: {p.user?.name || "Rep"} — covered by {p.coveringUser?.name || "Teammate"}
+                </p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
 
 function dueDateBadge(dueDate: string | null) {
   if (!dueDate) return null;
@@ -185,6 +408,7 @@ export default function TasksPage() {
   const [showCompleted, setShowCompleted] = useState(true);
   const [showAlerts, setShowAlerts] = useState(true);
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
 
   useEffect(() => {
     if (window.location.hash === "#completed") {
@@ -417,7 +641,7 @@ export default function TasksPage() {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2" data-testid="text-tasks-heading">
             <ListTodo className="h-6 w-6 text-blue-600 dark:text-blue-400" />
@@ -427,7 +651,24 @@ export default function TasksPage() {
             {isAdmin ? "All team tasks" : "Your tasks in one place"}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {/* View toggle */}
+          <div className="flex rounded-md border overflow-hidden" data-testid="view-toggle">
+            <button
+              className={`px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors ${viewMode === "list" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
+              onClick={() => setViewMode("list")}
+              data-testid="button-view-list"
+            >
+              <List className="h-3.5 w-3.5" /> List
+            </button>
+            <button
+              className={`px-3 py-1.5 text-sm flex items-center gap-1.5 border-l transition-colors ${viewMode === "calendar" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
+              onClick={() => setViewMode("calendar")}
+              data-testid="button-view-calendar"
+            >
+              <Calendar className="h-3.5 w-3.5" /> Calendar
+            </button>
+          </div>
           <Button
             variant="outline"
             className="gap-1"
@@ -446,6 +687,17 @@ export default function TasksPage() {
         </div>
       </div>
 
+      {viewMode === "calendar" && (
+        <TaskCalendarView
+          tasks={myTasks}
+          companies={companies}
+          teamMembers={teamMembers}
+          currentUser={currentUser}
+          onTaskClick={task => { setEditingTask(task); setTaskDialogOpen(true); }}
+        />
+      )}
+      {viewMode === "list" && (
+      <>
       <Card data-testid="card-open-tasks">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
@@ -560,6 +812,8 @@ export default function TasksPage() {
           </CardContent>
         )}
       </Card>
+      </>
+      )}
 
       <TaskDialog
         open={taskDialogOpen}

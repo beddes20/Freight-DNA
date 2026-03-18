@@ -3951,6 +3951,43 @@ export async function registerRoutes(
     }
   });
 
+  // Margin trend: last 6 months of actual margin for the rep tied to a goal
+  app.get("/api/goals/:id/margin-trend", requireAuth, async (req, res) => {
+    try {
+      const goal = await storage.getGoal(req.params.id);
+      if (!goal) return res.status(404).json({ error: "Goal not found" });
+      const allUsers = await storage.getUsers();
+      const amUser = allUsers.find(u => u.id === goal.amId);
+      const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
+      if (!repKey) return res.json({ months: [] });
+      const uploads = await storage.getFinancialUploads();
+      if (!uploads.length) return res.json({ months: [] });
+      const latest = uploads[uploads.length - 1];
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const repKeyLower = repKey.toLowerCase();
+      const byMonth: Record<string, number> = {};
+      for (const row of txRows) {
+        const { monthKey, margin } = parseHistoricalRow(row);
+        if (!monthKey) continue;
+        const rep = String(row["Operations user"] || row["Salesperson"] || "").trim().toLowerCase();
+        if (rep !== repKeyLower) continue;
+        byMonth[monthKey] = (byMonth[monthKey] || 0) + margin;
+      }
+      // Build last 6 months relative to goal startDate
+      const anchor = new Date(goal.startDate + "T00:00:00");
+      const months = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        const label = d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+        months.push({ key, label, margin: Math.round(byMonth[key] || 0) });
+      }
+      res.json({ months, repKey });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch margin trend" });
+    }
+  });
+
   app.get("/api/contacts/:id/touchpoints", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

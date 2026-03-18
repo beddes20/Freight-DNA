@@ -12,9 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import {
+  BarChart, Bar, ResponsiveContainer, Cell, Tooltip, XAxis,
+} from "recharts";
+import {
   Target, Plus, MessageSquare, Trash2, ChevronDown, ChevronUp,
   TrendingUp, Users, Truck, DollarSign, CalendarDays, Pencil, Send,
-  CheckCircle2, AlertCircle, BarChart3, BellRing, X, Sliders,
+  CheckCircle2, BarChart3, BellRing, X, Sliders,
 } from "lucide-react";
 import type { Goal, GoalComment } from "@shared/schema";
 
@@ -84,6 +87,11 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
   const { data: comments = [] } = useQuery<GoalComment[]>({
     queryKey: ["/api/goals", goal.id, "comments"],
     enabled: showComments,
+  });
+
+  const { data: marginTrend } = useQuery<{ months: { key: string; label: string; margin: number }[] }>({
+    queryKey: ["/api/goals", goal.id, "margin-trend"],
+    enabled: isFinancialTracked,
   });
 
   const amName = allUsers.find(u => u.id === goal.amId)?.name ?? "Unknown";
@@ -181,6 +189,36 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
             )}
           </div>
         </div>
+
+        {isFinancialTracked && marginTrend && marginTrend.months.length > 0 && (() => {
+          const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+          const maxMargin = Math.max(...marginTrend.months.map(m => m.margin), 1);
+          return (
+            <div className="mb-3 pt-2 border-t" data-testid={`margin-trend-${goal.id}`}>
+              <p className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
+                <BarChart3 className="h-3 w-3" /> 6-month trend
+              </p>
+              <ResponsiveContainer width="100%" height={64}>
+                <BarChart data={marginTrend.months} barCategoryGap="20%">
+                  <XAxis dataKey="label" tick={{ fontSize: 9, fill: "currentColor" }} axisLine={false} tickLine={false} className="text-muted-foreground" />
+                  <Tooltip
+                    formatter={(val: number) => [`$${val.toLocaleString()}`, "Margin"]}
+                    contentStyle={{ fontSize: 11, padding: "4px 8px" }}
+                    cursor={{ fill: "transparent" }}
+                  />
+                  <Bar dataKey="margin" radius={[2, 2, 0, 0]}>
+                    {marginTrend.months.map((entry) => (
+                      <Cell
+                        key={entry.key}
+                        fill={entry.key === goalMonthKey ? "hsl(var(--primary))" : "hsl(var(--primary) / 0.3)"}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          );
+        })()}
 
         {!isAutoTracked && canUpdateProgress && (
           <div className="mb-3">
