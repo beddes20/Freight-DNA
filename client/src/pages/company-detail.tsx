@@ -281,6 +281,7 @@ export default function CompanyDetail() {
   const [scorecardUploading, setScorecardUploading] = useState(false);
   const [facilityCoverageCollapsed, setFacilityCoverageCollapsed] = useState(false);
   const [lanePatternsCollapsed, setLanePatternsCollapsed] = useState(false);
+  const [showTrends, setShowTrends] = useState(false);
   const [laneMatchingCollapsed, setLaneMatchingCollapsed] = useState(false);
   const [calloutDialogOpen, setCalloutDialogOpen] = useState(false);
   const [calloutReplyTo, setCalloutReplyTo] = useState<{ id: string; title: string } | undefined>();
@@ -414,6 +415,15 @@ export default function CompanyDetail() {
 
   const { data: activityItems = [] } = useQuery<Array<{ type: string; title: string; description: string | null; date: string; userName: string | null }>>({
     queryKey: ["/api/companies", companyId, "activity"],
+  });
+
+  type TrendMonth = { monthKey: string; totalLoads: number; spotLoads: number; totalMargin: number };
+  type TrendDest = { city: string; state: string; count: number };
+  type TrendCorridor = { origin: string; destination: string; loads: number };
+  type TrendsData = { months: TrendMonth[]; destinations: TrendDest[]; corridors: TrendCorridor[]; totalLoads: number; spotLoads: number; totalMargin: number };
+  const { data: trendsData, isLoading: trendsLoading } = useQuery<TrendsData>({
+    queryKey: ["/api/companies", companyId, "historical-trends"],
+    enabled: showTrends,
   });
 
   const deleteCalloutMutation = useMutation({
@@ -996,6 +1006,18 @@ export default function CompanyDetail() {
               <PerfGrid bucket={accountPerf.thisMonth} label={fmtMonth(accountPerf.thisMonthKey)} />
               <div className="border-t" />
               <PerfGrid bucket={accountPerf.lastMonth} label={fmtMonth(accountPerf.lastMonthKey)} />
+              <div className="border-t pt-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full text-muted-foreground hover:text-foreground gap-2"
+                  onClick={() => setShowTrends(true)}
+                  data-testid="button-view-trends"
+                >
+                  <TrendingUp className="h-3.5 w-3.5" />
+                  View Historical Trends
+                </Button>
+              </div>
             </CardContent>
           </Card>
         );
@@ -2800,6 +2822,135 @@ export default function CompanyDetail() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Historical Trends Dialog */}
+      <Dialog open={showTrends} onOpenChange={setShowTrends}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-primary" />
+              Historical Freight Trends — {company?.name}
+            </DialogTitle>
+          </DialogHeader>
+
+          {trendsLoading ? (
+            <div className="py-12 text-center text-muted-foreground">Loading trends data…</div>
+          ) : !trendsData || trendsData.totalLoads === 0 ? (
+            <div className="py-12 text-center">
+              <TrendingUp className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+              <p className="text-sm text-muted-foreground">No freight history found for this account.</p>
+              <p className="text-xs text-muted-foreground mt-1">Make sure a financial alias is set if the customer name differs in the uploaded data.</p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Summary KPIs */}
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: "Total Loads", value: trendsData.totalLoads.toLocaleString() },
+                  { label: "Spot Loads", value: `${trendsData.spotLoads.toLocaleString()} (${trendsData.totalLoads > 0 ? Math.round((trendsData.spotLoads / trendsData.totalLoads) * 100) : 0}%)` },
+                  { label: "Total Margin", value: `$${trendsData.totalMargin.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` },
+                ].map(kpi => (
+                  <div key={kpi.label} className="rounded-lg border bg-muted/40 px-4 py-3 text-center">
+                    <div className="text-lg font-semibold">{kpi.value}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{kpi.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Monthly Trend Table */}
+              {trendsData.months.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">Monthly Breakdown</h3>
+                  <div className="rounded-md border overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="text-left px-3 py-2 font-medium text-muted-foreground">Month</th>
+                          <th className="text-right px-3 py-2 font-medium text-muted-foreground">Loads</th>
+                          <th className="text-right px-3 py-2 font-medium text-muted-foreground">Spot</th>
+                          <th className="text-right px-3 py-2 font-medium text-muted-foreground">Margin</th>
+                          <th className="text-right px-3 py-2 font-medium text-muted-foreground">Avg/Load</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {[...trendsData.months].reverse().map(m => {
+                          const [y, mo] = m.monthKey.split("-");
+                          const label = new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleString("default", { month: "short", year: "numeric" });
+                          const avg = m.totalLoads > 0 ? m.totalMargin / m.totalLoads : 0;
+                          return (
+                            <tr key={m.monthKey} className="hover:bg-muted/30 transition-colors">
+                              <td className="px-3 py-2 font-medium">{label}</td>
+                              <td className="px-3 py-2 text-right">{m.totalLoads}</td>
+                              <td className="px-3 py-2 text-right text-muted-foreground">{m.spotLoads}</td>
+                              <td className="px-3 py-2 text-right">{m.totalMargin > 0 ? `$${m.totalMargin.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : "—"}</td>
+                              <td className="px-3 py-2 text-right text-muted-foreground">{avg > 0 ? `$${avg.toFixed(0)}` : "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Top Destinations + Top Corridors side by side */}
+              <div className="grid grid-cols-2 gap-4">
+                {trendsData.destinations.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold mb-2">Top Delivery Destinations</h3>
+                    <div className="rounded-md border overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-medium text-muted-foreground">Destination</th>
+                            <th className="text-right px-3 py-2 font-medium text-muted-foreground">Loads</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {trendsData.destinations.map((d, i) => (
+                            <tr key={i} className="hover:bg-muted/30 transition-colors">
+                              <td className="px-3 py-1.5">{d.city}{d.state ? `, ${d.state}` : ""}</td>
+                              <td className="px-3 py-1.5 text-right font-medium">{d.count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {trendsData.corridors.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold mb-2">Top Lane Corridors</h3>
+                    <div className="rounded-md border overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-medium text-muted-foreground">Lane</th>
+                            <th className="text-right px-3 py-2 font-medium text-muted-foreground">Loads</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {trendsData.corridors.map((c, i) => (
+                            <tr key={i} className="hover:bg-muted/30 transition-colors">
+                              <td className="px-3 py-1.5 text-xs">
+                                <span className="font-medium">{c.origin}</span>
+                                <span className="text-muted-foreground mx-1">→</span>
+                                <span>{c.destination}</span>
+                              </td>
+                              <td className="px-3 py-1.5 text-right font-medium">{c.loads}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

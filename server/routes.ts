@@ -3127,6 +3127,89 @@ export async function registerRoutes(
     }
   });
 
+  // ── Company Historical Trends ─────────────────────────────────────────────
+  app.get("/api/companies/:id/historical-trends", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const company = await storage.getCompany(req.params.id);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const uploads = await storage.getFinancialUploads();
+      if (!uploads.length) return res.json({ months: [], destinations: [], corridors: [], totalLoads: 0, spotLoads: 0, totalMargin: 0 });
+
+      // Same normalize + nameMatches logic as the frontend
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+      const crmNorm = normalize(company.name);
+      const aliasNorm = company.financialAlias ? normalize(company.financialAlias) : null;
+      const nameMatches = (crmToTest: string, excelNorm: string) => {
+        if (excelNorm === crmToTest) return true;
+        const shorter = crmToTest.length <= excelNorm.length ? crmToTest : excelNorm;
+        const longer  = crmToTest.length <= excelNorm.length ? excelNorm : crmToTest;
+        return shorter.length >= 5 && longer.includes(shorter);
+      };
+      const rowMatchesCompany = (row: any) => {
+        const custNorm = normalize(String(row["Customer"] || "").trim());
+        if (!custNorm) return false;
+        if (aliasNorm && nameMatches(aliasNorm, custNorm)) return true;
+        return nameMatches(crmNorm, custNorm);
+      };
+
+      const byMonth: Record<string, { totalLoads: number; spotLoads: number; totalMargin: number }> = {};
+      const destMap: Record<string, { city: string; state: string; count: number }> = {};
+      const corrMap: Record<string, { origin: string; destination: string; origCity: string; origState: string; destCity: string; destState: string; loads: number }> = {};
+      let totalLoads = 0, spotLoads = 0, totalMargin = 0;
+
+      for (const upload of uploads) {
+        const rows: any[] = (Array.isArray(upload.rows) ? upload.rows as any[] : [])
+          .filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+        for (const row of rows) {
+          if (!rowMatchesCompany(row)) continue;
+          const { destCity, destState, origCity, origState, monthKey, margin } = parseHistoricalRow(row);
+          const orderType = String(row["Order type"] || "").toLowerCase();
+          const isSpot = orderType.includes("spot");
+          totalLoads++;
+          totalMargin += margin;
+          if (isSpot) spotLoads++;
+          if (monthKey) {
+            if (!byMonth[monthKey]) byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0 };
+            byMonth[monthKey].totalLoads++;
+            byMonth[monthKey].totalMargin += margin;
+            if (isSpot) byMonth[monthKey].spotLoads++;
+          }
+          if (destCity) {
+            const k = `${destCity}|${destState}`;
+            if (!destMap[k]) destMap[k] = { city: destCity, state: destState, count: 0 };
+            destMap[k].count++;
+          }
+          if (origCity && destCity) {
+            const k = `${origCity},${origState}→${destCity},${destState}`;
+            if (!corrMap[k]) corrMap[k] = { origin: `${origCity}${origState ? `, ${origState}` : ""}`, destination: `${destCity}${destState ? `, ${destState}` : ""}`, origCity, origState, destCity, destState, loads: 0 };
+            corrMap[k].loads++;
+          }
+        }
+      }
+
+      const months = Object.entries(byMonth)
+        .map(([monthKey, b]) => ({ monthKey, ...b }))
+        .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+
+      const destinations = Object.values(destMap)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 15);
+
+      const corridors = Object.values(corrMap)
+        .sort((a, b) => b.loads - a.loads)
+        .slice(0, 15);
+
+      res.json({ months, destinations, corridors, totalLoads, spotLoads, totalMargin });
+    } catch (err) {
+      console.error("Company historical trends error:", err);
+      res.status(500).json({ error: "Failed to compute trends" });
+    }
+  });
+
   // ── Proximity Matches (75-mile delivery zones vs RFP pickup origins) ────────
   app.get("/api/proximity-matches", requireAuth, async (req, res) => {
     try {
