@@ -3897,32 +3897,25 @@ export async function registerRoutes(
               const repKeyLower = repKey.toLowerCase();
               let total = 0;
               if (!raw.length) {
-                // Transaction rows (ReplistNumbers) — has byMonth
+                // Transaction rows (ReplistNumbers) — group directly by rep, not customer
                 const txRows: any[] = (latest.rows as any[]) || [];
-                type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
-                type CustomerEntry = { customerName: string; totalMargin: number; repName: string; byMonth: Record<string, MonthBucket> };
-                const byCustomer: Record<string, CustomerEntry> = {};
                 // Derive the target month key from startDate (e.g. "2026-03-01" → "2026-03")
                 const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+                // byRep: repCode → monthKey → totalMargin
+                const byRep: Record<string, Record<string, number>> = {};
                 for (const row of txRows) {
-                  const customerName = String(row["Customer"] || "").trim();
-                  if (!customerName) continue;
                   const { monthKey, margin } = parseHistoricalRow(row);
                   // Operations user holds the rep code (e.g. "m.moore"); Salesperson is a full-name code
-                  const rep = String(row["Operations user"] || row["Salesperson"] || "").trim();
-                  if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalMargin: 0, repName: rep, byMonth: {} };
-                  if (!byCustomer[customerName].repName && rep) byCustomer[customerName].repName = rep;
+                  const rep = String(row["Operations user"] || row["Salesperson"] || "").trim().toLowerCase();
+                  if (!rep) continue;
+                  if (!byRep[rep]) byRep[rep] = {};
                   if (monthKey) {
-                    if (!byCustomer[customerName].byMonth[monthKey]) byCustomer[customerName].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0 };
-                    byCustomer[customerName].byMonth[monthKey].totalMargin += margin;
+                    byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
                   }
-                  byCustomer[customerName].totalMargin += margin;
                 }
-                for (const entry of Object.values(byCustomer)) {
-                  if (entry.repName.toLowerCase() !== repKeyLower) continue;
-                  if (goalMonthKey) {
-                    total += entry.byMonth[goalMonthKey]?.totalMargin ?? 0;
-                  }
+                const repMonths = byRep[repKeyLower] || {};
+                if (goalMonthKey) {
+                  total = repMonths[goalMonthKey] || 0;
                 }
               } else {
                 // Summary rows (account-summary sheet format)
