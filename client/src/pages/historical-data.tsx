@@ -14,8 +14,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   MapPin, Flame, TrendingUp, Package, Search, Compass,
   Upload, FileSpreadsheet, Loader2, Trash2, History, Map, Target, ArrowRight, Building2, User,
-  ArrowDownToLine, ArrowUpFromLine, Layers, Download,
+  ArrowDownToLine, ArrowUpFromLine, Layers, Download, BarChart2,
 } from "lucide-react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip,
+  ResponsiveContainer, ComposedChart, Line, Legend,
+} from "recharts";
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DestSummary = { destination: string; city: string; state: string; totalLoads: number; avgWeekly: number; maxWeekly: number; weekCount: number; isHotZone: boolean };
 type SummaryResponse = { summary: DestSummary[]; totalRows: number; uploadCount: number };
@@ -410,6 +414,15 @@ function ProximityMatchesTab() {
   );
 }
 
+// ─── Types ─────────────────────────────────────────────────────────────────────
+type Company = { id: string; name: string; financialAlias?: string | null };
+type HistoricalTrends = {
+  totalLoads: number; spotLoads: number; totalMargin: number;
+  months: { monthKey: string; totalLoads: number; spotLoads: number; totalMargin: number }[];
+  topDestinations: { destination: string; loads: number }[];
+  topCorridors: { origin: string; destination: string; loads: number }[];
+};
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function HistoricalData() {
   const { user } = useAuth();
@@ -418,9 +431,15 @@ export default function HistoricalData() {
   const [search, setSearch] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [trendsCompanyId, setTrendsCompanyId] = useState<string>("");
 
   const { data, isLoading } = useQuery<SummaryResponse>({ queryKey: ["/api/historical-data-summary"] });
   const { data: uploads = [], isLoading: uploadsLoading } = useQuery<UploadMeta[]>({ queryKey: ["/api/financials/uploads"], enabled: isAdmin });
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: trendsData, isLoading: trendsLoading } = useQuery<HistoricalTrends>({
+    queryKey: ["/api/companies", trendsCompanyId, "historical-trends"],
+    enabled: !!trendsCompanyId,
+  });
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -561,7 +580,7 @@ export default function HistoricalData() {
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="grid grid-cols-4 w-full">
+        <TabsList className="grid grid-cols-5 w-full">
           <TabsTrigger value="overview" className="flex items-center gap-1.5" data-testid="tab-overview">
             <Flame className="h-3.5 w-3.5" />Overview
           </TabsTrigger>
@@ -573,6 +592,9 @@ export default function HistoricalData() {
           </TabsTrigger>
           <TabsTrigger value="proximity" className="flex items-center gap-1.5" data-testid="tab-proximity">
             <Target className="h-3.5 w-3.5" />Proximity
+          </TabsTrigger>
+          <TabsTrigger value="account-trends" className="flex items-center gap-1.5" data-testid="tab-account-trends">
+            <BarChart2 className="h-3.5 w-3.5" />Account Trends
           </TabsTrigger>
         </TabsList>
 
@@ -694,6 +716,149 @@ export default function HistoricalData() {
 
         {/* Proximity Matches Tab */}
         <TabsContent value="proximity"><ProximityMatchesTab /></TabsContent>
+
+        {/* Account Trends Tab */}
+        <TabsContent value="account-trends" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <BarChart2 className="h-4 w-4 text-muted-foreground" />
+                Per-Account Freight History
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-3">
+                <label className="text-sm font-medium whitespace-nowrap">Select Account:</label>
+                <select
+                  value={trendsCompanyId}
+                  onChange={e => setTrendsCompanyId(e.target.value)}
+                  className="flex-1 text-sm border rounded-md px-3 py-2 bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                  data-testid="select-trends-company"
+                >
+                  <option value="">— pick a company —</option>
+                  {[...companies].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+                    <option key={c.id} value={c.id}>{c.name}{c.financialAlias ? ` (${c.financialAlias})` : ""}</option>
+                  ))}
+                </select>
+              </div>
+
+              {!trendsCompanyId && (
+                <div className="py-12 text-center text-muted-foreground">
+                  <Building2 className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">Select an account above to view its freight history.</p>
+                </div>
+              )}
+
+              {trendsCompanyId && trendsLoading && (
+                <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+              )}
+
+              {trendsCompanyId && !trendsLoading && trendsData && trendsData.totalLoads === 0 && (
+                <div className="py-12 text-center">
+                  <TrendingUp className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+                  <p className="text-sm text-muted-foreground">No freight history found for this account.</p>
+                  <p className="text-xs text-muted-foreground mt-1">Set a financial alias on the account page if the name differs in the uploaded data.</p>
+                </div>
+              )}
+
+              {trendsCompanyId && !trendsLoading && trendsData && trendsData.totalLoads > 0 && (
+                <div className="space-y-6">
+                  {/* KPI tiles */}
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { label: "Total Loads", value: trendsData.totalLoads.toLocaleString() },
+                      { label: "Spot Loads", value: `${trendsData.spotLoads.toLocaleString()} (${Math.round((trendsData.spotLoads / trendsData.totalLoads) * 100)}%)` },
+                      { label: "Total Margin", value: `$${trendsData.totalMargin.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` },
+                    ].map(kpi => (
+                      <div key={kpi.label} className="rounded-lg border bg-muted/40 px-4 py-3 text-center">
+                        <div className="text-lg font-semibold">{kpi.value}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">{kpi.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Monthly chart */}
+                  {trendsData.months.length > 1 && (
+                    <div>
+                      <p className="text-sm font-semibold mb-3">Monthly Trend</p>
+                      <ResponsiveContainer width="100%" height={240}>
+                        <ComposedChart
+                          data={trendsData.months.map(m => {
+                            const [y, mo] = m.monthKey.split("-");
+                            return {
+                              month: new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" }),
+                              loads: m.totalLoads,
+                              spot: m.spotLoads,
+                              margin: Math.round(m.totalMargin),
+                            };
+                          })}
+                          margin={{ top: 5, right: 10, left: 10, bottom: 5 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
+                          <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                          <YAxis yAxisId="loads" tick={{ fontSize: 11 }} width={35} />
+                          <YAxis yAxisId="margin" orientation="right" tick={{ fontSize: 11 }} width={60}
+                            tickFormatter={v => v >= 1000 ? `$${(v/1000).toFixed(0)}K` : `$${v}`} />
+                          <RechartTooltip
+                            contentStyle={{ fontSize: 12 }}
+                            formatter={(value: number, name: string) => {
+                              if (name === "margin") return [`$${value.toLocaleString()}`, "Margin"];
+                              return [value, name === "loads" ? "Total Loads" : "Spot Loads"];
+                            }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 12 }} />
+                          <Bar yAxisId="loads" dataKey="loads" fill="#3b82f6" name="Loads" radius={[2,2,0,0]} />
+                          <Bar yAxisId="loads" dataKey="spot" fill="#f59e0b" name="Spot" radius={[2,2,0,0]} />
+                          <Line yAxisId="margin" type="monotone" dataKey="margin" stroke="#10b981" strokeWidth={2} dot={false} name="Margin" />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {/* Top destinations + corridors */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {trendsData.topDestinations.length > 0 && (
+                      <div>
+                        <p className="text-sm font-semibold mb-2">Top Destinations</p>
+                        <div className="rounded-lg border divide-y">
+                          {trendsData.topDestinations.slice(0, 8).map((d, i) => (
+                            <div key={d.destination} className="flex items-center justify-between px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground w-4 text-right">{i + 1}</span>
+                                <span className="text-sm">{d.destination}</span>
+                              </div>
+                              <span className="text-sm font-medium">{d.loads.toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {trendsData.topCorridors.length > 0 && (
+                      <div>
+                        <p className="text-sm font-semibold mb-2">Top Corridors</p>
+                        <div className="rounded-lg border divide-y">
+                          {trendsData.topCorridors.slice(0, 8).map((c, i) => (
+                            <div key={`${c.origin}-${c.destination}`} className="flex items-center justify-between px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground w-4 text-right">{i + 1}</span>
+                                <div className="flex items-center gap-1 text-sm">
+                                  <span>{c.origin}</span>
+                                  <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                  <span>{c.destination}</span>
+                                </div>
+                              </div>
+                              <span className="text-sm font-medium">{c.loads.toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
     </div>
   );

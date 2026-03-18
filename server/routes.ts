@@ -2439,6 +2439,23 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/financials/customer-names", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploads();
+      const names = new Set<string>();
+      for (const upload of uploads) {
+        const rows: any[] = Array.isArray(upload.rows) ? upload.rows as any[] : [];
+        for (const row of rows) {
+          const name = String(row["Customer"] || "").trim();
+          if (name) names.add(name);
+        }
+      }
+      res.json([...names].sort());
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch customer names" });
+    }
+  });
+
   app.post("/api/financials/seed-demo", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

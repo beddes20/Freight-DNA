@@ -12,7 +12,7 @@ import {
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
-  Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo,
+  Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -82,6 +82,9 @@ export default function Dashboard() {
   const [selectedMentionIdx, setSelectedMentionIdx] = useState(0);
   const [feedPendingFiles, setFeedPendingFiles] = useState<PendingFile[]>([]);
   const feedTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [feedSearch, setFeedSearch] = useState("");
+  const [feedAuthorFilter, setFeedAuthorFilter] = useState("all");
+  const [ptoBannerDismissed, setPtoBannerDismissed] = useState(false);
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -477,6 +480,37 @@ export default function Dashboard() {
           </button>
         </div>
       )}
+
+      {/* PTO Compact Coverage Alert — top of page */}
+      {!ptoBannerDismissed && currentUser && (() => {
+        const covering = passoffs.filter((p: any) => p.coveringUserId === currentUser.id && p.status === "active");
+        if (!covering.length) return null;
+        return covering.map((passoff: any) => {
+          const owner = allUsers.find((u: any) => u.id === passoff.createdById) || teamMembers.find((u: any) => u.id === passoff.createdById);
+          const highCount = (passoff.items || []).filter((i: any) => i.priority === "high").length;
+          return (
+            <div key={passoff.id} className="flex items-center gap-3 rounded-lg border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-950/30 px-4 py-2.5" data-testid={`banner-pto-covering-${passoff.id}`}>
+              <Plane className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <span className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                  You're covering for {owner?.name ?? "a teammate"}
+                </span>
+                <span className="text-sm text-blue-600 dark:text-blue-400 ml-2">
+                  {(passoff.items || []).length} account{(passoff.items || []).length !== 1 ? "s" : ""}{highCount > 0 ? ` · ${highCount} high priority` : ""} · {passoff.startDate} – {passoff.endDate}
+                </span>
+              </div>
+              <Link href="/pto-passoff">
+                <Button size="sm" variant="ghost" className="h-7 text-xs text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 shrink-0" data-testid={`button-pto-banner-view-${passoff.id}`}>
+                  View →
+                </Button>
+              </Link>
+              <button onClick={() => setPtoBannerDismissed(true)} className="text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 shrink-0" data-testid="button-dismiss-pto-banner">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          );
+        });
+      })()}
 
       {/* Hero Banner */}
       <div
@@ -966,14 +1000,63 @@ export default function Dashboard() {
             )}
           </div>
 
+          {/* Feed search + author filter */}
+          {feedPosts.length > 0 && (
+            <div className="flex gap-2 items-center">
+              <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                <input
+                  type="text"
+                  value={feedSearch}
+                  onChange={e => setFeedSearch(e.target.value)}
+                  placeholder="Search posts…"
+                  className="w-full pl-8 pr-3 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                  data-testid="input-feed-search"
+                />
+              </div>
+              {teamMembers.length > 1 && (
+                <select
+                  value={feedAuthorFilter}
+                  onChange={e => setFeedAuthorFilter(e.target.value)}
+                  className="text-sm border rounded-md px-2.5 py-1.5 bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                  data-testid="select-feed-author"
+                >
+                  <option value="all">All reps</option>
+                  {teamMembers.map(u => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+              )}
+              {(feedSearch || feedAuthorFilter !== "all") && (
+                <button
+                  onClick={() => { setFeedSearch(""); setFeedAuthorFilter("all"); }}
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                  data-testid="button-clear-feed-filter"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+
           {feedLoading ? (
             <div className="space-y-3">
               {[1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full" />)}
             </div>
           ) : feedPosts.length > 0 ? (
             <div>
+            {(() => {
+              const filtered = feedPosts.filter(p => {
+                if (feedSearch && !p.content.toLowerCase().includes(feedSearch.toLowerCase())) return false;
+                if (feedAuthorFilter !== "all" && p.authorId !== feedAuthorFilter) return false;
+                return true;
+              });
+              const visiblePosts = feedExpanded ? filtered : filtered.slice(0, 5);
+              return (<>
             <div className={`space-y-2 pr-1 ${feedExpanded ? "max-h-[600px] overflow-y-auto" : ""}`}>
-              {(feedExpanded ? feedPosts : feedPosts.slice(0, 5)).map(post => {
+              {visiblePosts.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No posts match your search.</p>
+              ) : visiblePosts.map(post => {
                 const catColors: Record<string, string> = {
                   trend: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
                   growth: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
@@ -1117,15 +1200,16 @@ export default function Dashboard() {
                 );
               })}
             </div>
-            {feedPosts.length > 5 && (
+            {filtered.length > 5 && (
               <button
                 onClick={() => setFeedExpanded(v => !v)}
                 className="w-full mt-2 py-1.5 text-xs text-muted-foreground hover:text-primary flex items-center justify-center gap-1.5 rounded-md hover:bg-muted/50 transition-colors"
                 data-testid="button-toggle-feed-expand"
               >
-                {feedExpanded ? "Show less" : `Show ${feedPosts.length - 5} more post${feedPosts.length - 5 === 1 ? "" : "s"}`}
+                {feedExpanded ? "Show less" : `Show ${filtered.length - 5} more post${filtered.length - 5 === 1 ? "" : "s"}`}
               </button>
             )}
+            </>); })()}
             </div>
           ) : (
             <div className="text-center py-6 text-muted-foreground">

@@ -82,6 +82,10 @@ import {
   DollarSign,
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip,
+  ResponsiveContainer, ComposedChart, Line, Legend,
+} from "recharts";
 import { CompanyDialog } from "@/components/company-dialog";
 import { ContactDialog } from "@/components/contact-dialog";
 import { ResearchLaneDialog } from "@/components/research-lane-dialog";
@@ -94,7 +98,7 @@ import { TaskDialog } from "@/components/task-dialog";
 import { CalloutDialog } from "@/components/callout-dialog";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
-import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp } from "@shared/schema";
+import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
 interface ResearchTask {
@@ -312,6 +316,11 @@ export default function CompanyDetail() {
   });
 
   const { data: allRfps = [] } = useQuery<Rfp[]>({ queryKey: ["/api/rfps"] });
+  const { data: allAwards = [] } = useQuery<Award[]>({ queryKey: ["/api/awards"] });
+  const { data: customerNames = [] } = useQuery<string[]>({
+    queryKey: ["/api/financials/customer-names"],
+    enabled: showTrends,
+  });
   const urgentRfps = allRfps.filter(r => {
     if (r.companyId !== companyId || !r.dueDate) return false;
     const days = Math.ceil((new Date(r.dueDate + "T00:00:00").getTime() - Date.now()) / 86400000);
@@ -425,6 +434,39 @@ export default function CompanyDetail() {
     queryKey: ["/api/companies", companyId, "historical-trends"],
     enabled: showTrends,
   });
+
+  // ── RFP Track Record ─────────────────────────────────────────────────────
+  const companyRfps = allRfps.filter(r => r.companyId === companyId);
+  const companyAwards = allAwards.filter(a => a.companyId === companyId);
+  const rfpWon = companyRfps.filter(r => r.status === "awarded" || r.status === "partially_awarded").length;
+  const rfpLost = companyRfps.filter(r => r.status === "lost").length;
+  const rfpPending = companyRfps.filter(r => r.status === "pending" || r.status === "submitted").length;
+  const rfpWinRate = companyRfps.length > 0 && (rfpWon + rfpLost) > 0
+    ? Math.round((rfpWon / (rfpWon + rfpLost)) * 100) : null;
+  const totalAwardValue = companyAwards.reduce((sum, a) => sum + (parseFloat(a.value ?? "0") || 0), 0);
+
+  // ── Touchpoints this month ────────────────────────────────────────────────
+  const now2 = new Date();
+  const monthStart = new Date(now2.getFullYear(), now2.getMonth(), 1);
+  const touchpointsThisMonth = companyTouchpoints.filter(tp => {
+    const d = new Date(tp.date || (tp as any).createdAt || "");
+    return d >= monthStart;
+  }).length;
+
+  // ── Alias suggestions for trends ─────────────────────────────────────────
+  const trendAliasSuggestions = (() => {
+    if (!company || customerNames.length === 0) return [];
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    const crmNorm = normalize(company.name);
+    return customerNames
+      .filter(n => {
+        const norm = normalize(n);
+        const shorter = crmNorm.length <= norm.length ? crmNorm : norm;
+        const longer  = crmNorm.length <= norm.length ? norm : crmNorm;
+        return shorter.length >= 4 && longer.includes(shorter);
+      })
+      .slice(0, 5);
+  })();
 
   const deleteCalloutMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -1029,6 +1071,55 @@ export default function CompanyDetail() {
           <FinancialAliasEditor company={company} />
         </CardContent>
       </Card>
+
+      {/* RFP Track Record */}
+      {companyRfps.length > 0 && (
+        <Card data-testid="card-rfp-track-record">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Trophy className="h-4 w-4 text-amber-500" />
+              RFP Track Record
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-3">
+            <div className="grid grid-cols-4 gap-2 text-center">
+              <div className="rounded-lg bg-muted/50 p-2">
+                <p className="text-lg font-bold">{companyRfps.length}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Total</p>
+              </div>
+              <div className="rounded-lg bg-green-50 dark:bg-green-950/30 p-2">
+                <p className="text-lg font-bold text-green-600 dark:text-green-400">{rfpWon}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Won</p>
+              </div>
+              <div className="rounded-lg bg-red-50 dark:bg-red-950/30 p-2">
+                <p className="text-lg font-bold text-red-500 dark:text-red-400">{rfpLost}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Lost</p>
+              </div>
+              <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-2">
+                <p className="text-lg font-bold text-amber-600 dark:text-amber-400">{rfpPending}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Open</p>
+              </div>
+            </div>
+            {rfpWinRate !== null && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Win Rate</span>
+                  <span className="font-semibold text-green-600 dark:text-green-400">{rfpWinRate}%</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${rfpWinRate}%` }} />
+                </div>
+              </div>
+            )}
+            {totalAwardValue > 0 && (
+              <div className="flex items-center justify-between text-xs pt-1 border-t">
+                <span className="text-muted-foreground flex items-center gap-1"><DollarSign className="h-3 w-3" />Total Awarded Value</span>
+                <span className="font-semibold">${totalAwardValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Customer Portal Information */}
       <Card data-testid="card-portal-info">
@@ -2509,9 +2600,17 @@ export default function CompanyDetail() {
 
       {contacts && contacts.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <List className="h-5 w-5 text-muted-foreground" />
-            <h2 className="text-lg font-medium">Contact Details</h2>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <List className="h-5 w-5 text-muted-foreground" />
+              <h2 className="text-lg font-medium">Contact Details</h2>
+            </div>
+            {touchpointsThisMonth > 0 && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-full px-2.5 py-1 font-medium" data-testid="badge-touchpoints-month">
+                <PhoneCall className="h-3 w-3" />
+                {touchpointsThisMonth} touch{touchpointsThisMonth === 1 ? "" : "points"} this month
+              </span>
+            )}
           </div>
           <ContactList
             contacts={contacts}
@@ -2842,6 +2941,19 @@ export default function CompanyDetail() {
               <TrendingUp className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
               <p className="text-sm text-muted-foreground">No freight history found for this account.</p>
               <p className="text-xs text-muted-foreground mt-1">Make sure a financial alias is set if the customer name differs in the uploaded data.</p>
+              {trendAliasSuggestions.length > 0 && (
+                <div className="mt-4 text-left max-w-sm mx-auto">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Possible matches in uploaded data:</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {trendAliasSuggestions.map(name => (
+                      <span key={name} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300">
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">Set one of these as the Financial Alias on the account page to link the data.</p>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-6">
@@ -2858,6 +2970,40 @@ export default function CompanyDetail() {
                   </div>
                 ))}
               </div>
+
+              {/* Monthly Chart */}
+              {trendsData.months.length > 1 && (
+                <div>
+                  <h3 className="text-sm font-semibold mb-3">Monthly Trend</h3>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <ComposedChart data={[...trendsData.months].map(m => {
+                      const [y, mo] = m.monthKey.split("-");
+                      return {
+                        month: new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" }),
+                        loads: m.totalLoads,
+                        spot: m.spotLoads,
+                        margin: Math.round(m.totalMargin),
+                      };
+                    })} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
+                      <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                      <YAxis yAxisId="loads" tick={{ fontSize: 11 }} width={35} />
+                      <YAxis yAxisId="margin" orientation="right" tick={{ fontSize: 11 }} width={55} tickFormatter={v => v >= 1000 ? `$${(v/1000).toFixed(0)}K` : `$${v}`} />
+                      <RechartTooltip
+                        contentStyle={{ fontSize: 12 }}
+                        formatter={(value: number, name: string) => {
+                          if (name === "margin") return [`$${value.toLocaleString()}`, "Margin"];
+                          return [value, name === "loads" ? "Total Loads" : "Spot Loads"];
+                        }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Bar yAxisId="loads" dataKey="loads" fill="#3b82f6" name="Loads" radius={[2,2,0,0]} />
+                      <Bar yAxisId="loads" dataKey="spot" fill="#f59e0b" name="Spot" radius={[2,2,0,0]} />
+                      <Line yAxisId="margin" type="monotone" dataKey="margin" stroke="#10b981" strokeWidth={2} dot={false} name="Margin" />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
 
               {/* Monthly Trend Table */}
               {trendsData.months.length > 0 && (
