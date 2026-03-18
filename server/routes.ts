@@ -3902,11 +3902,14 @@ export async function registerRoutes(
                 type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
                 type CustomerEntry = { customerName: string; totalMargin: number; repName: string; byMonth: Record<string, MonthBucket> };
                 const byCustomer: Record<string, CustomerEntry> = {};
+                // Derive the target month key from startDate (e.g. "2026-03-01" → "2026-03")
+                const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
                 for (const row of txRows) {
                   const customerName = String(row["Customer"] || "").trim();
                   if (!customerName) continue;
                   const { monthKey, margin } = parseHistoricalRow(row);
-                  const rep = String(row["Salesperson"] || row["Operations user"] || "").trim();
+                  // Operations user holds the rep code (e.g. "m.moore"); Salesperson is a full-name code
+                  const rep = String(row["Operations user"] || row["Salesperson"] || "").trim();
                   if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalMargin: 0, repName: rep, byMonth: {} };
                   if (!byCustomer[customerName].repName && rep) byCustomer[customerName].repName = rep;
                   if (monthKey) {
@@ -3917,8 +3920,8 @@ export async function registerRoutes(
                 }
                 for (const entry of Object.values(byCustomer)) {
                   if (entry.repName.toLowerCase() !== repKeyLower) continue;
-                  if (goal.period && entry.byMonth[goal.period] !== undefined) {
-                    total += entry.byMonth[goal.period].totalMargin;
+                  if (goalMonthKey && entry.byMonth[goalMonthKey] !== undefined) {
+                    total += entry.byMonth[goalMonthKey].totalMargin;
                   } else {
                     total += entry.totalMargin;
                   }
