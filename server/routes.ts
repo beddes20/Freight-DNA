@@ -2129,7 +2129,13 @@ export async function registerRoutes(
       const isInvolved = user.id === managerId || user.id === repId;
       if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
       const sessions = await storage.getArchivedSessions(managerId, repId);
-      res.json(sessions);
+      const sessionsWithTopics = await Promise.all(
+        sessions.map(async (s) => ({
+          ...s,
+          topics: await storage.getTopicsBySession(s.id),
+        }))
+      );
+      res.json(sessionsWithTopics);
     } catch (error) {
       res.status(500).json({ error: "Failed to get archived sessions" });
     }

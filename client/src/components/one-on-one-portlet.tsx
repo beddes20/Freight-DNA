@@ -36,16 +36,34 @@ interface ArchivedSession extends OneOnOneSession {
   topics: OneOnOneTopic[];
 }
 
-const TAG_OPTIONS = ["Action Item", "Question", "FYI", "Follow-up", "Shoutout", "Let's Work On"] as const;
+const TAG_OPTIONS: { value: string; label: string }[] = [
+  { value: "action_item",  label: "Action Item" },
+  { value: "question",     label: "Question" },
+  { value: "fyi",          label: "FYI" },
+  { value: "follow_up",    label: "Follow-up" },
+  { value: "shoutout",     label: "Shoutout" },
+  { value: "lets_work_on", label: "Let's Work On" },
+];
 
-const tagColors: Record<string, string> = {
-  "Action Item":  "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-  "Question":     "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-  "FYI":          "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
-  "Follow-up":    "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
-  "Shoutout":     "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  "Let's Work On": "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400",
-};
+// Resolves any stored tag value (snake_case or legacy human-readable) to display config
+function resolveTag(tag: string | null | undefined): { label: string; color: string } {
+  const MAP: Record<string, { label: string; color: string }> = {
+    action_item:   { label: "Action Item",   color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
+    question:      { label: "Question",      color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
+    fyi:           { label: "FYI",           color: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" },
+    follow_up:     { label: "Follow-up",     color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
+    shoutout:      { label: "Shoutout",      color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
+    lets_work_on:  { label: "Let's Work On", color: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400" },
+    // Legacy human-readable aliases
+    "Action Item":   { label: "Action Item",   color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
+    "Question":      { label: "Question",      color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
+    "FYI":           { label: "FYI",           color: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" },
+    "Follow-up":     { label: "Follow-up",     color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
+    "Shoutout":      { label: "Shoutout",      color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
+    "Let's Work On": { label: "Let's Work On", color: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400" },
+  };
+  return tag ? (MAP[tag] ?? { label: tag, color: "bg-muted text-muted-foreground" }) : { label: "", color: "" };
+}
 
 function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic; teamMembers: SafeUser[]; currentUserId: string }) {
   const { toast } = useToast();
@@ -156,11 +174,11 @@ function TopicRow({ topic, teamMembers, currentUserId }: { topic: OneOnOneTopic;
             {topic.text}
           </p>
           <div className="flex items-center gap-1.5 flex-wrap mt-1">
-            {topic.tag && (
-              <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${tagColors[topic.tag] || "bg-muted text-muted-foreground"}`} data-testid={`badge-topic-tag-${topic.id}`}>
-                {topic.tag}
+            {topic.tag && (() => { const t = resolveTag(topic.tag); return (
+              <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${t.color}`} data-testid={`badge-topic-tag-${topic.id}`}>
+                {t.label}
               </span>
-            )}
+            ); })()}
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
               <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${isNam ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"}`}>
                 {initials}
@@ -380,12 +398,12 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
               <div className="absolute z-50 right-0 top-full mt-1 w-36 rounded-md border bg-popover shadow-lg py-1" data-testid="tag-dropdown">
                 {TAG_OPTIONS.map(tag => (
                   <button
-                    key={tag}
-                    onClick={() => { setSelectedTag(selectedTag === tag ? null : tag); setShowTagSelector(false); }}
-                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors ${selectedTag === tag ? "font-semibold bg-muted" : ""}`}
-                    data-testid={`button-tag-${tag}`}
+                    key={tag.value}
+                    onClick={() => { setSelectedTag(selectedTag === tag.value ? null : tag.value); setShowTagSelector(false); }}
+                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors ${selectedTag === tag.value ? "font-semibold bg-muted" : ""}`}
+                    data-testid={`button-tag-${tag.value}`}
                   >
-                    {tag}
+                    {tag.label}
                   </button>
                 ))}
               </div>
@@ -403,13 +421,13 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
         </div>
       </div>
 
-      {selectedTag && (
+      {selectedTag && (() => { const t = resolveTag(selectedTag); return (
         <div className="flex items-center gap-1">
           <span className="text-xs text-muted-foreground">Tag:</span>
-          <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${tagColors[selectedTag]}`}>{selectedTag}</span>
+          <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${t.color}`}>{t.label}</span>
           <button onClick={() => setSelectedTag(null)} className="text-xs text-muted-foreground hover:text-foreground ml-1">×</button>
         </div>
-      )}
+      ); })()}
 
       <FileAttachmentUpload
         pendingFiles={topicPendingFiles}
@@ -471,9 +489,9 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
                           <Circle className="h-3 w-3 text-muted-foreground shrink-0" />
                         )}
                         <span className={topic.status === "discussed" ? "line-through text-muted-foreground" : ""}>{topic.text}</span>
-                        {topic.tag && (
-                          <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${tagColors[topic.tag] || "bg-muted text-muted-foreground"}`}>{topic.tag}</span>
-                        )}
+                        {topic.tag && (() => { const t = resolveTag(topic.tag); return (
+                          <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${t.color}`}>{t.label}</span>
+                        ); })()}
                       </div>
                     ))}
                   </div>
