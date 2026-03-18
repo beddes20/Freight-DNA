@@ -73,7 +73,8 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
   const current = parseFloat(goal.currentValue || "0");
   const target = parseFloat(goal.target || "0");
   const pct = progressPct(current, target);
-  const isAutoTracked = goal.metric === "contacts_added" || goal.metric === "touchpoints";
+  const isAutoTracked = goal.metric === "contacts_added" || goal.metric === "touchpoints" || goal.metric === "margin";
+  const isFinancialTracked = goal.metric === "margin";
 
   const { data: autoProgress } = useQuery<{ autoValue: number | null; currentValue: number }>({
     queryKey: ["/api/goals", goal.id, "progress"],
@@ -174,7 +175,9 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
               )}
             </span>
             {isAutoTracked && (
-              <span className="text-xs text-muted-foreground">Auto-tracked</span>
+              <span className="text-xs text-muted-foreground">
+                {isFinancialTracked ? "From financial data" : "Auto-tracked"}
+              </span>
             )}
           </div>
         </div>
@@ -683,6 +686,14 @@ export default function GoalsPage() {
                 <p className="text-xs text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
                   <TrendingUp className="h-3.5 w-3.5 shrink-0" />
                   New Contacts are automatically tracked from the CRM — no manual updates needed.
+                </p>
+              </div>
+            )}
+            {form.metric === "margin" && (
+              <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 p-3">
+                <p className="text-xs text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                  <TrendingUp className="h-3.5 w-3.5 shrink-0" />
+                  Margin $ is automatically pulled from the latest financial data upload — no manual updates needed.
                 </p>
               </div>
             )}
