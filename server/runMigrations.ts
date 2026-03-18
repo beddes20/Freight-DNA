@@ -57,6 +57,12 @@ export async function runMigrations() {
       END $$;
     `);
     console.log("[migrations] FK cascade/set-null constraints applied");
+
+    // Add account intelligence columns to companies
+    await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS tender_style text`);
+    await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS account_quirks text`);
+    await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS process_notes text`);
+    console.log("[migrations] account intelligence columns added to companies");
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

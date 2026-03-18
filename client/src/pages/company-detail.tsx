@@ -80,6 +80,8 @@ import {
   Upload,
   FileSpreadsheet,
   DollarSign,
+  AlertCircle,
+  FileText,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -262,6 +264,9 @@ export default function CompanyDetail() {
   const [portalUsername, setPortalUsername] = useState("");
   const [portalPassword, setPortalPassword] = useState("");
   const [showPortalPassword, setShowPortalPassword] = useState(false);
+  const [tenderStyle, setTenderStyle] = useState("");
+  const [accountQuirks, setAccountQuirks] = useState("");
+  const [processNotes, setProcessNotes] = useState("");
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState("");
   const [viewContact, setViewContact] = useState<Contact | null>(null);
@@ -584,14 +589,17 @@ export default function CompanyDetail() {
         portalUrl: portalUrl || null,
         portalUsername: portalUsername || null,
         portalPassword: portalPassword || null,
+        tenderStyle: tenderStyle || null,
+        accountQuirks: accountQuirks || null,
+        processNotes: processNotes || null,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
       setPortalEdit(false);
-      toast({ title: "Portal info saved", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
+      toast({ title: "Account info saved", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
     },
-    onError: () => toast({ title: "Failed to save portal info", variant: "destructive" }),
+    onError: () => toast({ title: "Failed to save account info", variant: "destructive" }),
   });
 
   const reassignMutation = useMutation({
@@ -612,6 +620,9 @@ export default function CompanyDetail() {
     setPortalUrl(company?.portalUrl || "");
     setPortalUsername(company?.portalUsername || "");
     setPortalPassword(company?.portalPassword || "");
+    setTenderStyle(company?.tenderStyle || "");
+    setAccountQuirks(company?.accountQuirks || "");
+    setProcessNotes(company?.processNotes || "");
     setPortalEdit(true);
   };
 
@@ -1118,13 +1129,13 @@ export default function CompanyDetail() {
         </Card>
       )}
 
-      {/* Customer Portal Information */}
+      {/* Account Information */}
       <Card data-testid="card-portal-info">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <Globe className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              Customer Portal Information
+              Account Information
             </CardTitle>
             {!portalEdit && (
               <Button variant="ghost" size="sm" onClick={openPortalEdit} data-testid="button-edit-portal">
@@ -1135,43 +1146,89 @@ export default function CompanyDetail() {
         </CardHeader>
         <CardContent className="pt-0">
           {portalEdit ? (
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Globe className="h-3 w-3" /> Portal URL</label>
-                <input
-                  className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                  placeholder="https://portal.example.com"
-                  value={portalUrl}
-                  onChange={e => setPortalUrl(e.target.value)}
-                  data-testid="input-portal-url"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Users className="h-3 w-3" /> Username</label>
-                <input
-                  className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                  placeholder="username"
-                  value={portalUsername}
-                  onChange={e => setPortalUsername(e.target.value)}
-                  data-testid="input-portal-username"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><KeyRound className="h-3 w-3" /> Password</label>
-                <div className="relative">
-                  <input
-                    className="w-full border rounded-md px-3 py-1.5 pr-9 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                    type={showPortalPassword ? "text" : "password"}
-                    placeholder="••••••••"
-                    value={portalPassword}
-                    onChange={e => setPortalPassword(e.target.value)}
-                    data-testid="input-portal-password"
-                  />
-                  <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setShowPortalPassword(v => !v)} data-testid="button-toggle-password">
-                    {showPortalPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
+            <div className="space-y-4">
+              {/* Portal Credentials Section */}
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Portal Credentials</p>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Globe className="h-3 w-3" /> Portal URL</label>
+                    <input
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                      placeholder="https://portal.example.com"
+                      value={portalUrl}
+                      onChange={e => setPortalUrl(e.target.value)}
+                      data-testid="input-portal-url"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Users className="h-3 w-3" /> Username</label>
+                    <input
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                      placeholder="username"
+                      value={portalUsername}
+                      onChange={e => setPortalUsername(e.target.value)}
+                      data-testid="input-portal-username"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><KeyRound className="h-3 w-3" /> Password</label>
+                    <div className="relative">
+                      <input
+                        className="w-full border rounded-md px-3 py-1.5 pr-9 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                        type={showPortalPassword ? "text" : "password"}
+                        placeholder="••••••••"
+                        value={portalPassword}
+                        onChange={e => setPortalPassword(e.target.value)}
+                        data-testid="input-portal-password"
+                      />
+                      <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setShowPortalPassword(v => !v)} data-testid="button-toggle-password">
+                        {showPortalPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
+
+              {/* Account Intelligence Section */}
+              <div className="border-t pt-4">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Intelligence</p>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><TruckIcon className="h-3 w-3" /> Tender Style</label>
+                    <input
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                      placeholder="e.g. TMS portal, email, phone, EDI…"
+                      value={tenderStyle}
+                      onChange={e => setTenderStyle(e.target.value)}
+                      data-testid="input-tender-style"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Account Quirks</label>
+                    <textarea
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+                      rows={3}
+                      placeholder="Special requirements, sensitivities, things to know…"
+                      value={accountQuirks}
+                      onChange={e => setAccountQuirks(e.target.value)}
+                      data-testid="input-account-quirks"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><FileText className="h-3 w-3" /> Process Notes</label>
+                    <textarea
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+                      rows={3}
+                      placeholder="Standard operating procedures, workflows, key steps…"
+                      value={processNotes}
+                      onChange={e => setProcessNotes(e.target.value)}
+                      data-testid="input-process-notes"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div className="flex gap-2 pt-1">
                 <Button size="sm" onClick={() => savePortalMutation.mutate()} disabled={savePortalMutation.isPending} data-testid="button-save-portal">
                   {savePortalMutation.isPending && <span className="mr-1 h-3 w-3 animate-spin rounded-full border-2 border-background border-t-transparent inline-block" />}
@@ -1181,34 +1238,75 @@ export default function CompanyDetail() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="space-y-4">
+              {/* Portal Credentials */}
               <div>
-                <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Globe className="h-3 w-3" /> Portal URL</p>
-                {company.portalUrl ? (
-                  <a href={company.portalUrl.startsWith("http") ? company.portalUrl : `https://${company.portalUrl}`} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1" data-testid="link-portal-url">
-                    {company.portalUrl} <ExternalLink className="h-3 w-3" />
-                  </a>
-                ) : (
-                  <p className="text-sm text-muted-foreground italic">Not set</p>
-                )}
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Users className="h-3 w-3" /> Username</p>
-                <p className="text-sm font-mono" data-testid="text-portal-username">{company.portalUsername || <span className="text-muted-foreground italic font-sans">Not set</span>}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><KeyRound className="h-3 w-3" /> Password</p>
-                {company.portalPassword ? (
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-mono" data-testid="text-portal-password">{showPortalPassword ? company.portalPassword : "••••••••"}</p>
-                    <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setShowPortalPassword(v => !v)} data-testid="button-reveal-password">
-                      {showPortalPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                    </button>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Portal Credentials</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Globe className="h-3 w-3" /> Portal URL</p>
+                    {company.portalUrl ? (
+                      <a href={company.portalUrl.startsWith("http") ? company.portalUrl : `https://${company.portalUrl}`} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1" data-testid="link-portal-url">
+                        {company.portalUrl} <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : (
+                      <p className="text-sm text-muted-foreground italic">Not set</p>
+                    )}
                   </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground italic">Not set</p>
-                )}
+                  <div>
+                    <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Users className="h-3 w-3" /> Username</p>
+                    <p className="text-sm font-mono" data-testid="text-portal-username">{company.portalUsername || <span className="text-muted-foreground italic font-sans">Not set</span>}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><KeyRound className="h-3 w-3" /> Password</p>
+                    {company.portalPassword ? (
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-mono" data-testid="text-portal-password">{showPortalPassword ? company.portalPassword : "••••••••"}</p>
+                        <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setShowPortalPassword(v => !v)} data-testid="button-reveal-password">
+                          {showPortalPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground italic">Not set</p>
+                    )}
+                  </div>
+                </div>
               </div>
+
+              {/* Account Intelligence */}
+              {(company.tenderStyle || company.accountQuirks || company.processNotes) && (
+                <div className="border-t pt-4">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Account Intelligence</p>
+                  <div className="space-y-3">
+                    {company.tenderStyle && (
+                      <div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><TruckIcon className="h-3 w-3" /> Tender Style</p>
+                        <p className="text-sm" data-testid="text-tender-style">{company.tenderStyle}</p>
+                      </div>
+                    )}
+                    {company.accountQuirks && (
+                      <div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><AlertCircle className="h-3 w-3" /> Account Quirks</p>
+                        <p className="text-sm whitespace-pre-wrap" data-testid="text-account-quirks">{company.accountQuirks}</p>
+                      </div>
+                    )}
+                    {company.processNotes && (
+                      <div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><FileText className="h-3 w-3" /> Process Notes</p>
+                        <p className="text-sm whitespace-pre-wrap" data-testid="text-process-notes">{company.processNotes}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Empty state nudge for intelligence section */}
+              {!company.tenderStyle && !company.accountQuirks && !company.processNotes && (
+                <div className="border-t pt-4">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Intelligence</p>
+                  <p className="text-xs text-muted-foreground italic">No account intelligence captured yet. Click Edit to add tender style, quirks, and process notes.</p>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
