@@ -21,10 +21,12 @@ type SafeUser = Omit<User, "password">;
 
 
 const TAG_CONFIG: Record<string, { label: string; color: string }> = {
-  action_item: { label: "Action Item", color: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" },
-  question:    { label: "Question",    color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
-  fyi:         { label: "FYI",         color: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" },
-  follow_up:   { label: "Follow-up",   color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
+  action_item:   { label: "Action Item",    color: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" },
+  question:      { label: "Question",       color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
+  fyi:           { label: "FYI",            color: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" },
+  follow_up:     { label: "Follow-up",      color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
+  shoutout:      { label: "Shoutout",       color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
+  lets_work_on:  { label: "Let's Work On",  color: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400" },
 };
 
 function formatDate(iso: string) {
@@ -442,6 +444,8 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
                 <option value="action_item">Action Item</option>
                 <option value="question">Question</option>
                 <option value="follow_up">Follow-up</option>
+                <option value="shoutout">Shoutout</option>
+                <option value="lets_work_on">Let's Work On</option>
               </select>
               <Button
                 size="sm"
