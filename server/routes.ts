@@ -3888,63 +3888,66 @@ export async function registerRoutes(
         const allUsers = await storage.getUsers();
         const amUser = allUsers.find(u => u.id === goal.amId);
         if (amUser) {
-          const uploads = await storage.getFinancialUploads();
-          if (uploads.length) {
-            const latest = uploads[uploads.length - 1];
-            const raw = (latest.summaryRows as any[]) || [];
-            const amNameLower = amUser.name.toLowerCase();
-            let total = 0;
-            if (!raw.length) {
-              // Transaction rows (ReplistNumbers) — has byMonth
-              const txRows: any[] = (latest.rows as any[]) || [];
-              type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
-              type CustomerEntry = { customerName: string; totalMargin: number; repName: string; byMonth: Record<string, MonthBucket> };
-              const byCustomer: Record<string, CustomerEntry> = {};
-              for (const row of txRows) {
-                const customerName = String(row["Customer"] || "").trim();
-                if (!customerName) continue;
-                const { monthKey, margin } = parseHistoricalRow(row);
-                const rep = String(row["Salesperson"] || row["Operations user"] || "").trim();
-                if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalMargin: 0, repName: rep, byMonth: {} };
-                if (!byCustomer[customerName].repName && rep) byCustomer[customerName].repName = rep;
-                if (monthKey) {
-                  if (!byCustomer[customerName].byMonth[monthKey]) byCustomer[customerName].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0 };
-                  byCustomer[customerName].byMonth[monthKey].totalMargin += margin;
+          const repKey = (amUser as any).financialRepId as string | null;
+          if (repKey) {
+            const uploads = await storage.getFinancialUploads();
+            if (uploads.length) {
+              const latest = uploads[uploads.length - 1];
+              const raw = (latest.summaryRows as any[]) || [];
+              const repKeyLower = repKey.toLowerCase();
+              let total = 0;
+              if (!raw.length) {
+                // Transaction rows (ReplistNumbers) — has byMonth
+                const txRows: any[] = (latest.rows as any[]) || [];
+                type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
+                type CustomerEntry = { customerName: string; totalMargin: number; repName: string; byMonth: Record<string, MonthBucket> };
+                const byCustomer: Record<string, CustomerEntry> = {};
+                for (const row of txRows) {
+                  const customerName = String(row["Customer"] || "").trim();
+                  if (!customerName) continue;
+                  const { monthKey, margin } = parseHistoricalRow(row);
+                  const rep = String(row["Salesperson"] || row["Operations user"] || "").trim();
+                  if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalMargin: 0, repName: rep, byMonth: {} };
+                  if (!byCustomer[customerName].repName && rep) byCustomer[customerName].repName = rep;
+                  if (monthKey) {
+                    if (!byCustomer[customerName].byMonth[monthKey]) byCustomer[customerName].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0 };
+                    byCustomer[customerName].byMonth[monthKey].totalMargin += margin;
+                  }
+                  byCustomer[customerName].totalMargin += margin;
                 }
-                byCustomer[customerName].totalMargin += margin;
-              }
-              for (const entry of Object.values(byCustomer)) {
-                if (entry.repName.toLowerCase() !== amNameLower) continue;
-                if (goal.period && entry.byMonth[goal.period] !== undefined) {
-                  total += entry.byMonth[goal.period].totalMargin;
-                } else {
-                  total += entry.totalMargin;
+                for (const entry of Object.values(byCustomer)) {
+                  if (entry.repName.toLowerCase() !== repKeyLower) continue;
+                  if (goal.period && entry.byMonth[goal.period] !== undefined) {
+                    total += entry.byMonth[goal.period].totalMargin;
+                  } else {
+                    total += entry.totalMargin;
+                  }
                 }
-              }
-            } else {
-              // Summary rows (account-summary sheet format)
-              const firstRow = raw[0] || {};
-              const usesEmptyKeys = "__EMPTY" in firstRow;
-              let rows = raw;
-              if (usesEmptyKeys) {
-                rows = raw.filter((r: any) => {
-                  const name = String(r["__EMPTY"] || "").trim();
-                  return name && name !== "Customer Name" && name !== "TOTAL" && name !== "Customer code";
-                });
-              }
-              for (const r of rows) {
-                let repName: string, totalMargin: number;
+              } else {
+                // Summary rows (account-summary sheet format)
+                const firstRow = raw[0] || {};
+                const usesEmptyKeys = "__EMPTY" in firstRow;
+                let rows = raw;
                 if (usesEmptyKeys) {
-                  repName = String(r["__EMPTY_6"] || "").trim();
-                  totalMargin = Number(r["__EMPTY_3"] ?? 0);
-                } else {
-                  repName = String(r["Rep Name"] || r["Rep"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim();
-                  totalMargin = Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0);
+                  rows = raw.filter((r: any) => {
+                    const name = String(r["__EMPTY"] || "").trim();
+                    return name && name !== "Customer Name" && name !== "TOTAL" && name !== "Customer code";
+                  });
                 }
-                if (repName.toLowerCase() === amNameLower) total += totalMargin;
+                for (const r of rows) {
+                  let repName: string, totalMargin: number;
+                  if (usesEmptyKeys) {
+                    repName = String(r["__EMPTY_6"] || "").trim();
+                    totalMargin = Number(r["__EMPTY_3"] ?? 0);
+                  } else {
+                    repName = String(r["Rep Name"] || r["Rep"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim();
+                    totalMargin = Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0);
+                  }
+                  if (repName.toLowerCase() === repKeyLower) total += totalMargin;
+                }
               }
+              autoValue = Math.round(total);
             }
-            autoValue = Math.round(total);
           }
         }
       }
