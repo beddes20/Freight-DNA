@@ -33,6 +33,30 @@ export async function runMigrations() {
     }
 
     console.log("[migrations] financial_rep_id migration complete");
+
+    // Fix FK constraints that were missing ON DELETE rules — causes 500 when deleting users
+    await client.query(`
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'touchpoints_logged_by_id_fkey' AND confdeltype = 'a') THEN
+          ALTER TABLE touchpoints DROP CONSTRAINT touchpoints_logged_by_id_fkey;
+          ALTER TABLE touchpoints ADD CONSTRAINT touchpoints_logged_by_id_fkey FOREIGN KEY (logged_by_id) REFERENCES users(id) ON DELETE CASCADE;
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'callouts_author_id_fkey' AND confdeltype = 'a') THEN
+          ALTER TABLE callouts DROP CONSTRAINT callouts_author_id_fkey;
+          ALTER TABLE callouts ADD CONSTRAINT callouts_author_id_fkey FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE;
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'goals_created_by_id_fkey' AND confdeltype = 'a') THEN
+          ALTER TABLE goals ALTER COLUMN created_by_id DROP NOT NULL;
+          ALTER TABLE goals DROP CONSTRAINT goals_created_by_id_fkey;
+          ALTER TABLE goals ADD CONSTRAINT goals_created_by_id_fkey FOREIGN KEY (created_by_id) REFERENCES users(id) ON DELETE SET NULL;
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pto_passoffs_covering_user_id_fkey' AND confdeltype = 'a') THEN
+          ALTER TABLE pto_passoffs DROP CONSTRAINT pto_passoffs_covering_user_id_fkey;
+          ALTER TABLE pto_passoffs ADD CONSTRAINT pto_passoffs_covering_user_id_fkey FOREIGN KEY (covering_user_id) REFERENCES users(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+    `);
+    console.log("[migrations] FK cascade/set-null constraints applied");
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {
