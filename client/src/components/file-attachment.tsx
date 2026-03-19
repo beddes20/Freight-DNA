@@ -77,53 +77,81 @@ export function FileAttachmentUpload({ pendingFiles, onAdd, onRemove, compact }:
     .map((pf, i) => ({ pf, i }))
     .filter(({ pf }) => !pf.file.type.startsWith("image/"));
 
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-2">
-        <input
-          ref={inputRef}
-          type="file"
-          accept={ACCEPTED_TYPES}
-          multiple
-          onChange={handleFileSelect}
-          className="hidden"
-          data-testid="input-file-attachment"
-        />
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={compact ? "h-7 text-xs gap-1 px-2" : "h-8 text-xs gap-1.5"}
-          onClick={() => inputRef.current?.click()}
-          data-testid="button-attach-file"
-        >
-          <Paperclip className="h-3.5 w-3.5" />
-          Attach
-        </Button>
-      </div>
+  const [pendingLightbox, setPendingLightbox] = useState<string | null>(null);
 
-      {imagePendingIndexes.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {imagePendingIndexes.map(({ pf, i }) => (
-            <div key={i} className="relative group" data-testid={`pending-file-${i}`}>
-              <img
-                src={`data:${pf.file.type};base64,${pf.base64}`}
-                alt={pf.file.name}
-                className="h-20 w-28 object-cover rounded-md border border-border"
-              />
-              <button
-                type="button"
-                onClick={() => onRemove(i)}
-                className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                data-testid={`button-remove-pending-${i}`}
-              >
-                <X className="h-3 w-3" />
-              </button>
-              <span className="absolute bottom-0 left-0 right-0 text-[9px] text-white bg-black/50 px-1 py-0.5 rounded-b-md truncate">{pf.file.name}</span>
-            </div>
-          ))}
+  return (
+    <>
+      {pendingLightbox && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setPendingLightbox(null)}
+          data-testid="pending-image-lightbox"
+        >
+          <img
+            src={pendingLightbox}
+            alt="Full size preview"
+            className="max-h-[90vh] max-w-full rounded-lg shadow-2xl object-contain"
+            onClick={e => e.stopPropagation()}
+          />
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white bg-black/50 rounded-full p-2"
+            onClick={() => setPendingLightbox(null)}
+            data-testid="button-close-pending-lightbox"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
       )}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <input
+            ref={inputRef}
+            type="file"
+            accept={ACCEPTED_TYPES}
+            multiple
+            onChange={handleFileSelect}
+            className="hidden"
+            data-testid="input-file-attachment"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={compact ? "h-7 text-xs gap-1 px-2" : "h-8 text-xs gap-1.5"}
+            onClick={() => inputRef.current?.click()}
+            data-testid="button-attach-file"
+          >
+            <Paperclip className="h-3.5 w-3.5" />
+            Attach
+          </Button>
+        </div>
+
+        {imagePendingIndexes.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {imagePendingIndexes.map(({ pf, i }) => (
+              <div key={i} className="relative group" data-testid={`pending-file-${i}`}>
+                <img
+                  src={`data:${pf.file.type};base64,${pf.base64}`}
+                  alt={pf.file.name}
+                  className="h-20 w-28 object-cover rounded-md border border-border cursor-zoom-in hover:opacity-90 transition-opacity"
+                  onClick={() => setPendingLightbox(`data:${pf.file.type};base64,${pf.base64}`)}
+                />
+                <button
+                  type="button"
+                  onClick={() => onRemove(i)}
+                  className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                  data-testid={`button-remove-pending-${i}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                  <ZoomIn className="h-5 w-5 text-white drop-shadow-lg" />
+                </div>
+                <span className="absolute bottom-0 left-0 right-0 text-[9px] text-white bg-black/50 px-1 py-0.5 rounded-b-md truncate">{pf.file.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
       {nonImageIndexes.length > 0 && (
         <div className="space-y-1">
@@ -151,6 +179,7 @@ export function FileAttachmentUpload({ pendingFiles, onAdd, onRemove, compact }:
         </div>
       )}
     </div>
+  </>
   );
 }
 
