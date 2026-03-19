@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users } from "lucide-react";
+import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -7,6 +7,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
+
+type ReportType = "bug" | "improvement" | "feature";
 
 interface Conversation {
   id: number;
@@ -65,7 +67,10 @@ export function CrmChatbot() {
   const [activeConvoId, setActiveConvoId] = useState<number | null>(null);
   const [showConvoList, setShowConvoList] = useState(false);
   const [showSuggest, setShowSuggest] = useState(false);
+  const [reportType, setReportType] = useState<ReportType | null>(null);
   const [suggestionText, setSuggestionText] = useState("");
+  const [bugPage, setBugPage] = useState("");
+  const [bugExpected, setBugExpected] = useState("");
   const [suggestionSent, setSuggestionSent] = useState(false);
   const [input, setInput] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
@@ -128,10 +133,36 @@ export function CrmChatbot() {
       setTimeout(() => {
         setSuggestionSent(false);
         setSuggestionText("");
+        setBugPage("");
+        setBugExpected("");
+        setReportType(null);
         setShowSuggest(false);
       }, 2500);
     },
   });
+
+  const buildSubmitContent = () => {
+    if (reportType === "bug") {
+      const parts = ["🐛 BUG REPORT"];
+      if (bugPage.trim()) parts.push(`Page/Location: ${bugPage.trim()}`);
+      parts.push(`What happened: ${suggestionText.trim()}`);
+      if (bugExpected.trim()) parts.push(`What was expected: ${bugExpected.trim()}`);
+      return parts.join("\n");
+    }
+    if (reportType === "improvement") return `🔧 IMPROVEMENT REQUEST\n${suggestionText.trim()}`;
+    return `✨ FEATURE REQUEST\n${suggestionText.trim()}`;
+  };
+
+  const canSubmit = reportType && suggestionText.trim().length > 0;
+
+  const resetSuggest = () => {
+    setShowSuggest(false);
+    setReportType(null);
+    setSuggestionText("");
+    setBugPage("");
+    setBugExpected("");
+    setSuggestionSent(false);
+  };
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -273,8 +304,9 @@ export function CrmChatbot() {
                 size="icon"
                 variant="ghost"
                 className="h-7 w-7 text-white/80 hover:text-white hover:bg-white/20"
-                onClick={() => { setShowSuggest((v) => !v); setShowConvoList(false); }}
-                title="Suggest a feature"
+                onClick={() => { setShowSuggest((v) => !v); setShowConvoList(false); if (showSuggest) { setReportType(null); setSuggestionText(""); setBugPage(""); setBugExpected(""); } }}
+                title="Report a bug or suggest a feature"
+                data-testid="chatbot-feedback-btn"
               >
                 <Lightbulb className="h-4 w-4" />
               </Button>
@@ -299,39 +331,128 @@ export function CrmChatbot() {
             </div>
           </div>
 
-          {/* Suggestion form overlay */}
+          {/* Feedback / Report form overlay */}
           {showSuggest && (
             <div className="absolute inset-0 top-[57px] bg-background z-10 flex flex-col rounded-b-2xl">
               <div className="flex items-center gap-2 px-4 py-2.5 border-b">
-                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setShowSuggest(false)}>
+                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={resetSuggest}>
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
                 <Lightbulb className="h-4 w-4 text-amber-500" />
-                <span className="text-sm font-medium">Suggest a Feature</span>
+                <span className="text-sm font-medium">
+                  {reportType === "bug" ? "Report a Bug" : reportType === "improvement" ? "Suggest Improvement" : reportType === "feature" ? "Request a Feature" : "Send Feedback"}
+                </span>
+                {reportType && (
+                  <Button size="sm" variant="ghost" className="h-6 px-1.5 ml-auto text-xs text-muted-foreground" onClick={() => { setReportType(null); setSuggestionText(""); setBugPage(""); setBugExpected(""); }}>
+                    Change
+                  </Button>
+                )}
               </div>
 
               {suggestionSent ? (
                 <div className="flex flex-col items-center justify-center flex-1 gap-3 px-6 text-center">
                   <CheckCircle2 className="h-10 w-10 text-green-500" />
-                  <p className="text-sm font-medium">Thanks for the suggestion!</p>
-                  <p className="text-xs text-muted-foreground">Your idea has been sent to the admin team.</p>
+                  <p className="text-sm font-medium">
+                    {reportType === "bug" ? "Bug report sent!" : reportType === "improvement" ? "Improvement noted!" : "Feature request sent!"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">The admin team will review it shortly.</p>
+                </div>
+              ) : !reportType ? (
+                <div className="flex flex-col flex-1 p-4 gap-3">
+                  <p className="text-sm text-muted-foreground">What would you like to send?</p>
+                  <button
+                    onClick={() => setReportType("bug")}
+                    className="flex items-start gap-3 p-3.5 rounded-xl border border-border hover:border-red-300 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors text-left"
+                    data-testid="feedback-type-bug"
+                  >
+                    <Bug className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium">Report a Bug</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Something isn't working the way it should</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setReportType("improvement")}
+                    className="flex items-start gap-3 p-3.5 rounded-xl border border-border hover:border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/20 transition-colors text-left"
+                    data-testid="feedback-type-improvement"
+                  >
+                    <Wrench className="h-5 w-5 text-blue-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium">Suggest an Improvement</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Make something that exists work better</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setReportType("feature")}
+                    className="flex items-start gap-3 p-3.5 rounded-xl border border-border hover:border-violet-300 hover:bg-violet-50 dark:hover:bg-violet-950/20 transition-colors text-left"
+                    data-testid="feedback-type-feature"
+                  >
+                    <Sparkles className="h-5 w-5 text-violet-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium">Request a Feature</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Something new that would help your workflow</p>
+                    </div>
+                  </button>
                 </div>
               ) : (
-                <div className="flex flex-col flex-1 p-4 gap-3">
-                  <p className="text-sm text-muted-foreground">
-                    Got an idea to improve the app? Describe it below and it'll go straight to the admin team.
-                  </p>
-                  <Textarea
-                    placeholder="e.g. It would be great if we could filter contacts by relationship base on the customers list..."
-                    className="flex-1 resize-none text-sm min-h-[160px]"
-                    value={suggestionText}
-                    onChange={(e) => setSuggestionText(e.target.value)}
-                    data-testid="suggestion-input"
-                  />
+                <div className="flex flex-col flex-1 p-4 gap-3 overflow-y-auto">
+                  {reportType === "bug" && (
+                    <>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">Page or area where it happened <span className="font-normal">(optional)</span></label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Company detail page, RFP upload, Dashboard…"
+                          className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-[#001AB3]/40"
+                          value={bugPage}
+                          onChange={(e) => setBugPage(e.target.value)}
+                          data-testid="bug-page-input"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">What happened? <span className="text-destructive">*</span></label>
+                        <Textarea
+                          placeholder="Describe what went wrong — be as specific as possible…"
+                          className="resize-none text-sm min-h-[90px]"
+                          value={suggestionText}
+                          onChange={(e) => setSuggestionText(e.target.value)}
+                          data-testid="suggestion-input"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">What did you expect to happen? <span className="font-normal">(optional)</span></label>
+                        <Textarea
+                          placeholder="e.g. The contact should have saved and appeared in the list…"
+                          className="resize-none text-sm min-h-[70px]"
+                          value={bugExpected}
+                          onChange={(e) => setBugExpected(e.target.value)}
+                          data-testid="bug-expected-input"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {(reportType === "improvement" || reportType === "feature") && (
+                    <div className="space-y-1 flex-1">
+                      <label className="text-xs font-medium text-muted-foreground">
+                        {reportType === "improvement" ? "What would you improve and how?" : "Describe the feature you'd like"} <span className="text-destructive">*</span>
+                      </label>
+                      <Textarea
+                        placeholder={reportType === "improvement"
+                          ? "e.g. The contact list would be much easier to use if I could filter by last touch date…"
+                          : "e.g. It would be great to export RFP lane data directly to Excel from the RFP detail page…"}
+                        className="resize-none text-sm min-h-[160px]"
+                        value={suggestionText}
+                        onChange={(e) => setSuggestionText(e.target.value)}
+                        data-testid="suggestion-input"
+                      />
+                    </div>
+                  )}
+
                   <Button
                     className="w-full bg-[#001AB3] hover:bg-[#044ad3]"
-                    disabled={!suggestionText.trim() || submitSuggestion.isPending}
-                    onClick={() => submitSuggestion.mutate(suggestionText)}
+                    disabled={!canSubmit || submitSuggestion.isPending}
+                    onClick={() => submitSuggestion.mutate(buildSubmitContent())}
                     data-testid="suggestion-submit"
                   >
                     {submitSuggestion.isPending ? (
