@@ -585,10 +585,21 @@ export async function registerRoutes(
   async function fanOutCelebration(type: "new_account" | "new_contact" | "base_advanced", title: string, body: string, link: string, relatedId: string, actorId: string) {
     try {
       const allUsers = await storage.getUsers();
-      const celebrationRoles = ["national_account_manager", "director", "admin"];
-      const targets = allUsers.filter(u => celebrationRoles.includes(u.role));
-      await Promise.all(targets.map(u =>
-        storage.createNotification({ userId: u.id, type, title, body, link, relatedId, read: false }).catch(() => {})
+      const actor = allUsers.find(u => u.id === actorId);
+      const notifyIds = new Set<string>();
+      // Walk up the manager chain from the actor
+      let current = actor;
+      while (current?.managerId) {
+        const manager = allUsers.find(u => u.id === current!.managerId);
+        if (manager) notifyIds.add(manager.id);
+        current = manager;
+      }
+      // Always include all admins
+      allUsers.filter(u => u.role === "admin").forEach(u => notifyIds.add(u.id));
+      // Never notify the actor themselves
+      notifyIds.delete(actorId);
+      await Promise.all([...notifyIds].map(uid =>
+        storage.createNotification({ userId: uid, type, title, body, link, relatedId, read: false }).catch(() => {})
       ));
     } catch (e) {
       console.error("fanOutCelebration error:", e);
