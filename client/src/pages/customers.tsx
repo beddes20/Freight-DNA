@@ -144,11 +144,11 @@ export default function Customers() {
     return Array.from(set).sort();
   }, [companies]);
 
-  // Derive NAM + AM users for the rep filter dropdown (admins/directors only see core sales hierarchy)
+  // Derive assignable users for the rep filter dropdown — all non-admin roles can own accounts
   const isAdminOrDirector = currentUser?.role === "admin" || currentUser?.role === "director";
   const amUsers = useMemo(() => {
     return teamMembers
-      .filter(u => u.role === "national_account_manager" || u.role === "account_manager")
+      .filter(u => u.role !== "admin")
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [teamMembers]);
 

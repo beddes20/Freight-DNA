@@ -899,7 +899,7 @@ export default function OneOnOnePage() {
   if (!user) return null;
 
   const isAM = user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator";
-  const showNamLabel = user.role === "admin";
+  const showNamLabel = user.role === "admin" || user.role === "director" || user.role === "sales_director";
 
   const activePairingKey = selectedKey ?? (pairings.length > 0 ? `${pairings[0].namId}::${pairings[0].amId}` : null);
   const activePairing = pairings.find(p => `${p.namId}::${p.amId}` === activePairingKey) ?? pairings[0] ?? null;
