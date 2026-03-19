@@ -551,6 +551,10 @@ export async function registerRoutes(
       if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id);
         const visibleIds = new Set([...teamIds, currentUser.id]);
+        // Always include manager (they can post replies to this user's sessions)
+        if (currentUser.managerId) visibleIds.add(currentUser.managerId);
+        // Always include admins (they can see and post to any session)
+        safeUsers.filter(u => u.role === "admin").forEach(u => visibleIds.add(u.id));
         return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
       }
       const visibleIds = new Set<string>([currentUser.id]);
@@ -560,6 +564,8 @@ export async function registerRoutes(
           if (u.managerId === currentUser.managerId) visibleIds.add(u.id);
         });
       }
+      // Always include admins (they can see and post to any session)
+      safeUsers.filter(u => u.role === "admin").forEach(u => visibleIds.add(u.id));
       return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch team members" });
