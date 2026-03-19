@@ -161,6 +161,28 @@ export async function runMigrations() {
     `);
     console.log("[migrations] goal_comments table ensured");
 
+    // Add performance indexes on high-traffic foreign key columns
+    const perfIndexes = [
+      `CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_contacts_company_id ON contacts(company_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_companies_assigned_to ON companies(assigned_to)`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to ON tasks(assigned_to)`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_company_id ON tasks(company_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_goals_am_id ON goals(am_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_goals_nam_id ON goals(nam_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_one_on_one_topics_session_id ON one_on_one_topics(session_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_one_on_one_topic_replies_topic_id ON one_on_one_topic_replies(topic_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_callouts_company_id ON callouts(company_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_feed_posts_parent_id ON feed_posts(parent_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_feed_posts_author_id ON feed_posts(author_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_goal_comments_goal_id ON goal_comments(goal_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_attachments_entity ON attachments(entity_type, entity_id)`,
+    ];
+    for (const sql of perfIndexes) {
+      await client.query(sql);
+    }
+    console.log("[migrations] performance indexes ensured");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

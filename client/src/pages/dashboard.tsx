@@ -106,7 +106,7 @@ export default function Dashboard() {
 
   const { data: allTasks = [], isLoading: tasksLoading } = useQuery<Task[]>({
     queryKey: ["/api/tasks"],
-    refetchInterval: 20000,
+    refetchInterval: 60000,
   });
 
   const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
@@ -128,7 +128,7 @@ export default function Dashboard() {
 
   const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPostWithReplies[]>({
     queryKey: ["/api/feed-posts"],
-    refetchInterval: 30000,
+    refetchInterval: 60000,
   });
 
   const { data: passoffs = [] } = useQuery<any[]>({
@@ -146,12 +146,12 @@ export default function Dashboard() {
 
   const { data: oneOnOnePendingData } = useQuery<{ count: number }>({
     queryKey: ["/api/one-on-one/pending-count"],
-    refetchInterval: 30000,
+    refetchInterval: 90000,
   });
 
   const { data: myGoals = [] } = useQuery<any[]>({
     queryKey: ["/api/goals"],
-    refetchInterval: 30000,
+    refetchInterval: 120000,
   });
 
   const { data: leaderboard = [], isLoading: leaderboardLoading } = useQuery<{
@@ -161,7 +161,7 @@ export default function Dashboard() {
   }[]>({
     queryKey: ["/api/goals/leaderboard"],
     enabled: canSeeTeam,
-    refetchInterval: 60000,
+    refetchInterval: 120000,
   });
 
   const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string } | undefined>();

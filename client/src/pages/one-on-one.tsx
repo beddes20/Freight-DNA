@@ -879,7 +879,7 @@ export default function OneOnOnePage() {
 
   const { data: pairings = [], isLoading: pairingsLoading } = useQuery<Pairing[]>({
     queryKey: ["/api/one-on-one/pairings"],
-    refetchInterval: 30000,
+    refetchInterval: 90000,
   });
 
   if (!user) return null;

@@ -48,7 +48,7 @@ export function NotificationToasts() {
 
   const { data: notifications = [] } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],
-    refetchInterval: 15000,
+    refetchInterval: 45000,
   });
 
   const markRead = useMutation({
