@@ -201,7 +201,9 @@ const SALES_ROLES = new Set(["sales", "sales_director"]);
 
 function OrgChartView({ users, onEdit }: { users: SafeUser[]; onEdit: (u: SafeUser) => void }) {
   const chartUsers = users.filter(u => !SALES_ROLES.has(u.role));
-  const roots = chartUsers.filter(u => !u.managerId).sort((a, b) => a.name.localeCompare(b.name));
+  const chartUserIds = new Set(chartUsers.map(u => u.id));
+  // Treat anyone whose manager isn't in the visible list as a root (handles NAM/director scoped views)
+  const roots = chartUsers.filter(u => !u.managerId || !chartUserIds.has(u.managerId)).sort((a, b) => a.name.localeCompare(b.name));
 
   if (users.length === 0) {
     return <p className="text-center py-12 text-muted-foreground">No users to display.</p>;
