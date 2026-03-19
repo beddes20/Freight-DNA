@@ -3776,7 +3776,7 @@ export async function registerRoutes(
       ]);
       const result = perf.map(p => {
         const u = allUsers.find(u => u.id === p.userId);
-        return { ...p, name: u?.name || "Unknown", role: u?.role || "account_manager", managerId: u?.managerId };
+        return { ...p, name: u?.name || "Unknown", role: u?.role || "account_manager", managerId: u?.managerId, financialRepId: (u as any)?.financialRepId || null };
       });
       res.json(result);
     } catch (error) {

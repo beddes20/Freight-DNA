@@ -14,6 +14,7 @@ interface RepPerf {
   name: string;
   role: string;
   managerId?: string;
+  financialRepId?: string | null;
   openTasks: number;
   overdueTasks: number;
   completedTasks: number;
@@ -184,7 +185,12 @@ export default function TeamPerformancePage() {
   const repLoadsMap: Record<string, { loads: number; margin: number; revenue: number }> = {};
   for (const row of accountSummary) {
     if (!row.repName) continue;
-    const match = reps.find(r => matchRepName(row.repName, r.name));
+    const repNameLower = row.repName.toLowerCase().trim();
+    // Try financialRepId match first (most reliable for ReplistNumbers format), then fall back to name match
+    const match = reps.find(r =>
+      (r.financialRepId && r.financialRepId.toLowerCase() === repNameLower) ||
+      matchRepName(row.repName, r.name)
+    );
     if (match) {
       if (!repLoadsMap[match.userId]) repLoadsMap[match.userId] = { loads: 0, margin: 0, revenue: 0 };
       repLoadsMap[match.userId].loads += row.totalLoads;
