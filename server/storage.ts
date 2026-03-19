@@ -20,6 +20,7 @@ import {
   goals,
   goalComments,
   touchpoints,
+  internalPosts,
   type User,
   type InsertUser,
   type Company,
@@ -230,6 +231,10 @@ export interface IStorage {
   createPtoPassoffItem(data: InsertPtoPassoffItem): Promise<PtoPassoffItem>;
   updatePtoPassoffItem(id: string, data: Partial<InsertPtoPassoffItem>): Promise<PtoPassoffItem | undefined>;
   deletePtoPassoffItem(id: string): Promise<boolean>;
+
+  getInternalPosts(userId: string, role: string): Promise<any[]>;
+  createInternalPost(data: { content: string; authorId: string; recipientIds: string[]; parentId?: string | null; createdAt: string }): Promise<any>;
+  deleteInternalPost(id: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -1227,6 +1232,33 @@ export class DatabaseStorage implements IStorage {
 
   async deletePtoPassoffItem(id: string): Promise<boolean> {
     const result = await db.delete(ptoPassoffItems).where(eq(ptoPassoffItems.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getInternalPosts(userId: string, role: string): Promise<any[]> {
+    const isLeadership = role === "admin" || role === "director";
+    if (isLeadership) {
+      return db.select().from(internalPosts).orderBy(desc(internalPosts.createdAt));
+    }
+    // Non-leadership: only see top-level posts where they are a recipient, plus all replies under those threads
+    const topLevel = await db.select().from(internalPosts)
+      .where(and(isNull(internalPosts.parentId), sql`${userId} = ANY(${internalPosts.recipientIds})`))
+      .orderBy(desc(internalPosts.createdAt));
+    if (!topLevel.length) return [];
+    const threadIds = topLevel.map(p => p.id);
+    const replies = await db.select().from(internalPosts)
+      .where(inArray(internalPosts.parentId, threadIds))
+      .orderBy(internalPosts.createdAt);
+    return [...topLevel, ...replies];
+  }
+
+  async createInternalPost(data: { content: string; authorId: string; recipientIds: string[]; parentId?: string | null; createdAt: string }): Promise<any> {
+    const [created] = await db.insert(internalPosts).values(data).returning();
+    return created;
+  }
+
+  async deleteInternalPost(id: string): Promise<boolean> {
+    const result = await db.delete(internalPosts).where(eq(internalPosts.id, id)).returning();
     return result.length > 0;
   }
 }

@@ -465,3 +465,15 @@ export const appSuggestions = pgTable("app_suggestions", {
 export const insertAppSuggestionSchema = createInsertSchema(appSuggestions).omit({ id: true, createdAt: true });
 export type InsertAppSuggestion = z.infer<typeof insertAppSuggestionSchema>;
 export type AppSuggestion = typeof appSuggestions.$inferSelect;
+
+export const internalPosts = pgTable("internal_posts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  content: text("content").notNull(),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  recipientIds: text("recipient_ids").array().notNull().default(sql`'{}'::text[]`),
+  parentId: varchar("parent_id"),
+  createdAt: text("created_at").notNull(),
+});
+export const insertInternalPostSchema = createInsertSchema(internalPosts).omit({ id: true });
+export type InsertInternalPost = z.infer<typeof insertInternalPostSchema>;
+export type InternalPost = typeof internalPosts.$inferSelect;

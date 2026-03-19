@@ -1975,6 +1975,56 @@ export async function registerRoutes(
     }
   });
 
+  // ── Internal Posts (Leadership → Team Direct Messages) ────────────────────
+
+  app.get("/api/internal-posts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const posts = await storage.getInternalPosts(user.id, user.role);
+      res.json(posts);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch internal posts" });
+    }
+  });
+
+  app.post("/api/internal-posts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { content, recipientIds, parentId } = req.body;
+      if (!content?.trim()) return res.status(400).json({ error: "Content required" });
+      // Only admins/directors can start new threads; anyone who can see the thread can reply
+      const isLeadership = user.role === "admin" || user.role === "director";
+      if (!parentId && !isLeadership) {
+        return res.status(403).json({ error: "Only admins and directors can start new threads" });
+      }
+      const post = await storage.createInternalPost({
+        content: content.trim(),
+        authorId: user.id,
+        recipientIds: Array.isArray(recipientIds) ? recipientIds : [],
+        parentId: parentId || null,
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(post);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create internal post" });
+    }
+  });
+
+  app.delete("/api/internal-posts/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const isLeadership = user.role === "admin" || user.role === "director";
+      if (!isLeadership) return res.status(403).json({ error: "Only admins and directors can delete posts" });
+      await storage.deleteInternalPost(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete internal post" });
+    }
+  });
+
   // ── Callout Reactions ──────────────────────────────────────────────────────
 
   app.get("/api/callouts/reactions", async (req, res) => {

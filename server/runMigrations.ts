@@ -187,6 +187,19 @@ export async function runMigrations() {
     await client.query(`UPDATE notifications SET link = '/' WHERE link = '/feed'`);
     console.log("[migrations] notification /feed links corrected");
 
+    // Internal posts table for admin/director → recipient direct messages
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS internal_posts (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        content text NOT NULL,
+        author_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        recipient_ids text[] NOT NULL DEFAULT '{}',
+        parent_id varchar,
+        created_at text NOT NULL
+      )
+    `);
+    console.log("[migrations] internal_posts table ensured");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {
