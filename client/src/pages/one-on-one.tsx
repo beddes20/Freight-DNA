@@ -826,6 +826,15 @@ interface PairingListProps {
 }
 
 function PairingList({ pairings, selectedKey, onSelect, showNamLabel }: PairingListProps) {
+  // Keep upward/manager pairing first, sort everything else alphabetically by display name
+  const sortedPairings = [...pairings].sort((a, b) => {
+    if (a.section === "upward" || a.section === "my_manager") return -1;
+    if (b.section === "upward" || b.section === "my_manager") return 1;
+    const nameA = a.section === "upward" ? a.namName : a.amName;
+    const nameB = b.section === "upward" ? b.namName : b.amName;
+    return nameA.localeCompare(nameB);
+  });
+
   return (
     <div className="w-64 shrink-0 border-r flex flex-col bg-muted/10">
       <div className="px-4 py-3 border-b">
@@ -834,13 +843,13 @@ function PairingList({ pairings, selectedKey, onSelect, showNamLabel }: PairingL
         </p>
       </div>
       <div className="flex-1 overflow-y-auto py-2">
-        {pairings.length === 0 ? (
+        {sortedPairings.length === 0 ? (
           <div className="px-4 py-8 text-center text-muted-foreground">
             <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
             <p className="text-sm">No pairings found</p>
           </div>
         ) : (
-          pairings.map(p => {
+          sortedPairings.map(p => {
             const key = `${p.namId}::${p.amId}`;
             const isSelected = selectedKey === key;
             const isUpward = p.section === "upward";
