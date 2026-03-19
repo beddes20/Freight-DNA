@@ -17,7 +17,7 @@ import {
 import {
   Target, Plus, MessageSquare, Trash2, ChevronDown, ChevronUp,
   TrendingUp, Users, Truck, DollarSign, CalendarDays, Pencil, Send,
-  CheckCircle2, BarChart3, BellRing, X, Sliders,
+  CheckCircle2, BarChart3, BellRing, X, Sliders, Percent,
 } from "lucide-react";
 import type { Goal, GoalComment } from "@shared/schema";
 
@@ -26,6 +26,7 @@ const METRICS = [
   { value: "touchpoints",    label: "Touchpoints",  icon: TrendingUp, color: "bg-cyan-500", unit: "touches" },
   { value: "load_count",     label: "Load Count",   icon: Truck, color: "bg-green-500", unit: "loads" },
   { value: "margin",         label: "Margin ($)",   icon: DollarSign, color: "bg-violet-500", unit: "$" },
+  { value: "margin_pct",    label: "Margin %",     icon: Percent, color: "bg-emerald-500", unit: "%" },
   { value: "custom",         label: "Custom",       icon: Sliders, color: "bg-orange-500", unit: "units" },
 ];
 
@@ -40,6 +41,7 @@ function getMetric(value: string) {
 
 function formatValue(metric: string, value: number) {
   if (metric === "margin") return `$${value.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  if (metric === "margin_pct") return `${value}%`;
   return value.toLocaleString();
 }
 
