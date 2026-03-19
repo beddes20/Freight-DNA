@@ -867,7 +867,7 @@ export default function CompanyDetail() {
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="sticky top-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-background/95 backdrop-blur border-b border-border/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-start gap-4">
           <Button
             variant="ghost"
@@ -1446,7 +1446,16 @@ export default function CompanyDetail() {
           ) : (
             <div className="text-center py-4 text-muted-foreground">
               <ClipboardList className="h-6 w-6 mx-auto mb-1 opacity-50" />
-              <p className="text-xs">No tasks yet — add one to track follow-ups for this account</p>
+              <p className="text-xs mb-2">No tasks yet</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 text-xs h-7"
+                onClick={() => { setEditingTaskItem(undefined); setForceLanePrefill(undefined); setFocusTaskComments(false); setTaskDialogOpen(true); }}
+                data-testid="button-create-first-company-task"
+              >
+                <Plus className="h-3 w-3" /> Add a task
+              </Button>
             </div>
           )}
         </CardContent>

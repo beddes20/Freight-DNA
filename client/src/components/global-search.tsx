@@ -20,6 +20,7 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
   const [loading, setLoading] = useState(false);
   const [, navigate] = useLocation();
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const abortRef = useRef<AbortController | null>(null);
 
@@ -75,6 +76,18 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
   }, []);
 
   useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (abortRef.current) abortRef.current.abort();
       if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -102,14 +115,18 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
       <div className="relative">
         <Search className={`absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 ${navBar ? "text-white/60" : "text-muted-foreground"}`} />
         <Input
+          ref={inputRef}
           data-testid="input-global-search"
           placeholder="Search accounts, contacts, RFPs..."
           value={query}
           onChange={(e) => handleChange(e.target.value)}
           onKeyDown={handleKeyDown}
           onFocus={() => { if (query.trim() && hasResults) setOpen(true); }}
-          className={`pl-9 h-8 ${navBar ? "bg-white/10 border-white/20 text-white placeholder:text-white/50 focus-visible:ring-white/30" : ""}`}
+          className={`pl-9 pr-12 h-8 ${navBar ? "bg-white/10 border-white/20 text-white placeholder:text-white/50 focus-visible:ring-white/30" : ""}`}
         />
+        <span className={`absolute right-2 top-1/2 -translate-y-1/2 text-[10px] px-1 py-0.5 rounded border font-mono pointer-events-none ${navBar ? "text-white/40 border-white/20" : "text-muted-foreground/50 border-border"}`}>
+          ⌘K
+        </span>
       </div>
 
       {showDropdown && (

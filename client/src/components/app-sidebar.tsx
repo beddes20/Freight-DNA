@@ -58,7 +58,7 @@ function NavLink({ item, isActive }: { item: { title: string; url: string; icon:
   const Icon = item.icon;
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={isActive}>
+      <SidebarMenuButton asChild isActive={isActive} tooltip={item.title}>
         <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`}>
           <Icon className="h-4 w-4" />
           <span>{item.title}</span>
@@ -78,9 +78,9 @@ export function AppSidebar() {
       : location.startsWith(url) || (url === "/customers" && location.startsWith("/companies/"));
 
   return (
-    <Sidebar>
+    <Sidebar collapsible="icon">
       <SidebarHeader className="p-4 border-b border-sidebar-border">
-        <div className="flex flex-col items-center justify-center py-1 gap-1">
+        <div className="flex flex-col items-center justify-center py-1 gap-1 group-data-[collapsible=icon]:hidden">
           <img src={vtLogoWhite} alt="Value Truck" className="h-10 w-auto object-contain" />
           <p className="text-[10px] tracking-wide text-sidebar-foreground/60 text-center" data-testid="text-dna-tagline-sidebar">
             <span className="font-bold text-sidebar-foreground/80">DNA</span>
@@ -89,6 +89,9 @@ export function AppSidebar() {
             <span className="font-bold text-sidebar-foreground/80">N</span>ot{" "}
             <span className="font-bold text-sidebar-foreground/80">A</span>cross
           </p>
+        </div>
+        <div className="hidden group-data-[collapsible=icon]:flex justify-center py-1">
+          <img src={vtLogoWhite} alt="VT" className="h-6 w-6 object-contain" />
         </div>
       </SidebarHeader>
 
@@ -163,8 +166,8 @@ export function AppSidebar() {
 
       <SidebarFooter className="p-3 border-t border-sidebar-border space-y-3">
         {user && (
-          <div className="flex items-center justify-between">
-            <div className="min-w-0">
+          <div className="flex items-center justify-between group-data-[collapsible=icon]:justify-center">
+            <div className="min-w-0 group-data-[collapsible=icon]:hidden">
               <p className="text-sm font-medium truncate" data-testid="text-current-user">{user.name}</p>
               <p className="text-xs text-sidebar-foreground/60">{ROLE_LABELS[user.role] || user.role}</p>
             </div>
@@ -174,12 +177,13 @@ export function AppSidebar() {
               className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
               onClick={() => logout.mutate()}
               data-testid="button-logout"
+              title="Log out"
             >
               <LogOut className="h-4 w-4" />
             </Button>
           </div>
         )}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between group-data-[collapsible=icon]:hidden">
           <span className="text-xs text-sidebar-foreground/60">Theme</span>
           <ThemeToggle />
         </div>

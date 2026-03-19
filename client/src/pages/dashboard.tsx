@@ -786,8 +786,16 @@ export default function Dashboard() {
           ) : (
             <div className="text-center py-6 text-muted-foreground">
               <ClipboardList className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">No tasks yet</p>
-              <p className="text-xs mt-1">Click "Add Task" to create your first one</p>
+              <p className="text-sm mb-3">No tasks yet</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
+                data-testid="button-create-first-task"
+              >
+                <Plus className="h-3.5 w-3.5" /> Create a task
+              </Button>
             </div>
           )}
         </CardContent>
@@ -1456,6 +1464,66 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      {coldContacts.length > 0 && (
+        <Card data-testid="card-cold-contacts">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              Contacts Needing Attention
+              <Badge variant="secondary" className="ml-auto font-normal">{coldContacts.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="divide-y">
+              {coldContacts.slice(0, 8).map(({ contact, company, daysSince, lastType }) => {
+                const dotColor = daysSince >= 999 ? "bg-muted-foreground/40" : daysSince > 30 ? "bg-red-500" : "bg-amber-500";
+                const typeLabel = lastType ? ({ call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" }[lastType] ?? lastType) : null;
+                const daysNum = daysSince >= 999 ? null : daysSince;
+                const badgeClass = daysSince >= 999 ? "bg-muted text-muted-foreground" : daysSince > 30 ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400";
+                return (
+                  <div
+                    key={contact.id}
+                    className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors group"
+                    data-testid={`cold-contact-row-${contact.id}`}
+                  >
+                    <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${dotColor}`} />
+                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewContact(contact)}>
+                      <p className="text-sm font-medium truncate">{contact.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{company.name}{contact.title ? ` · ${contact.title}` : ""}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right">
+                        {typeLabel && <p className="text-xs text-muted-foreground">Last: {typeLabel}</p>}
+                      </div>
+                      <div className={`text-right rounded-md px-2 py-0.5 ${badgeClass}`}>
+                        {daysNum !== null
+                          ? <p className="text-xs font-bold leading-tight">{daysNum}d</p>
+                          : <p className="text-xs font-medium">Never</p>
+                        }
+                      </div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Create task for this contact"
+                        data-testid={`button-task-cold-${contact.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTaskPrefill({ title: `Follow up with ${contact.name}`, companyId: company.id });
+                          setPrefillDialogOpen(true);
+                        }}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {canSeeTeam && (leaderboardLoading || leaderboard.length > 0) && (
         <Card data-testid="card-leaderboard">
           <CardHeader className="pb-3">
@@ -1524,66 +1592,6 @@ export default function Dashboard() {
                 })}
               </div>
             )}
-          </CardContent>
-        </Card>
-      )}
-
-      {coldContacts.length > 0 && (
-        <Card data-testid="card-cold-contacts">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <AlertTriangle className="h-4 w-4 text-amber-500" />
-              Contacts Needing Attention
-              <Badge variant="secondary" className="ml-auto font-normal">{coldContacts.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y">
-              {coldContacts.slice(0, 8).map(({ contact, company, daysSince, lastType }) => {
-                const dotColor = daysSince >= 999 ? "bg-muted-foreground/40" : daysSince > 30 ? "bg-red-500" : "bg-amber-500";
-                const typeLabel = lastType ? ({ call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" }[lastType] ?? lastType) : null;
-                const daysNum = daysSince >= 999 ? null : daysSince;
-                const badgeClass = daysSince >= 999 ? "bg-muted text-muted-foreground" : daysSince > 30 ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400";
-                return (
-                  <div
-                    key={contact.id}
-                    className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors group"
-                    data-testid={`cold-contact-row-${contact.id}`}
-                  >
-                    <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${dotColor}`} />
-                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewContact(contact)}>
-                      <p className="text-sm font-medium truncate">{contact.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{company.name}{contact.title ? ` · ${contact.title}` : ""}</p>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <div className="text-right hidden group-hover:block">
-                        {typeLabel && <p className="text-xs text-muted-foreground">Last: {typeLabel}</p>}
-                      </div>
-                      <div className={`text-right rounded-md px-2 py-0.5 ${badgeClass}`}>
-                        {daysNum !== null
-                          ? <p className="text-xs font-bold leading-tight">{daysNum}d</p>
-                          : <p className="text-xs font-medium">Never</p>
-                        }
-                      </div>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Create task for this contact"
-                        data-testid={`button-task-cold-${contact.id}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setTaskPrefill({ title: `Follow up with ${contact.name}`, companyId: company.id });
-                          setPrefillDialogOpen(true);
-                        }}
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
           </CardContent>
         </Card>
       )}
