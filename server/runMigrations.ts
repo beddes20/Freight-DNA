@@ -183,6 +183,10 @@ export async function runMigrations() {
     }
     console.log("[migrations] performance indexes ensured");
 
+    // Fix notification links that pointed to /feed (page doesn't exist — callouts live on dashboard)
+    await client.query(`UPDATE notifications SET link = '/' WHERE link = '/feed'`);
+    console.log("[migrations] notification /feed links corrected");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

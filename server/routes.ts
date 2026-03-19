@@ -1806,7 +1806,7 @@ export async function registerRoutes(
               ? `${user.name} replied to your callout`
               : `${user.name} replied to a thread you're in`,
             body: (title.trim()).length > 80 ? title.trim().slice(0, 80) + "…" : title.trim(),
-            link: "/feed",
+            link: "/",
             relatedId: callout.id,
             read: false,
           }).catch((e) => console.error("Notification error:", e));
@@ -1883,7 +1883,7 @@ export async function registerRoutes(
             type: "post_reply",
             title: `${user.name} replied to your post`,
             body: trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed,
-            link: "/feed",
+            link: "/",
             relatedId: post.id,
             read: false,
           }).catch((e) => console.error("Notification error:", e));
@@ -1929,7 +1929,7 @@ export async function registerRoutes(
                   type: "new_post",
                   title: `${user.name} posted a ${categoryLabel}`,
                   body: preview,
-                  link: "/feed",
+                  link: "/",
                   relatedId: post.id,
                   read: false,
                 }).catch(() => {})
