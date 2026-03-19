@@ -3286,8 +3286,8 @@ export async function registerRoutes(
           pairs.push({ namId: user.id, amId: nam.id });
         }
       } else {
-        // NAM: downward (their AMs) + upward (their manager)
-        const reports = allUsers.filter(u => u.managerId === user.id && amLikeRoles.includes(u.role));
+        // NAM/Director: downward (ALL direct reports) + upward (their manager)
+        const reports = allUsers.filter(u => u.managerId === user.id);
         for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       }
@@ -3321,7 +3321,8 @@ export async function registerRoutes(
         const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
         for (const nam of nams) pairs.push({ namId: user.id, amId: nam.id });
       } else {
-        const reports = allUsers.filter(u => u.managerId === user.id && amLikeRoles2.includes(u.role));
+        // NAM/Director: downward (ALL direct reports) + upward (their manager)
+        const reports = allUsers.filter(u => u.managerId === user.id);
         for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       }
@@ -3380,8 +3381,8 @@ export async function registerRoutes(
             result.push({ namId: manager.id, amId: currentUser.id, namName: manager.name, amName: currentUser.name, section: "upward" });
           }
         }
-        // Downward: pairings with their AMs
-        const directReports = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator"));
+        // Downward: pairings with ALL direct reports (AM, NAM, director, etc.)
+        const directReports = safeUsers.filter(u => u.managerId === currentUser.id);
         for (const am of directReports) {
           result.push({ namId: currentUser.id, amId: am.id, namName: currentUser.name, amName: am.name, section: "my_reports" });
         }
@@ -4245,8 +4246,16 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const days = parseInt(req.query.days as string) || 30;
-      const scopedUserId = (user.role === "admin" || user.role === "director" || user.role === "sales_director") ? null : user.id;
-      const results = await storage.getColdContacts(scopedUserId, days);
+      if (user.role === "admin") {
+        const results = await storage.getColdContacts(null, days);
+        return res.json(results);
+      }
+      if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        const results = await storage.getColdContacts(null, days, teamIds);
+        return res.json(results);
+      }
+      const results = await storage.getColdContacts(user.id, days);
       res.json(results);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch cold contacts" });

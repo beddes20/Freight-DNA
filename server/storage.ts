@@ -193,7 +193,7 @@ export interface IStorage {
   getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]>;
   createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint>;
   deleteTouchpoint(id: string): Promise<boolean>;
-  getColdContacts(assignedToUserId: string | null, daysSince: number): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>>;
+  getColdContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>>;
 
   getTouchpointCountByAm(amId: string, startDate: string, endDate: string): Promise<number>;
 
@@ -1014,13 +1014,15 @@ export class DatabaseStorage implements IStorage {
     return (result.rowCount ?? 0) > 0;
   }
 
-  async getColdContacts(assignedToUserId: string | null, daysSince: number): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>> {
+  async getColdContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - daysSince);
     const cutoffStr = cutoff.toISOString().split("T")[0];
 
     let companiesResult: Company[];
-    if (assignedToUserId) {
+    if (teamUserIds && teamUserIds.length > 0) {
+      companiesResult = await db.select().from(companies).where(inArray(companies.assignedTo, teamUserIds));
+    } else if (assignedToUserId) {
       companiesResult = await db.select().from(companies).where(eq(companies.assignedTo, assignedToUserId));
     } else {
       companiesResult = await db.select().from(companies);

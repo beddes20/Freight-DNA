@@ -640,10 +640,10 @@ export default function GoalsPage() {
           <div className="space-y-4 py-2">
             {isNam && !isAm && (
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Account Manager</label>
+                <label className="text-sm font-medium">Team Member</label>
                 <Select value={form.amId} onValueChange={v => setForm(f => ({ ...f, amId: v }))}>
                   <SelectTrigger data-testid="select-goal-am">
-                    <SelectValue placeholder="Select AM..." />
+                    <SelectValue placeholder="Select team member..." />
                   </SelectTrigger>
                   <SelectContent>
                     {uniqueAms.map(p => (
