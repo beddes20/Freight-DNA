@@ -1653,9 +1653,11 @@ export async function registerRoutes(
         createdAt: new Date().toISOString(),
         parentId: parentId || null,
       });
-      // Notify task assignee and creator (skip the commenter themselves)
-      const notifyIds = [...new Set([task.assignedTo, task.assignedBy])].filter(
-        id => id && id !== user.id
+      // Notify task assignee, creator, and anyone who has previously commented (thread following)
+      const existingComments = await storage.getTaskComments(req.params.id);
+      const threadParticipants = existingComments.map(c => c.authorId);
+      const notifyIds = [...new Set([task.assignedTo, task.assignedBy, ...threadParticipants])].filter(
+        (id): id is string => !!id && id !== user.id
       );
       for (const uid of notifyIds) {
         storage.createNotification({
@@ -1786,17 +1788,29 @@ export async function registerRoutes(
         parentId: parentId || null,
         createdAt: new Date().toISOString(),
       });
-      // Notify the parent callout author if someone else replied
-      if (parentCallout && parentCallout.authorId !== user.id) {
-        storage.createNotification({
-          userId: parentCallout.authorId,
-          type: "post_reply",
-          title: `${user.name} replied to your callout`,
-          body: (title.trim()).length > 80 ? title.trim().slice(0, 80) + "…" : title.trim(),
-          link: "/feed",
-          relatedId: callout.id,
-          read: false,
-        }).catch((e) => console.error("Notification error:", e));
+      // Notify the original author + all thread participants (thread following)
+      if (parentCallout) {
+        const allCallouts = await storage.getCallouts();
+        const threadReplies = allCallouts.filter(c => c.parentId === parentCallout!.id);
+        const threadParticipants = new Set([
+          parentCallout.authorId,
+          ...threadReplies.map(c => c.authorId),
+        ]);
+        threadParticipants.delete(user.id);
+        for (const uid of threadParticipants) {
+          const isOriginalAuthor = uid === parentCallout.authorId;
+          storage.createNotification({
+            userId: uid,
+            type: "post_reply",
+            title: isOriginalAuthor
+              ? `${user.name} replied to your callout`
+              : `${user.name} replied to a thread you're in`,
+            body: (title.trim()).length > 80 ? title.trim().slice(0, 80) + "…" : title.trim(),
+            link: "/feed",
+            relatedId: callout.id,
+            read: false,
+          }).catch((e) => console.error("Notification error:", e));
+        }
       }
       res.status(201).json(callout);
     } catch (error) {
@@ -3490,13 +3504,13 @@ export async function registerRoutes(
         text: text.trim(),
         createdAt: new Date().toISOString(),
       });
-      // Notify the other party in the 1:1 session
+      // Notify ALL session participants (both namId and amId) except the author
       const session = await storage.getSession(topic.sessionId);
       if (session) {
-        const otherUserId = session.namId === currentUser.id ? session.amId : session.namId;
-        if (otherUserId !== currentUser.id) {
+        const participantIds = [session.namId, session.amId].filter(id => id && id !== currentUser.id);
+        for (const uid of participantIds) {
           storage.createNotification({
-            userId: otherUserId,
+            userId: uid,
             type: "topic_reply",
             title: `${currentUser.name} replied to a 1:1 topic`,
             body: text.trim().length > 80 ? text.trim().slice(0, 80) + "…" : text.trim(),
@@ -3987,11 +4001,13 @@ export async function registerRoutes(
         body,
         createdAt: new Date().toISOString(),
       });
-      // Notify the other party (NAM ↔ AM) about the goal comment
-      const notifyGoalId = user.id === goal.namId ? goal.amId : goal.namId;
-      if (notifyGoalId && notifyGoalId !== user.id) {
+      // Notify both NAM and AM about the goal comment (skip the commenter)
+      const goalNotifyIds = [goal.namId, goal.amId].filter(
+        (id): id is string => !!id && id !== user.id
+      );
+      for (const uid of goalNotifyIds) {
         storage.createNotification({
-          userId: notifyGoalId,
+          userId: uid,
           type: "goal_comment",
           title: `${user.name} commented on a goal`,
           body: goal.title,
