@@ -422,9 +422,14 @@ export default function GoalsPage() {
       // Admins: derive from pairings (full cross-team view)
       ? Array.from(new Map(pairings.map(p => [p.amId, { amId: p.amId, amName: p.amName }])).values())
           .sort((a, b) => a.amName.localeCompare(b.amName))
-      // Directors/NAMs: all direct reports from the user list, regardless of role
+      // Directors/NAMs: everyone downstream — full recursive team, excluding
+      // the current user, their manager above them, and admins
       : allUsers
-          .filter(u => u.managerId === user?.id)
+          .filter(u =>
+            u.id !== user?.id &&
+            u.role !== "admin" &&
+            u.id !== user?.managerId
+          )
           .map(u => ({ amId: u.id, amName: u.name }))
           .sort((a, b) => a.amName.localeCompare(b.amName))
     : [];
