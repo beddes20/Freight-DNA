@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   MapPin, Flame, TrendingUp, Package, Search, Compass,
   Upload, FileSpreadsheet, Loader2, Trash2, History, Map, Target, ArrowRight, Building2, User,
-  ArrowDownToLine, ArrowUpFromLine, Layers, Download, BarChart2,
+  ArrowDownToLine, ArrowUpFromLine, Layers, Download, BarChart2, RefreshCw,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip,
@@ -503,12 +503,32 @@ export default function HistoricalData() {
   const hotZones = filtered.filter(d => d.isHotZone);
   const others = filtered.filter(d => !d.isHotZone);
 
+  const handleRefresh = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["/api/historical-data-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/financials/uploads"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/financials"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/financials/account-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/team/performance"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/historical-lane-corridors"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
+  }, []);
+
   return (
     <div className="p-4 sm:p-6 space-y-6">
       <div>
-        <div className="flex items-center gap-2">
-          <History className="h-6 w-6 text-primary" />
-          <h1 className="text-2xl font-bold tracking-tight">Historical Data</h1>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <History className="h-6 w-6 text-primary" />
+            <h1 className="text-2xl font-bold tracking-tight">Historical Data</h1>
+          </div>
+          <Button variant="outline" size="sm" onClick={handleRefresh} data-testid="button-refresh-historical" className="gap-1.5 text-muted-foreground hover:text-foreground">
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
+          </Button>
         </div>
         <p className="text-muted-foreground text-sm mt-1">
           Upload dispatch spreadsheets to analyze delivery patterns, lane corridors, and proximity opportunities.

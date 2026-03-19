@@ -341,8 +341,8 @@ export default function CompanyDetail() {
     queryKey: ["/api/callouts/company", companyId],
   });
 
-  type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
-  const { data: accountSummaryAll = [] } = useQuery<Array<{ customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; repName: string; byMonth?: Record<string, MonthBucket> }>>({
+  type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number };
+  const { data: accountSummaryAll = [] } = useQuery<Array<{ customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number; repName: string; byMonth?: Record<string, MonthBucket> }>>({
     queryKey: ["/api/financials/account-summary"],
   });
   const matchedPerf = (() => {
@@ -979,10 +979,12 @@ export default function CompanyDetail() {
           const [y, mo] = key.split("-");
           return new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
         };
-        const PerfGrid = ({ bucket, label }: { bucket: { totalLoads: number; spotLoads: number; totalMargin: number }; label: string }) => (
+        const PerfGrid = ({ bucket, label }: { bucket: { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number }; label: string }) => {
+          const marginPct = (bucket.totalRevenue ?? 0) > 0 ? (bucket.totalMargin / bucket.totalRevenue!) * 100 : null;
+          return (
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">{label}</p>
-            <div className="grid grid-cols-3 gap-2">
+            <div className={`grid gap-2 ${marginPct !== null ? "grid-cols-4" : "grid-cols-3"}`}>
               <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                 <p className="text-xl font-bold text-blue-600 dark:text-blue-400">{bucket.totalLoads.toLocaleString()}</p>
                 <p className="text-[10px] text-muted-foreground mt-0.5">Total Loads</p>
@@ -995,6 +997,12 @@ export default function CompanyDetail() {
                 <p className="text-xl font-bold text-green-600 dark:text-green-400">{fmtMargin(bucket.totalMargin)}</p>
                 <p className="text-[10px] text-muted-foreground mt-0.5">Margin</p>
               </div>
+              {marginPct !== null && (
+                <div className="rounded-lg bg-muted/50 p-2.5 text-center">
+                  <p className={`text-xl font-bold ${marginPct < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>{marginPct.toFixed(1)}%</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">Margin %</p>
+                </div>
+              )}
             </div>
             {bucket.totalLoads > 0 && (
               <div className="mt-2 flex items-center gap-2 text-[10px] text-muted-foreground">
@@ -1005,7 +1013,8 @@ export default function CompanyDetail() {
               </div>
             )}
           </div>
-        );
+          );
+        };
         return (
           <Card data-testid="card-account-performance">
             <CardHeader className="pb-3">

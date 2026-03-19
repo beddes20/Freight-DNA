@@ -30,6 +30,7 @@ import {
   Link,
   Database,
   Download,
+  RefreshCw,
 } from "lucide-react";
 
 type FinancialRow = {
@@ -272,12 +273,35 @@ export default function Financials() {
               {financialData ? `${financialData.rowCount.toLocaleString()} total records · ${financialData.fileName}` : "Upload your Excel data to get started"}
             </p>
           </div>
-          {financialData && (
-            <div className="hidden sm:flex items-center gap-2 rounded-lg bg-white/15 backdrop-blur-sm px-3 py-2">
-              <Package className="h-4 w-4" />
-              <span className="text-sm font-medium">{filtered.length.toLocaleString()} records</span>
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                queryClient.invalidateQueries({ queryKey: ["/api/financials"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/financials/uploads"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/financials/account-summary"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/team/performance"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/historical-data-summary"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/historical-lane-corridors"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
+              }}
+              data-testid="button-refresh-financials"
+              className="flex items-center gap-1.5 rounded-lg bg-white/15 backdrop-blur-sm px-3 py-2 text-white/80 hover:text-white hover:bg-white/25 transition-colors text-sm"
+              title="Refresh all financial data"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </button>
+            {financialData && (
+              <div className="hidden sm:flex items-center gap-2 rounded-lg bg-white/15 backdrop-blur-sm px-3 py-2">
+                <Package className="h-4 w-4" />
+                <span className="text-sm font-medium">{filtered.length.toLocaleString()} records</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

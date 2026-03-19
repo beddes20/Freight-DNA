@@ -30,12 +30,13 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import type { Company, Contact, User } from "@shared/schema";
 
-type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
+type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number };
 type AccountSummaryRow = {
   customerName: string;
   totalLoads: number;
   spotLoads: number;
   totalMargin: number;
+  totalRevenue?: number;
   repName: string;
   byMonth?: Record<string, MonthBucket>;
 };
@@ -399,6 +400,8 @@ export default function Customers() {
                               );
                               const loads = m ? m.totalLoads : fin.totalLoads;
                               const margin = m ? m.totalMargin : fin.totalMargin;
+                              const revenue = m ? (m.totalRevenue ?? 0) : (fin.totalRevenue ?? 0);
+                              const marginPct = revenue > 0 ? (margin / revenue) * 100 : null;
                               const label = m ? "mo." : "";
                               return (
                                 <>
@@ -416,6 +419,14 @@ export default function Customers() {
                                     </span>
                                     <span className="text-muted-foreground">margin{label ? ` ${label}` : ""}</span>
                                   </div>
+                                  {marginPct !== null && (
+                                    <div className="flex items-center gap-1.5 text-xs" title="Margin % (margin / revenue)">
+                                      <span className={`font-medium ${marginPct < 0 ? "text-red-500 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                                        {marginPct.toFixed(1)}%
+                                      </span>
+                                      <span className="text-muted-foreground">margin%</span>
+                                    </div>
+                                  )}
                                 </>
                               );
                             })()}

@@ -2611,8 +2611,8 @@ export async function registerRoutes(
       // If no summary sheet, compute from transaction rows (new ReplistNumbers format)
       if (!raw.length) {
         const txRows: any[] = (latest.rows as any[]) || [];
-        type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number };
-        type CustomerEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; repName: string; byMonth: Record<string, MonthBucket> };
+        type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+        type CustomerEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number; repName: string; byMonth: Record<string, MonthBucket> };
         const byCustomer: Record<string, CustomerEntry> = {};
         for (const row of txRows) {
           const customerName = String(row["Customer"] || "").trim();
@@ -2624,15 +2624,17 @@ export async function registerRoutes(
           const rep = String(row["Salesperson"] || row["Operations user"] || "").trim();
           const orderType = String(row["Order type"] || "").toLowerCase();
           const isSpot = orderType.includes("spot");
-          if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, repName: rep, byMonth: {} };
+          if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0, repName: rep, byMonth: {} };
           byCustomer[customerName].totalLoads++;
           byCustomer[customerName].totalMargin += margin;
+          byCustomer[customerName].totalRevenue += revenue;
           if (isSpot) byCustomer[customerName].spotLoads++;
           if (!byCustomer[customerName].repName && rep) byCustomer[customerName].repName = rep;
           if (monthKey) {
-            if (!byCustomer[customerName].byMonth[monthKey]) byCustomer[customerName].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0 };
+            if (!byCustomer[customerName].byMonth[monthKey]) byCustomer[customerName].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
             byCustomer[customerName].byMonth[monthKey].totalLoads++;
             byCustomer[customerName].byMonth[monthKey].totalMargin += margin;
+            byCustomer[customerName].byMonth[monthKey].totalRevenue += revenue;
             if (isSpot) byCustomer[customerName].byMonth[monthKey].spotLoads++;
           }
         }
