@@ -106,7 +106,7 @@ export default function Dashboard() {
 
   const { data: allTasks = [], isLoading: tasksLoading } = useQuery<Task[]>({
     queryKey: ["/api/tasks"],
-    refetchInterval: 60000,
+    refetchInterval: 180000,
   });
 
   const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
@@ -128,7 +128,7 @@ export default function Dashboard() {
 
   const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPostWithReplies[]>({
     queryKey: ["/api/feed-posts"],
-    refetchInterval: 60000,
+    refetchInterval: 180000,
   });
 
   const { data: passoffs = [] } = useQuery<any[]>({

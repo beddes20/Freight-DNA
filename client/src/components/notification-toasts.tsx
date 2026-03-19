@@ -40,21 +40,30 @@ interface ToastCard {
   id: string;
 }
 
+const TOAST_AUTO_DISMISS_MS = 8000;
+
 export function NotificationToasts() {
   const [, navigate] = useLocation();
   const [toasts, setToasts] = useState<ToastCard[]>([]);
   const seenIds = useRef<Set<string>>(new Set());
   const initialized = useRef(false);
+  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const { data: notifications = [] } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],
-    refetchInterval: 45000,
+    refetchInterval: 180000,
   });
 
   const markRead = useMutation({
     mutationFn: (id: string) => apiRequest("PATCH", `/api/notifications/${id}/read`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/notifications"] }),
   });
+
+  useEffect(() => {
+    return () => {
+      timers.current.forEach(t => clearTimeout(t));
+    };
+  }, []);
 
   useEffect(() => {
     if (!notifications.length && !initialized.current) return;
@@ -75,9 +84,19 @@ export function NotificationToasts() {
       const combined = [...prev, ...incoming];
       return combined.slice(-5);
     });
+
+    newOnes.forEach(n => {
+      const t = setTimeout(() => {
+        setToasts(prev => prev.filter(toast => toast.id !== n.id));
+        timers.current.delete(n.id);
+      }, TOAST_AUTO_DISMISS_MS);
+      timers.current.set(n.id, t);
+    });
   }, [notifications]);
 
   const dismiss = (id: string) => {
+    const t = timers.current.get(id);
+    if (t) { clearTimeout(t); timers.current.delete(id); }
     markRead.mutate(id);
     setToasts(prev => prev.filter(t => t.id !== id));
   };

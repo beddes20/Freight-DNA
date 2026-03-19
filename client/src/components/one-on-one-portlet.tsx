@@ -294,7 +294,7 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
 
   const { data: sessionData, isLoading } = useQuery<SessionWithTopics>({
     queryKey: ["/api/one-on-one/session", pairing.namId, pairing.amId],
-    refetchInterval: 90000,
+    refetchInterval: 180000,
     queryFn: async () => {
       const res = await fetch(`/api/one-on-one/session?namId=${pairing.namId}&amId=${pairing.amId}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
