@@ -69,14 +69,6 @@ export default function InternalCommsPortlet() {
     enabled: isLeadership,
   });
 
-  // Must be after all hooks
-  if (!isLeadership) return null;
-
-  const topLevel = rawPosts.filter(p => !p.parentId);
-  const repliesFor = (parentId: string) => rawPosts.filter(p => p.parentId === parentId);
-
-  const getUserName = (id: string) => teamMembers.find(u => u.id === id)?.name ?? "Unknown";
-
   // Resolve preset → user IDs from team members by first name match
   const resolveIds = (preset: PresetKey): string[] => {
     const option = PRESET_OPTIONS.find(o => o.key === preset);
@@ -86,13 +78,7 @@ export default function InternalCommsPortlet() {
       .map(u => u.id);
   };
 
-  const presetLabel = (post: InternalPost): string => {
-    const names = post.recipientIds
-      .map(id => teamMembers.find(u => u.id === id)?.name?.split(" ")[0] ?? "?")
-      .join(" & ");
-    return names || "All";
-  };
-
+  // All hooks must be called before any conditional return
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!selectedPreset) throw new Error("No recipient selected");
@@ -165,6 +151,21 @@ export default function InternalCommsPortlet() {
       else setPendingFiles(prev => [...prev, ...results]);
     }
   }, []);
+
+  // Early return after all hooks
+  if (!isLeadership) return null;
+
+  const topLevel = rawPosts.filter(p => !p.parentId);
+  const repliesFor = (parentId: string) => rawPosts.filter(p => p.parentId === parentId);
+
+  const getUserName = (id: string) => teamMembers.find(u => u.id === id)?.name ?? "Unknown";
+
+  const presetLabel = (post: InternalPost): string => {
+    const names = post.recipientIds
+      .map(id => teamMembers.find(u => u.id === id)?.name?.split(" ")[0] ?? "?")
+      .join(" & ");
+    return names || "All";
+  };
 
   const toggleThread = (id: string) =>
     setExpandedThreads(prev => {
