@@ -169,6 +169,14 @@ export default function Financials() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/financials"] });
       queryClient.invalidateQueries({ queryKey: ["/api/financials/uploads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/financials/account-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/team/performance"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/historical-data-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/historical-lane-corridors"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
       toast({ title: "Upload successful", description: "Financial data has been updated." });
     },
@@ -182,6 +190,14 @@ export default function Financials() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/financials"] });
       queryClient.invalidateQueries({ queryKey: ["/api/financials/uploads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/financials/account-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/team/performance"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/historical-data-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/historical-lane-corridors"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
       toast({ title: "Upload deleted" });
     },
   });
