@@ -66,7 +66,7 @@ interface GoalCardProps {
 
 function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }: GoalCardProps) {
   const { toast } = useToast();
-  const [showComments, setShowComments] = useState(false);
+  const [showComments, setShowComments] = useState(true);
   const [commentBody, setCommentBody] = useState("");
   const [updatingValue, setUpdatingValue] = useState(false);
   const [newValue, setNewValue] = useState("");
@@ -87,6 +87,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
   const { data: comments = [] } = useQuery<GoalComment[]>({
     queryKey: ["/api/goals", goal.id, "comments"],
     enabled: showComments,
+    staleTime: 120000,
   });
 
   const { data: marginTrend } = useQuery<{ months: { key: string; label: string; margin: number }[] }>({
@@ -365,7 +366,8 @@ export default function GoalsPage() {
 
   const { data: goals = [], isLoading } = useQuery<Goal[]>({
     queryKey: ["/api/goals"],
-    refetchInterval: 30000,
+    refetchInterval: 120000,
+    staleTime: 60000,
   });
 
   const { data: pairings = [] } = useQuery<Array<{ namId: string; amId: string; namName: string; amName: string }>>({

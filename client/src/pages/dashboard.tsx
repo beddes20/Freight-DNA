@@ -12,8 +12,14 @@ import {
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
-  Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search,
+  Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search, MoreHorizontal,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -1119,13 +1125,26 @@ export default function Dashboard() {
                         </div>
                       </div>
                       {(post.authorId === currentUser?.id || currentUser?.role === "admin") && (
-                        <button
-                          onClick={() => deleteFeedPostMutation.mutate(post.id)}
-                          className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                          data-testid={`button-delete-feed-${post.id}`}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
+                              data-testid={`button-menu-feed-${post.id}`}
+                            >
+                              <MoreHorizontal className="h-3.5 w-3.5" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => deleteFeedPostMutation.mutate(post.id)}
+                              className="text-destructive focus:text-destructive"
+                              data-testid={`button-delete-feed-${post.id}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 mr-2" />
+                              Delete post
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       )}
                     </div>
 
@@ -1147,13 +1166,26 @@ export default function Dashboard() {
                           </div>
                         </div>
                         {(reply.authorId === currentUser?.id || currentUser?.role === "admin") && (
-                          <button
-                            onClick={() => deleteFeedPostMutation.mutate(reply.id)}
-                            className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/reply:opacity-100 transition-opacity"
-                            data-testid={`button-delete-reply-${reply.id}`}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
+                                data-testid={`button-menu-reply-${reply.id}`}
+                              >
+                                <MoreHorizontal className="h-3 w-3" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => deleteFeedPostMutation.mutate(reply.id)}
+                                className="text-destructive focus:text-destructive"
+                                data-testid={`button-delete-reply-${reply.id}`}
+                              >
+                                <Trash2 className="h-3 w-3 mr-2" />
+                                Delete reply
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         )}
                       </div>
                     ))}
