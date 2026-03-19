@@ -98,7 +98,7 @@ function subtreeWidth(userId: string, all: SafeUser[]): number {
   return kids.reduce((s, k, i) => s + subtreeWidth(k.id, all) + (i < kids.length - 1 ? CHILD_GAP : 0), 0);
 }
 
-function OrgChartNode({ user, allUsers }: { user: SafeUser; allUsers: SafeUser[] }) {
+function OrgChartNode({ user, allUsers, onEdit }: { user: SafeUser; allUsers: SafeUser[]; onEdit: (u: SafeUser) => void }) {
   const children = allUsers
     .filter(u => u.managerId === user.id)
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -126,9 +126,11 @@ function OrgChartNode({ user, allUsers }: { user: SafeUser; allUsers: SafeUser[]
     <div className="flex flex-col items-center" style={{ width: mySubtreeW }}>
       {/* Node card */}
       <div
-        className="bg-card border border-border rounded-lg p-2.5 shadow-sm hover:shadow-md transition-shadow flex-shrink-0"
+        className="bg-card border border-border rounded-lg p-2.5 shadow-sm hover:shadow-md hover:border-primary/40 transition-all flex-shrink-0 cursor-pointer"
         style={{ width: NODE_W }}
         data-testid={`org-node-${user.id}`}
+        onClick={() => onEdit(user)}
+        title={`Edit ${user.name}`}
       >
         <div className="flex flex-col items-center gap-1 text-center">
           <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${AVATAR_COLORS[user.role] || "bg-muted text-muted-foreground"}`}>
@@ -186,7 +188,7 @@ function OrgChartNode({ user, allUsers }: { user: SafeUser; allUsers: SafeUser[]
           {/* Children row */}
           <div className="flex items-start flex-shrink-0" style={{ gap: CHILD_GAP }}>
             {children.map(child => (
-              <OrgChartNode key={child.id} user={child} allUsers={allUsers} />
+              <OrgChartNode key={child.id} user={child} allUsers={allUsers} onEdit={onEdit} />
             ))}
           </div>
         </>
@@ -197,7 +199,7 @@ function OrgChartNode({ user, allUsers }: { user: SafeUser; allUsers: SafeUser[]
 
 const SALES_ROLES = new Set(["sales", "sales_director"]);
 
-function OrgChartView({ users }: { users: SafeUser[] }) {
+function OrgChartView({ users, onEdit }: { users: SafeUser[]; onEdit: (u: SafeUser) => void }) {
   const chartUsers = users.filter(u => !SALES_ROLES.has(u.role));
   const roots = chartUsers.filter(u => !u.managerId).sort((a, b) => a.name.localeCompare(b.name));
 
@@ -213,7 +215,7 @@ function OrgChartView({ users }: { users: SafeUser[] }) {
         ) : (
           <div className="flex gap-12 justify-start">
             {roots.map(root => (
-              <OrgChartNode key={root.id} user={root} allUsers={chartUsers} />
+              <OrgChartNode key={root.id} user={root} allUsers={chartUsers} onEdit={onEdit} />
             ))}
           </div>
         )}
@@ -567,7 +569,7 @@ export default function AdminUsers() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : viewMode === "org" ? (
-        <OrgChartView users={users} />
+        <OrgChartView users={users} onEdit={(u) => { setEditUser(u); setDialogOpen(true); }} />
       ) : (
         <div className="grid gap-4">
           {users.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => {
