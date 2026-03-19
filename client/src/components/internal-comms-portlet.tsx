@@ -81,7 +81,8 @@ export default function InternalCommsPortlet() {
   // All hooks must be called before any conditional return
   const createMutation = useMutation({
     mutationFn: async () => {
-      if (!selectedPreset) throw new Error("No recipient selected");
+      if (!selectedPreset) throw new Error("Select a recipient before sending");
+      if (!content.trim() && pendingFiles.length === 0) throw new Error("Add a message or attach a file");
       const recipientIds = resolveIds(selectedPreset);
       const res = await apiRequest("POST", "/api/internal-posts", { content, recipientIds });
       const post = await res.json();
@@ -98,7 +99,7 @@ export default function InternalCommsPortlet() {
       setPendingFiles([]);
       toast({ title: "Message sent" });
     },
-    onError: () => toast({ title: "Failed to send message", variant: "destructive" }),
+    onError: (err: Error) => toast({ title: err.message || "Failed to send message", variant: "destructive" }),
   });
 
   const replyMutation = useMutation({

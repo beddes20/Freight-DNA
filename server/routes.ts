@@ -1993,7 +1993,7 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { content, recipientIds, parentId } = req.body;
-      if (!content?.trim()) return res.status(400).json({ error: "Content required" });
+      // Allow empty content when attachments will follow (attachments are uploaded separately after the post is created)
       // Only admins/directors can start new threads; anyone who can see the thread can reply
       const isLeadership = user.role === "admin" || user.role === "director";
       if (!parentId && !isLeadership) {
