@@ -24,10 +24,11 @@ type InternalPost = {
 
 // Preset recipient options — matched by first name (case-insensitive)
 const PRESET_OPTIONS = [
-  { key: "jordan",     label: "Jordan",        names: ["jordan"] },
-  { key: "danny",      label: "Danny",          names: ["danny"] },
-  { key: "sam",        label: "Sam",            names: ["sam"] },
-  { key: "sam_danny",  label: "Sam & Danny",    names: ["sam", "danny"] },
+  { key: "jordan",       label: "Jordan",          names: ["jordan"] },
+  { key: "danny",        label: "Danny",            names: ["danny"] },
+  { key: "sam",          label: "Sam",              names: ["sam"] },
+  { key: "sam_danny",    label: "Sam & Danny",      names: ["sam", "danny"] },
+  { key: "all",          label: "All Leadership",   names: ["jordan", "danny", "sam"] },
 ] as const;
 type PresetKey = typeof PRESET_OPTIONS[number]["key"];
 
