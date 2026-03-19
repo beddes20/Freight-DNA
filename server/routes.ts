@@ -3356,6 +3356,66 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/one-on-one/action-items", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const allUsers = await storage.getUsers();
+      const safeUsers = allUsers.map(({ password, ...u }) => u);
+      let pairs: Array<{ namId: string; amId: string }> = [];
+
+      const amLikeRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+      if (amLikeRoles.includes(user.role)) {
+        if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
+      } else if (user.role === "admin") {
+        const ams = allUsers.filter(u => amLikeRoles.includes(u.role) && u.managerId);
+        for (const am of ams) pairs.push({ namId: am.managerId!, amId: am.id });
+        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
+        for (const nam of nams) pairs.push({ namId: user.id, amId: nam.id });
+      } else {
+        const reports = allUsers.filter(u => u.managerId === user.id);
+        for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
+        if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
+      }
+
+      const results: Array<{
+        id: string; text: string; tag: string; status: string; createdAt: string;
+        sessionId: string; addedById: string; namId: string; amId: string;
+        withUserName: string; addedByName: string;
+      }> = [];
+
+      for (const { namId, amId } of pairs) {
+        const session = await storage.getOrCreateActiveSession(namId, amId);
+        const topics = await storage.getTopicsBySession(session.id);
+        const actionItems = topics.filter(t => t.status === "pending" && (t.tag === "action_item" || t.tag === "Action Item"));
+        for (const topic of actionItems) {
+          const otherId = user.id === namId ? amId : namId;
+          const otherUser = safeUsers.find(u => u.id === otherId);
+          const addedByUser = safeUsers.find(u => u.id === topic.addedById);
+          results.push({
+            id: topic.id,
+            text: topic.text,
+            tag: topic.tag,
+            status: topic.status,
+            createdAt: topic.createdAt instanceof Date ? topic.createdAt.toISOString() : String(topic.createdAt),
+            sessionId: session.id,
+            addedById: topic.addedById,
+            namId,
+            amId,
+            withUserName: otherUser?.name ?? "Unknown",
+            addedByName: addedByUser?.name ?? "Unknown",
+          });
+        }
+      }
+
+      results.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      res.json(results);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch action items" });
+    }
+  });
+
   app.get("/api/one-on-one/per-pairing-counts", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

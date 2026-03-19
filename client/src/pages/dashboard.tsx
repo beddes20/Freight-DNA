@@ -150,6 +150,16 @@ export default function Dashboard() {
     refetchInterval: 90000,
   });
 
+  type ActionItem = {
+    id: string; text: string; tag: string; status: string; createdAt: string;
+    sessionId: string; addedById: string; namId: string; amId: string;
+    withUserName: string; addedByName: string;
+  };
+  const { data: actionItems = [] } = useQuery<ActionItem[]>({
+    queryKey: ["/api/one-on-one/action-items"],
+    refetchInterval: 90000,
+  });
+
   const { data: notifications = [] } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],
   });
@@ -769,73 +779,114 @@ export default function Dashboard() {
             <div className="space-y-3">
               {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
-          ) : displayTasks.length > 0 ? (
-            <div className="space-y-1">
-              {displayTasks.map(task => {
-                const companyName = getCompanyName(task.companyId);
-                const assignerName = getUserName(task.assignedBy);
-                return (
-                  <div
-                    key={task.id}
-                    className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group cursor-pointer ${task.status === "completed" ? "opacity-50" : ""}`}
-                    data-testid={`task-row-${task.id}`}
-                    onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
-                  >
-                    <button
-                      onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }}
-                      className="shrink-0 hover:scale-110 transition-transform"
-                      title={`Status: ${task.status}. Click to change.`}
-                      data-testid={`button-toggle-status-${task.id}`}
-                    >
-                      {statusIcon(task.status)}
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`}
-                         data-testid={`text-task-title-${task.id}`}>
-                        {task.title}
-                      </p>
-                      <div className="flex items-center gap-2 flex-wrap mt-0.5">
-                        {companyName && (
-                          <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`} onClick={(e) => e.stopPropagation()}>
-                            {companyName}
-                          </Link>
-                        )}
-                        {assignerName && task.assignedBy !== currentUser?.id && (
-                          <span className="text-xs text-muted-foreground">from {assignerName}</span>
-                        )}
-                      </div>
-                    </div>
-                    {dueDateBadge(task.dueDate)}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }}
-                      className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                      data-testid={`button-delete-task-${task.id}`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                );
-              })}
-              {completedCount > 0 && (
-                <p className="text-xs text-muted-foreground pt-2 pl-3" data-testid="text-completed-count">
-                  {completedCount} completed task{completedCount !== 1 ? "s" : ""}
-                </p>
-              )}
-            </div>
           ) : (
-            <div className="text-center py-6 text-muted-foreground">
-              <ClipboardList className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm mb-3">No tasks yet</p>
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5"
-                onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
-                data-testid="button-create-first-task"
-              >
-                <Plus className="h-3.5 w-3.5" /> Create a task
-              </Button>
-            </div>
+            <>
+              {displayTasks.length > 0 && (
+                <div className="space-y-1">
+                  {displayTasks.map(task => {
+                    const companyName = getCompanyName(task.companyId);
+                    const assignerName = getUserName(task.assignedBy);
+                    return (
+                      <div
+                        key={task.id}
+                        className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group cursor-pointer ${task.status === "completed" ? "opacity-50" : ""}`}
+                        data-testid={`task-row-${task.id}`}
+                        onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
+                      >
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }}
+                          className="shrink-0 hover:scale-110 transition-transform"
+                          title={`Status: ${task.status}. Click to change.`}
+                          data-testid={`button-toggle-status-${task.id}`}
+                        >
+                          {statusIcon(task.status)}
+                        </button>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`}
+                             data-testid={`text-task-title-${task.id}`}>
+                            {task.title}
+                          </p>
+                          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                            {companyName && (
+                              <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`} onClick={(e) => e.stopPropagation()}>
+                                {companyName}
+                              </Link>
+                            )}
+                            {assignerName && task.assignedBy !== currentUser?.id && (
+                              <span className="text-xs text-muted-foreground">from {assignerName}</span>
+                            )}
+                          </div>
+                        </div>
+                        {dueDateBadge(task.dueDate)}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }}
+                          className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                          data-testid={`button-delete-task-${task.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {completedCount > 0 && (
+                    <p className="text-xs text-muted-foreground pt-2 pl-3" data-testid="text-completed-count">
+                      {completedCount} completed task{completedCount !== 1 ? "s" : ""}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {actionItems.length > 0 && (
+                <div className={displayTasks.length > 0 ? "mt-3 pt-3 border-t border-border" : ""} data-testid="section-action-items">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1.5 px-1">
+                    <Users className="h-3 w-3" />
+                    1:1 Action Items
+                  </p>
+                  <div className="space-y-1">
+                    {actionItems.map(item => (
+                      <Link key={item.id} href="/one-on-one">
+                        <div
+                          className="flex items-start gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all cursor-pointer"
+                          data-testid={`action-item-row-${item.id}`}
+                        >
+                          <div className="shrink-0 mt-0.5">
+                            <div className="h-4 w-4 rounded-full border-2 border-violet-400 dark:border-violet-500" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate" data-testid={`text-action-item-${item.id}`}>
+                              {item.text}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              with {item.withUserName}
+                              {item.addedById !== currentUser?.id && ` · added by ${item.addedByName}`}
+                            </p>
+                          </div>
+                          <Badge variant="outline" className="shrink-0 text-[10px] px-1.5 py-0 h-5 border-violet-300 text-violet-600 dark:border-violet-600 dark:text-violet-400 font-medium">
+                            1:1
+                          </Badge>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {displayTasks.length === 0 && actionItems.length === 0 && (
+                <div className="text-center py-6 text-muted-foreground">
+                  <ClipboardList className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm mb-3">No tasks yet</p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5"
+                    onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
+                    data-testid="button-create-first-task"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Create a task
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
