@@ -1501,6 +1501,9 @@ export async function registerRoutes(
       } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         assignableIds = new Set(teamIds);
+        // Also allow assigning upward to their manager and all admins
+        if (user.managerId) assignableIds.add(user.managerId);
+        allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
       } else {
         assignableIds = new Set([user.id]);
         if (user.managerId) {
@@ -1509,6 +1512,8 @@ export async function registerRoutes(
             if (u.managerId === user.managerId) assignableIds.add(u.id);
           });
         }
+        // Also allow assigning to any admin
+        allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
       }
       if (!assignableIds.has(assignedTo)) {
         return res.status(403).json({ error: "Cannot assign task to that user" });
