@@ -158,8 +158,8 @@ export default function InternalCommsPortlet() {
       return next;
     });
 
-  // Don't render portlet if non-leadership has no posts at all
-  if (!isLeadership && topLevel.length === 0) return null;
+  // Only admins and directors can see this portlet
+  if (!isLeadership) return null;
 
   return (
     <Card data-testid="card-internal-comms">
