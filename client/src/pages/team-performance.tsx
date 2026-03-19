@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
-  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign
+  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent
 } from "lucide-react";
 
 interface RepPerf {
@@ -31,6 +31,7 @@ interface AccountSummaryRow {
   totalLoads: number;
   spotLoads: number;
   totalMargin: number;
+  totalRevenue?: number;
   repName: string;
 }
 
@@ -44,7 +45,7 @@ function StatPill({ value, label, color, icon }: { value: number; label: string;
   );
 }
 
-function RepCard({ rep, totalLoads, totalMargin }: { rep: RepPerf; totalLoads?: number; totalMargin?: number }) {
+function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf; totalLoads?: number; totalMargin?: number; totalRevenue?: number }) {
   const [, navigate] = useLocation();
   const initials = rep.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
   const colors = ["bg-blue-500", "bg-green-500", "bg-purple-500", "bg-amber-500", "bg-red-500", "bg-cyan-500", "bg-pink-500", "bg-indigo-500"];
@@ -54,6 +55,10 @@ function RepCard({ rep, totalLoads, totalMargin }: { rep: RepPerf; totalLoads?: 
   const marginDisplay = totalMargin != null && totalMargin >= 1000
     ? `$${(totalMargin / 1000).toFixed(1)}K`
     : totalMargin != null ? `$${totalMargin.toLocaleString()}` : null;
+  const marginPct = totalRevenue != null && totalRevenue > 0 && totalMargin != null
+    ? (totalMargin / totalRevenue) * 100
+    : null;
+  const hasFinancials = totalLoads != null || marginDisplay != null;
 
   return (
     <Card
@@ -80,23 +85,32 @@ function RepCard({ rep, totalLoads, totalMargin }: { rep: RepPerf; totalLoads?: 
           )}
         </div>
 
-        {(totalLoads != null || marginDisplay != null) && (
-          <div className="grid grid-cols-2 gap-1.5 mb-2">
+        {hasFinancials && (
+          <div className={`grid gap-1.5 mb-2 ${marginPct !== null ? "grid-cols-3" : "grid-cols-2"}`}>
             {totalLoads != null && (
-              <div className="flex items-center gap-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 px-2.5 py-1.5">
+              <div className="flex items-center gap-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 px-2 py-1.5">
                 <Package className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-                <div>
+                <div className="min-w-0">
                   <p className="text-sm font-bold text-blue-600 dark:text-blue-400 leading-none">{totalLoads.toLocaleString()}</p>
-                  <p className="text-[10px] text-muted-foreground">Total Loads</p>
+                  <p className="text-[10px] text-muted-foreground">Loads</p>
                 </div>
               </div>
             )}
             {marginDisplay && (
-              <div className="flex items-center gap-1.5 rounded-lg bg-green-50 dark:bg-green-900/20 px-2.5 py-1.5">
+              <div className="flex items-center gap-1.5 rounded-lg bg-green-50 dark:bg-green-900/20 px-2 py-1.5">
                 <DollarSign className="h-3.5 w-3.5 text-green-500 shrink-0" />
-                <div>
+                <div className="min-w-0">
                   <p className="text-sm font-bold text-green-600 dark:text-green-400 leading-none">{marginDisplay}</p>
-                  <p className="text-[10px] text-muted-foreground">Total Margin</p>
+                  <p className="text-[10px] text-muted-foreground">Margin</p>
+                </div>
+              </div>
+            )}
+            {marginPct !== null && (
+              <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 ${marginPct < 0 ? "bg-red-50 dark:bg-red-900/20" : "bg-emerald-50 dark:bg-emerald-900/20"}`}>
+                <Percent className={`h-3.5 w-3.5 shrink-0 ${marginPct < 0 ? "text-red-500" : "text-emerald-500"}`} />
+                <div className="min-w-0">
+                  <p className={`text-sm font-bold leading-none ${marginPct < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>{marginPct.toFixed(1)}%</p>
+                  <p className="text-[10px] text-muted-foreground">Margin %</p>
                 </div>
               </div>
             )}
@@ -167,20 +181,23 @@ export default function TeamPerformancePage() {
     );
   }
 
-  const repLoadsMap: Record<string, { loads: number; margin: number }> = {};
+  const repLoadsMap: Record<string, { loads: number; margin: number; revenue: number }> = {};
   for (const row of accountSummary) {
     if (!row.repName) continue;
     const match = reps.find(r => matchRepName(row.repName, r.name));
     if (match) {
-      if (!repLoadsMap[match.userId]) repLoadsMap[match.userId] = { loads: 0, margin: 0 };
+      if (!repLoadsMap[match.userId]) repLoadsMap[match.userId] = { loads: 0, margin: 0, revenue: 0 };
       repLoadsMap[match.userId].loads += row.totalLoads;
       repLoadsMap[match.userId].margin += row.totalMargin;
+      repLoadsMap[match.userId].revenue += row.totalRevenue ?? 0;
     }
   }
 
   const hasSummaryData = accountSummary.length > 0;
   const totalLoadsAll = Object.values(repLoadsMap).reduce((s, v) => s + v.loads, 0);
   const totalMarginAll = Object.values(repLoadsMap).reduce((s, v) => s + v.margin, 0);
+  const totalRevenueAll = Object.values(repLoadsMap).reduce((s, v) => s + v.revenue, 0);
+  const totalMarginPctAll = totalRevenueAll > 0 ? (totalMarginAll / totalRevenueAll) * 100 : null;
 
   const ams = reps.filter(r => r.role === "account_manager" || r.role === "logistics_manager" || r.role === "logistics_coordinator");
   const nams = reps.filter(r => r.role === "national_account_manager" || r.role === "director" || r.role === "sales_director");
@@ -252,7 +269,7 @@ export default function TeamPerformancePage() {
               ))}
             </div>
             {hasSummaryData && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className={`grid gap-3 ${totalMarginPctAll !== null ? "grid-cols-3" : "grid-cols-2"}`}>
                 <Card>
                   <CardContent className="pt-4 pb-3">
                     <div className="flex items-center gap-2 mb-1">
@@ -273,6 +290,19 @@ export default function TeamPerformancePage() {
                     </p>
                   </CardContent>
                 </Card>
+                {totalMarginPctAll !== null && (
+                  <Card>
+                    <CardContent className="pt-4 pb-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Percent className="h-4 w-4 text-emerald-500" />
+                        <span className="text-xs text-muted-foreground">Avg Margin % (all reps)</span>
+                      </div>
+                      <p className={`text-2xl font-bold ${totalMarginPctAll < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                        {totalMarginPctAll.toFixed(1)}%
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
               </div>
             )}
           </div>
@@ -290,6 +320,7 @@ export default function TeamPerformancePage() {
                     rep={rep}
                     totalLoads={repLoadsMap[rep.userId]?.loads}
                     totalMargin={repLoadsMap[rep.userId]?.margin}
+                    totalRevenue={repLoadsMap[rep.userId]?.revenue}
                   />
                 ))}
               </div>
@@ -309,6 +340,7 @@ export default function TeamPerformancePage() {
                     rep={rep}
                     totalLoads={repLoadsMap[rep.userId]?.loads}
                     totalMargin={repLoadsMap[rep.userId]?.margin}
+                    totalRevenue={repLoadsMap[rep.userId]?.revenue}
                   />
                 ))}
               </div>
