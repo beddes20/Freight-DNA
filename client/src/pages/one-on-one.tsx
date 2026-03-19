@@ -815,6 +815,7 @@ interface Pairing {
   amId: string;
   namName: string;
   amName: string;
+  section?: string;
 }
 
 interface PairingListProps {
@@ -842,6 +843,8 @@ function PairingList({ pairings, selectedKey, onSelect, showNamLabel }: PairingL
           pairings.map(p => {
             const key = `${p.namId}::${p.amId}`;
             const isSelected = selectedKey === key;
+            const isUpward = p.section === "upward";
+            const displayName = isUpward ? p.namName : p.amName;
             return (
               <button
                 key={key}
@@ -849,14 +852,16 @@ function PairingList({ pairings, selectedKey, onSelect, showNamLabel }: PairingL
                 className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 ${isSelected ? "bg-muted/60 border-r-2 border-r-indigo-600" : ""}`}
                 data-testid={`btn-select-pairing-${p.amId}`}
               >
-                <div className={`h-8 w-8 rounded-full shrink-0 flex items-center justify-center text-white text-xs font-semibold ${avatarColor(p.amName)}`}>
-                  {initials(p.amName)}
+                <div className={`h-8 w-8 rounded-full shrink-0 flex items-center justify-center text-white text-xs font-semibold ${avatarColor(displayName)}`}>
+                  {initials(displayName)}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{p.amName}</p>
-                  {showNamLabel && (
+                  <p className="text-sm font-medium truncate">{displayName}</p>
+                  {isUpward ? (
+                    <p className="text-xs text-muted-foreground">My Manager</p>
+                  ) : showNamLabel ? (
                     <p className="text-xs text-muted-foreground truncate">with {p.namName}</p>
-                  )}
+                  ) : null}
                 </div>
               </button>
             );
@@ -893,9 +898,12 @@ export default function OneOnOnePage() {
   const managerId = activePairing?.namId ?? null;
   const repId = activePairing?.amId ?? null;
 
-  const pairingTitle = isAM
-    ? activePairing ? `Your 1:1 with ${activePairing.namName}` : "Your 1:1 Sessions"
-    : activePairing ? `1:1 with ${activePairing.amName}` : "1:1 Sessions";
+  const pairingDisplayName = activePairing
+    ? (isAM || activePairing.section === "upward" ? activePairing.namName : activePairing.amName)
+    : null;
+  const pairingTitle = activePairing
+    ? `1:1 with ${pairingDisplayName}`
+    : "1:1 Sessions";
 
   if (usersLoading || pairingsLoading) {
     return (
@@ -938,9 +946,9 @@ export default function OneOnOnePage() {
               {/* Pairing header */}
               <div className="px-6 pt-5 pb-0">
                 <div className="flex items-center gap-3 mb-1">
-                  {activePairing && (
-                    <div className={`h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0 ${avatarColor(isAM ? activePairing.namName : activePairing.amName)}`}>
-                      {initials(isAM ? activePairing.namName : activePairing.amName)}
+                  {activePairing && pairingDisplayName && (
+                    <div className={`h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0 ${avatarColor(pairingDisplayName)}`}>
+                      {initials(pairingDisplayName)}
                     </div>
                   )}
                   <div>
