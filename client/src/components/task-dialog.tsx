@@ -17,7 +17,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -428,9 +430,45 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
                   <SelectValue placeholder="Select person" />
                 </SelectTrigger>
                 <SelectContent>
-                  {teamMembers.map(u => (
-                    <SelectItem key={u.id} value={u.id}>{u.name} ({u.role === "admin" ? "Admin" : u.role === "director" ? "Director" : u.role === "national_account_manager" ? "NAM" : u.role === "sales" ? "Sales" : "AM"})</SelectItem>
-                  ))}
+                  {(user?.role === "admin" || user?.role === "director") ? (() => {
+                    const sorted = [...teamMembers].sort((a, b) => a.name.localeCompare(b.name));
+                    const admins    = sorted.filter(u => u.role === "admin");
+                    const directors = sorted.filter(u => u.role === "director");
+                    const nams      = sorted.filter(u => u.role === "national_account_manager");
+                    const ams       = sorted.filter(u => !["admin","director","national_account_manager"].includes(u.role));
+                    return (
+                      <>
+                        {admins.length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel>Admins</SelectLabel>
+                            {admins.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                          </SelectGroup>
+                        )}
+                        {directors.length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel>Directors</SelectLabel>
+                            {directors.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                          </SelectGroup>
+                        )}
+                        {nams.length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel>National Account Managers</SelectLabel>
+                            {nams.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                          </SelectGroup>
+                        )}
+                        {ams.length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel>Account Managers</SelectLabel>
+                            {ams.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                          </SelectGroup>
+                        )}
+                      </>
+                    );
+                  })() : (
+                    teamMembers.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => (
+                      <SelectItem key={u.id} value={u.id}>{u.name} ({u.role === "admin" ? "Admin" : u.role === "director" ? "Director" : u.role === "national_account_manager" ? "NAM" : u.role === "sales" ? "Sales" : "AM"})</SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
