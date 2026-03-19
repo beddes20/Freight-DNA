@@ -375,7 +375,7 @@ export default function GoalsPage() {
     enabled: user?.role !== "account_manager",
   });
 
-  const { data: allUsers = [] } = useQuery<Array<{ id: string; name: string; role: string }>>({
+  const { data: allUsers = [] } = useQuery<Array<{ id: string; name: string; role: string; managerId: string | null }>>({
     queryKey: ["/api/team-members"],
   });
 
@@ -415,11 +415,17 @@ export default function GoalsPage() {
     },
   });
 
-  const myPairings = isNam
-    ? pairings.filter(p => user?.role === "admin" || p.namId === user?.id)
+  const uniqueAms: { amId: string; amName: string }[] = isNam
+    ? user?.role === "admin"
+      // Admins: derive from pairings (full cross-team view)
+      ? Array.from(new Map(pairings.map(p => [p.amId, { amId: p.amId, amName: p.amName }])).values())
+          .sort((a, b) => a.amName.localeCompare(b.amName))
+      // Directors/NAMs: all direct reports from the user list, regardless of role
+      : allUsers
+          .filter(u => u.managerId === user?.id)
+          .map(u => ({ amId: u.id, amName: u.name }))
+          .sort((a, b) => a.amName.localeCompare(b.amName))
     : [];
-
-  const uniqueAms = Array.from(new Map(myPairings.map(p => [p.amId, p])).values());
 
   const filteredGoals = activeTab === "all"
     ? goals
