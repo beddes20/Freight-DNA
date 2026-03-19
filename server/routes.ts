@@ -1891,10 +1891,8 @@ export async function registerRoutes(
         return res.status(201).json(post);
       }
 
-      // Top-level post: managers and above only
-      const canPost = user.role === "admin" || user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director";
-      if (!canPost) return res.status(403).json({ error: "Only managers and above can post to the feed" });
-      const validCategories = ["trend", "growth", "idea"];
+      // Top-level post: all authenticated users can post
+      const validCategories = ["trend", "growth", "idea", "celebrate"];
       if (!validCategories.includes(category)) return res.status(400).json({ error: "Invalid category" });
       const post = await storage.createFeedPost({
         content: trimmed,

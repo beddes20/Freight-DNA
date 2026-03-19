@@ -989,7 +989,7 @@ export default function Dashboard() {
                 </button>
               ))}
             </div>
-            {currentUser?.role !== "account_manager" && (
+            {currentUser && (
               <>
                 <Textarea
                   ref={feedTextareaRef}
