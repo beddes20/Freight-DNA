@@ -551,6 +551,14 @@ export default function OneOnOnePortlet() {
   });
   const unresolvedCount = pendingCountData?.count || 0;
 
+  // Unread notifications for 1:1 activity badge
+  const { data: notifications = [] } = useQuery<Array<{ id: string; read: boolean; type: string }>>({
+    queryKey: ["/api/notifications"],
+  });
+  const notifUnread = notifications.filter(
+    n => !n.read && ["topic_added", "topic_reply", "session_closed"].includes(n.type)
+  ).length;
+
   const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
   const isAdmin = currentUser?.role === "admin";
   const isAm = currentUser?.role === "account_manager" || currentUser?.role === "logistics_manager" || currentUser?.role === "logistics_coordinator";
@@ -649,6 +657,12 @@ export default function OneOnOnePortlet() {
                 <Badge variant="destructive" className="ml-1 font-normal text-xs" data-testid="badge-unresolved-count">
                   {unresolvedCount}
                 </Badge>
+              )}
+              {notifUnread > 0 && (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400" data-testid="badge-one-on-one-notif">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  {notifUnread} new
+                </span>
               )}
             </CardTitle>
           </button>

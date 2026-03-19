@@ -26,7 +26,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
-import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint } from "@shared/schema";
+import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 
 type SafeUser = Omit<User, "password">;
@@ -147,6 +147,10 @@ export default function Dashboard() {
   const { data: oneOnOnePendingData } = useQuery<{ count: number }>({
     queryKey: ["/api/one-on-one/pending-count"],
     refetchInterval: 90000,
+  });
+
+  const { data: notifications = [] } = useQuery<Notification[]>({
+    queryKey: ["/api/notifications"],
   });
 
   const { data: myGoals = [] } = useQuery<any[]>({
@@ -338,6 +342,14 @@ export default function Dashboard() {
 
   // T007: 1:1 pending topics count
   const pendingTopicsCount = oneOnOnePendingData?.count ?? 0;
+
+  // Unread notification counts per portlet — drives activity badges
+  const unread = {
+    tasks:    notifications.filter(n => !n.read && ["task_assigned","task_comment","task_completed","task_reminder"].includes(n.type)).length,
+    feed:     notifications.filter(n => !n.read && ["post_reply","new_post"].includes(n.type)).length,
+    oneOnOne: notifications.filter(n => !n.read && ["topic_added","topic_reply","session_closed"].includes(n.type)).length,
+    goals:    notifications.filter(n => !n.read && ["goal_set","goal_updated","goal_comment"].includes(n.type)).length,
+  };
 
   const myTasks = allTasks
     .filter(t => t.assignedTo === currentUser?.id)
@@ -691,6 +703,12 @@ export default function Dashboard() {
               {!tasksLoading && openTasks.length > 0 && (
                 <Badge variant="secondary" className="ml-1 font-normal">{openTasks.length}</Badge>
               )}
+              {unread.tasks > 0 && (
+                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  {unread.tasks} new
+                </span>
+              )}
             </CardTitle>
             <div className="flex items-center gap-2">
               <Link href="/tasks">
@@ -941,6 +959,12 @@ export default function Dashboard() {
             Trends / Growth / Ideas / Celebrate
             {!feedLoading && feedPosts.length > 0 && (
               <Badge variant="secondary" className="ml-1 font-normal">{feedPosts.length}</Badge>
+            )}
+            {unread.feed > 0 && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                {unread.feed} new
+              </span>
             )}
           </CardTitle>
         </CardHeader>
