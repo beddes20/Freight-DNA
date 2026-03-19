@@ -4387,7 +4387,8 @@ export async function registerRoutes(
       }
       const buffer = Buffer.from(att.fileData, "base64");
       res.setHeader("Content-Type", att.mimeType);
-      res.setHeader("Content-Disposition", `attachment; filename="${att.fileName}"`);
+      const isImage = att.mimeType.startsWith("image/");
+      res.setHeader("Content-Disposition", `${isImage ? "inline" : "attachment"}; filename="${att.fileName}"`);
       res.send(buffer);
     } catch (error) {
       res.status(500).json({ error: "Failed to download attachment" });

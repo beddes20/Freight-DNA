@@ -27,7 +27,7 @@ import { TaskDialog } from "@/components/task-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification } from "@shared/schema";
-import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
+import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -301,6 +301,26 @@ export default function Dashboard() {
     if (!trimmed) return;
     createFeedPostMutation.mutate({ content: trimmed, category: feedCategory });
   };
+
+  const handleFeedPaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageItems = items.filter(item => item.type.startsWith("image/"));
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    const results: PendingFile[] = [];
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      if (file.size > 10 * 1024 * 1024) {
+        toast({ title: "Pasted image is too large (max 10MB)", variant: "destructive" });
+        continue;
+      }
+      const namedFile = new File([file], `screenshot-${Date.now()}.png`, { type: file.type });
+      const base64 = await fileToBase64(namedFile);
+      results.push({ file: namedFile, base64 });
+    }
+    if (results.length > 0) setFeedPendingFiles(prev => [...prev, ...results]);
+  }, [toast]);
 
   const formatTimeAgo = (iso: string) => {
     const diff = Date.now() - new Date(iso).getTime();
@@ -996,6 +1016,7 @@ export default function Dashboard() {
                   value={feedContent}
                   onChange={handleFeedChange}
                   onKeyDown={handleFeedKeyDown}
+                  onPaste={handleFeedPaste}
                   placeholder="Share a trend, growth win, idea, or celebrate a win… Type @ to mention someone (Ctrl+Enter to post)"
                   className="resize-none text-sm min-h-[72px]"
                   data-testid="textarea-feed-content"
