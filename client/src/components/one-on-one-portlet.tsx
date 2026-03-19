@@ -520,7 +520,7 @@ export default function OneOnOnePortlet() {
   });
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
-    queryKey: ["/api/users"],
+    queryKey: ["/api/team-members"],
   });
 
   // Per-pairing pending counts — used to badge pills and auto-select best pairing

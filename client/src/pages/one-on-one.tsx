@@ -874,7 +874,7 @@ export default function OneOnOnePage() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
-    queryKey: ["/api/users"],
+    queryKey: ["/api/team-members"],
   });
 
   const { data: pairings = [], isLoading: pairingsLoading } = useQuery<Pairing[]>({
