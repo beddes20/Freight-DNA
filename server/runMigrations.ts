@@ -148,6 +148,19 @@ export async function runMigrations() {
       );
     }
     console.log("[migrations] financial aliases set for all companies");
+
+    // Create goal_comments table if it doesn't exist (was missing from original migration)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS goal_comments (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        goal_id varchar NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+        author_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        body text NOT NULL,
+        created_at text NOT NULL
+      )
+    `);
+    console.log("[migrations] goal_comments table ensured");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

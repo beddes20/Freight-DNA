@@ -3973,10 +3973,12 @@ export async function registerRoutes(
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       const canComment = user.role === "admin" || goal.namId === user.id || goal.amId === user.id;
       if (!canComment) return res.status(403).json({ error: "Access denied" });
+      const body = (req.body.body || req.body.text || "").trim();
+      if (!body) return res.status(400).json({ error: "Comment body is required" });
       const comment = await storage.createGoalComment({
         goalId: req.params.id,
         authorId: user.id,
-        body: req.body.body,
+        body,
         createdAt: new Date().toISOString(),
       });
       // Notify the other party (NAM ↔ AM) about the goal comment
