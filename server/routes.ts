@@ -2664,12 +2664,9 @@ export async function registerRoutes(
       const uploads = await storage.getFinancialUploads();
       if (uploads.length === 0) return res.json([]);
 
-      let allRows: any[] = [];
-      for (const upload of uploads) {
-        if (Array.isArray(upload.rows)) {
-          allRows.push(...(upload.rows as any[]));
-        }
-      }
+      // Use only the latest upload — it already contains merged historical + current month rows
+      const latestHistUpload = uploads[uploads.length - 1];
+      let allRows: any[] = Array.isArray(latestHistUpload.rows) ? latestHistUpload.rows as any[] : [];
       const histCols = resolveColumns(allRows);
       allRows = allRows.filter((r: any) => getStatusFromRow(r, histCols) !== "void");
 
@@ -2727,12 +2724,9 @@ export async function registerRoutes(
       const uploads = await storage.getFinancialUploads();
       if (uploads.length === 0) return res.json([]);
 
-      let allRows: any[] = [];
-      for (const upload of uploads) {
-        if (Array.isArray(upload.rows)) {
-          allRows.push(...(upload.rows as any[]));
-        }
-      }
+      // Use only the latest upload — it already contains merged historical + current month rows
+      const latestOppUpload = uploads[uploads.length - 1];
+      let allRows: any[] = Array.isArray(latestOppUpload.rows) ? latestOppUpload.rows as any[] : [];
       const oppCols = resolveColumns(allRows);
       allRows = allRows.filter((r: any) => getStatusFromRow(r, oppCols) !== "void");
 
@@ -3333,8 +3327,9 @@ export async function registerRoutes(
     try {
       const uploads = await storage.getFinancialUploads();
       const corridorMap: Record<string, { origin: string; destination: string; originCity: string; originState: string; destCity: string; destState: string; loads: number }> = {};
-      for (const upload of uploads) {
-        const rawCorrRows: any[] = (upload as any).rows ?? [];
+      if (uploads.length > 0) {
+        const latestCorr = uploads[uploads.length - 1];
+        const rawCorrRows: any[] = (latestCorr as any).rows ?? [];
         const corrCols = resolveColumns(rawCorrRows);
         const rows: any[] = rawCorrRows.filter((r: any) => getStatusFromRow(r, corrCols) !== "void");
         for (const row of rows) {
@@ -3363,8 +3358,9 @@ export async function registerRoutes(
       const deliveries: Record<string, { city: string; state: string; count: number }> = {};
       const pickups: Record<string, { city: string; state: string; count: number }> = {};
       let totalRows = 0;
-      for (const upload of uploads) {
-        const rawHeatRows: any[] = Array.isArray((upload as any).rows) ? (upload as any).rows : [];
+      if (uploads.length > 0) {
+        const latestHeat = uploads[uploads.length - 1];
+        const rawHeatRows: any[] = Array.isArray((latestHeat as any).rows) ? (latestHeat as any).rows : [];
         const heatCols = resolveColumns(rawHeatRows);
         const rows: any[] = rawHeatRows.filter((r: any) => getStatusFromRow(r, heatCols) !== "void");
         totalRows += rows.length;
@@ -3424,34 +3420,40 @@ export async function registerRoutes(
       const corrMap: Record<string, { origin: string; destination: string; origCity: string; origState: string; destCity: string; destState: string; loads: number }> = {};
       let totalLoads = 0, spotLoads = 0, totalMargin = 0;
 
-      for (const upload of uploads) {
-        const rawCompRows: any[] = Array.isArray(upload.rows) ? upload.rows as any[] : [];
-        const compCols = resolveColumns(rawCompRows);
-        const rows: any[] = rawCompRows.filter((r: any) => getStatusFromRow(r, compCols) !== "void");
-        for (const row of rows) {
-          if (!rowMatchesCompany(row)) continue;
-          const { destCity, destState, origCity, origState, monthKey, margin } = parseHistoricalRow(row, compCols);
-          const orderType = String(row[compCols.orderType] || "").toLowerCase();
-          const isSpot = orderType.includes("spot");
-          totalLoads++;
-          totalMargin += margin;
-          if (isSpot) spotLoads++;
-          if (monthKey) {
-            if (!byMonth[monthKey]) byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0 };
-            byMonth[monthKey].totalLoads++;
-            byMonth[monthKey].totalMargin += margin;
-            if (isSpot) byMonth[monthKey].spotLoads++;
-          }
-          if (destCity) {
-            const k = `${destCity}|${destState}`;
-            if (!destMap[k]) destMap[k] = { city: destCity, state: destState, count: 0 };
-            destMap[k].count++;
-          }
-          if (origCity && destCity) {
-            const k = `${origCity},${origState}→${destCity},${destState}`;
-            if (!corrMap[k]) corrMap[k] = { origin: `${origCity}${origState ? `, ${origState}` : ""}`, destination: `${destCity}${destState ? `, ${destState}` : ""}`, origCity, origState, destCity, destState, loads: 0 };
-            corrMap[k].loads++;
-          }
+      // Only use the latest upload — iterating all uploads multiplies the row count unnecessarily
+      const latest = uploads[uploads.length - 1];
+      const rawCompRows: any[] = Array.isArray(latest.rows) ? latest.rows as any[] : [];
+      const compCols = resolveColumns(rawCompRows);
+      // Resolve the customer column name once up-front
+      const custCol = compCols.customer;
+      const rows: any[] = rawCompRows.filter((r: any) => getStatusFromRow(r, compCols) !== "void");
+      for (const row of rows) {
+        // Normalise the customer field once per row (not via the full rowMatchesCompany wrapper)
+        const custNorm = normalize(String(row[custCol] || "").trim());
+        if (!custNorm) continue;
+        const matched = (aliasNorm && nameMatches(aliasNorm, custNorm)) || nameMatches(crmNorm, custNorm);
+        if (!matched) continue;
+        const { destCity, destState, origCity, origState, monthKey, margin } = parseHistoricalRow(row, compCols);
+        const orderType = String(row[compCols.orderType] || "").toLowerCase();
+        const isSpot = orderType.includes("spot");
+        totalLoads++;
+        totalMargin += margin;
+        if (isSpot) spotLoads++;
+        if (monthKey) {
+          if (!byMonth[monthKey]) byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0 };
+          byMonth[monthKey].totalLoads++;
+          byMonth[monthKey].totalMargin += margin;
+          if (isSpot) byMonth[monthKey].spotLoads++;
+        }
+        if (destCity) {
+          const k = `${destCity}|${destState}`;
+          if (!destMap[k]) destMap[k] = { city: destCity, state: destState, count: 0 };
+          destMap[k].count++;
+        }
+        if (origCity && destCity) {
+          const k = `${origCity},${origState}→${destCity},${destState}`;
+          if (!corrMap[k]) corrMap[k] = { origin: `${origCity}${origState ? `, ${origState}` : ""}`, destination: `${destCity}${destState ? `, ${destState}` : ""}`, origCity, origState, destCity, destState, loads: 0 };
+          corrMap[k].loads++;
         }
       }
 
@@ -3487,10 +3489,11 @@ export async function registerRoutes(
       const companyMap = Object.fromEntries(companies.map((c: any) => [c.id, c]));
       const userMap = Object.fromEntries(users.map((u: any) => [u.id, u.name]));
 
-      // Build delivery zone frequency
+      // Build delivery zone frequency — latest upload only
       const deliveryMap: Record<string, { city: string; state: string; count: number }> = {};
-      for (const upload of uploads) {
-        const rawDzRows: any[] = (upload as any).rows ?? [];
+      if (uploads.length > 0) {
+        const latestDz = uploads[uploads.length - 1];
+        const rawDzRows: any[] = (latestDz as any).rows ?? [];
         const dzCols = resolveColumns(rawDzRows);
         const rows: any[] = rawDzRows.filter((r: any) => getStatusFromRow(r, dzCols) !== "void");
         for (const row of rows) {
