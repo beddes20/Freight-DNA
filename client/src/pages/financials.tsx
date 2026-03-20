@@ -1259,51 +1259,9 @@ export default function Financials() {
               <p className="text-sm">Upload your NUMBERS.xlsx file to see account trends</p>
             </CardContent></Card>
           ) : (() => {
-            const raw = sheetsData.trendAnalysis;
-            const firstRow = raw[0] ?? {};
-            const allKeys = Object.keys(firstRow);
-
-            // Detect legacy format: sheet had a title row causing __EMPTY_N column names
-            const isLegacy = allKeys.includes("__EMPTY") || allKeys.includes("__EMPTY_1");
-
-            let repKey = "Rep";
-            let accKey = "Account";
-            let weekKeys: string[] = [];
-            let rows: any[] = raw;
-
-            if (isLegacy) {
-              repKey = "__EMPTY";
-              accKey = "__EMPTY_1";
-              const skipKeys = new Set(allKeys.filter(k => !k.startsWith("__EMPTY")));
-              weekKeys = allKeys.filter(k => k.match(/^__EMPTY_\d+$/));
-              rows = raw.filter((r: any) => {
-                const rep = String(r[repKey] ?? "").trim();
-                const acc = String(r[accKey] ?? "").trim();
-                return rep !== "" || acc !== "";
-              });
-            } else {
-              // Proper column names from updated server parsing
-              const skipKeys = new Set([repKey, accKey]);
-              weekKeys = allKeys.filter(k => !skipKeys.has(k) && k.trim() !== "" && !k.startsWith("_c"));
-              rows = raw.filter((r: any) => {
-                const rep = String(r[repKey] ?? "").trim();
-                const acc = String(r[accKey] ?? "").trim();
-                return rep !== "" || acc !== "";
-              });
-            }
-
-            // Fill down rep names (Excel merged cells appear empty in subsequent rows)
-            let lastRep = "";
-            const filledRows = rows.map((r: any) => {
-              const rep = String(r[repKey] ?? "").trim();
-              if (rep !== "") lastRep = rep;
-              return { ...r, [repKey]: lastRep };
-            });
-
-            const weekLabels = isLegacy
-              ? weekKeys.map((_, i) => `Wk ${i + 1}`)
-              : weekKeys;
-
+            const rows = sheetsData.trendAnalysis;
+            const allKeys = Object.keys(rows[0] ?? {});
+            const weekCols = allKeys.filter(k => k !== "Customer" && k.trim() !== "");
             return (
               <Card>
                 <CardHeader className="pb-3">
@@ -1311,30 +1269,28 @@ export default function Financials() {
                     <TrendingUp className="h-4 w-4 text-blue-500" />
                     Account Trends — Week Over Week Load Acquisition
                   </CardTitle>
-                  <p className="text-xs text-muted-foreground">Green = up from prior week · Red = down · Gray = same or no change</p>
+                  <p className="text-xs text-muted-foreground">Green = up from prior week · Red = down · Gray = same</p>
                 </CardHeader>
                 <CardContent className="p-0">
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b bg-muted/30">
-                          <th className="px-4 py-2 text-left font-medium text-muted-foreground text-xs sticky left-0 bg-muted/30 min-w-[100px]">Rep</th>
-                          <th className="px-4 py-2 text-left font-medium text-muted-foreground text-xs sticky left-0 bg-muted/30 min-w-[120px]">Account</th>
-                          {weekLabels.map(wk => (
+                          <th className="px-4 py-2 text-left font-medium text-muted-foreground text-xs sticky left-0 bg-muted/30 min-w-[160px]">Customer</th>
+                          {weekCols.map(wk => (
                             <th key={wk} className="px-3 py-2 text-right font-medium text-muted-foreground text-xs whitespace-nowrap">{wk}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {filledRows.map((row: any, i: number) => (
+                        {rows.map((row: any, i: number) => (
                           <tr key={i} className="border-b last:border-0 hover:bg-muted/20">
-                            <td className="px-4 py-2 text-xs font-medium sticky left-0 bg-background">{row[repKey] ?? "—"}</td>
-                            <td className="px-4 py-2 text-xs sticky left-0 bg-background">{row[accKey] ?? "—"}</td>
-                            {weekKeys.map((wk, wi) => {
+                            <td className="px-4 py-2 font-medium sticky left-0 bg-background text-xs">{row["Customer"] ?? ""}</td>
+                            {weekCols.map((wk, wi) => {
                               const val = row[wk];
                               const num = Number(val);
-                              const prev = wi > 0 ? Number(row[weekKeys[wi - 1]]) : null;
-                              const trend = prev !== null && !isNaN(num) && !isNaN(prev) && prev !== 0
+                              const prev = wi > 0 ? Number(row[weekCols[wi - 1]]) : null;
+                              const trend = prev !== null && !isNaN(num) && !isNaN(prev)
                                 ? num > prev ? "up" : num < prev ? "down" : "same"
                                 : "none";
                               return (
@@ -1346,7 +1302,8 @@ export default function Financials() {
                                   }`}>
                                     {trend === "up" && <ArrowUp className="h-3 w-3" />}
                                     {trend === "down" && <ArrowDown className="h-3 w-3" />}
-                                    {val !== "" && val !== null && val !== undefined && !isNaN(Number(val)) ? Number(val).toLocaleString() : "—"}
+                                    {trend === "same" && <Minus className="h-3 w-3" />}
+                                    {val !== "" && val !== null && val !== undefined ? val : "—"}
                                   </span>
                                 </td>
                               );
@@ -1369,94 +1326,56 @@ export default function Financials() {
               <Target className="h-10 w-10 mx-auto mb-3 opacity-30" />
               <p className="text-sm">Upload your NUMBERS.xlsx file to see rep averages</p>
             </CardContent></Card>
-          ) : (() => {
-            const raw = sheetsData.averagesData;
-            const firstRow = raw[0] ?? {};
-            const isLegacy = Object.keys(firstRow).some(k => k.startsWith("__EMPTY"));
-
-            // Build clean column list — skip internal/empty keys
-            const skipPattern = /^_c\d+$/;
-            const displayCols = Object.keys(firstRow).filter(k => {
-              if (k.trim() === "" || skipPattern.test(k)) return false;
-              return true;
-            });
-
-            // For legacy: rename __EMPTY_N columns to something readable
-            const colLabel = (k: string) => {
-              if (!isLegacy) return k;
-              if (k === "__EMPTY") return "Rep";
-              if (k === "__EMPTY_1") return "Account / Metric";
-              const m = k.match(/^__EMPTY_(\d+)$/);
-              if (m) return `Col ${Number(m[1]) + 1}`;
-              return k;
-            };
-
-            const cleanRows = raw.filter((r: any) =>
-              displayCols.some(k => {
-                const v = r[k];
-                return v !== "" && v !== null && v !== undefined;
-              })
-            );
-
-            return (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Target className="h-4 w-4 text-green-500" />
-                    Rep Averages vs. Today
-                  </CardTitle>
-                  <p className="text-xs text-muted-foreground">Yearly daily averages compared to today's acquisition + days hitting or beating their average this month</p>
-                </CardHeader>
-                <CardContent className="p-0">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b bg-muted/30">
-                          {displayCols.map(col => (
-                            <th key={col} className="px-4 py-2 text-left font-medium text-muted-foreground text-xs whitespace-nowrap">{colLabel(col)}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {cleanRows.map((row: any, i: number) => {
-                          const statusVal = String(row["Status"] ?? row["status"] ?? "").toLowerCase();
-                          return (
-                            <tr key={i} className="border-b last:border-0 hover:bg-muted/20">
-                              {displayCols.map(col => {
-                                const val = row[col];
-                                const label = colLabel(col).toLowerCase();
-                                const isRepCol = label === "rep" || col === "Sales Rep" || col === "Rep";
-                                const isStatusCol = col === "Status" || col === "status";
-                                const isRankCol = col === "Rank" || col === "rank";
-                                const displayVal = val !== "" && val !== null && val !== undefined ? val : "—";
-                                return (
-                                  <td key={col} className="px-4 py-2.5 text-xs">
-                                    {isStatusCol ? (
-                                      <Badge className={
-                                        statusVal.includes("exceed") || statusVal.includes("hit") || statusVal === "on track" ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" :
-                                        statusVal.includes("behind") || statusVal.includes("below") ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" :
-                                        "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
-                                      }>{val}</Badge>
-                                    ) : isRankCol ? (
-                                      <span className="font-bold">{displayVal}</span>
-                                    ) : isRepCol ? (
-                                      <span className="font-medium">{displayVal}</span>
-                                    ) : (
-                                      <span>{displayVal}</span>
-                                    )}
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })()}
+          ) : (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Target className="h-4 w-4 text-green-500" />
+                  Rep Averages vs. Today
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">Yearly daily averages compared to today's acquisition + days hitting or beating their average this month</p>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/30">
+                        {Object.keys(sheetsData.averagesData[0] ?? {}).map(col => (
+                          <th key={col} className="px-4 py-2 text-left font-medium text-muted-foreground text-xs whitespace-nowrap">{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sheetsData.averagesData.map((row: any, i: number) => {
+                        const status = String(row["Status"] ?? "").toLowerCase();
+                        return (
+                          <tr key={i} className="border-b last:border-0 hover:bg-muted/20">
+                            {Object.entries(row).map(([col, val]: [string, any]) => (
+                              <td key={col} className="px-4 py-2.5 text-xs">
+                                {col === "Status" ? (
+                                  <Badge className={
+                                    status.includes("exceed") || status.includes("hit") || status === "on track" ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" :
+                                    status.includes("behind") ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" :
+                                    "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                                  }>{val}</Badge>
+                                ) : col === "Rank" ? (
+                                  <span className="font-bold">{val}</span>
+                                ) : col === "Sales Rep" ? (
+                                  <span className="font-medium">{val}</span>
+                                ) : (
+                                  <span>{val !== "" && val !== null && val !== undefined ? val : "—"}</span>
+                                )}
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         {/* ── TODAY TAB ───────────────────────────────────────────────── */}

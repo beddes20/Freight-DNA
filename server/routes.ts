@@ -83,8 +83,8 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
     rows,
     bestDealDaysSpot: readSheet("Best Deal Days (SPOT)"),
     bestDealDaysAll: readSheet("Best Deal Days (ALL)"),
-    trendAnalysis: readSheetSmart("Trend Analysis"),
-    averagesData: readSheetSmart("Averages"),
+    trendAnalysis: readSheet("Trend Analysis"),
+    averagesData: readSheet("Averages"),
     dailyAcquisition: readSheetSmart("Daily Acquisition Data"),
   };
 }
