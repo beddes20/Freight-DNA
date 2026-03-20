@@ -22,6 +22,7 @@ import {
   SlidersHorizontal,
   X,
   UserCheck,
+  ArrowUpDown,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -66,6 +67,7 @@ export default function Customers() {
   const [repFilter, setRepFilter] = useState("all");
   const [industryFilter, setIndustryFilter] = useState("all");
   const [touchFilter, setTouchFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("name");
   const [quickTouch, setQuickTouch] = useState<{ company: Company; contacts: Contact[] } | null>(null);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [quickTouchType, setQuickTouchType] = useState("call");
@@ -121,6 +123,12 @@ export default function Customers() {
   });
   const salesPersonMap = new Map(salesUsers.map(u => [u.id, u.name]));
 
+  type MsSummaryRow = { companyId: string; currentPct: number | null };
+  const { data: msSummary = [] } = useQuery<MsSummaryRow[]>({
+    queryKey: ["/api/market-share/summary"],
+  });
+  const msMap = useMemo(() => new Map(msSummary.map(r => [r.companyId, r.currentPct ?? 0])), [msSummary]);
+
   const thisMonthKey = (() => {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
@@ -166,7 +174,7 @@ export default function Customers() {
 
   function applyFilters(list: Company[] | undefined) {
     if (!list) return [];
-    return list.filter(company => {
+    const filtered = list.filter(company => {
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         if (!company.name.toLowerCase().includes(q) && !company.industry?.toLowerCase().includes(q)) return false;
@@ -180,7 +188,24 @@ export default function Customers() {
         if (touchFilter === "not_this_week" && tps.week > 0) return false;
       }
       return true;
-    }).sort((a, b) => a.name.localeCompare(b.name));
+    });
+
+    const getFinVal = (company: Company, key: "totalLoads" | "totalMargin" | "marginPct") => {
+      const fin = (company.financialAlias ? matchFinancials(company.financialAlias, accountSummary) : null) || matchFinancials(company.name, accountSummary);
+      if (!fin) return -1;
+      if (key === "marginPct") return fin.totalRevenue && fin.totalRevenue > 0 ? fin.totalMargin / fin.totalRevenue : -1;
+      return fin[key];
+    };
+
+    return filtered.sort((a, b) => {
+      switch (sortBy) {
+        case "loads_desc":   return getFinVal(b, "totalLoads") - getFinVal(a, "totalLoads");
+        case "margin_desc":  return getFinVal(b, "totalMargin") - getFinVal(a, "totalMargin");
+        case "ms_desc":      return (msMap.get(b.id) ?? -1) - (msMap.get(a.id) ?? -1);
+        case "margin_pct_desc": return getFinVal(b, "marginPct") - getFinVal(a, "marginPct");
+        default:             return a.name.localeCompare(b.name);
+      }
+    });
   }
 
   const displayList = applyFilters(showArchived ? archivedCompanies : companies);
@@ -258,8 +283,30 @@ export default function Customers() {
             <X className="h-3.5 w-3.5" /> Clear
           </Button>
         )}
-        {!isLoading && (
+        {!showArchived && (
+          <div className="flex items-center gap-1.5 ml-auto">
+            <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <Select value={sortBy} onValueChange={setSortBy}>
+              <SelectTrigger className="h-9 text-sm w-[170px]" data-testid="select-sort-by">
+                <SelectValue placeholder="Sort by…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="name">Name (A–Z)</SelectItem>
+                <SelectItem value="loads_desc">Highest Load Count</SelectItem>
+                <SelectItem value="margin_desc">Highest Margin $</SelectItem>
+                <SelectItem value="margin_pct_desc">Highest Margin %</SelectItem>
+                <SelectItem value="ms_desc">Highest Market Share</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {showArchived && !isLoading && (
           <span className="text-sm text-muted-foreground ml-auto">
+            {displayList.length} account{displayList.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        {!showArchived && !isLoading && (
+          <span className="text-sm text-muted-foreground">
             {displayList.length} account{displayList.length !== 1 ? "s" : ""}
           </span>
         )}
