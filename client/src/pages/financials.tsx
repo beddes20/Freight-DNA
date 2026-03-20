@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import {
   BarChart3,
@@ -441,6 +442,18 @@ export default function Financials() {
         </div>
       </div>
 
+      <Tabs defaultValue="data" className="w-full">
+        <TabsList data-testid="tabs-financials">
+          <TabsTrigger value="data" className="flex items-center gap-1.5" data-testid="tab-data">
+            <BarChart3 className="h-3.5 w-3.5" />Data
+          </TabsTrigger>
+          <TabsTrigger value="analyze" className="flex items-center gap-1.5" data-testid="tab-analyze">
+            <Sparkles className="h-3.5 w-3.5" />DNA Analysis
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="data" className="space-y-4 mt-4">
+
       {canSyncOneDrive && oneDriveSetting && (
         <Card className="border-blue-200 dark:border-blue-800/50 bg-gradient-to-r from-blue-50/50 to-white dark:from-blue-950/20 dark:to-card">
           <CardHeader className="pb-3">
@@ -756,6 +769,18 @@ export default function Financials() {
             </CardContent>
           </Card>
 
+        </>
+      ) : !isLoading && !isAdmin ? (
+        <div className="text-center py-16 text-muted-foreground">
+          <BarChart3 className="h-12 w-12 mx-auto mb-3 opacity-30" />
+          <p className="text-sm font-medium">No financial data available yet</p>
+          <p className="text-xs mt-1">An admin needs to upload the data first</p>
+        </div>
+      ) : null}
+
+        </TabsContent>
+
+        <TabsContent value="analyze" className="mt-4">
           <Card data-testid="card-financial-ai-analysis">
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
@@ -775,18 +800,13 @@ export default function Financials() {
                   "Are there any trends or anomalies I should be aware of?",
                   "Which customers or lanes should we focus on to grow margin?",
                 ]}
-                emptyLabel="Upload financial data above to enable AI analysis"
+                emptyLabel="Upload financial data to enable DNA Analysis"
               />
             </CardContent>
           </Card>
-        </>
-      ) : !isLoading && !isAdmin ? (
-        <div className="text-center py-16 text-muted-foreground">
-          <BarChart3 className="h-12 w-12 mx-auto mb-3 opacity-30" />
-          <p className="text-sm font-medium">No financial data available yet</p>
-          <p className="text-xs mt-1">An admin needs to upload the data first</p>
-        </div>
-      ) : null}
+        </TabsContent>
+
+      </Tabs>
     </div>
   );
 }
