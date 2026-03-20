@@ -67,6 +67,7 @@ import {
   Zap,
   TrendingUp,
   ChevronDown,
+  ChevronRight,
   ClipboardList,
   Circle,
   PlayCircle,
