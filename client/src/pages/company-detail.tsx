@@ -932,6 +932,11 @@ export default function CompanyDetail() {
               </span>
             )}
           </div>
+
+          <Button variant="outline" onClick={() => setShowTrends(true)} data-testid="button-account-trends">
+            <TrendingUp className="h-4 w-4 mr-2" />
+            Trends
+          </Button>
           {canReassign && (
             <Button variant="outline" onClick={() => { setTransferTo(company.assignedTo || ""); setTransferOpen(true); }} data-testid="button-transfer-account">
               <UserCheck className="h-4 w-4 mr-2" />
