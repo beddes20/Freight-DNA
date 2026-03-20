@@ -20,6 +20,7 @@ export const companies = pgTable("companies", {
   processNotes: text("process_notes"),
   spotProcess: text("spot_process"),
   dlEmail: varchar("dl_email"),
+  salesPersonId: varchar("sales_person_id"),
 });
 
 export const insertCompanySchema = createInsertSchema(companies).omit({

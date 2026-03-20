@@ -227,6 +227,10 @@ export async function runMigrations() {
     await client.query(`ALTER TABLE financial_uploads ADD COLUMN IF NOT EXISTS daily_acquisition jsonb NOT NULL DEFAULT '[]'`);
     console.log("[migrations] financial_uploads extra sheets columns ensured");
 
+    // Add sales_person_id to companies for linking accounts to sales/sales_director users
+    await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS sales_person_id varchar`);
+    console.log("[migrations] sales_person_id added to companies");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

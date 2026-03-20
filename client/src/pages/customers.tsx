@@ -21,6 +21,7 @@ import {
   PhoneCall,
   SlidersHorizontal,
   X,
+  UserCheck,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -114,6 +115,11 @@ export default function Customers() {
   const { data: teamMembers = [] } = useQuery<Omit<User, "password">[]>({
     queryKey: ["/api/team-members"],
   });
+
+  const { data: salesUsers = [] } = useQuery<Omit<User, "password">[]>({
+    queryKey: ["/api/users/sales"],
+  });
+  const salesPersonMap = new Map(salesUsers.map(u => [u.id, u.name]));
 
   const thisMonthKey = (() => {
     const n = new Date();
@@ -345,6 +351,17 @@ export default function Customers() {
                           <p className="text-sm text-muted-foreground truncate">
                             {company.industry || "No industry specified"}
                           </p>
+                          {(() => {
+                            const spId = (company as any).salesPersonId as string | null;
+                            const spName = spId ? salesPersonMap.get(spId) : null;
+                            if (!spName) return null;
+                            return (
+                              <p className="text-xs text-blue-600 dark:text-blue-400 flex items-center gap-1 mt-0.5" data-testid={`text-salesperson-${company.id}`}>
+                                <UserCheck className="h-3 w-3" />
+                                {spName}
+                              </p>
+                            );
+                          })()}
                         </div>
                       </div>
                       {contacts.length > 0 && !company.archivedAt && (

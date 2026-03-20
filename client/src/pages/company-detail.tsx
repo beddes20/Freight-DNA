@@ -221,6 +221,7 @@ export default function CompanyDetail() {
   const [portalUrl, setPortalUrl] = useState("");
   const [portalUsername, setPortalUsername] = useState("");
   const [portalPassword, setPortalPassword] = useState("");
+  const [salesPersonIdEdit, setSalesPersonIdEdit] = useState<string>("");
   const [showPortalPassword, setShowPortalPassword] = useState(false);
   const [tenderStyle, setTenderStyle] = useState("");
   const [accountQuirks, setAccountQuirks] = useState("");
@@ -566,6 +567,15 @@ export default function CompanyDetail() {
     queryKey: ["/api/users"],
     enabled: canReassign,
   });
+  const canEditSalesPerson = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales_director";
+  const { data: allSalesUsers = [] } = useQuery<Omit<User, "password">[]>({
+    queryKey: ["/api/users/sales"],
+  });
+  const { data: allUsersForSales = [] } = useQuery<Omit<User, "password">[]>({
+    queryKey: ["/api/users"],
+    enabled: canEditSalesPerson,
+  });
+  const salesUsers = allUsersForSales.filter(u => u.role === "sales" || u.role === "sales_director");
 
   const savePortalMutation = useMutation({
     mutationFn: async () => {
@@ -580,6 +590,7 @@ export default function CompanyDetail() {
         processNotes: processNotes || null,
         spotProcess: spotProcess || null,
         dlEmail: dlEmail || null,
+        salesPersonId: salesPersonIdEdit || null,
       });
     },
     onSuccess: () => {
@@ -614,6 +625,7 @@ export default function CompanyDetail() {
     setProcessNotes(company?.processNotes || "");
     setSpotProcess(company?.spotProcess || "");
     setDlEmail(company?.dlEmail || "");
+    setSalesPersonIdEdit((company as any)?.salesPersonId || "");
     setPortalEdit(true);
   };
 
@@ -1434,6 +1446,25 @@ export default function CompanyDetail() {
                     />
                     <p className="text-[11px] text-muted-foreground">Alternate name used to match this account in uploaded financial data. Leave blank to use the account name.</p>
                   </div>
+                  {canEditSalesPerson && (
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                        <UserCheck className="h-3 w-3" /> Salesperson
+                      </label>
+                      <select
+                        className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                        value={salesPersonIdEdit}
+                        onChange={e => setSalesPersonIdEdit(e.target.value)}
+                        data-testid="select-salesperson"
+                      >
+                        <option value="">— None —</option>
+                        {salesUsers.map(u => (
+                          <option key={u.id} value={u.id}>{u.name}</option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-muted-foreground">Auto-populated from the Salesperson column in uploaded financial data. Override manually if needed.</p>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1544,6 +1575,19 @@ export default function CompanyDetail() {
                       {company.financialAlias ?? <span className="text-muted-foreground italic">{company.name} (default)</span>}
                     </p>
                   </div>
+                  {(() => {
+                    const spId = (company as any).salesPersonId as string | null;
+                    const spUser = allSalesUsers.find(u => u.id === spId) || [...assignableUsers, ...allUsersForSales].find(u => u.id === spId);
+                    if (!spId && !canEditSalesPerson) return null;
+                    return (
+                      <div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><UserCheck className="h-3 w-3" /> Salesperson</p>
+                        <p className="text-sm" data-testid="text-salesperson">
+                          {spUser ? spUser.name : <span className="text-muted-foreground italic">Not assigned</span>}
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 

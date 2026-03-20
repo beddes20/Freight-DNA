@@ -11,7 +11,7 @@ import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } f
 import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
-import { resolveColumns, getRepFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
+import { resolveColumns, getRepFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -527,6 +527,18 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/users/sales", requireAuth, async (req, res) => {
+    try {
+      const allUsers = await storage.getUsers();
+      const salesUsers = allUsers
+        .filter(u => u.role === "sales" || u.role === "sales_director")
+        .map(({ password, ...u }) => u);
+      res.json(salesUsers);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch sales users" });
+    }
+  });
+
   app.get("/api/users", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
@@ -878,6 +890,22 @@ export async function registerRoutes(
       res.json(company);
     } catch (error) {
       res.status(500).json({ error: "Failed to update financial alias" });
+    }
+  });
+
+  app.patch("/api/companies/:id/salesperson", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { salesPersonId } = req.body;
+      const company = await storage.updateCompany(req.params.id, { salesPersonId: salesPersonId || null } as any);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update salesperson" });
     }
   });
 
@@ -2958,6 +2986,74 @@ export async function registerRoutes(
     }
   });
 
+  /**
+   * Reads transaction rows and updates companies.sales_person_id based on the
+   * "Salesperson" column (col AB).  Only users with role "sales" or "sales_director"
+   * are candidates.  Matching uses financialRepId first, then normalised name.
+   */
+  async function linkSalespersonsFromRows(rows: any[]) {
+    if (!rows || rows.length === 0) return;
+    const cols = resolveColumns(rows);
+
+    // Build map: normalized customer name → tally of salesperson strings
+    const customerSalesMap = new Map<string, Map<string, number>>();
+    for (const row of rows) {
+      const customer = getCustomerFromRow(row, cols);
+      const salesperson = getSalespersonFromRow(row, cols);
+      if (!customer || !salesperson) continue;
+      const key = customer.toLowerCase().trim();
+      if (!customerSalesMap.has(key)) customerSalesMap.set(key, new Map());
+      const tally = customerSalesMap.get(key)!;
+      tally.set(salesperson, (tally.get(salesperson) || 0) + 1);
+    }
+    if (customerSalesMap.size === 0) return;
+
+    // Load sales users
+    const allUsers = await storage.getUsers();
+    const salesUsers = allUsers.filter(u => u.role === "sales" || u.role === "sales_director");
+    if (salesUsers.length === 0) return;
+
+    // Helper: find best matching sales user for a salesperson string
+    const normalize = (s: string) => s.toLowerCase().replace(/[\s._\-]+/g, " ").trim();
+    function matchUser(spName: string) {
+      const norm = normalize(spName);
+      // 1. Exact financialRepId match
+      const byRepId = salesUsers.find(u => u.financialRepId && normalize(u.financialRepId) === norm);
+      if (byRepId) return byRepId;
+      // 2. Normalized name match
+      const byName = salesUsers.find(u => normalize(u.name) === norm);
+      if (byName) return byName;
+      // 3. Partial match (name contains spName or vice-versa)
+      const partial = salesUsers.find(u => normalize(u.name).includes(norm) || norm.includes(normalize(u.name)));
+      return partial || null;
+    }
+
+    // Load companies
+    const allCompanies = await storage.getCompanies();
+
+    for (const company of allCompanies) {
+      const alias = (company.financialAlias || "").toLowerCase().trim();
+      const cname = company.name.toLowerCase().trim();
+      // Try alias first, then name
+      const tally = customerSalesMap.get(alias) || customerSalesMap.get(cname);
+      if (!tally) continue;
+      // Pick most-common salesperson for this customer
+      let bestSp = "";
+      let bestCount = 0;
+      for (const [sp, count] of tally) {
+        if (count > bestCount) { bestCount = count; bestSp = sp; }
+      }
+      if (!bestSp) continue;
+      const matched = matchUser(bestSp);
+      if (!matched) continue;
+      // Update only if changed
+      if (company.salesPersonId !== matched.id) {
+        await storage.updateCompany(company.id, { salesPersonId: matched.id });
+        console.log(`[salesperson-link] ${company.name} → ${matched.name} (${bestSp})`);
+      }
+    }
+  }
+
   app.post("/api/financials/upload", requireAuth, upload.single("file"), async (req, res) => {
     try {
       const user = await getCurrentUser(req);
@@ -3002,6 +3098,11 @@ export async function registerRoutes(
 
       await storage.setSetting("monthly_sync_failed", "");
       await storage.setSetting("monthly_sync_failed_error", "");
+
+      // Auto-link companies to salesperson users based on col AB
+      linkSalespersonsFromRows(sheets.rows).catch(err =>
+        console.error("[salesperson-link] auto-link error:", err)
+      );
 
       res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
     } catch (error) {
@@ -3174,6 +3275,15 @@ export async function registerRoutes(
 
       await storage.setSetting("monthly_sync_failed", "");
       await storage.setSetting("monthly_sync_failed_error", "");
+
+      // Auto-link companies to salesperson users from synced data
+      storage.getFinancialUploads().then(uploads => {
+        if (uploads.length === 0) return;
+        const latest = uploads[uploads.length - 1];
+        linkSalespersonsFromRows((latest.rows as any[]) || []).catch(err =>
+          console.error("[salesperson-link] sync auto-link error:", err)
+        );
+      }).catch(() => {});
 
       res.json(result);
     } catch (error: any) {
