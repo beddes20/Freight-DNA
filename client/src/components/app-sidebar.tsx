@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -29,8 +29,9 @@ const navItems = [
     icon: TrendingUp,
     roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
   },
-  { title: "Goals",       url: "/goals",       icon: Target },
-  { title: "PTO Passoff", url: "/pto-passoff", icon: Plane  },
+  { title: "Goals",           url: "/goals",      icon: Target         },
+  { title: "My Report Card",  url: "/report/me",  icon: FileBarChart2  },
+  { title: "PTO Passoff",     url: "/pto-passoff",icon: Plane          },
 ];
 
 const pipelineItems = [

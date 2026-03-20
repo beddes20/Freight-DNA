@@ -4,9 +4,10 @@ import { useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
-  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent
+  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2
 } from "lucide-react";
 
 interface RepPerf {
@@ -145,6 +146,17 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf;
             />
           </div>
         </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full mt-3 text-xs h-7"
+          data-testid={`button-view-report-${rep.userId}`}
+          onClick={(e) => { e.stopPropagation(); navigate(`/report/${rep.userId}`); }}
+        >
+          <FileBarChart2 className="h-3 w-3 mr-1.5" />
+          View Progress Report
+        </Button>
       </CardContent>
     </Card>
   );

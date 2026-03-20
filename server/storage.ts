@@ -1,4 +1,4 @@
-import { eq, inArray, ilike, or, and, desc, isNull, gte, sql } from "drizzle-orm";
+import { eq, inArray, ilike, or, and, desc, isNull, gte, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -79,6 +79,18 @@ import {
 } from "@shared/schema";
 
 const { Pool } = pg;
+
+export interface RepReportData {
+  rep: { id: string; name: string; role: string; manager: string | null; director: string | null };
+  period: { type: string; label: string; start: string; end: string };
+  goals: Array<{ id: string; label: string; metric: string; period: string; current: number; target: number; pct: number }>;
+  touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; weeklyTrend: number[] };
+  contacts: { newThisPeriod: number };
+  tasks: { completed: number; open: number; overdue: number };
+  topAccounts: Array<{ name: string; touches: number; lastTouch: string }>;
+  accountsNeedingAttention: number;
+  wins: Array<{ id: string; text: string; category: string }>;
+}
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -201,6 +213,8 @@ export interface IStorage {
   getColdContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>>;
 
   getTouchpointCountByAm(amId: string, startDate: string, endDate: string): Promise<number>;
+
+  getRepReport(userId: string, period: "weekly" | "monthly"): Promise<RepReportData>;
 
   getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]>;
   getAttachmentsByEntities(entityType: string, entityIds: string[]): Promise<Attachment[]>;
@@ -1102,6 +1116,161 @@ export class DatabaseStorage implements IStorage {
     const companyIds = allCompanies.map(c => c.id);
     const allTps = await db.select().from(touchpoints).where(inArray(touchpoints.companyId, companyIds));
     return allTps.filter(tp => tp.date >= startDate && tp.date <= endDate).length;
+  }
+
+  async getRepReport(userId: string, period: "weekly" | "monthly"): Promise<RepReportData> {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+
+    let periodStart: string, periodEnd: string, periodLabel: string;
+    if (period === "monthly") {
+      periodStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      periodEnd = lastDay.toISOString().slice(0, 10);
+      periodLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
+    } else {
+      const day = now.getDay();
+      const diffToMon = day === 0 ? -6 : 1 - day;
+      const mon = new Date(now);
+      mon.setDate(now.getDate() + diffToMon);
+      const sun = new Date(mon);
+      sun.setDate(mon.getDate() + 6);
+      periodStart = mon.toISOString().slice(0, 10);
+      periodEnd = sun.toISOString().slice(0, 10);
+      periodLabel = `${mon.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${sun.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+    }
+
+    const [allUsers, allTasks, userCompanies] = await Promise.all([
+      db.select().from(users),
+      db.select().from(tasks),
+      db.select().from(companies).where(eq(companies.assignedTo, userId)),
+    ]);
+
+    const repUser = allUsers.find(u => u.id === userId);
+    const manager = repUser?.managerId ? allUsers.find(u => u.id === repUser.managerId) : null;
+    const director = (manager as any)?.managerId ? allUsers.find(u => u.id === (manager as any).managerId) : null;
+
+    const userGoals = await this.getGoals({ amId: userId });
+    const activeGoals = userGoals.filter(g => g.startDate <= periodEnd && g.endDate >= periodStart);
+    const enrichedGoals = await Promise.all(activeGoals.map(async (g) => {
+      let autoValue: number | null = null;
+      if (g.metric === "contacts_added") {
+        autoValue = await this.getContactsAddedByAm(userId, g.startDate, g.endDate);
+      } else if (g.metric === "touchpoints") {
+        autoValue = await this.getTouchpointCountByAm(userId, g.startDate, g.endDate);
+      }
+      const displayCurrent = autoValue !== null ? autoValue : parseFloat(g.currentValue || "0");
+      const target = parseFloat(g.target);
+      const pct = target > 0 ? Math.min(100, Math.round((displayCurrent / target) * 100)) : 0;
+      return {
+        id: g.id,
+        label: g.customLabel || g.title || g.metric,
+        metric: g.metric,
+        period: g.period,
+        current: displayCurrent,
+        target,
+        pct,
+      };
+    }));
+
+    const companyIds = userCompanies.map(c => c.id);
+    let periodTps: typeof touchpoints.$inferSelect[] = [];
+    if (companyIds.length > 0) {
+      periodTps = await db.select().from(touchpoints).where(
+        and(
+          eq(touchpoints.loggedById, userId),
+          gte(touchpoints.date, periodStart),
+          lte(touchpoints.date, periodEnd)
+        )
+      );
+    }
+
+    const tpBreakdown = {
+      total: periodTps.length,
+      call: periodTps.filter(t => t.type === "call").length,
+      email: periodTps.filter(t => t.type === "email").length,
+      text: periodTps.filter(t => t.type === "text").length,
+      site_visit: periodTps.filter(t => t.type === "site_visit").length,
+    };
+
+    const weeklyTrend: number[] = [];
+    for (let i = 3; i >= 0; i--) {
+      const refDate = new Date(now);
+      refDate.setDate(now.getDate() - i * 7);
+      const rd = refDate.getDay();
+      const diff = rd === 0 ? -6 : 1 - rd;
+      const wMon = new Date(refDate);
+      wMon.setDate(refDate.getDate() + diff);
+      const wSun = new Date(wMon);
+      wSun.setDate(wMon.getDate() + 6);
+      const cnt = await this.getTouchpointCountByAm(userId, wMon.toISOString().slice(0, 10), wSun.toISOString().slice(0, 10));
+      weeklyTrend.push(cnt);
+    }
+
+    const newContactsCount = await this.getContactsAddedByAm(userId, periodStart, periodEnd);
+
+    const userTasks = allTasks.filter(t => t.assignedTo === userId);
+    const taskStats = {
+      completed: userTasks.filter(t => t.status === "completed").length,
+      open: userTasks.filter(t => t.status === "open" || t.status === "in_progress").length,
+      overdue: userTasks.filter(t => (t.status === "open" || t.status === "in_progress") && t.dueDate && t.dueDate < today).length,
+    };
+
+    const companyTpMap: Record<string, { name: string; touches: number; lastTouch: string }> = {};
+    for (const c of userCompanies) {
+      const cTps = periodTps.filter(t => t.companyId === c.id);
+      if (cTps.length > 0) {
+        const sorted = [...cTps].sort((a, b) => b.date.localeCompare(a.date));
+        companyTpMap[c.id] = { name: c.name, touches: cTps.length, lastTouch: sorted[0].date };
+      }
+    }
+    const topAccounts = Object.values(companyTpMap).sort((a, b) => b.touches - a.touches).slice(0, 6);
+
+    let allUserTps: typeof touchpoints.$inferSelect[] = [];
+    if (companyIds.length > 0) {
+      allUserTps = await db.select().from(touchpoints).where(
+        and(eq(touchpoints.loggedById, userId))
+      );
+    }
+    const twoWeeksAgo = new Date(now);
+    twoWeeksAgo.setDate(now.getDate() - 14);
+    const twoWeeksAgoStr = twoWeeksAgo.toISOString().slice(0, 10);
+    const lastTouchByCompany: Record<string, string> = {};
+    for (const tp of allUserTps) {
+      if (!lastTouchByCompany[tp.companyId] || tp.date > lastTouchByCompany[tp.companyId]) {
+        lastTouchByCompany[tp.companyId] = tp.date;
+      }
+    }
+    const accountsNeedingAttention = userCompanies.filter(c => {
+      const last = lastTouchByCompany[c.id];
+      return !last || last < twoWeeksAgoStr;
+    }).length;
+
+    const winPosts = await db.select().from(feedPosts).where(
+      and(eq(feedPosts.authorId, userId), gte(feedPosts.createdAt, periodStart), isNull(feedPosts.parentId))
+    );
+    const wins = winPosts
+      .filter(p => ["growth", "celebrate", "win", "callout"].includes(p.category))
+      .slice(0, 5)
+      .map(p => ({ id: p.id, text: p.content, category: p.category }));
+
+    return {
+      rep: {
+        id: userId,
+        name: repUser?.name || "Unknown",
+        role: repUser?.role || "account_manager",
+        manager: manager?.name || null,
+        director: director?.name || null,
+      },
+      period: { type: period, label: periodLabel, start: periodStart, end: periodEnd },
+      goals: enrichedGoals,
+      touchpoints: { ...tpBreakdown, weeklyTrend },
+      contacts: { newThisPeriod: newContactsCount },
+      tasks: taskStats,
+      topAccounts,
+      accountsNeedingAttention,
+      wins,
+    };
   }
 
   async getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]> {
