@@ -177,6 +177,7 @@ export default function Financials() {
       queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
       queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/financials/sheets"] });
       toast({ title: "Sync complete", description: `${data.rowCount.toLocaleString()} records imported from OneDrive.` });
     },
     onError: (error: Error) => {
@@ -207,6 +208,7 @@ export default function Financials() {
       queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
       queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/financials/sheets"] });
       toast({ title: "Upload successful", description: "Financial data has been updated." });
     },
     onError: (error: Error) => {
@@ -227,6 +229,7 @@ export default function Financials() {
       queryClient.invalidateQueries({ queryKey: ["/api/historical-lane-corridors"] });
       queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
       queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/financials/sheets"] });
       toast({ title: "Upload deleted" });
     },
   });
@@ -633,6 +636,7 @@ export default function Financials() {
                 queryClient.invalidateQueries({ queryKey: ["/api/historical-heatmap"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/proximity-matches"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/sync-alert"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/financials/sheets"] });
               }}
               data-testid="button-refresh-financials"
               className="flex items-center gap-1.5 rounded-lg bg-white/15 backdrop-blur-sm px-3 py-2 text-white/80 hover:text-white hover:bg-white/25 transition-colors text-sm"
