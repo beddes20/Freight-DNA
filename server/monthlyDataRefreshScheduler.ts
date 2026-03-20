@@ -111,9 +111,21 @@ export async function performOneDriveSync(uploadedBy: string): Promise<{ id: str
   const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
   const sheets = extractSheetsFromWorkbook(workbook);
 
-  const summarySheetName = findSheetByName(workbook, "March Replit");
-  const summarySheet = workbook.Sheets[summarySheetName];
-  const summaryRows: any[] = XLSX.utils.sheet_to_json(summarySheet, { defval: "" });
+  // Only read "March Replit" summary sheet if it exists by exact name — never fall back to another sheet
+  const exactSummarySheetName = workbook.SheetNames.find(
+    (s: string) => s.trim().toLowerCase() === "march replit"
+  );
+  let summaryRows: any[] = [];
+  if (exactSummarySheetName) {
+    const summarySheet = workbook.Sheets[exactSummarySheetName];
+    const parsed: any[] = XLSX.utils.sheet_to_json(summarySheet, { defval: "" });
+    const looksLikeSummary = parsed.some((r: any) => {
+      const keys = Object.keys(r);
+      return keys.some((k: string) => k.toLowerCase().includes("customer")) ||
+             (String(r["__EMPTY"] || "").trim().length > 0 && Number(r["__EMPTY_1"]) > 0);
+    });
+    if (looksLikeSummary) summaryRows = parsed;
+  }
 
   const upload = await storage.createFinancialUpload({
     fileName: `OneDrive Sync — ${new Date().toLocaleDateString()}`,

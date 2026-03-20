@@ -24,6 +24,23 @@ function findSheetByName(workbook: XLSX.WorkBook, preferredName: string): string
   return match || workbook.SheetNames[0];
 }
 
+// Guard against bad summary rows (documentation/description strings stored instead of real customer data)
+function isBadSummaryData(rows: any[]): boolean {
+  if (!rows.length) return true;
+  const firstRow = rows[0];
+  const usesEmpty = "__EMPTY" in firstRow;
+  const sampleNames = rows.slice(0, 5).map((r: any) =>
+    String(usesEmpty ? (r["__EMPTY"] || "") : (r["Customer Name"] || r["customer name"] || "")).trim()
+  );
+  return sampleNames.every(name =>
+    name.length > 60 ||
+    name.includes("—") ||
+    name.toLowerCase().startsWith("use") ||
+    name.toLowerCase().startsWith("remove") ||
+    name.toLowerCase().startsWith("date")
+  );
+}
+
 function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
   const readSheet = (name: string): any[] => {
     const match = workbook.SheetNames.find(s => s.trim().toLowerCase() === name.toLowerCase());
@@ -2910,9 +2927,22 @@ export async function registerRoutes(
       const workbook = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true });
       const sheets = extractSheetsFromWorkbook(workbook);
 
-      const summarySheetName = findSheetByName(workbook, "March Replit");
-      const summarySheet = workbook.Sheets[summarySheetName];
-      const summaryRows: any[] = XLSX.utils.sheet_to_json(summarySheet, { defval: "" });
+      // Only read "March Replit" summary sheet if it exists by exact name — never fall back to another sheet
+      const exactSummarySheetName = workbook.SheetNames.find(
+        s => s.trim().toLowerCase() === "march replit"
+      );
+      let summaryRows: any[] = [];
+      if (exactSummarySheetName) {
+        const summarySheet = workbook.Sheets[exactSummarySheetName];
+        const parsed: any[] = XLSX.utils.sheet_to_json(summarySheet, { defval: "" });
+        // Validate: real summary rows have a customer name and numeric load counts
+        const looksLikeSummary = parsed.some((r: any) => {
+          const keys = Object.keys(r);
+          return keys.some(k => k.toLowerCase().includes("customer")) ||
+                 (String(r["__EMPTY"] || "").trim().length > 0 && Number(r["__EMPTY_1"]) > 0);
+        });
+        if (looksLikeSummary) summaryRows = parsed;
+      }
 
       const upload = await storage.createFinancialUpload({
         fileName: req.file.originalname,
@@ -2991,8 +3021,8 @@ export async function registerRoutes(
       const latest = uploads[uploads.length - 1];
       const raw = (latest.summaryRows as any[]) || [];
 
-      // If no summary sheet, compute from transaction rows (new ReplistNumbers format)
-      if (!raw.length) {
+      // If no summary sheet OR summary data looks like documentation, compute from transaction rows
+      if (isBadSummaryData(raw)) {
         const txRows: any[] = (latest.rows as any[]) || [];
         const sumCols = resolveColumns(txRows);
         type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
@@ -4222,7 +4252,7 @@ export async function registerRoutes(
             const repKeyLower = repKey.toLowerCase();
             const raw = (latestUpload.summaryRows as any[]) || [];
             let total = 0;
-            if (!raw.length) {
+            if (isBadSummaryData(raw)) {
               const txRows: any[] = (latestUpload.rows as any[]) || [];
               const goalTxCols = resolveColumns(txRows);
               const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
@@ -4308,7 +4338,7 @@ export async function registerRoutes(
             const raw = (latestUpload.summaryRows as any[]) || [];
             const repKeyLower = repKey.toLowerCase();
             let total = 0;
-            if (!raw.length) {
+            if (isBadSummaryData(raw)) {
               const txRows: any[] = (latestUpload.rows as any[]) || [];
               const lbTxCols = resolveColumns(txRows);
               const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
@@ -4532,7 +4562,7 @@ export async function registerRoutes(
               const raw = (latest.summaryRows as any[]) || [];
               const repKeyLower = repKey.toLowerCase();
               let total = 0;
-              if (!raw.length) {
+              if (isBadSummaryData(raw)) {
                 // Transaction rows (ReplistNumbers) — group directly by rep, not customer
                 const txRows: any[] = (latest.rows as any[]) || [];
                 const progTxCols = resolveColumns(txRows);
