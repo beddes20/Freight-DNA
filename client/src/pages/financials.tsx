@@ -262,15 +262,30 @@ export default function Financials() {
     // --- Column discovery ---
     const allColumns = rows.length > 0 ? Object.keys(rows[0]) : [];
 
+    // --- Detect date columns ---
+    const dateCols = allColumns.filter(col => /date|day/i.test(col));
+
+    // Helper: parse a cell value as a JS Date
+    const parseDate = (val: unknown): Date | null => {
+      if (!val) return null;
+      // Excel serial number
+      if (typeof val === "number" && val > 1000) {
+        const d = new Date((val - 25569) * 86400 * 1000);
+        if (!isNaN(d.getTime())) return d;
+      }
+      const d = new Date(String(val));
+      return isNaN(d.getTime()) ? null : d;
+    };
+
     const lines: string[] = [
       `Financial Data File: ${financialData?.fileName || "Unknown"}`,
-      `Total Records: ${rows.length.toLocaleString()}`,
+      `Total Records: ${rows.length.toLocaleString()} (ALL aggregations below are computed from every row)`,
       `Columns (${allColumns.length}): ${allColumns.join(" | ")}`,
       `Total Revenue (Total Charges): $${rows.reduce((s, r) => s + toNumber(r["Total charges"]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
       `Total Freight Charges: $${rows.reduce((s, r) => s + toNumber(r["Freight charge"]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
     ];
 
-    // --- Unique values for key categorical columns (for AI awareness) ---
+    // --- Unique values for key categorical columns ---
     const catCols = ["Customer", "Operations user", "Broker", "Shipper state", "Consignee state", "Tender Method", "Order Type", "Equipment type", "Status", "Mode"];
     catCols.forEach(col => {
       const vals = [...new Set(rows.map(r => String(r[col] || "")).filter(Boolean))];
@@ -279,7 +294,54 @@ export default function Financials() {
       }
     });
 
-    // --- Aggregated summaries ---
+    // --- Monthly breakdowns from ALL rows for each detected date column ---
+    const orderTypeCol = allColumns.find(c => /order.?type/i.test(c)) || "Order Type";
+    const tenderCol = allColumns.find(c => /tender/i.test(c)) || "Tender Method";
+    const repCol = allColumns.find(c => /operations.?user|broker/i.test(c)) || "Operations user";
+
+    dateCols.forEach(dateCol => {
+      type MonthEntry = { loads: number; revenue: number; byOrderType: Record<string, number>; byRep: Record<string, number> };
+      const monthMap: Record<string, MonthEntry> = {};
+
+      rows.forEach(r => {
+        const d = parseDate(r[dateCol]);
+        if (!d) return;
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        if (!monthMap[key]) monthMap[key] = { loads: 0, revenue: 0, byOrderType: {}, byRep: {} };
+        const entry = monthMap[key];
+        entry.loads++;
+        entry.revenue += toNumber(r["Total charges"]);
+        const ot = String(r[orderTypeCol] || r[tenderCol] || "Unknown").trim();
+        entry.byOrderType[ot] = (entry.byOrderType[ot] || 0) + 1;
+        const rep = String(r[repCol] || r["Broker"] || "Unknown").trim();
+        if (rep && rep !== "Unknown") entry.byRep[rep] = (entry.byRep[rep] || 0) + 1;
+      });
+
+      const sorted = Object.entries(monthMap).sort(([a], [b]) => a.localeCompare(b));
+      if (sorted.length > 0) {
+        lines.push("", `MONTHLY BREAKDOWN BY ${dateCol.toUpperCase()} (all ${rows.length} rows, exact counts):`);
+        sorted.forEach(([month, data]) => {
+          const label = (() => {
+            const [yr, mo] = month.split("-");
+            return new Date(Number(yr), Number(mo) - 1, 1).toLocaleString("default", { month: "long", year: "numeric" });
+          })();
+          const orderBreakdown = Object.entries(data.byOrderType)
+            .sort((a, b) => b[1] - a[1])
+            .map(([type, cnt]) => `${type}: ${cnt}`)
+            .join(", ");
+          const repBreakdown = Object.entries(data.byRep)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 8)
+            .map(([rep, cnt]) => `${rep}: ${cnt}`)
+            .join(", ");
+          lines.push(`  ${label} (${month}): ${data.loads} loads | $${data.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`);
+          if (orderBreakdown) lines.push(`    Order Types: ${orderBreakdown}`);
+          if (repBreakdown) lines.push(`    By Rep: ${repBreakdown}`);
+        });
+      }
+    });
+
+    // --- Aggregated summaries (all rows) ---
     const repMap: Record<string, { loads: number; revenue: number }> = {};
     const custMap: Record<string, { loads: number; revenue: number }> = {};
     const laneMap: Record<string, { loads: number; revenue: number }> = {};
@@ -304,21 +366,22 @@ export default function Financials() {
     const topLanes = Object.entries(laneMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 30);
 
     if (topReps.length) {
-      lines.push("", "TOP REPS BY LOAD COUNT:");
+      lines.push("", "TOP REPS BY LOAD COUNT (all rows):");
       topReps.forEach(([name, s]) => lines.push(`  • ${name}: ${s.loads.toLocaleString()} loads | $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`));
     }
     if (topCusts.length) {
-      lines.push("", "TOP CUSTOMERS BY REVENUE:");
+      lines.push("", "TOP CUSTOMERS BY REVENUE (all rows):");
       topCusts.forEach(([name, s]) => lines.push(`  • ${name}: $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} | ${s.loads.toLocaleString()} loads`));
     }
     if (topLanes.length) {
-      lines.push("", "TOP LANES BY LOAD COUNT:");
+      lines.push("", "TOP LANES BY LOAD COUNT (all rows):");
       topLanes.forEach(([lane, s]) => lines.push(`  • ${lane}: ${s.loads.toLocaleString()} loads | $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`));
     }
 
-    // --- Raw row sample: up to 2000 rows, all columns, pipe-separated ---
-    const sampleRows = rows.slice(0, 2000);
-    lines.push("", `RAW DATA SAMPLE (${sampleRows.length} of ${rows.length} rows, all columns):`);
+    // --- Raw row sample: up to 3000 rows for record-level lookups ---
+    const sampleSize = Math.min(rows.length, 3000);
+    const sampleRows = rows.slice(0, sampleSize);
+    lines.push("", `RAW DATA SAMPLE (${sampleSize} of ${rows.length} rows — use MONTHLY BREAKDOWN sections above for exact date-filtered totals):`);
     lines.push(allColumns.join(" | "));
     sampleRows.forEach(r => {
       lines.push(allColumns.map(col => String(r[col] ?? "")).join(" | "));
