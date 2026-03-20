@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -31,7 +31,9 @@ import {
   Database,
   Download,
   RefreshCw,
+  Sparkles,
 } from "lucide-react";
+import { DataAnalystPortlet } from "@/components/data-analyst-portlet";
 
 type FinancialRow = {
   "Order number"?: string | number;
@@ -253,6 +255,54 @@ export default function Financials() {
   };
 
   const hasFilters = search || filterRep !== "all" || filterCustomer !== "all" || filterStatus !== "all";
+
+  const financialContextData = useMemo(() => {
+    if (!rows.length) return "";
+    const lines: string[] = [
+      `Financial Data File: ${financialData?.fileName || "Unknown"}`,
+      `Total Records: ${rows.length.toLocaleString()}`,
+      `Total Revenue (Total Charges): $${rows.reduce((s, r) => s + toNumber(r["Total charges"]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      `Total Freight Charges: $${rows.reduce((s, r) => s + toNumber(r["Freight charge"]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+    ];
+
+    const repMap: Record<string, { loads: number; revenue: number }> = {};
+    const custMap: Record<string, { loads: number; revenue: number }> = {};
+    const laneMap: Record<string, { loads: number; revenue: number }> = {};
+
+    rows.forEach(r => {
+      const rep = r["Operations user"] || r["Broker"] || "";
+      const cust = r["Customer"] || "";
+      const origCity = r["Shipper city"] || "";
+      const origState = r["Shipper state"] || "";
+      const destCity = r["Consignee city"] || "";
+      const destState = r["Consignee state"] || "";
+      const lane = origCity && destCity ? `${origCity}, ${origState} → ${destCity}, ${destState}` : "";
+      const rev = toNumber(r["Total charges"]);
+
+      if (rep) { repMap[rep] = repMap[rep] || { loads: 0, revenue: 0 }; repMap[rep].loads++; repMap[rep].revenue += rev; }
+      if (cust) { custMap[cust] = custMap[cust] || { loads: 0, revenue: 0 }; custMap[cust].loads++; custMap[cust].revenue += rev; }
+      if (lane) { laneMap[lane] = laneMap[lane] || { loads: 0, revenue: 0 }; laneMap[lane].loads++; laneMap[lane].revenue += rev; }
+    });
+
+    const topReps = Object.entries(repMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 10);
+    const topCusts = Object.entries(custMap).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 15);
+    const topLanes = Object.entries(laneMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 20);
+
+    if (topReps.length) {
+      lines.push("", "TOP REPS BY LOAD COUNT:");
+      topReps.forEach(([name, s]) => lines.push(`  • ${name}: ${s.loads.toLocaleString()} loads | $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`));
+    }
+    if (topCusts.length) {
+      lines.push("", "TOP CUSTOMERS BY REVENUE:");
+      topCusts.forEach(([name, s]) => lines.push(`  • ${name}: $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} | ${s.loads.toLocaleString()} loads`));
+    }
+    if (topLanes.length) {
+      lines.push("", "TOP LANES BY LOAD COUNT:");
+      topLanes.forEach(([lane, s]) => lines.push(`  • ${lane}: ${s.loads.toLocaleString()} loads | $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`));
+    }
+
+    return lines.join("\n");
+  }, [rows, financialData]);
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
@@ -617,6 +667,30 @@ export default function Financials() {
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          <Card data-testid="card-financial-ai-analysis">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-violet-500" />
+                AI Analysis
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">Ask Claude to surface trends, compare reps, flag anomalies, and identify opportunities in this data</p>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DataAnalystPortlet
+                contextType="financial"
+                contextData={financialContextData}
+                presetQuestions={[
+                  "Who are the top performing reps and what's driving their results?",
+                  "Which customers have the most potential to grow?",
+                  "What are the top lanes by volume and revenue?",
+                  "Are there any trends or anomalies I should be aware of?",
+                  "Which customers or lanes should we focus on to grow margin?",
+                ]}
+                emptyLabel="Upload financial data above to enable AI analysis"
+              />
             </CardContent>
           </Card>
         </>

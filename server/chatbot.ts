@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
@@ -11,6 +12,11 @@ import {
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const db = drizzle(pool);
+
+const anthropic = new Anthropic({
+  apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
+});
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -418,6 +424,73 @@ Guidelines:
       res.json(results);
     } catch (err) {
       res.status(500).json({ error: "Failed to load suggestions" });
+    }
+  });
+
+  app.post("/api/analyze/stream", async (req: Request, res: Response) => {
+    if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const { contextType, contextData, messages: history = [], question } = req.body as {
+      contextType: "rfp" | "financial" | "historical";
+      contextData: string;
+      messages: { role: "user" | "assistant"; content: string }[];
+      question: string;
+    };
+
+    if (!question?.trim()) return res.status(400).json({ error: "Question required" });
+
+    const systemPrompts: Record<string, string> = {
+      rfp: `You are a freight brokerage sales analyst specializing in RFP analysis. You have deep expertise in transportation lanes, freight volumes, equipment types, and carrier networks. Your job is to analyze RFP data and help the sales team identify opportunities, prioritize lanes, and develop winning strategies.
+
+Be specific and actionable. Reference actual lane data, volumes, and origin/destination states from the context. When you identify an opportunity or recommendation, make it concrete enough that it could become a task. Use bullet points for clarity. Keep responses focused and under 300 words unless a detailed breakdown is needed.`,
+
+      financial: `You are a freight brokerage financial analyst. You have deep expertise in load data, revenue trends, rep performance, lane economics, and customer analysis. Your job is to analyze financial/load data and surface trends, anomalies, opportunities, and risks.
+
+Be specific and data-driven. Reference actual customers, reps, lanes, and figures from the context. Highlight trends over time when visible. When you identify something actionable, frame it as a specific next step. Use bullet points for clarity. Keep responses focused and under 300 words unless a detailed breakdown is needed.`,
+
+      historical: `You are a freight network analyst specializing in historical delivery pattern analysis for transportation brokers. You have deep expertise in lane density, delivery zone mapping, hub analysis, and identifying freight opportunities from historical data.
+
+Be specific and insight-driven. Reference actual cities, states, corridors, and load counts from the context. Identify patterns, hot zones, and underserved lanes. When you find an opportunity, make it actionable. Use bullet points for clarity. Keep responses focused and under 300 words unless a detailed breakdown is needed.`,
+    };
+
+    const systemPrompt = systemPrompts[contextType] || systemPrompts.rfp;
+
+    const chatMessages: { role: "user" | "assistant"; content: string }[] = [
+      ...history,
+      { role: "user", content: question.trim() },
+    ];
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    try {
+      const stream = anthropic.messages.stream({
+        model: "claude-sonnet-4-6",
+        max_tokens: 8192,
+        system: `${systemPrompt}\n\n=== DATA CONTEXT ===\n${contextData}`,
+        messages: chatMessages,
+      });
+
+      for await (const event of stream) {
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          const content = event.delta.text;
+          if (content) {
+            res.write(`data: ${JSON.stringify({ content })}\n\n`);
+          }
+        }
+      }
+
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+    } catch (err) {
+      console.error("Analyze stream error:", err);
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ error: "Analysis failed. Please try again." })}\n\n`);
+        res.end();
+      } else {
+        res.status(500).json({ error: "Failed to analyze data" });
+      }
     }
   });
 }

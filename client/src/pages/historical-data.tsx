@@ -1,6 +1,6 @@
 import "leaflet/dist/leaflet.css";
 import type * as L from "leaflet";
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -14,8 +14,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   MapPin, Flame, TrendingUp, Package, Search, Compass,
   Upload, FileSpreadsheet, Loader2, Trash2, History, Map, Target, ArrowRight, Building2, User,
-  ArrowDownToLine, ArrowUpFromLine, Layers, Download, BarChart2, RefreshCw,
+  ArrowDownToLine, ArrowUpFromLine, Layers, Download, BarChart2, RefreshCw, Sparkles,
 } from "lucide-react";
+import { DataAnalystPortlet } from "@/components/data-analyst-portlet";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip,
   ResponsiveContainer, ComposedChart, Line, Legend,
@@ -503,6 +504,41 @@ export default function HistoricalData() {
   const hotZones = filtered.filter(d => d.isHotZone);
   const others = filtered.filter(d => !d.isHotZone);
 
+  const historicalContextData = useMemo(() => {
+    if (!data || data.totalRows === 0) return "";
+    const lines: string[] = [
+      `Total Historical Records: ${data.totalRows.toLocaleString()}`,
+      `Total Destinations: ${(data.summary || []).length}`,
+      `Hot Zones (high-frequency): ${(data.summary || []).filter(d => d.isHotZone).length}`,
+    ];
+    const top20 = (data.summary || []).slice(0, 20);
+    if (top20.length) {
+      lines.push("", "TOP DELIVERY DESTINATIONS:");
+      top20.forEach(d => {
+        lines.push(`  • ${d.destination}: ${d.totalLoads.toLocaleString()} total loads | avg ${d.avgWeekly.toFixed(1)}/week${d.isHotZone ? " 🔥 HOT ZONE" : ""}`);
+      });
+    }
+    if (data.topCorridors?.length) {
+      lines.push("", "TOP LANE CORRIDORS:");
+      data.topCorridors.slice(0, 20).forEach((c: any) => {
+        lines.push(`  • ${c.origin || c.originState || ""} → ${c.destination || c.destinationState || ""}: ${(c.loadCount || c.count || 0).toLocaleString()} loads`);
+      });
+    }
+    if (data.originHubs?.length) {
+      lines.push("", "TOP ORIGIN HUBS:");
+      data.originHubs.slice(0, 10).forEach((h: any) => {
+        lines.push(`  • ${h.city || h.hub || h.origin}: ${(h.loadCount || h.count || 0).toLocaleString()} loads`);
+      });
+    }
+    if (data.stateMatrix?.length) {
+      lines.push("", "TOP STATE-TO-STATE FLOWS:");
+      data.stateMatrix.slice(0, 10).forEach((m: any) => {
+        lines.push(`  • ${m.originState} → ${m.destinationState}: ${(m.loadCount || m.count || 0).toLocaleString()} loads`);
+      });
+    }
+    return lines.join("\n");
+  }, [data]);
+
   const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["/api/historical-data-summary"] });
     queryClient.invalidateQueries({ queryKey: ["/api/financials/uploads"] });
@@ -607,7 +643,7 @@ export default function HistoricalData() {
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="grid grid-cols-5 w-full">
+        <TabsList className="grid grid-cols-6 w-full">
           <TabsTrigger value="overview" className="flex items-center gap-1.5" data-testid="tab-overview">
             <Flame className="h-3.5 w-3.5" />Overview
           </TabsTrigger>
@@ -622,6 +658,9 @@ export default function HistoricalData() {
           </TabsTrigger>
           <TabsTrigger value="account-trends" className="flex items-center gap-1.5" data-testid="tab-account-trends">
             <BarChart2 className="h-3.5 w-3.5" />Account Trends
+          </TabsTrigger>
+          <TabsTrigger value="analyze" className="flex items-center gap-1.5" data-testid="tab-analyze">
+            <Sparkles className="h-3.5 w-3.5" />Analyze
           </TabsTrigger>
         </TabsList>
 
@@ -885,6 +924,33 @@ export default function HistoricalData() {
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* AI Analyze Tab */}
+        <TabsContent value="analyze">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-violet-500" />
+                AI Analysis
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">Ask Claude to analyze your delivery patterns, identify trends, and surface strategic opportunities</p>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DataAnalystPortlet
+                contextType="historical"
+                contextData={historicalContextData}
+                presetQuestions={[
+                  "What are our hottest delivery markets and why do they matter?",
+                  "Which lane corridors should we prioritize for capacity?",
+                  "Are there geographic gaps or underserved markets we should target?",
+                  "What does our delivery pattern say about our network strengths?",
+                  "Where should we focus prospecting to match our freight network?",
+                ]}
+                emptyLabel="Upload historical dispatch data above to enable AI analysis"
+              />
             </CardContent>
           </Card>
         </TabsContent>

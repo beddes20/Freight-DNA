@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,7 @@ import {
   Repeat2,
   Users,
   ChevronDown,
+  Sparkles,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -69,6 +70,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RfpDialog } from "@/components/rfp-dialog";
 import { AwardDialog } from "@/components/award-dialog";
 import { ResearchLaneDialog } from "@/components/research-lane-dialog";
+import { DataAnalystPortlet } from "@/components/data-analyst-portlet";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Rfp, Award, Company, Contact } from "@shared/schema";
@@ -452,6 +454,55 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
 
   if (rows.length === 0 && highVolumeLanes.length === 0) return null;
   const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
+
+  const rfpContextData = useMemo(() => {
+    const lines: string[] = [
+      `RFP: ${rfp.title}`,
+      `Status: ${rfp.status}`,
+      rfp.value ? `Estimated Value: $${Number(rfp.value).toLocaleString()}` : "",
+      rfp.dueDate ? `Due Date: ${rfp.dueDate}` : "",
+      rfp.laneCount ? `Total Lanes: ${rfp.laneCount}` : "",
+      rfp.totalVolume ? `Total Annual Volume: ${Number(rfp.totalVolume).toLocaleString()} loads` : "",
+      rfp.originStates?.length ? `Origin States: ${rfp.originStates.join(", ")}` : "",
+      rfp.notes ? `Notes: ${rfp.notes}` : "",
+    ].filter(Boolean);
+
+    if (highVolumeLanes.length > 0) {
+      lines.push("", "HIGH VOLUME LANES (50+ loads/yr, need planner/contact):");
+      highVolumeLanes.slice(0, 40).forEach(l => {
+        lines.push(`  • ${l.origin || ""} → ${l.destination || ""} | ${l.volume?.toLocaleString() ?? "?"} loads/yr | ${l.equipment || ""} | Status: ${l.status || "open"}`);
+      });
+    }
+
+    if (rows.length > 0) {
+      const laneCol = ["Lane", "lane", "LANE REF ID", "Origin City", "origin_city"].find(k => k in rows[0]);
+      const volCol = ["Annual Volume", "annual_volume", "Volume", "volume"].find(k => k in rows[0]);
+      const origCol = ["Origin City", "Origin city", "origin_city"].find(k => k in rows[0]);
+      const destCol = ["Destination City", "Destination city", "destination_city"].find(k => k in rows[0]);
+      const eqCol = ["Equipment Type", "Equipment", "equipment"].find(k => k in rows[0]);
+      const stateOrigCol = ["Origin State", "origin_state"].find(k => k in rows[0]);
+      const stateDestCol = ["Destination State", "destination_state"].find(k => k in rows[0]);
+
+      const laneRows = rows
+        .map(r => ({
+          lane: origCol && destCol ? `${r[origCol]}, ${r[stateOrigCol] || ""} → ${r[destCol]}, ${r[stateDestCol] || ""}` : (laneCol ? r[laneCol] : ""),
+          volume: volCol ? Number(String(r[volCol]).replace(/[^0-9.]/g, "")) || 0 : 0,
+          equipment: eqCol ? r[eqCol] : "",
+        }))
+        .filter(r => r.lane)
+        .sort((a, b) => b.volume - a.volume)
+        .slice(0, 30);
+
+      if (laneRows.length > 0) {
+        lines.push("", "TOP LANES BY ANNUAL VOLUME:");
+        laneRows.forEach(l => {
+          lines.push(`  • ${l.lane} | ${l.volume.toLocaleString()} loads/yr${l.equipment ? ` | ${l.equipment}` : ""}`);
+        });
+      }
+    }
+
+    return lines.join("\n");
+  }, [rfp, highVolumeLanes, rows]);
 
   const openLanes = highVolumeLanes.filter(l => !l.status || l.status === "open");
   const completedLanes = highVolumeLanes.filter(l => l.status && l.status !== "open");
@@ -1013,6 +1064,30 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
           )}
         </Card>
       )}
+
+      <Card data-testid="card-rfp-ai-analysis">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-500" />
+            AI Analysis
+          </CardTitle>
+          <p className="text-xs text-muted-foreground mt-0.5">Ask Claude to analyze this RFP, surface trends, and help you turn insights into action</p>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <DataAnalystPortlet
+            contextType="rfp"
+            contextData={rfpContextData}
+            companyId={companyId}
+            presetQuestions={[
+              "What are the top opportunities in this RFP?",
+              "Which lanes should we prioritize and why?",
+              "What equipment types dominate and what does that mean for our network?",
+              "What are the risks or challenges in this bid?",
+              "Give me a summary of this RFP I can share with my team",
+            ]}
+          />
+        </CardContent>
+      </Card>
 
       <ResearchLaneDialog
         open={researchDialogOpen}
