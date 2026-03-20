@@ -1602,6 +1602,77 @@ export async function registerRoutes(
     }
   });
 
+  // Market share summary: all companies visible to user, with latest % + trend
+  app.get("/api/market-share/summary", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      // Determine visible companies based on role
+      let companies = await storage.getCompanies();
+      if (user.role !== "admin") {
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        teamIds.push(user.id);
+        companies = companies.filter(c => c.assignedTo && teamIds.includes(c.assignedTo));
+      }
+
+      const companyIds = new Set(companies.map(c => c.id));
+      const allEntries = await storage.getAllMarketShareEntries();
+      const allUsers = await storage.getUsers();
+
+      // Group entries by company, sorted by periodStart asc (already ordered)
+      const byCompany: Record<string, typeof allEntries> = {};
+      for (const e of allEntries) {
+        if (!companyIds.has(e.companyId)) continue;
+        if (!byCompany[e.companyId]) byCompany[e.companyId] = [];
+        byCompany[e.companyId].push(e);
+      }
+
+      const rows = companies
+        .filter(c => byCompany[c.id]?.length)
+        .map(c => {
+          const entries = byCompany[c.id];
+          // Only entries with enough denominator data
+          const calcable = entries.filter(e => Number(e.totalMarketLoads) > 0);
+          const last = calcable[calcable.length - 1];
+          const prev = calcable[calcable.length - 2];
+          const currentPct = last
+            ? Math.round(((Number(last.vtLoads) + Number(last.spotLoads)) / Number(last.totalMarketLoads)) * 100 * 10) / 10
+            : null;
+          const prevPct = prev
+            ? Math.round(((Number(prev.vtLoads) + Number(prev.spotLoads)) / Number(prev.totalMarketLoads)) * 100 * 10) / 10
+            : null;
+          const trend = currentPct === null ? "none"
+            : prevPct === null ? "none"
+            : currentPct > prevPct ? "up"
+            : currentPct < prevPct ? "down"
+            : "flat";
+          const am = allUsers.find(u => u.id === c.assignedTo);
+          return {
+            companyId: c.id,
+            companyName: c.name,
+            amName: am ? `${am.firstName} ${am.lastName}`.trim() : null,
+            currentPct,
+            prevPct,
+            trend,
+            lastPeriodLabel: last?.periodLabel || null,
+            entryCount: calcable.length,
+            monthlyData: calcable.map(e => ({
+              label: e.periodLabel,
+              pct: Math.round(((Number(e.vtLoads) + Number(e.spotLoads)) / Number(e.totalMarketLoads)) * 100 * 10) / 10,
+            })),
+          };
+        })
+        .filter(r => r.currentPct !== null)
+        .sort((a, b) => (b.currentPct ?? 0) - (a.currentPct ?? 0));
+
+      res.json(rows);
+    } catch (error) {
+      console.error("Error fetching market share summary:", error);
+      res.status(500).json({ error: "Failed to fetch market share summary" });
+    }
+  });
+
   // ── Task Assignment ──────────────────────────────────────────────────────────
 
   app.get("/api/tasks", async (req, res) => {

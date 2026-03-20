@@ -240,6 +240,7 @@ export interface IStorage {
   deleteInternalPost(id: string): Promise<boolean>;
 
   getMarketShareEntries(companyId: string): Promise<MarketShareEntry[]>;
+  getAllMarketShareEntries(): Promise<MarketShareEntry[]>;
   createMarketShareEntry(entry: InsertMarketShareEntry): Promise<MarketShareEntry>;
   updateMarketShareEntry(id: string, data: Partial<InsertMarketShareEntry>): Promise<MarketShareEntry | undefined>;
   deleteMarketShareEntry(id: string): Promise<boolean>;
@@ -1274,6 +1275,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(marketShareEntries)
       .where(eq(marketShareEntries.companyId, companyId))
       .orderBy(marketShareEntries.periodStart, marketShareEntries.createdAt);
+  }
+
+  async getAllMarketShareEntries(): Promise<MarketShareEntry[]> {
+    return db.select().from(marketShareEntries)
+      .orderBy(marketShareEntries.companyId, marketShareEntries.periodStart, marketShareEntries.createdAt);
   }
 
   async createMarketShareEntry(entry: InsertMarketShareEntry): Promise<MarketShareEntry> {

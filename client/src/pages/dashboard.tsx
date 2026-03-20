@@ -26,6 +26,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import InternalCommsPortlet from "@/components/internal-comms-portlet";
+import MarketSharePortlet from "@/components/market-share-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
@@ -1622,6 +1623,8 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       )}
+
+      {canSeeTeam && <MarketSharePortlet />}
 
       {canSeeTeam && (leaderboardLoading || leaderboard.length > 0) && (
         <Card data-testid="card-leaderboard">
