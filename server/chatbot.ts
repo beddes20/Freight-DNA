@@ -390,7 +390,7 @@ Guidelines:
       const typeLabel = isBug ? "Bug Report" : isImprovement ? "Improvement Request" : "Feature Request";
       const typeEmoji = isBug ? "🐛" : isImprovement ? "🔧" : "✨";
       const taskTitle = `${typeEmoji} ${typeLabel} from ${submitter.name}`;
-      const bodyPreview = trimmed.length > 120 ? trimmed.slice(0, 120) + "…" : trimmed;
+      const bodyPreview = trimmed; // store full content so admin can read the whole request
       const now = new Date().toISOString();
 
       const admins = await db.select().from(users).where(eq(users.role, "admin"));
@@ -463,11 +463,15 @@ Guidelines:
     const systemPrompts: Record<string, string> = {
       rfp: `You are a freight brokerage sales analyst specializing in RFP analysis. You have deep expertise in transportation lanes, freight volumes, equipment types, and carrier networks. Your job is to analyze RFP data and help the sales team identify opportunities, prioritize lanes, and develop winning strategies.
 
-Be specific and actionable. Reference actual lane data, volumes, and origin/destination states from the context. When you identify an opportunity or recommendation, make it concrete enough that it could become a task. Use bullet points for clarity. Keep responses focused and under 300 words unless a detailed breakdown is needed.`,
+The context includes the RFP metadata, high-volume lanes, a column listing from the actual RFP spreadsheet, top lanes by volume, and a RAW RFP DATA SAMPLE section with up to 150 actual rows in pipe-delimited format. Use the raw rows to answer questions about specific lanes, equipment types, or column values not captured in the summary.
 
-      financial: `You are a freight brokerage financial analyst. You have deep expertise in load data, revenue trends, rep performance, lane economics, and customer analysis. Your job is to analyze financial/load data and surface trends, anomalies, opportunities, and risks.
+Be specific and actionable. Reference actual lane data, volumes, origin/destination states, and column values from the context. When you identify an opportunity or recommendation, make it concrete enough that it could become a task. Use bullet points for clarity. Keep responses focused and under 350 words unless a detailed breakdown is needed.`,
 
-Be specific and data-driven. Reference actual customers, reps, lanes, and figures from the context. Highlight trends over time when visible. When you identify something actionable, frame it as a specific next step. Use bullet points for clarity. Keep responses focused and under 300 words unless a detailed breakdown is needed.`,
+      financial: `You are a freight brokerage financial analyst with direct access to the full spreadsheet data. You have deep expertise in load data, revenue trends, rep performance, lane economics, and customer analysis.
+
+The context includes: (1) column names from the actual uploaded spreadsheet, (2) unique values for categorical columns, (3) aggregated summaries (top reps/customers/lanes), and (4) a RAW DATA SAMPLE section with up to 200 actual rows in pipe-delimited format (column names are in the header row). Use this raw data to answer specific questions about individual records, column values, or calculations that require row-level data.
+
+Be specific and data-driven. Reference actual customers, reps, lanes, column names, and figures from the context. When asked about a specific column or value, look it up in the raw sample. When you identify something actionable, frame it as a specific next step. Use bullet points for clarity. Keep responses focused and under 400 words unless a detailed breakdown is needed.`,
 
       historical: `You are a freight network analyst specializing in historical delivery pattern analysis for transportation brokers. You have deep expertise in lane density, delivery zone mapping, hub analysis, and identifying freight opportunities from historical data.
 

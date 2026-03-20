@@ -258,13 +258,28 @@ export default function Financials() {
 
   const financialContextData = useMemo(() => {
     if (!rows.length) return "";
+
+    // --- Column discovery ---
+    const allColumns = rows.length > 0 ? Object.keys(rows[0]) : [];
+
     const lines: string[] = [
       `Financial Data File: ${financialData?.fileName || "Unknown"}`,
       `Total Records: ${rows.length.toLocaleString()}`,
+      `Columns (${allColumns.length}): ${allColumns.join(" | ")}`,
       `Total Revenue (Total Charges): $${rows.reduce((s, r) => s + toNumber(r["Total charges"]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
       `Total Freight Charges: $${rows.reduce((s, r) => s + toNumber(r["Freight charge"]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
     ];
 
+    // --- Unique values for key categorical columns (for AI awareness) ---
+    const catCols = ["Customer", "Operations user", "Broker", "Shipper state", "Consignee state", "Tender Method", "Order Type", "Equipment type", "Status", "Mode"];
+    catCols.forEach(col => {
+      const vals = [...new Set(rows.map(r => String(r[col] || "")).filter(Boolean))];
+      if (vals.length > 0 && vals.length <= 80) {
+        lines.push(`Unique ${col} values (${vals.length}): ${vals.slice(0, 60).join(", ")}`);
+      }
+    });
+
+    // --- Aggregated summaries ---
     const repMap: Record<string, { loads: number; revenue: number }> = {};
     const custMap: Record<string, { loads: number; revenue: number }> = {};
     const laneMap: Record<string, { loads: number; revenue: number }> = {};
@@ -284,9 +299,9 @@ export default function Financials() {
       if (lane) { laneMap[lane] = laneMap[lane] || { loads: 0, revenue: 0 }; laneMap[lane].loads++; laneMap[lane].revenue += rev; }
     });
 
-    const topReps = Object.entries(repMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 10);
-    const topCusts = Object.entries(custMap).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 15);
-    const topLanes = Object.entries(laneMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 20);
+    const topReps = Object.entries(repMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 15);
+    const topCusts = Object.entries(custMap).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 25);
+    const topLanes = Object.entries(laneMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 30);
 
     if (topReps.length) {
       lines.push("", "TOP REPS BY LOAD COUNT:");
@@ -300,6 +315,14 @@ export default function Financials() {
       lines.push("", "TOP LANES BY LOAD COUNT:");
       topLanes.forEach(([lane, s]) => lines.push(`  • ${lane}: ${s.loads.toLocaleString()} loads | $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`));
     }
+
+    // --- Raw row sample: up to 200 rows, all columns, pipe-separated ---
+    const sampleRows = rows.slice(0, 200);
+    lines.push("", `RAW DATA SAMPLE (${sampleRows.length} of ${rows.length} rows, all columns):`);
+    lines.push(allColumns.join(" | "));
+    sampleRows.forEach(r => {
+      lines.push(allColumns.map(col => String(r[col] ?? "")).join(" | "));
+    });
 
     return lines.join("\n");
   }, [rows, financialData]);

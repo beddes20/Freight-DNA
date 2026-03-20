@@ -123,7 +123,7 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className={`text-sm leading-snug ${!notif.read ? "font-medium" : ""}`}>{notif.title}</p>
-                  {notif.body && <p className="text-xs text-muted-foreground mt-0.5 truncate">{notif.body}</p>}
+                  {notif.body && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-4 whitespace-pre-line">{notif.body}</p>}
                   <p className="text-xs text-muted-foreground mt-1">{timeAgo(notif.createdAt as unknown as string)}</p>
                 </div>
                 {!notif.read && (

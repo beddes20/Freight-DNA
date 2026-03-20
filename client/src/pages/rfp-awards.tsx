@@ -479,6 +479,9 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
     }
 
     if (rows.length > 0) {
+      const allColumns = Object.keys(rows[0]);
+      lines.push("", `RFP SPREADSHEET COLUMNS (${allColumns.length}): ${allColumns.join(" | ")}`);
+
       const laneCol = ["Lane", "lane", "LANE REF ID", "Origin City", "origin_city"].find(k => k in rows[0]);
       const volCol = ["Annual Volume", "annual_volume", "Volume", "volume"].find(k => k in rows[0]);
       const origCol = ["Origin City", "Origin city", "origin_city"].find(k => k in rows[0]);
@@ -495,7 +498,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
         }))
         .filter(r => r.lane)
         .sort((a, b) => b.volume - a.volume)
-        .slice(0, 30);
+        .slice(0, 50);
 
       if (laneRows.length > 0) {
         lines.push("", "TOP LANES BY ANNUAL VOLUME:");
@@ -503,6 +506,14 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
           lines.push(`  • ${l.lane} | ${l.volume.toLocaleString()} loads/yr${l.equipment ? ` | ${l.equipment}` : ""}`);
         });
       }
+
+      // Raw row sample so AI can see all column values
+      const sampleRows = rows.slice(0, 150);
+      lines.push("", `RAW RFP DATA SAMPLE (${sampleRows.length} of ${rows.length} rows, all columns):`);
+      lines.push(allColumns.join(" | "));
+      sampleRows.forEach(r => {
+        lines.push(allColumns.map(col => String(r[col] ?? "")).join(" | "));
+      });
     }
 
     return lines.join("\n");
