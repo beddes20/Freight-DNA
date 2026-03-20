@@ -70,19 +70,37 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
       });
   };
 
-  // Check for a month-specific tab first: ReplitNumbers[Month] e.g. "ReplitNumbersMarch"
-  // This lets users upload a lean current-month-only tab instead of processing a huge YTD dataset.
+  // Check for a month-specific tab: ReplitNumbers[Month] e.g. "ReplitNumbersMarch"
+  // If present, merge it with the ReplitNumbers historical tab so trends get full history
+  // and account-summary gets the accurate current-month data.
   const monthNames = ["january","february","march","april","may","june","july","august","september","october","november","december"];
   const monthTabMatch = workbook.SheetNames.find(s => {
     const lower = s.trim().toLowerCase();
     return monthNames.some(m => lower === `replitnumbers${m}`);
   });
   const monthTabRows = monthTabMatch ? readSheet(monthTabMatch) : [];
+  const replitHistoricalRows = readSheet("ReplitNumbers");
+
+  // Helper: extract order number from a row for deduplication
+  const getOrderKey = (r: any): string => String(r["Order"] ?? r["Order number"] ?? r["order"] ?? r["ORDER"] ?? "").trim();
 
   let rows: any[];
-  if (monthTabRows.length > 0) {
-    // Prioritise the month-specific tab — pre-filtered by the user, use as-is
+  if (monthTabRows.length > 0 && replitHistoricalRows.length > 0) {
+    // Merge: historical base + current-month rows; current month wins on duplicate order number
+    const merged = new Map<string, any>();
+    for (const r of replitHistoricalRows) {
+      const k = getOrderKey(r);
+      if (k) merged.set(k, r); else merged.set(`_nokey_${merged.size}`, r);
+    }
+    for (const r of monthTabRows) {
+      const k = getOrderKey(r);
+      if (k) merged.set(k, r); else merged.set(`_nokey_${merged.size}`, r);
+    }
+    rows = Array.from(merged.values());
+  } else if (monthTabRows.length > 0) {
     rows = monthTabRows;
+  } else if (replitHistoricalRows.length > 0) {
+    rows = replitHistoricalRows;
   } else {
     const boraRaw: any[] = readSheet("YTD BORA");
     if (boraRaw.length > 0) {
@@ -99,20 +117,14 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
       if (altRows.length > 0) {
         rows = altRows;
       } else {
-        // Try "ReplitNumbers" tab — pre-filtered data, use as-is
-        const replitRows = readSheet("ReplitNumbers");
-        if (replitRows.length > 0) {
-          rows = replitRows;
-        } else {
-          // Last resort: read the sheet with the most data rows
-          const bestSheetName = workbook.SheetNames.reduce((best, name) => {
-            const sh = workbook.Sheets[name];
-            const len = (XLSX.utils.sheet_to_json(sh, { header: 1, defval: "" }) as any[][]).length;
-            const bestLen = (XLSX.utils.sheet_to_json(workbook.Sheets[best], { header: 1, defval: "" }) as any[][]).length;
-            return len > bestLen ? name : best;
-          }, workbook.SheetNames[0]);
-          rows = readSheet(bestSheetName);
-        }
+        // Last resort: read the sheet with the most data rows
+        const bestSheetName = workbook.SheetNames.reduce((best, name) => {
+          const sh = workbook.Sheets[name];
+          const len = (XLSX.utils.sheet_to_json(sh, { header: 1, defval: "" }) as any[][]).length;
+          const bestLen = (XLSX.utils.sheet_to_json(workbook.Sheets[best], { header: 1, defval: "" }) as any[][]).length;
+          return len > bestLen ? name : best;
+        }, workbook.SheetNames[0]);
+        rows = readSheet(bestSheetName);
       }
     }
   }
