@@ -469,6 +469,7 @@ export default function AdminUsers() {
   const { toast } = useToast();
 
   const [smtpResult, setSmtpResult] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [search, setSearch] = useState("");
 
   const smtpTestMutation = useMutation({
     mutationFn: async () => {
@@ -522,6 +523,15 @@ export default function AdminUsers() {
     return users.find(u => u.id === managerId);
   };
 
+  const q = search.toLowerCase().trim();
+  const filteredUsers = q
+    ? users.filter(u =>
+        u.name.toLowerCase().includes(q) ||
+        u.role.toLowerCase().replace(/_/g, " ").includes(q) ||
+        (u.username || "").toLowerCase().includes(q)
+      )
+    : users;
+
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -530,9 +540,31 @@ export default function AdminUsers() {
             <Users className="w-6 h-6 text-blue-600" />
             User Management
           </h1>
-          <p className="text-muted-foreground mt-1">{users.length} users</p>
+          <p className="text-muted-foreground mt-1">
+            {q ? `${filteredUsers.length} of ${users.length} users` : `${users.length} users`}
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Search */}
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Search by name or role…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="h-9 w-52 rounded-lg border border-input bg-background px-3 pr-8 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              data-testid="input-user-search"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                data-testid="button-clear-search"
+              >
+                ×
+              </button>
+            )}
+          </div>
           {/* View toggle */}
           <div className="flex rounded-lg border border-border overflow-hidden" data-testid="view-toggle">
             <Button
@@ -585,7 +617,12 @@ export default function AdminUsers() {
         <OrgChartView users={users} onEdit={(u) => { setEditUser(u); setDialogOpen(true); }} />
       ) : (
         <div className="grid gap-4">
-          {users.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => {
+          {filteredUsers.length === 0 && (
+            <p className="text-muted-foreground text-sm text-center py-10">
+              No users match <strong>"{search}"</strong>.
+            </p>
+          )}
+          {filteredUsers.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => {
             const RoleIcon = ROLE_ICONS[u.role] || UserCircle;
             const manager = getManager(u.managerId);
             return (
