@@ -57,13 +57,20 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
     if (altRows.length > 0) {
       rows = altRows;
     } else {
-      const bestSheetName = workbook.SheetNames.reduce((best, name) => {
-        const sh = workbook.Sheets[name];
-        const len = (XLSX.utils.sheet_to_json(sh, { header: 1, defval: "" }) as any[][]).length;
-        const bestLen = (XLSX.utils.sheet_to_json(workbook.Sheets[best], { header: 1, defval: "" }) as any[][]).length;
-        return len > bestLen ? name : best;
-      }, workbook.SheetNames[0]);
-      rows = readSheet(bestSheetName);
+      // Try "ReplitNumbers" tab — pre-filtered data, use as-is
+      const replitRows = readSheet("ReplitNumbers");
+      if (replitRows.length > 0) {
+        rows = replitRows;
+      } else {
+        // Last resort: read the sheet with the most data rows
+        const bestSheetName = workbook.SheetNames.reduce((best, name) => {
+          const sh = workbook.Sheets[name];
+          const len = (XLSX.utils.sheet_to_json(sh, { header: 1, defval: "" }) as any[][]).length;
+          const bestLen = (XLSX.utils.sheet_to_json(workbook.Sheets[best], { header: 1, defval: "" }) as any[][]).length;
+          return len > bestLen ? name : best;
+        }, workbook.SheetNames[0]);
+        rows = readSheet(bestSheetName);
+      }
     }
   }
   return {
