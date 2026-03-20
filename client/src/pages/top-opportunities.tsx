@@ -1,11 +1,14 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Link } from "wouter";
+import { Button } from "@/components/ui/button";
+import { Link, useLocation } from "wouter";
+import { TaskDialog } from "@/components/task-dialog";
 import {
   Truck, MapPin, Flame, Package, TrendingUp, Building2,
-  FileText, ArrowRight, Zap,
+  FileText, Zap, Plus, ExternalLink,
 } from "lucide-react";
 
 type OpportunityMatch = {
@@ -28,10 +31,33 @@ type Opportunity = {
   matches: OpportunityMatch[];
 };
 
+type TaskPrefill = {
+  companyId: string;
+  title: string;
+  notes: string;
+};
+
 export default function TopOpportunities() {
+  const [, navigate] = useLocation();
   const { data: opportunities, isLoading } = useQuery<Opportunity[]>({
     queryKey: ["/api/opportunities"],
   });
+
+  const [taskOpen, setTaskOpen] = useState(false);
+  const [taskPrefill, setTaskPrefill] = useState<TaskPrefill | null>(null);
+
+  const openTask = (opp: Opportunity, match: OpportunityMatch) => {
+    setTaskPrefill({
+      companyId: match.companyId,
+      title: `Pursue opportunity: ${opp.destination} — ${match.lane}`,
+      notes: `Opportunity Zone: ${opp.destination}\nWe deliver here ~${opp.weeklyLoadCount} loads/week avg (peak ${opp.maxWeekly}/week)\n\nRFP: ${match.rfpTitle}\nLane: ${match.lane}${match.volume ? `\nVolume: ${match.volume} loads` : ""}${match.equipment ? `\nEquipment: ${match.equipment}` : ""}`,
+    });
+    setTaskOpen(true);
+  };
+
+  const goToAccount = (match: OpportunityMatch) => {
+    navigate(`/companies/${match.companyId}?rfpTab=matching`);
+  };
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
@@ -82,7 +108,7 @@ export default function TopOpportunities() {
                       <div className="flex items-center gap-2">
                         <MapPin className="h-4 w-4 text-primary" />
                         <span className="font-semibold text-base" data-testid={`text-destination-${idx}`}>
-                          {opp.destination}
+                          {opp.city}, {opp.state}
                         </span>
                         {opp.maxWeekly >= 5 && (
                           <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-xs">
@@ -112,21 +138,20 @@ export default function TopOpportunities() {
                     <div
                       key={`${match.rfpId}-${mIdx}`}
                       data-testid={`row-match-${idx}-${mIdx}`}
-                      className="px-4 py-3 hover:bg-muted/40 transition-colors"
+                      className="px-4 py-3 hover:bg-muted/40 transition-colors group"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-start gap-3 min-w-0">
                           <Building2 className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <Link href={`/companies/${match.companyId}`}>
-                                <span
-                                  className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                  data-testid={`text-company-${idx}-${mIdx}`}
-                                >
-                                  {match.companyName}
-                                </span>
-                              </Link>
+                              <span
+                                className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                data-testid={`text-company-${idx}-${mIdx}`}
+                                onClick={() => goToAccount(match)}
+                              >
+                                {match.companyName}
+                              </span>
                               <span className="text-muted-foreground text-xs">·</span>
                               <span className="text-xs text-muted-foreground flex items-center gap-1">
                                 <FileText className="h-3 w-3" />
@@ -155,6 +180,30 @@ export default function TopOpportunities() {
                               ${Number(match.rate).toLocaleString()}
                             </Badge>
                           )}
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs gap-1"
+                              onClick={() => goToAccount(match)}
+                              data-testid={`btn-view-account-${idx}-${mIdx}`}
+                              title="View on account page"
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                              Account
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs gap-1 text-primary border-primary/30 hover:bg-primary/5"
+                              onClick={() => openTask(opp, match)}
+                              data-testid={`btn-add-task-${idx}-${mIdx}`}
+                              title="Create a task for this opportunity"
+                            >
+                              <Plus className="h-3 w-3" />
+                              Task
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -164,6 +213,21 @@ export default function TopOpportunities() {
             </Card>
           ))}
         </div>
+      )}
+
+      {taskPrefill && (
+        <TaskDialog
+          open={taskOpen}
+          onOpenChange={(open) => {
+            setTaskOpen(open);
+            if (!open) setTaskPrefill(null);
+          }}
+          companyId={taskPrefill.companyId}
+          prefillData={{
+            title: taskPrefill.title,
+            notes: taskPrefill.notes,
+          }}
+        />
       )}
     </div>
   );

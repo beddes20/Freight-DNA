@@ -281,7 +281,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
   if (!destCol) destCol = findCol(["destination", "dest", "delivery", "ship to", "to"]);
 
   const originStateCol = findCol(["origin_state", "origin state", "o_state", "from_state", "from state", "orig state", "orig_state"]);
-  const destStateCol = findCol(["destination_state", "dest_state", "dest state", "to_state", "to state", "d_state"]);
+  const destStateCol = findCol(["destination state", "destination_state", "dest_state", "dest state", "to_state", "to state", "d_state"]);
   let volumeCol = findCol(["annual volume", "annual loads", "annual shipments", "yearly volume", "yearly loads"]);
   if (!volumeCol) volumeCol = findCol(["volume", "loads", "shipments", "qty", "quantity"]);
   if (!volumeCol) volumeCol = findCol(["weekly volume", "weekly loads", "weekly shipments", "wkly"]);
@@ -3309,12 +3309,17 @@ export async function registerRoutes(
             const cityMatch = laneOrigin.includes(hotCity) || hotCity.includes(laneOrigin);
             const stateMatch = !laneState || !hotState || laneState === hotState || laneState.startsWith(hotState.slice(0, 2)) || hotState.startsWith(laneState.slice(0, 2));
             if (cityMatch && stateMatch) {
+              const rawRow = (lane as any).rawRow || {};
+              const dStateRaw = lane.destinationState ||
+                (Object.entries(rawRow).find(([k]) => /destination.?state/i.test(k))?.[1] as string || "");
+              const oStateRaw = lane.originState ||
+                (Object.entries(rawRow).find(([k]) => /origin.?state/i.test(k))?.[1] as string || "");
               matches.push({
                 companyId: rfp.companyId,
                 companyName: companyMap.get(rfp.companyId || "") || "Unknown",
                 rfpId: rfp.id,
                 rfpTitle: rfp.title,
-                lane: `${lane.origin || ""}${lane.originState ? ", " + lane.originState : ""} → ${lane.destination || ""}${lane.destinationState ? ", " + lane.destinationState : ""}`,
+                lane: `${lane.origin || ""}${oStateRaw ? ", " + oStateRaw : ""} → ${lane.destination || ""}${dStateRaw ? ", " + dStateRaw : ""}`,
                 volume: lane.volume,
                 rate: lane.rate,
                 equipment: lane.equipment,

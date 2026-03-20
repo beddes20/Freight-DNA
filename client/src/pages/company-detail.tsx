@@ -202,6 +202,7 @@ export default function CompanyDetail() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
   const searchString = useSearch();
+  const rfpIntelTab = new URLSearchParams(searchString).get("rfpTab") || "coverage";
   const { toast } = useToast();
   const { user: currentUser } = useAuth();
   const companyId = params.id!;
@@ -266,6 +267,15 @@ export default function CompanyDetail() {
       navigate(`/companies/${companyId}`, { replace: true });
     }
   }, [searchString, companyId, navigate]);
+
+  useEffect(() => {
+    if (rfpIntelTab !== "coverage") {
+      setTimeout(() => {
+        const el = document.querySelector("[data-testid='card-rfp-intelligence']");
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 400);
+    }
+  }, [rfpIntelTab]);
 
   const { data: company, isLoading: companyLoading } = useQuery<Company>({
     queryKey: ["/api/companies", companyId],
@@ -1905,7 +1915,7 @@ export default function CompanyDetail() {
                 <a href="/rfp-awards" className="text-xs text-primary underline underline-offset-2 hover:opacity-80">Go to RFP & Awards →</a>
               </div>
             ) : (
-              <Tabs defaultValue="coverage" className="w-full">
+              <Tabs defaultValue={rfpIntelTab} className="w-full">
                 <TabsList className="w-full grid grid-cols-3 mb-4">
                   <TabsTrigger value="coverage" data-testid="tab-coverage">
                     <MapPin className="h-3.5 w-3.5 mr-1.5" />
