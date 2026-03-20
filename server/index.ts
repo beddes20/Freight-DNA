@@ -7,6 +7,7 @@ import { initMonthlyGoalScheduler } from "./monthlyGoalScheduler";
 import { initMonthlyDataRefreshScheduler } from "./monthlyDataRefreshScheduler";
 import { initRfpDeadlineScheduler } from "./rfpDeadlineScheduler";
 import { initDailyDigestScheduler } from "./dailyDigestScheduler";
+import { initRepReportScheduler } from "./repReportScheduler";
 import { runMigrations } from "./runMigrations";
 
 const app = express();
@@ -111,6 +112,7 @@ app.use((req, res, next) => {
       initMonthlyDataRefreshScheduler();
       initRfpDeadlineScheduler();
       initDailyDigestScheduler();
+      initRepReportScheduler();
     },
   );
 })();

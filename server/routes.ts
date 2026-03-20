@@ -4468,6 +4468,29 @@ export async function registerRoutes(
   });
 
   // ── Rep Progress Report ───────────────────────────────────────────────────
+  app.post("/api/report/rep/:userId/send-email", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Not authenticated" });
+      const { userId } = req.params;
+      const period = (req.body?.period as string) === "monthly" ? "monthly" : "weekly";
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { sendRepReportEmail } = await import("./repReportScheduler");
+      const ok = await sendRepReportEmail(userId, period);
+      if (ok) {
+        res.json({ success: true, message: "Report email sent" });
+      } else {
+        res.status(422).json({ success: false, message: "Email could not be sent — check SMTP config or user email address" });
+      }
+    } catch (error: any) {
+      console.error("send-email error:", error);
+      res.status(500).json({ error: "Failed to send email" });
+    }
+  });
+
   app.get("/api/report/rep/:userId", requireAuth, async (req, res) => {
     try {
       const viewer = await getCurrentUser(req);

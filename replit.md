@@ -49,3 +49,12 @@ The application uses React, TypeScript, and Tailwind CSS with `shadcn/ui` for a 
 - **Leaflet**: Interactive mapping.
 - **OneDrive API (Microsoft Graph API)**: Financial data synchronization.
 - **node-cron**: Scheduling recurring jobs.
+### Email / SMTP
+- **Provider**: Office 365 via `smtp.office365.com:587` (STARTTLS)
+- **From address**: `info@freight-dna.com` (env: `SMTP_FROM`)
+- **Secrets**: `SMTP_PASSWORD` (stored in Replit Secrets)
+- **Env vars**: `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_FROM_NAME` (all set)
+- **Note**: SMTP AUTH must be enabled on the mailbox in M365 Admin Center. If MFA is on, use an App Password.
+- **Rep Report emails**: Weekly (Mon 7am cron) + Monthly (1st of month 7am cron) via `repReportScheduler.ts`
+- **Template**: Styled HTML matching brand colors; built in `emailService.ts` → `buildRepReportEmail()`
+- **Manual send**: `POST /api/report/rep/:userId/send-email` (button on report page)

@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { useParams, useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import {
   TrendingUp, TrendingDown, Minus, Phone, Mail, MessageSquare, Building2,
   Users, CheckSquare, AlertCircle, Target, ChevronRight, Zap, Trophy, Flame,
-  Clock, ArrowLeft,
+  Clock, ArrowLeft, Send, Loader2,
 } from "lucide-react";
 
 interface RepReportData {
@@ -93,8 +95,22 @@ export default function RepReportPage() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
   const [period, setPeriod] = useState<"weekly" | "monthly">("weekly");
+  const { toast } = useToast();
 
   const targetId = (!userId || userId === "me") ? user?.id : userId;
+
+  const sendEmailMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/report/rep/${targetId}/send-email`, { period });
+      return res.json();
+    },
+    onSuccess: (d) => {
+      toast({ title: d.success ? "Email sent!" : "Could not send email", description: d.message, variant: d.success ? "default" : "destructive" });
+    },
+    onError: () => {
+      toast({ title: "Send failed", description: "Check SMTP configuration or try again.", variant: "destructive" });
+    },
+  });
 
   const { data, isLoading, error } = useQuery<RepReportData>({
     queryKey: ["/api/report/rep", targetId, period],
@@ -163,22 +179,36 @@ export default function RepReportPage() {
               </div>
             </div>
 
-            {/* Period toggle */}
+            {/* Period toggle + email */}
             <div className="flex flex-col items-start md:items-end gap-2">
-              <div className="flex items-center gap-1 bg-white/10 rounded-xl p-1">
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 bg-white/10 rounded-xl p-1">
+                  <button
+                    onClick={() => setPeriod("weekly")}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "weekly" ? "bg-white text-slate-900" : "text-white/70 hover:text-white"}`}
+                    data-testid="button-period-weekly"
+                  >
+                    Weekly
+                  </button>
+                  <button
+                    onClick={() => setPeriod("monthly")}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "monthly" ? "bg-white text-slate-900" : "text-white/70 hover:text-white"}`}
+                    data-testid="button-period-monthly"
+                  >
+                    Monthly
+                  </button>
+                </div>
                 <button
-                  onClick={() => setPeriod("weekly")}
-                  className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "weekly" ? "bg-white text-slate-900" : "text-white/70 hover:text-white"}`}
-                  data-testid="button-period-weekly"
+                  onClick={() => sendEmailMutation.mutate()}
+                  disabled={sendEmailMutation.isPending}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-medium transition-all disabled:opacity-50"
+                  data-testid="button-send-email"
+                  title="Send this report by email"
                 >
-                  Weekly
-                </button>
-                <button
-                  onClick={() => setPeriod("monthly")}
-                  className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "monthly" ? "bg-white text-slate-900" : "text-white/70 hover:text-white"}`}
-                  data-testid="button-period-monthly"
-                >
-                  Monthly
+                  {sendEmailMutation.isPending
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Send className="h-3.5 w-3.5" />}
+                  Email Report
                 </button>
               </div>
               <p className="text-white/50 text-xs px-1">{p.label}</p>
