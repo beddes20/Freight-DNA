@@ -54,12 +54,31 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
   };
 
   const boraRaw: any[] = readSheet("YTD BORA");
-  const rows = boraRaw.length > 0
-    ? boraRaw.filter((r: any) => {
-        const rc = (r["Revenue code"] || r["Revenue Code"] || "").toString().trim().toUpperCase();
-        return rc === "UTAHB";
-      })
-    : readSheet("All Data (YTD)");
+  let rows: any[];
+  if (boraRaw.length > 0) {
+    // NUMBERS.xlsx format: filter YTD BORA to Value Truck rows only
+    const filtered = boraRaw.filter((r: any) => {
+      const rc = (r["Revenue code"] || r["Revenue Code"] || "").toString().trim().toUpperCase();
+      return rc === "UTAHB";
+    });
+    // If UTAHB filter yields nothing, use all BORA rows (different revenue code naming)
+    rows = filtered.length > 0 ? filtered : boraRaw;
+  } else {
+    // No YTD BORA sheet — try "All Data (YTD)" (legacy sheet name)
+    const altRows = readSheet("All Data (YTD)");
+    if (altRows.length > 0) {
+      rows = altRows;
+    } else {
+      // ReplistNumbers.xlsx format: read the sheet with the most data rows
+      const bestSheetName = workbook.SheetNames.reduce((best, name) => {
+        const sh = workbook.Sheets[name];
+        const len = (XLSX.utils.sheet_to_json(sh, { header: 1, defval: "" }) as any[][]).length;
+        const bestLen = (XLSX.utils.sheet_to_json(workbook.Sheets[best], { header: 1, defval: "" }) as any[][]).length;
+        return len > bestLen ? name : best;
+      }, workbook.SheetNames[0]);
+      rows = readSheet(bestSheetName);
+    }
+  }
   return {
     rows,
     bestDealDaysSpot: readSheet("Best Deal Days (SPOT)"),
