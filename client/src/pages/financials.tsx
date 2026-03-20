@@ -697,7 +697,7 @@ export default function Financials() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-violet-500" />
-                AI Analysis
+                DNA Analysis
               </CardTitle>
               <p className="text-xs text-muted-foreground mt-0.5">Ask Claude to surface trends, compare reps, flag anomalies, and identify opportunities in this data</p>
             </CardHeader>

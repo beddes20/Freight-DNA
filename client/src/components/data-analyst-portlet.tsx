@@ -244,7 +244,7 @@ export function DataAnalystPortlet({
       <div className="flex flex-col items-center justify-center py-16 text-center gap-3 text-muted-foreground">
         <Sparkles className="h-10 w-10 opacity-30" />
         <p className="text-sm font-medium">{emptyLabel}</p>
-        <p className="text-xs max-w-xs">Once data is loaded, AI will be able to analyze it, surface trends, and help you turn insights into action.</p>
+        <p className="text-xs max-w-xs">Once data is loaded, DNA Analysis will be able to analyze it, surface trends, and help you turn insights into action.</p>
       </div>
     );
   }

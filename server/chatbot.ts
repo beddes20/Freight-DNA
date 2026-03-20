@@ -299,7 +299,7 @@ export function registerChatbotRoutes(app: Express): void {
 
       const scopeLabel = effectiveScope === "everyone" ? "the entire organization (all reps and teams)" : "the current user's team only";
 
-      const systemPrompt = `You are GrowthBot, an AI assistant built into the OrgChart CRM for Value Truck transportation brokerage. You have access to live CRM data.
+      const systemPrompt = `You are DNA Guru, an AI assistant built into the OrgChart CRM for Value Truck transportation brokerage. You have access to live CRM data.
 
 Current user: ${user.name} (${user.role.replace(/_/g, " ")})
 Data scope: ${scopeLabel}

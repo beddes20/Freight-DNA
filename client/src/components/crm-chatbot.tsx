@@ -304,7 +304,7 @@ export function CrmChatbot() {
               <Bot className="h-4 w-4" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold leading-none">GrowthBot</p>
+              <p className="text-sm font-semibold leading-none">DNA Guru</p>
               <p className="text-xs text-white/70 mt-0.5">
                 {isAdminOrDirector ? "Viewing: All Teams" : "Your CRM assistant"}
               </p>
@@ -610,7 +610,7 @@ export function CrmChatbot() {
                     </div>
                     <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[290px]">
                       <p className="text-sm">
-                        Hi! I'm GrowthBot. I have live access to your CRM data.
+                        Hi! I'm DNA Guru. I have live access to your CRM data.
                         {isAdminOrDirector
                           ? " As an admin/director, I can see data across all teams."
                           : " Use the toggle below to switch between your team's data or the entire org."}
