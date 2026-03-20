@@ -4467,6 +4467,22 @@ export async function registerRoutes(
     }
   });
 
+  // ── SMTP Test ────────────────────────────────────────────────────────────
+  app.post("/api/admin/smtp/test", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer || viewer.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const { verifySmtp, emailEnabled } = await import("./emailService");
+      if (!emailEnabled()) {
+        return res.status(422).json({ ok: false, error: "SMTP_HOST, SMTP_FROM (or SMTP_USER), and SMTP_PASSWORD must all be set." });
+      }
+      const result = await verifySmtp();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
   // ── Rep Progress Report ───────────────────────────────────────────────────
   app.post("/api/report/rep/:userId/send-email", requireAuth, async (req, res) => {
     try {

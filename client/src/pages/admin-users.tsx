@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi } from "lucide-react";
 import type { User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
@@ -468,6 +468,17 @@ export default function AdminUsers() {
   const [viewMode, setViewMode] = useState<"list" | "org">("list");
   const { toast } = useToast();
 
+  const [smtpResult, setSmtpResult] = useState<{ ok: boolean; error?: string } | null>(null);
+
+  const smtpTestMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/smtp/test");
+      return res.json();
+    },
+    onSuccess: (d) => setSmtpResult(d),
+    onError: (e: any) => setSmtpResult({ ok: false, error: e.message || "Connection failed" }),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/users/${id}`);
@@ -638,6 +649,63 @@ export default function AdminUsers() {
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {currentUser?.role === "admin" && (
+        <div className="border rounded-xl p-5 space-y-4 bg-muted/30">
+          <div className="flex items-center gap-2">
+            <Mail className="w-4 h-4 text-blue-600" />
+            <h2 className="font-semibold text-sm">Email / SMTP Configuration</h2>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            {[
+              { label: "Host", value: "smtp.office365.com" },
+              { label: "Port", value: "587 (STARTTLS)" },
+              { label: "From", value: "info@freight-dna.com" },
+              { label: "Password", value: "••••••••  (stored as Secret)" },
+            ].map(({ label, value }) => (
+              <div key={label} className="bg-background border rounded-lg p-3">
+                <p className="text-muted-foreground mb-0.5">{label}</p>
+                <p className="font-mono font-medium truncate">{value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4 text-xs space-y-1.5">
+            <p className="font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5" /> Office 365 prerequisite checklist
+            </p>
+            <ol className="text-amber-700 dark:text-amber-400 space-y-1 ml-5 list-decimal">
+              <li>Sign in to <strong>Microsoft 365 Admin Center</strong> (admin.microsoft.com)</li>
+              <li>Go to <strong>Users → Active users</strong> → click <em>info@freight-dna.com</em></li>
+              <li>Open the <strong>Mail</strong> tab → click <strong>"Manage email apps"</strong></li>
+              <li>Check <strong>"Authenticated SMTP"</strong> and save</li>
+              <li>If MFA is enabled: go to <strong>account.microsoft.com → Security → App passwords</strong>, create one, and paste it as <strong>SMTP_PASSWORD</strong> in Replit Secrets</li>
+            </ol>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => { setSmtpResult(null); smtpTestMutation.mutate(); }}
+              disabled={smtpTestMutation.isPending}
+              data-testid="button-smtp-test"
+              className="gap-1.5"
+            >
+              {smtpTestMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
+              Test Connection
+            </Button>
+            {smtpResult && (
+              <span className={`flex items-center gap-1.5 text-sm font-medium ${smtpResult.ok ? "text-green-600" : "text-red-600"}`}>
+                {smtpResult.ok
+                  ? <><CheckCircle2 className="w-4 h-4" /> Connected — SMTP is working!</>
+                  : <><XCircle className="w-4 h-4" /> {smtpResult.error}</>
+                }
+              </span>
+            )}
+          </div>
         </div>
       )}
 
