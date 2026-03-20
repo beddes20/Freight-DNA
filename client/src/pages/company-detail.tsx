@@ -1064,9 +1064,6 @@ export default function CompanyDetail() {
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <BarChart3 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                 Account Performance
-                {accountPerf.repName && (
-                  <Badge variant="secondary" className="ml-auto text-xs font-normal">{accountPerf.repName}</Badge>
-                )}
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-0 space-y-4">
