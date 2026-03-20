@@ -62,7 +62,8 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
 
   const handleNotifClick = (notif: Notification) => {
     if (!notif.read) markRead.mutate(notif.id);
-    if (notif.link) navigate(notif.link);
+    const destination = notif.link || (notif.type === "app_suggestion" ? "/tasks" : null);
+    if (destination) navigate(destination);
     setOpen(false);
   };
 

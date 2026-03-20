@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles } from "lucide-react";
+import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles, ClipboardList, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
+import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 
 type ReportType = "bug" | "improvement" | "feature";
@@ -63,10 +65,14 @@ function MarkdownText({ content }: { content: string }) {
 
 export function CrmChatbot() {
   const { user } = useAuth();
+  const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
   const [activeConvoId, setActiveConvoId] = useState<number | null>(null);
   const [showConvoList, setShowConvoList] = useState(false);
   const [showSuggest, setShowSuggest] = useState(false);
+  const [showTaskCreate, setShowTaskCreate] = useState(false);
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskDueDate, setTaskDueDate] = useState("");
   const [reportType, setReportType] = useState<ReportType | null>(null);
   const [suggestionText, setSuggestionText] = useState("");
   const [bugPage, setBugPage] = useState("");
@@ -130,14 +136,18 @@ export function CrmChatbot() {
     mutationFn: (content: string) => apiRequest("POST", "/api/chatbot/suggest", { content }),
     onSuccess: () => {
       setSuggestionSent(true);
-      setTimeout(() => {
-        setSuggestionSent(false);
-        setSuggestionText("");
-        setBugPage("");
-        setBugExpected("");
-        setReportType(null);
-        setShowSuggest(false);
-      }, 2500);
+      // No auto-dismiss — user can navigate to Tasks or close manually
+    },
+  });
+
+  const createTask = useMutation({
+    mutationFn: (title: string) => apiRequest("POST", "/api/tasks", { title, dueDate: taskDueDate || null, status: "open" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/tasks"] });
+      setTaskTitle("");
+      setTaskDueDate("");
+      setShowTaskCreate(false);
+      navigate("/tasks");
     },
   });
 
@@ -304,7 +314,17 @@ export function CrmChatbot() {
                 size="icon"
                 variant="ghost"
                 className="h-7 w-7 text-white/80 hover:text-white hover:bg-white/20"
-                onClick={() => { setShowSuggest((v) => !v); setShowConvoList(false); if (showSuggest) { setReportType(null); setSuggestionText(""); setBugPage(""); setBugExpected(""); } }}
+                onClick={() => { setShowTaskCreate((v) => !v); setShowSuggest(false); setShowConvoList(false); }}
+                title="Create a task"
+                data-testid="chatbot-task-btn"
+              >
+                <ClipboardList className="h-4 w-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-white/80 hover:text-white hover:bg-white/20"
+                onClick={() => { setShowSuggest((v) => !v); setShowConvoList(false); setShowTaskCreate(false); if (showSuggest) { setReportType(null); setSuggestionText(""); setBugPage(""); setBugExpected(""); } }}
                 title="Report a bug or suggest a feature"
                 data-testid="chatbot-feedback-btn"
               >
@@ -314,7 +334,7 @@ export function CrmChatbot() {
                 size="icon"
                 variant="ghost"
                 className="h-7 w-7 text-white/80 hover:text-white hover:bg-white/20"
-                onClick={() => { setShowConvoList((v) => !v); setShowSuggest(false); }}
+                onClick={() => { setShowConvoList((v) => !v); setShowSuggest(false); setShowTaskCreate(false); }}
                 title="Chat history"
               >
                 <MessageSquare className="h-4 w-4" />
@@ -350,12 +370,31 @@ export function CrmChatbot() {
               </div>
 
               {suggestionSent ? (
-                <div className="flex flex-col items-center justify-center flex-1 gap-3 px-6 text-center">
+                <div className="flex flex-col items-center justify-center flex-1 gap-4 px-6 text-center">
                   <CheckCircle2 className="h-10 w-10 text-green-500" />
-                  <p className="text-sm font-medium">
-                    {reportType === "bug" ? "Bug report sent!" : reportType === "improvement" ? "Improvement noted!" : "Feature request sent!"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">The admin team will review it shortly.</p>
+                  <div>
+                    <p className="text-sm font-medium">
+                      {reportType === "bug" ? "Bug report sent!" : reportType === "improvement" ? "Improvement noted!" : "Feature request sent!"}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">A task has been created for the admin team to review.</p>
+                  </div>
+                  <div className="flex flex-col gap-2 w-full max-w-[200px]">
+                    <Button
+                      className="w-full bg-[#001AB3] hover:bg-[#044ad3] gap-2"
+                      onClick={() => { resetSuggest(); navigate("/tasks"); setOpen(false); }}
+                      data-testid="suggestion-view-tasks-btn"
+                    >
+                      <ExternalLink className="h-4 w-4" /> View in Tasks
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={resetSuggest}
+                      data-testid="suggestion-done-btn"
+                    >
+                      Done
+                    </Button>
+                  </div>
                 </div>
               ) : !reportType ? (
                 <div className="flex flex-col flex-1 p-4 gap-3">
@@ -463,6 +502,54 @@ export function CrmChatbot() {
                   </Button>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Quick Task Creation overlay */}
+          {showTaskCreate && (
+            <div className="absolute inset-0 top-[57px] bg-background z-10 flex flex-col rounded-b-2xl">
+              <div className="flex items-center gap-2 px-4 py-2.5 border-b">
+                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => { setShowTaskCreate(false); setTaskTitle(""); setTaskDueDate(""); }}>
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <ClipboardList className="h-4 w-4 text-primary" />
+                <span className="text-sm font-medium">Create a Task</span>
+              </div>
+              <div className="flex flex-col flex-1 p-4 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">Task Title <span className="text-destructive">*</span></label>
+                  <Textarea
+                    placeholder="What needs to get done?"
+                    className="resize-none text-sm min-h-[80px]"
+                    value={taskTitle}
+                    onChange={(e) => setTaskTitle(e.target.value)}
+                    data-testid="chatbot-task-title-input"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">Due Date <span className="font-normal">(optional)</span></label>
+                  <Input
+                    type="date"
+                    className="text-sm"
+                    value={taskDueDate}
+                    onChange={(e) => setTaskDueDate(e.target.value)}
+                    data-testid="chatbot-task-due-input"
+                  />
+                </div>
+                <Button
+                  className="w-full bg-[#001AB3] hover:bg-[#044ad3] gap-2"
+                  disabled={!taskTitle.trim() || createTask.isPending}
+                  onClick={() => createTask.mutate(taskTitle.trim())}
+                  data-testid="chatbot-task-submit"
+                >
+                  {createTask.isPending ? (
+                    <><Loader2 className="h-4 w-4 animate-spin" /> Creating…</>
+                  ) : (
+                    <><ClipboardList className="h-4 w-4" /> Create &amp; View Tasks</>
+                  )}
+                </Button>
+                <p className="text-xs text-muted-foreground text-center">Task will be created and you'll be taken to the Tasks page.</p>
+              </div>
             </div>
           )}
 
