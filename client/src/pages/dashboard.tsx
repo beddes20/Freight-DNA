@@ -602,6 +602,35 @@ export default function Dashboard() {
         </div>
       </div>
 
+      <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
+        {stats.map((stat) => (
+          <Card key={stat.title} className="overflow-hidden">
+            <CardContent className="p-4 sm:p-6">
+              {isLoading ? (
+                <Skeleton className="h-16 w-full" />
+              ) : (
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bg}`}>
+                      <stat.icon className={`h-4 w-4 ${stat.color}`} />
+                    </div>
+                    <TrendingUp className="h-3 w-3 text-green-500" />
+                  </div>
+                  <div>
+                    <div className="text-xl sm:text-2xl font-bold" data-testid={`text-stat-${stat.title.toLowerCase().replace(/\s/g, "-")}`}>
+                      {stat.value}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {stat.description}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
       {/* PTO Coverage Portlet — only shown to users who are assigned as covering someone */}
       {currentUser && passoffs.filter((p: any) => p.coveringUserId === currentUser.id).map((passoff: any) => {
         const owner = allUsers.find(u => u.id === passoff.createdById);
@@ -891,6 +920,66 @@ export default function Dashboard() {
           )}
         </CardContent>
       </Card>
+
+      {coldContacts.length > 0 && (
+        <Card data-testid="card-cold-contacts">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              Contacts Needing Attention
+              <Badge variant="secondary" className="ml-auto font-normal">{coldContacts.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="divide-y">
+              {coldContacts.slice(0, 8).map(({ contact, company, daysSince, lastType }) => {
+                const dotColor = daysSince >= 999 ? "bg-muted-foreground/40" : daysSince > 30 ? "bg-red-500" : "bg-amber-500";
+                const typeLabel = lastType ? ({ call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" }[lastType] ?? lastType) : null;
+                const daysNum = daysSince >= 999 ? null : daysSince;
+                const badgeClass = daysSince >= 999 ? "bg-muted text-muted-foreground" : daysSince > 30 ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400";
+                return (
+                  <div
+                    key={contact.id}
+                    className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors group"
+                    data-testid={`cold-contact-row-${contact.id}`}
+                  >
+                    <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${dotColor}`} />
+                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewContact(contact)}>
+                      <p className="text-sm font-medium truncate">{contact.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{company.name}{contact.title ? ` · ${contact.title}` : ""}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right">
+                        {typeLabel && <p className="text-xs text-muted-foreground">Last: {typeLabel}</p>}
+                      </div>
+                      <div className={`text-right rounded-md px-2 py-0.5 ${badgeClass}`}>
+                        {daysNum !== null
+                          ? <p className="text-xs font-bold leading-tight">{daysNum}d</p>
+                          : <p className="text-xs font-medium">Never</p>
+                        }
+                      </div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Create task for this contact"
+                        data-testid={`button-task-cold-${contact.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTaskPrefill({ title: `Follow up with ${contact.name}`, companyId: company.id });
+                          setPrefillDialogOpen(true);
+                        }}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {urgentRfps.length > 0 && (
         <Card className="border-red-300 dark:border-red-700" data-testid="card-rfp-deadline-alert">
@@ -1365,35 +1454,6 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => (
-          <Card key={stat.title} className="overflow-hidden">
-            <CardContent className="p-4 sm:p-6">
-              {isLoading ? (
-                <Skeleton className="h-16 w-full" />
-              ) : (
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bg}`}>
-                      <stat.icon className={`h-4 w-4 ${stat.color}`} />
-                    </div>
-                    <TrendingUp className="h-3 w-3 text-green-500" />
-                  </div>
-                  <div>
-                    <div className="text-xl sm:text-2xl font-bold" data-testid={`text-stat-${stat.title.toLowerCase().replace(/\s/g, "-")}`}>
-                      {stat.value}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {stat.description}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
       {canSeeTeam && (
         <div className="grid gap-4 md:grid-cols-2">
           <Card>
@@ -1563,66 +1623,6 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
-
-      {coldContacts.length > 0 && (
-        <Card data-testid="card-cold-contacts">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <AlertTriangle className="h-4 w-4 text-amber-500" />
-              Contacts Needing Attention
-              <Badge variant="secondary" className="ml-auto font-normal">{coldContacts.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y">
-              {coldContacts.slice(0, 8).map(({ contact, company, daysSince, lastType }) => {
-                const dotColor = daysSince >= 999 ? "bg-muted-foreground/40" : daysSince > 30 ? "bg-red-500" : "bg-amber-500";
-                const typeLabel = lastType ? ({ call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" }[lastType] ?? lastType) : null;
-                const daysNum = daysSince >= 999 ? null : daysSince;
-                const badgeClass = daysSince >= 999 ? "bg-muted text-muted-foreground" : daysSince > 30 ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400";
-                return (
-                  <div
-                    key={contact.id}
-                    className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors group"
-                    data-testid={`cold-contact-row-${contact.id}`}
-                  >
-                    <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${dotColor}`} />
-                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewContact(contact)}>
-                      <p className="text-sm font-medium truncate">{contact.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{company.name}{contact.title ? ` · ${contact.title}` : ""}</p>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <div className="text-right">
-                        {typeLabel && <p className="text-xs text-muted-foreground">Last: {typeLabel}</p>}
-                      </div>
-                      <div className={`text-right rounded-md px-2 py-0.5 ${badgeClass}`}>
-                        {daysNum !== null
-                          ? <p className="text-xs font-bold leading-tight">{daysNum}d</p>
-                          : <p className="text-xs font-medium">Never</p>
-                        }
-                      </div>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Create task for this contact"
-                        data-testid={`button-task-cold-${contact.id}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setTaskPrefill({ title: `Follow up with ${contact.name}`, companyId: company.id });
-                          setPrefillDialogOpen(true);
-                        }}
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {canSeeTeam && <MarketSharePortlet />}
 

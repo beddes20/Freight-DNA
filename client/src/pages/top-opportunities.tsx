@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
 import { TaskDialog } from "@/components/task-dialog";
 import {
   Truck, MapPin, Flame, Package, TrendingUp, Building2,
@@ -31,6 +31,26 @@ type Opportunity = {
   matches: OpportunityMatch[];
 };
 
+type CompanyGroup = {
+  companyId: string;
+  companyName: string;
+  totalMatches: number;
+  hotZoneCount: number;
+  matches: Array<{
+    destination: string;
+    city: string;
+    state: string;
+    weeklyLoadCount: number;
+    maxWeekly: number;
+    rfpId: string;
+    rfpTitle: string;
+    lane: string;
+    volume: number;
+    rate: number;
+    equipment: string;
+  }>;
+};
+
 type TaskPrefill = {
   companyId: string;
   title: string;
@@ -46,17 +66,52 @@ export default function TopOpportunities() {
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskPrefill, setTaskPrefill] = useState<TaskPrefill | null>(null);
 
-  const openTask = (opp: Opportunity, match: OpportunityMatch) => {
+  const byCompany = useMemo<CompanyGroup[]>(() => {
+    if (!opportunities) return [];
+    const map = new Map<string, CompanyGroup>();
+    opportunities.forEach(opp => {
+      opp.matches.forEach(match => {
+        if (!map.has(match.companyId)) {
+          map.set(match.companyId, {
+            companyId: match.companyId,
+            companyName: match.companyName,
+            totalMatches: 0,
+            hotZoneCount: 0,
+            matches: [],
+          });
+        }
+        const group = map.get(match.companyId)!;
+        group.matches.push({
+          destination: opp.destination,
+          city: opp.city,
+          state: opp.state,
+          weeklyLoadCount: opp.weeklyLoadCount,
+          maxWeekly: opp.maxWeekly,
+          rfpId: match.rfpId,
+          rfpTitle: match.rfpTitle,
+          lane: match.lane,
+          volume: match.volume,
+          rate: match.rate,
+          equipment: match.equipment,
+        });
+        group.totalMatches += 1;
+        if (opp.maxWeekly >= 5) group.hotZoneCount += 1;
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => b.hotZoneCount - a.hotZoneCount || b.totalMatches - a.totalMatches);
+  }, [opportunities]);
+
+  const openTask = (group: CompanyGroup, match: CompanyGroup["matches"][number]) => {
     setTaskPrefill({
-      companyId: match.companyId,
-      title: `Pursue opportunity: ${opp.destination} — ${match.lane}`,
-      notes: `Opportunity Zone: ${opp.destination}\nWe deliver here ~${opp.weeklyLoadCount} loads/week avg (peak ${opp.maxWeekly}/week)\n\nRFP: ${match.rfpTitle}\nLane: ${match.lane}${match.volume ? `\nVolume: ${match.volume} loads` : ""}${match.equipment ? `\nEquipment: ${match.equipment}` : ""}`,
+      companyId: group.companyId,
+      title: `Pursue opportunity: ${match.destination} — ${match.lane}`,
+      notes: `Opportunity Zone: ${match.destination}\nWe deliver here ~${match.weeklyLoadCount} loads/week avg (peak ${match.maxWeekly}/week)\n\nRFP: ${match.rfpTitle}\nLane: ${match.lane}${match.volume ? `\nVolume: ${match.volume} loads` : ""}${match.equipment ? `\nEquipment: ${match.equipment}` : ""}`,
     });
     setTaskOpen(true);
   };
 
-  const goToAccount = (match: OpportunityMatch) => {
-    navigate(`/companies/${match.companyId}?rfpTab=matching`);
+  const goToAccount = (companyId: string) => {
+    navigate(`/companies/${companyId}?rfpTab=matching`);
   };
 
   return (
@@ -67,7 +122,7 @@ export default function TopOpportunities() {
           <h1 className="text-2xl font-bold tracking-tight">Top Opportunities</h1>
         </div>
         <p className="text-muted-foreground text-sm mt-1">
-          Destinations where we regularly deliver trucks, matched against RFP lane origins — natural repositioning opportunities.
+          Accounts with RFP lanes that overlap our delivery zones — grouped by customer for easy follow-up.
         </p>
       </div>
 
@@ -83,7 +138,7 @@ export default function TopOpportunities() {
             </Card>
           ))}
         </div>
-      ) : !opportunities || opportunities.length === 0 ? (
+      ) : !byCompany || byCompany.length === 0 ? (
         <Card>
           <CardContent className="py-20 text-center">
             <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
@@ -96,8 +151,8 @@ export default function TopOpportunities() {
         </Card>
       ) : (
         <div className="space-y-4" data-testid="opportunities-list">
-          {opportunities.map((opp, idx) => (
-            <Card key={opp.destination} data-testid={`card-opportunity-${idx}`} className="overflow-hidden">
+          {byCompany.map((group, idx) => (
+            <Card key={group.companyId} data-testid={`card-opportunity-company-${group.companyId}`} className="overflow-hidden">
               <CardHeader className="pb-3 bg-gradient-to-r from-primary/5 to-transparent border-b">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
@@ -105,53 +160,66 @@ export default function TopOpportunities() {
                       {idx + 1}
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
-                        <MapPin className="h-4 w-4 text-primary" />
-                        <span className="font-semibold text-base" data-testid={`text-destination-${idx}`}>
-                          {opp.city}, {opp.state}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Building2 className="h-4 w-4 text-primary" />
+                        <span
+                          className="font-semibold text-base text-primary hover:underline cursor-pointer"
+                          data-testid={`text-company-name-${group.companyId}`}
+                          onClick={() => goToAccount(group.companyId)}
+                        >
+                          {group.companyName}
                         </span>
-                        {opp.maxWeekly >= 5 && (
+                        {group.hotZoneCount > 0 && (
                           <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-xs">
-                            <Flame className="h-3 w-3 mr-1" /> Hot Zone
+                            <Flame className="h-3 w-3 mr-1" /> {group.hotZoneCount} hot zone{group.hotZoneCount !== 1 ? "s" : ""}
                           </Badge>
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        We deliver here{" "}
-                        <span className="font-medium text-foreground" data-testid={`text-weekly-count-${idx}`}>
-                          ~{opp.weeklyLoadCount} loads/week avg
-                        </span>
-                        {" "}· peak {opp.maxWeekly}/week
+                        {group.totalMatches} delivery zone{group.totalMatches !== 1 ? "s" : ""} match their RFP lanes
                       </p>
                     </div>
                   </div>
-                  <Badge variant="outline" className="shrink-0 text-xs">
-                    <Truck className="h-3 w-3 mr-1" />
-                    {opp.matches.length} {opp.matches.length === 1 ? "match" : "matches"}
-                  </Badge>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs gap-1"
+                      onClick={() => goToAccount(group.companyId)}
+                      data-testid={`btn-view-account-${group.companyId}`}
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Account
+                    </Button>
+                    <Badge variant="outline" className="text-xs">
+                      <Truck className="h-3 w-3 mr-1" />
+                      {group.totalMatches} match{group.totalMatches !== 1 ? "es" : ""}
+                    </Badge>
+                  </div>
                 </div>
               </CardHeader>
 
               <CardContent className="p-0">
                 <div className="divide-y">
-                  {opp.matches.map((match, mIdx) => (
+                  {group.matches.map((match, mIdx) => (
                     <div
-                      key={`${match.rfpId}-${mIdx}`}
-                      data-testid={`row-match-${idx}-${mIdx}`}
+                      key={`${match.rfpId}-${match.destination}-${mIdx}`}
+                      data-testid={`row-match-${group.companyId}-${mIdx}`}
                       className="px-4 py-3 hover:bg-muted/40 transition-colors group"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-start gap-3 min-w-0">
-                          <Building2 className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                          <MapPin className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span
-                                className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                data-testid={`text-company-${idx}-${mIdx}`}
-                                onClick={() => goToAccount(match)}
-                              >
-                                {match.companyName}
+                              <span className="font-medium text-sm" data-testid={`text-destination-${group.companyId}-${mIdx}`}>
+                                {match.city}, {match.state}
                               </span>
+                              {match.maxWeekly >= 5 && (
+                                <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-xs">
+                                  <Flame className="h-3 w-3 mr-1" /> Hot Zone
+                                </Badge>
+                              )}
                               <span className="text-muted-foreground text-xs">·</span>
                               <span className="text-xs text-muted-foreground flex items-center gap-1">
                                 <FileText className="h-3 w-3" />
@@ -160,6 +228,8 @@ export default function TopOpportunities() {
                             </div>
                             <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
                               <span className="font-medium text-foreground">{match.lane}</span>
+                              <span className="text-muted-foreground/50 mx-1">·</span>
+                              <span>~{match.weeklyLoadCount}/wk avg · peak {match.maxWeekly}/wk</span>
                             </div>
                           </div>
                         </div>
@@ -184,20 +254,9 @@ export default function TopOpportunities() {
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-7 px-2 text-xs gap-1"
-                              onClick={() => goToAccount(match)}
-                              data-testid={`btn-view-account-${idx}-${mIdx}`}
-                              title="View on account page"
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                              Account
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
                               className="h-7 px-2 text-xs gap-1 text-primary border-primary/30 hover:bg-primary/5"
-                              onClick={() => openTask(opp, match)}
-                              data-testid={`btn-add-task-${idx}-${mIdx}`}
+                              onClick={() => openTask(group, match)}
+                              data-testid={`btn-add-task-${group.companyId}-${mIdx}`}
                               title="Create a task for this opportunity"
                             >
                               <Plus className="h-3 w-3" />
