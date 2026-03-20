@@ -209,6 +209,8 @@ export default function CompanyDetail() {
 
   const [editCompanyOpen, setEditCompanyOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [confirmDeleteTaskId, setConfirmDeleteTaskId] = useState<string | null>(null);
+  const [confirmDeleteCalloutId, setConfirmDeleteCalloutId] = useState<string | null>(null);
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | undefined>();
   const [contactDefaults, setContactDefaults] = useState<{ lane?: string; region?: string } | undefined>();
@@ -256,6 +258,11 @@ export default function CompanyDetail() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importRows, setImportRows] = useState<any[]>([]);
   const [importFileName, setImportFileName] = useState("");
+  const [detailTab, setDetailTab] = useState<string>(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get("rfpTab") && urlParams.get("rfpTab") !== "coverage") return "rfp";
+    return localStorage.getItem("cd_tab") || "overview";
+  });
 
   useEffect(() => {
     const urlParams = new URLSearchParams(searchString);
@@ -271,10 +278,11 @@ export default function CompanyDetail() {
 
   useEffect(() => {
     if (rfpIntelTab !== "coverage") {
+      setDetailTab("rfp");
       setTimeout(() => {
         const el = document.querySelector("[data-testid='card-rfp-intelligence']");
         if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 400);
+      }, 450);
     }
   }, [rfpIntelTab]);
 
@@ -1015,6 +1023,16 @@ export default function CompanyDetail() {
         </div>
       )}
 
+      <Tabs value={detailTab} onValueChange={(t) => { setDetailTab(t); localStorage.setItem("cd_tab", t); }}>
+        <TabsList className="w-full grid grid-cols-4 mb-1">
+          <TabsTrigger value="overview" data-testid="tab-detail-overview">Overview</TabsTrigger>
+          <TabsTrigger value="intelligence" data-testid="tab-detail-intelligence">Intelligence</TabsTrigger>
+          <TabsTrigger value="people" data-testid="tab-detail-people">People</TabsTrigger>
+          <TabsTrigger value="rfp" data-testid="tab-detail-rfp">RFP & Lanes</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-4 mt-2">
+
       {/* Account Performance (from uploaded summary data) */}
       {accountPerf && (() => {
         const fmtMargin = (m: number) => m >= 1000 ? `$${(m / 1000).toFixed(1)}K` : `$${m.toLocaleString()}`;
@@ -1202,7 +1220,7 @@ export default function CompanyDetail() {
                         </button>
                       )}
                       <button onClick={() => { setEditingTaskItem(task); setForceLanePrefill(undefined); setFocusTaskComments(false); setTaskDialogOpen(true); }} className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity text-xs" data-testid={`button-edit-company-task-${task.id}`}>Edit</button>
-                      <button onClick={() => deleteTaskMutation.mutate(task.id)} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-company-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
+                      <button onClick={() => setConfirmDeleteTaskId(task.id)} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-company-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
                     </div>
                   );
                 })}
@@ -1325,7 +1343,7 @@ export default function CompanyDetail() {
                         </button>
                         {(callout.authorId === currentUser?.id || currentUser?.role === "admin") && (
                           <button
-                            onClick={() => deleteCalloutMutation.mutate(callout.id)}
+                            onClick={() => setConfirmDeleteCalloutId(callout.id)}
                             className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
                             data-testid={`button-delete-company-callout-${callout.id}`}
                           >
@@ -1350,7 +1368,7 @@ export default function CompanyDetail() {
                             </div>
                             {(reply.authorId === currentUser?.id || currentUser?.role === "admin") && (
                               <button
-                                onClick={() => deleteCalloutMutation.mutate(reply.id)}
+                                onClick={() => setConfirmDeleteCalloutId(reply.id)}
                                 className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/reply:opacity-100 transition-opacity"
                                 data-testid={`button-delete-company-callout-reply-${reply.id}`}
                               >
@@ -1373,6 +1391,10 @@ export default function CompanyDetail() {
           )}
         </CardContent>
       </Card>
+
+        </TabsContent>
+
+        <TabsContent value="intelligence" className="space-y-4 mt-2">
 
       {/* Account Information */}
       <Card data-testid="card-portal-info">
@@ -1695,26 +1717,6 @@ export default function CompanyDetail() {
       {/* Market Share */}
       <MarketShareCard companyId={companyId} rfps={companyRfps} />
 
-      <TaskDialog
-        open={taskDialogOpen}
-        onOpenChange={(open) => {
-          setTaskDialogOpen(open);
-          if (!open) { setForceLanePrefill(undefined); setFocusTaskComments(false); }
-        }}
-        companyId={companyId}
-        editingTask={editingTaskItem}
-        prefillData={forceLanePrefill}
-        focusComments={focusTaskComments}
-      />
-
-      <CalloutDialog
-        open={calloutDialogOpen}
-        onOpenChange={setCalloutDialogOpen}
-        companyId={companyId}
-        parentId={calloutReplyTo?.id}
-        parentTitle={calloutReplyTo?.title}
-      />
-
       {/* Transfer Account Dialog */}
       <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
         <DialogContent>
@@ -1752,6 +1754,10 @@ export default function CompanyDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+        </TabsContent>
+
+        <TabsContent value="people" className="space-y-4 mt-2">
 
       {company.notes && (
         <Card>
@@ -1895,6 +1901,10 @@ export default function CompanyDetail() {
           )}
         </CardContent>
       </Card>
+
+        </TabsContent>
+
+        <TabsContent value="rfp" className="space-y-4 mt-2">
 
       {/* ── RFP Intelligence (unified: Coverage + Lane Patterns + Lane Matching) ── */}
       {(facilityCoverage !== undefined || lanePatterns !== undefined || laneMatching !== undefined) && (() => {
@@ -2907,6 +2917,29 @@ export default function CompanyDetail() {
         </div>
       )}
 
+        </TabsContent>
+      </Tabs>
+
+      <TaskDialog
+        open={taskDialogOpen}
+        onOpenChange={(open) => {
+          setTaskDialogOpen(open);
+          if (!open) { setForceLanePrefill(undefined); setFocusTaskComments(false); }
+        }}
+        companyId={companyId}
+        editingTask={editingTaskItem}
+        prefillData={forceLanePrefill}
+        focusComments={focusTaskComments}
+      />
+
+      <CalloutDialog
+        open={calloutDialogOpen}
+        onOpenChange={setCalloutDialogOpen}
+        companyId={companyId}
+        parentId={calloutReplyTo?.id}
+        parentTitle={calloutReplyTo?.title}
+      />
+
       <CompanyDialog
         open={editCompanyOpen}
         onOpenChange={setEditCompanyOpen}
@@ -2962,6 +2995,32 @@ export default function CompanyDetail() {
             <AlertDialogAction onClick={() => archiveMutation.mutate()} disabled={archiveMutation.isPending} data-testid="button-confirm-archive">
               {archiveMutation.isPending ? "Archiving..." : "Archive Account"}
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!confirmDeleteTaskId} onOpenChange={open => !open && setConfirmDeleteTaskId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete task?</AlertDialogTitle>
+            <AlertDialogDescription>This will permanently remove the task. This action cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => { if (confirmDeleteTaskId) { deleteTaskMutation.mutate(confirmDeleteTaskId); setConfirmDeleteTaskId(null); } }} data-testid="button-confirm-delete-task">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!confirmDeleteCalloutId} onOpenChange={open => !open && setConfirmDeleteCalloutId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete post?</AlertDialogTitle>
+            <AlertDialogDescription>This will permanently remove this callout or reply. This action cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => { if (confirmDeleteCalloutId) { deleteCalloutMutation.mutate(confirmDeleteCalloutId); setConfirmDeleteCalloutId(null); } }} data-testid="button-confirm-delete-callout">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

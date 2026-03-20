@@ -510,16 +510,18 @@ export async function registerRoutes(
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const q = (req.query.q as string || "").trim();
       if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [] });
-      const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps] = await Promise.all([
+      const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, allCompanies] = await Promise.all([
         storage.searchCompanies(q),
         storage.searchUsers(q, ["account_manager", "national_account_manager", "director", "sales"]),
         storage.searchContacts(q),
         storage.searchRfps(q),
+        storage.getCompanies(),
       ]);
+      const companyNameMap = new Map(allCompanies.map(c => [c.id, c.name]));
       const accounts = matchedCompanies.map(c => ({ id: c.id, name: c.name }));
       const accountManagers = matchedUsers.filter(u => u.role === "account_manager");
       const nationalAccountManagers = matchedUsers.filter(u => u.role === "national_account_manager" || u.role === "director");
-      const contacts = matchedContacts.map(c => ({ id: c.id, name: c.name, title: c.title, companyId: c.companyId }));
+      const contacts = matchedContacts.map(c => ({ id: c.id, name: c.name, title: c.title, companyId: c.companyId, companyName: companyNameMap.get(c.companyId) || "" }));
       const rfps = matchedRfps.map(r => ({ id: r.id, title: r.title, companyId: r.companyId, status: r.status }));
       res.json({ accounts, accountManagers, nationalAccountManagers, contacts, rfps });
     } catch (error) {
@@ -1759,6 +1761,70 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/companies/:id/market-share/upload", upload.single("file"), async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheetName = wb.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" }) as any[];
+
+      const normalize = (key: string) => key.toLowerCase().replace(/[\s_\-\/]+/g, "");
+
+      const findVal = (row: any, ...candidates: string[]): string => {
+        const rowNorm = Object.fromEntries(Object.entries(row).map(([k, v]) => [normalize(k), v]));
+        for (const c of candidates) {
+          const val = rowNorm[normalize(c)];
+          if (val !== undefined && val !== "") return String(val);
+        }
+        return "";
+      };
+
+      const created: any[] = [];
+      const skipped: string[] = [];
+
+      for (const row of rows) {
+        const periodLabel = findVal(row, "periodLabel", "period_label", "Period Label", "Period", "period", "Month", "month");
+        if (!periodLabel) { skipped.push("row missing period label"); continue; }
+
+        const vtStr = findVal(row, "vtLoads", "vt_loads", "VT Loads", "VT", "vt", "ContractedLoads", "contracted_loads", "Contracted");
+        const spotStr = findVal(row, "spotLoads", "spot_loads", "Spot Loads", "Spot", "spot", "SpotLoads");
+        const totalStr = findVal(row, "totalMarketLoads", "total_market_loads", "Total Market Loads", "Total Market", "TotalMarket", "total", "Total");
+        const entryType = findVal(row, "entryType", "entry_type", "Type", "type") || "monthly";
+        const periodStart = findVal(row, "periodStart", "period_start", "Start", "start_date", "StartDate") || null;
+        const periodEnd = findVal(row, "period_end", "periodEnd", "End", "end_date", "EndDate") || null;
+        const notes = findVal(row, "notes", "Notes", "note", "Note") || null;
+
+        const vtLoads = vtStr ? parseInt(vtStr.replace(/,/g, ""), 10) || 0 : 0;
+        const spotLoads = spotStr ? parseInt(spotStr.replace(/,/g, ""), 10) || 0 : 0;
+        const totalMarketLoads = totalStr ? parseInt(totalStr.replace(/,/g, ""), 10) || null : null;
+
+        const entry = await storage.createMarketShareEntry({
+          companyId: req.params.id,
+          entryType: entryType === "rfp_cycle" ? "rfp_cycle" : "monthly",
+          periodLabel,
+          periodStart: periodStart || null,
+          periodEnd: periodEnd || null,
+          vtLoads,
+          spotLoads,
+          totalMarketLoads,
+          notes,
+          rfpId: null,
+          createdAt: new Date().toISOString(),
+          createdBy: user.id,
+        });
+        created.push(entry);
+      }
+
+      res.json({ created: created.length, skipped: skipped.length, entries: created });
+    } catch (error) {
+      console.error("Error uploading market share file:", error);
+      res.status(500).json({ error: "Failed to process market share file" });
+    }
+  });
+
   app.patch("/api/market-share/:id", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
@@ -2377,6 +2443,21 @@ export async function registerRoutes(
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete feed post" });
+    }
+  });
+
+  app.patch("/api/feed-posts/:id/pin", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const canPin = ["admin", "director", "national_account_manager", "sales_director"].includes(user.role);
+      if (!canPin) return res.status(403).json({ error: "Only admins and managers can pin posts" });
+      const post = await storage.getFeedPost(req.params.id);
+      if (!post) return res.status(404).json({ error: "Post not found" });
+      const updated = await storage.pinFeedPost(req.params.id, !!req.body.pinned);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to pin post" });
     }
   });
 

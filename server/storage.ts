@@ -149,6 +149,7 @@ export interface IStorage {
   createFeedPost(post: InsertFeedPost): Promise<FeedPost>;
   getFeedPost(id: string): Promise<FeedPost | undefined>;
   deleteFeedPost(id: string): Promise<boolean>;
+  pinFeedPost(id: string, pinned: boolean): Promise<FeedPost>;
 
   getSetting(key: string): Promise<string | undefined>;
   setSetting(key: string, value: string): Promise<void>;
@@ -596,6 +597,14 @@ export class DatabaseStorage implements IStorage {
   async deleteFeedPost(id: string): Promise<boolean> {
     const result = await db.delete(feedPosts).where(eq(feedPosts.id, id)).returning();
     return result.length > 0;
+  }
+
+  async pinFeedPost(id: string, pinned: boolean): Promise<FeedPost> {
+    const [updated] = await db.update(feedPosts)
+      .set({ pinned, pinnedAt: pinned ? new Date().toISOString() : null })
+      .where(eq(feedPosts.id, id))
+      .returning();
+    return updated;
   }
 
   async getSetting(key: string): Promise<string | undefined> {

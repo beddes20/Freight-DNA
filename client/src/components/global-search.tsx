@@ -7,7 +7,7 @@ interface SearchResults {
   accounts: Array<{ id: string; name: string }>;
   accountManagers: Array<{ id: string; name: string; username: string }>;
   nationalAccountManagers: Array<{ id: string; name: string; username: string }>;
-  contacts: Array<{ id: string; name: string; title?: string; companyId: string }>;
+  contacts: Array<{ id: string; name: string; title?: string; companyId: string; companyName?: string }>;
   rfps: Array<{ id: string; title: string; companyId: string; status: string }>;
 }
 
@@ -180,7 +180,9 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
                   <Contact className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <span className="truncate block">{contact.name}</span>
-                    {contact.title && <span className="text-xs text-muted-foreground truncate block">{contact.title}</span>}
+                    <span className="text-xs text-muted-foreground truncate block">
+                      {[contact.companyName, contact.title].filter(Boolean).join(" · ")}
+                    </span>
                   </div>
                 </button>
               ))}

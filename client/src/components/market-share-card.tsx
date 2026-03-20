@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import {
 import {
   PieChart, TrendingUp, TrendingDown, Minus, Plus, Sparkles,
   Pencil, Trash2, RefreshCw, Loader2, BarChart3, Info,
-  Trophy, Truck,
+  Trophy, Truck, Upload,
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
@@ -107,6 +107,8 @@ export function MarketShareCard({ companyId, rfps = [] }: Props) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [autoCalcing, setAutoCalcing] = useState(false);
   const [activeTab, setActiveTab] = useState<"monthly" | "rfp_cycle">("monthly");
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const uploadRef = useRef<HTMLInputElement>(null);
 
   const { data: entries = [], isLoading } = useQuery<MarketShareEntry[]>({
     queryKey: ["/api/companies", companyId, "market-share"],
@@ -186,6 +188,36 @@ export function MarketShareCard({ companyId, rfps = [] }: Props) {
       toast({ title: "Auto-calculate failed", variant: "destructive" });
     } finally {
       setAutoCalcing(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingFile(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/companies/${companyId}/market-share/upload`, {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Upload failed" }));
+        throw new Error(err.error ?? "Upload failed");
+      }
+      const data = await res.json();
+      qc.invalidateQueries({ queryKey: ["/api/companies", companyId, "market-share"] });
+      toast({
+        title: `Imported ${data.created} entr${data.created !== 1 ? "ies" : "y"}`,
+        description: data.skipped > 0 ? `${data.skipped} row${data.skipped !== 1 ? "s" : ""} skipped (missing period label)` : undefined,
+      });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message ?? "Could not parse file", variant: "destructive" });
+    } finally {
+      setUploadingFile(false);
+      if (uploadRef.current) uploadRef.current.value = "";
     }
   };
 
@@ -276,6 +308,26 @@ export function MarketShareCard({ companyId, rfps = [] }: Props) {
                 {autoCalcing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
                 From Financial Data
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => uploadRef.current?.click()}
+                disabled={uploadingFile}
+                className="h-7 text-xs gap-1"
+                data-testid="button-ms-upload"
+                title="Upload Excel/CSV with columns: Period, VT Loads, Spot Loads, Total Market Loads"
+              >
+                {uploadingFile ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                Upload
+              </Button>
+              <input
+                ref={uploadRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={handleFileUpload}
+                data-testid="input-ms-file-upload"
+              />
               <Button variant="outline" size="sm" onClick={() => openAdd(activeTab)} className="h-7 text-xs gap-1" data-testid="button-ms-add">
                 <Plus className="h-3 w-3" /> Add
               </Button>
@@ -289,7 +341,7 @@ export function MarketShareCard({ companyId, rfps = [] }: Props) {
             <div className="text-center py-10 text-muted-foreground space-y-2">
               <BarChart3 className="h-8 w-8 mx-auto opacity-30" />
               <p className="text-sm font-medium">No market share data yet</p>
-              <p className="text-xs max-w-xs mx-auto">Click "From Financial Data" to auto-import monthly load counts, or add entries manually to track your share of this account's freight.</p>
+              <p className="text-xs max-w-xs mx-auto">Click "From Financial Data" to auto-import monthly load counts, upload a spreadsheet, or add entries manually to track your share of this account's freight.</p>
             </div>
           ) : (
             <>

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -60,14 +60,35 @@ function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummar
 export default function Customers() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
-  const [searchQuery, setSearchQuery] = useState("");
+
+  const initParam = (key: string, fallback = "all") => {
+    const p = new URLSearchParams(window.location.search);
+    return p.get(key) || fallback;
+  };
+
+  const [searchQuery, setSearchQuery] = useState(() => initParam("q", ""));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
-  const [repFilter, setRepFilter] = useState("all");
-  const [industryFilter, setIndustryFilter] = useState("all");
-  const [touchFilter, setTouchFilter] = useState("all");
-  const [sortBy, setSortBy] = useState("name");
+  const [showFilters, setShowFilters] = useState(() => {
+    const p = new URLSearchParams(window.location.search);
+    return ["rep", "industry", "touch"].some(k => p.has(k) && p.get(k) !== "all");
+  });
+  const [repFilter, setRepFilter] = useState(() => initParam("rep"));
+  const [industryFilter, setIndustryFilter] = useState(() => initParam("industry"));
+  const [touchFilter, setTouchFilter] = useState(() => initParam("touch"));
+  const [sortBy, setSortBy] = useState(() => initParam("sort", "name"));
+
+  useEffect(() => {
+    const p = new URLSearchParams();
+    if (searchQuery) p.set("q", searchQuery);
+    if (repFilter !== "all") p.set("rep", repFilter);
+    if (industryFilter !== "all") p.set("industry", industryFilter);
+    if (touchFilter !== "all") p.set("touch", touchFilter);
+    if (sortBy !== "name") p.set("sort", sortBy);
+    const qs = p.toString();
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+  }, [searchQuery, repFilter, industryFilter, touchFilter, sortBy]);
+
   const [quickTouch, setQuickTouch] = useState<{ company: Company; contacts: Contact[] } | null>(null);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [quickTouchType, setQuickTouchType] = useState("call");

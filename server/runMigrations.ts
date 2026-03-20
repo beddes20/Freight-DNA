@@ -231,6 +231,11 @@ export async function runMigrations() {
     await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS sales_person_id varchar`);
     console.log("[migrations] sales_person_id added to companies");
 
+    // Add pinned columns to feed_posts for pinning team feed posts
+    await client.query(`ALTER TABLE feed_posts ADD COLUMN IF NOT EXISTS pinned boolean DEFAULT false`);
+    await client.query(`ALTER TABLE feed_posts ADD COLUMN IF NOT EXISTS pinned_at text`);
+    console.log("[migrations] feed_posts pinned columns added");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

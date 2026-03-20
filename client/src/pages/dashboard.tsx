@@ -13,6 +13,7 @@ import {
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
   Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search, MoreHorizontal,
+  Pin, PinOff, ChevronDown, ChevronUp,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -93,6 +94,8 @@ export default function Dashboard() {
   const [feedSearch, setFeedSearch] = useState("");
   const [feedAuthorFilter, setFeedAuthorFilter] = useState("all");
   const [ptoBannerDismissed, setPtoBannerDismissed] = useState(false);
+  const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
+  const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") === "true");
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -259,6 +262,18 @@ export default function Dashboard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/feed-posts"] });
       toast({ title: "Post deleted" });
+    },
+  });
+
+  const canPin = ["admin", "director", "national_account_manager", "sales_director"].includes(currentUser?.role ?? "");
+
+  const pinFeedPostMutation = useMutation({
+    mutationFn: async ({ id, pinned }: { id: string; pinned: boolean }) => {
+      await apiRequest("PATCH", `/api/feed-posts/${id}/pin`, { pinned });
+    },
+    onSuccess: (_data, { pinned }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/feed-posts"] });
+      toast({ title: pinned ? "Post pinned to top" : "Post unpinned" });
     },
   });
 
@@ -758,19 +773,26 @@ export default function Dashboard() {
       <Card data-testid="card-my-tasks">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2">
-              <ClipboardList className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              My Tasks
-              {!tasksLoading && openTasks.length > 0 && (
-                <Badge variant="secondary" className="ml-1 font-normal">{openTasks.length}</Badge>
-              )}
-              {unread.tasks > 0 && (
-                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-                  {unread.tasks} new
-                </span>
-              )}
-            </CardTitle>
+            <button
+              className="flex items-center gap-2 text-left"
+              onClick={() => { const next = !tasksCollapsed; setTasksCollapsed(next); localStorage.setItem("dash_tasks_collapsed", String(next)); }}
+              data-testid="button-toggle-tasks-section"
+            >
+              <CardTitle className="text-base flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                My Tasks
+                {!tasksLoading && openTasks.length > 0 && (
+                  <Badge variant="secondary" className="ml-1 font-normal">{openTasks.length}</Badge>
+                )}
+                {unread.tasks > 0 && (
+                  <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    {unread.tasks} new
+                  </span>
+                )}
+              </CardTitle>
+              {tasksCollapsed ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+            </button>
             <div className="flex items-center gap-2">
               <Link href="/tasks">
                 <Button
@@ -804,6 +826,7 @@ export default function Dashboard() {
             </div>
           </div>
         </CardHeader>
+        {!tasksCollapsed && (
         <CardContent>
           {tasksLoading ? (
             <div className="space-y-3">
@@ -919,6 +942,7 @@ export default function Dashboard() {
             </>
           )}
         </CardContent>
+        )}
       </Card>
 
       {coldContacts.length > 0 && (
@@ -1118,20 +1142,30 @@ export default function Dashboard() {
 
       <Card data-testid="card-feed">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Lightbulb className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-            Trends / Growth / Ideas / Celebrate
-            {!feedLoading && feedPosts.length > 0 && (
-              <Badge variant="secondary" className="ml-1 font-normal">{feedPosts.length}</Badge>
-            )}
-            {unread.feed > 0 && (
-              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-                {unread.feed} new
-              </span>
-            )}
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <button
+              className="flex items-center gap-2 text-left"
+              onClick={() => { const next = !feedCollapsed; setFeedCollapsed(next); localStorage.setItem("dash_feed_collapsed", String(next)); }}
+              data-testid="button-toggle-feed-section"
+            >
+              <CardTitle className="text-base flex items-center gap-2">
+                <Lightbulb className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                Trends / Growth / Ideas / Celebrate
+                {!feedLoading && feedPosts.length > 0 && (
+                  <Badge variant="secondary" className="ml-1 font-normal">{feedPosts.length}</Badge>
+                )}
+                {unread.feed > 0 && (
+                  <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    {unread.feed} new
+                  </span>
+                )}
+              </CardTitle>
+              {feedCollapsed ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+            </button>
+          </div>
         </CardHeader>
+        {!feedCollapsed && (
         <CardContent className="space-y-4">
           <div className="relative">
             <div className="flex gap-1 mb-2 flex-wrap">
@@ -1257,6 +1291,10 @@ export default function Dashboard() {
                 if (feedSearch && !p.content.toLowerCase().includes(feedSearch.toLowerCase())) return false;
                 if (feedAuthorFilter !== "all" && p.authorId !== feedAuthorFilter) return false;
                 return true;
+              }).sort((a, b) => {
+                if (a.pinned && !b.pinned) return -1;
+                if (!a.pinned && b.pinned) return 1;
+                return 0;
               });
               const visiblePosts = feedExpanded ? filtered : filtered.slice(0, 5);
               return (<>
@@ -1273,7 +1311,12 @@ export default function Dashboard() {
                 const catIcon: Record<string, string> = { trend: "📈", growth: "🚀", idea: "💡", celebrate: "🎉" };
                 const isReplying = replyingTo === post.id;
                 return (
-                  <div key={post.id} className="rounded-lg border border-border/50 bg-card" data-testid={`feed-post-${post.id}`}>
+                  <div key={post.id} className={`rounded-lg border bg-card ${post.pinned ? "border-blue-400/60 dark:border-blue-600/60 ring-1 ring-blue-400/20" : "border-border/50"}`} data-testid={`feed-post-${post.id}`}>
+                    {post.pinned && (
+                      <div className="flex items-center gap-1 px-3 pt-1.5 text-xs text-blue-600 dark:text-blue-400 font-medium">
+                        <Pin className="h-3 w-3" /> Pinned
+                      </div>
+                    )}
                     {/* Main post */}
                     <div className="flex items-start gap-3 p-3 group">
                       <Lightbulb className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
@@ -1321,7 +1364,7 @@ export default function Dashboard() {
                           })}
                         </div>
                       </div>
-                      {(post.authorId === currentUser?.id || currentUser?.role === "admin") && (
+                      {(post.authorId === currentUser?.id || currentUser?.role === "admin" || canPin) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <button
@@ -1332,14 +1375,25 @@ export default function Dashboard() {
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={() => deleteFeedPostMutation.mutate(post.id)}
-                              className="text-destructive focus:text-destructive"
-                              data-testid={`button-delete-feed-${post.id}`}
-                            >
-                              <Trash2 className="h-3.5 w-3.5 mr-2" />
-                              Delete post
-                            </DropdownMenuItem>
+                            {canPin && !post.parentId && (
+                              <DropdownMenuItem
+                                onClick={() => pinFeedPostMutation.mutate({ id: post.id, pinned: !post.pinned })}
+                                data-testid={`button-pin-feed-${post.id}`}
+                              >
+                                {post.pinned ? <PinOff className="h-3.5 w-3.5 mr-2" /> : <Pin className="h-3.5 w-3.5 mr-2" />}
+                                {post.pinned ? "Unpin post" : "Pin to top"}
+                              </DropdownMenuItem>
+                            )}
+                            {(post.authorId === currentUser?.id || currentUser?.role === "admin") && (
+                              <DropdownMenuItem
+                                onClick={() => deleteFeedPostMutation.mutate(post.id)}
+                                className="text-destructive focus:text-destructive"
+                                data-testid={`button-delete-feed-${post.id}`}
+                              >
+                                <Trash2 className="h-3.5 w-3.5 mr-2" />
+                                Delete post
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       )}
@@ -1452,6 +1506,7 @@ export default function Dashboard() {
             </div>
           )}
         </CardContent>
+        )}
       </Card>
 
       {canSeeTeam && (

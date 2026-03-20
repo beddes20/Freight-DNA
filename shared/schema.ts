@@ -215,6 +215,8 @@ export const feedPosts = pgTable("feed_posts", {
   authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   createdAt: text("created_at").notNull(),
   parentId: varchar("parent_id"),
+  pinned: boolean("pinned").default(false),
+  pinnedAt: text("pinned_at"),
 });
 
 export const insertFeedPostSchema = createInsertSchema(feedPosts).omit({
