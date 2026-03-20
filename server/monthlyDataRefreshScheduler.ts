@@ -53,20 +53,35 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
   const monthTabRows = monthTabMatch ? readSheet(monthTabMatch) : [];
   const replitHistoricalRows = readSheet("ReplitNumbers");
 
-  const getOrderKey = (r: any): string => String(r["Order"] ?? r["Order number"] ?? r["order"] ?? r["ORDER"] ?? "").trim();
+  // Helper: parse a row's pickup/delivery date into { month, year }
+  const getRowMonthYear = (r: any): { month: number; year: number } | null => {
+    const dateVal = r["Pickup Date"] ?? r["pickup date"] ?? r["Pickup date"] ??
+                    r["Delivery date"] ?? r["Delivery Date"] ?? r["delivery date"] ??
+                    r["Date"] ?? r["date"] ?? "";
+    if (!dateVal && dateVal !== 0) return null;
+    let d: Date | null = null;
+    if (typeof dateVal === "number" && dateVal > 40000) {
+      d = new Date(Math.round((dateVal - 25569) * 86400 * 1000));
+    } else {
+      const parsed = new Date(String(dateVal).trim());
+      if (!isNaN(parsed.getTime())) d = parsed;
+    }
+    if (!d || isNaN(d.getTime())) return null;
+    return { month: d.getMonth() + 1, year: d.getFullYear() };
+  };
 
   let rows: any[];
   if (monthTabRows.length > 0 && replitHistoricalRows.length > 0) {
-    const merged = new Map<string, any>();
-    for (const r of replitHistoricalRows) {
-      const k = getOrderKey(r);
-      if (k) merged.set(k, r); else merged.set(`_nokey_${merged.size}`, r);
-    }
-    for (const r of monthTabRows) {
-      const k = getOrderKey(r);
-      if (k) merged.set(k, r); else merged.set(`_nokey_${merged.size}`, r);
-    }
-    rows = Array.from(merged.values());
+    // The month tab is the exclusive source for its month — strip that month from ReplitNumbers
+    const monthIndex = monthNames.findIndex(m => monthTabMatch!.trim().toLowerCase() === `replitnumbers${m}`);
+    const currentMonthNum = monthIndex + 1;
+    const currentYear = new Date().getFullYear();
+    const historicalFiltered = replitHistoricalRows.filter(r => {
+      const my = getRowMonthYear(r);
+      if (!my) return true;
+      return !(my.month === currentMonthNum && my.year === currentYear);
+    });
+    rows = [...historicalFiltered, ...monthTabRows];
   } else if (monthTabRows.length > 0) {
     rows = monthTabRows;
   } else if (replitHistoricalRows.length > 0) {
