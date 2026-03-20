@@ -372,10 +372,27 @@ export default function CompanyDetail() {
       matches.reduce((acc, r) => {
         const b = r.byMonth?.[key];
         if (!b) return acc;
-        return { totalLoads: acc.totalLoads + b.totalLoads, spotLoads: acc.spotLoads + b.spotLoads, totalMargin: acc.totalMargin + b.totalMargin };
-      }, { totalLoads: 0, spotLoads: 0, totalMargin: 0 });
+        return { totalLoads: acc.totalLoads + b.totalLoads, spotLoads: acc.spotLoads + b.spotLoads, totalMargin: acc.totalMargin + b.totalMargin, totalRevenue: (acc.totalRevenue ?? 0) + (b.totalRevenue ?? 0) };
+      }, { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 } as MonthBucket);
+    const ytd: MonthBucket = matches.reduce((acc, r) => {
+      if (r.byMonth) {
+        for (const b of Object.values(r.byMonth)) {
+          acc.totalLoads += b.totalLoads;
+          acc.spotLoads += b.spotLoads;
+          acc.totalMargin += b.totalMargin;
+          acc.totalRevenue = (acc.totalRevenue ?? 0) + (b.totalRevenue ?? 0);
+        }
+      } else {
+        acc.totalLoads += r.totalLoads;
+        acc.spotLoads += r.spotLoads;
+        acc.totalMargin += r.totalMargin;
+        acc.totalRevenue = (acc.totalRevenue ?? 0) + (r.totalRevenue ?? 0);
+      }
+      return acc;
+    }, { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 } as MonthBucket);
     return {
       repName:       matches[0].repName,
+      ytd,
       thisMonth:     sumMonth(thisMonthKey),
       lastMonth:     sumMonth(lastMonthKey),
       thisMonthKey,
@@ -1033,9 +1050,11 @@ export default function CompanyDetail() {
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-0 space-y-4">
-              <PerfGrid bucket={accountPerf.thisMonth} label={fmtMonth(accountPerf.thisMonthKey)} />
+              <PerfGrid bucket={accountPerf.ytd} label={`YTD (${new Date().getFullYear()})`} />
               <div className="border-t" />
               <PerfGrid bucket={accountPerf.lastMonth} label={fmtMonth(accountPerf.lastMonthKey)} />
+              <div className="border-t" />
+              <PerfGrid bucket={accountPerf.thisMonth} label={fmtMonth(accountPerf.thisMonthKey)} />
               <div className="border-t pt-1">
                 <Button
                   variant="ghost"
