@@ -47,8 +47,46 @@ function zipToCity(value: string): string {
   return zipCodeMap[zip5] || trimmed;
 }
 
+function selectBestRfpSheet(workbook: XLSX.WorkBook): string {
+  const laneKeywords = ["origin", "dest", "volume", "load", "ship", "from", "to", "lane", "state", "city", "zip", "rate", "qty", "pickup", "delivery", "equipment", "trailer", "mode", "annual", "corridor"];
+  const skipPatterns = [/^(cover|summary|index|instructions?|notes?|legend|glossary|overview|readme|terms|conditions|contacts?|intro)/i];
+
+  let bestSheet = workbook.SheetNames[0];
+  let bestScore = -1;
+
+  for (const name of workbook.SheetNames) {
+    if (skipPatterns.some(p => p.test(name.trim()))) continue;
+
+    const sheet = workbook.Sheets[name];
+    const rawAll: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    if (rawAll.length < 2) continue;
+
+    // Count non-empty data rows (rows that have at least one non-empty cell)
+    const dataRows = rawAll.filter(row => row.some(cell => cell !== "" && cell !== null && cell !== undefined));
+    const rowCount = Math.max(0, dataRows.length - 1); // subtract header row
+
+    // Score the first 15 rows for lane/freight keywords (header detection)
+    let keywordScore = 0;
+    for (let i = 0; i < Math.min(15, rawAll.length); i++) {
+      const rowStr = rawAll[i].join(" ").toLowerCase();
+      keywordScore = Math.max(keywordScore, laneKeywords.filter(kw => rowStr.includes(kw)).length);
+    }
+
+    // Final score: rows weighted heavily, with a small keyword bonus
+    // Sheets with zero keyword matches but lots of rows still win over tiny relevant sheets
+    const score = rowCount * 10 + keywordScore * 5;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestSheet = name;
+    }
+  }
+
+  return bestSheet;
+}
+
 function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
-  const sheetName = workbook.SheetNames[0];
+  const sheetName = selectBestRfpSheet(workbook);
   const sheet = workbook.Sheets[sheetName];
 
   // First, try to find the real header row by scanning first 15 rows as raw arrays
@@ -221,6 +259,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     rows: rows.slice(0, 100),
     headers,
     highVolumeLanes,
+    sheetName,
     analysis: {
       laneCount: rows.length,
       totalVolume: String(Math.round(totalVolume)),
@@ -1007,7 +1046,7 @@ export async function registerRoutes(
         dueDate: null,
         notes: null,
         fileName: req.file.originalname,
-        fileData: { rows: result.rows, highVolumeLanes: result.highVolumeLanes },
+        fileData: { rows: result.rows, highVolumeLanes: result.highVolumeLanes, sheetName: result.sheetName },
         laneCount: result.analysis.laneCount,
         totalVolume: result.analysis.totalVolume,
         originStates: result.analysis.originStates,
@@ -1015,7 +1054,7 @@ export async function registerRoutes(
       };
 
       const rfp = await storage.createRfp(rfpData);
-      res.status(201).json({ rfp, analysis: result.analysis, headers: result.headers, highVolumeLanes: result.highVolumeLanes, previewRows: result.rows.slice(0, 10) });
+      res.status(201).json({ rfp, analysis: result.analysis, headers: result.headers, highVolumeLanes: result.highVolumeLanes, previewRows: result.rows.slice(0, 10), sheetName: result.sheetName });
     } catch (error) {
       console.error("Error uploading RFP:", error);
       res.status(500).json({ error: "Failed to process uploaded file" });

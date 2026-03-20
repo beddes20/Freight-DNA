@@ -440,16 +440,18 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
     },
   });
 
-  const fileDataObj = rfp.fileData as { rows?: Record<string, any>[]; highVolumeLanes?: HighVolumeLane[] } | Record<string, any>[] | null;
+  const fileDataObj = rfp.fileData as { rows?: Record<string, any>[]; highVolumeLanes?: HighVolumeLane[]; sheetName?: string } | Record<string, any>[] | null;
 
   let rows: Record<string, any>[] = [];
   let highVolumeLanes: HighVolumeLane[] = [];
+  let detectedSheetName: string | null = null;
 
   if (Array.isArray(fileDataObj)) {
     rows = fileDataObj;
   } else if (fileDataObj && typeof fileDataObj === "object") {
     rows = fileDataObj.rows || [];
     highVolumeLanes = fileDataObj.highVolumeLanes || [];
+    detectedSheetName = fileDataObj.sheetName || null;
   }
 
   if (rows.length === 0 && highVolumeLanes.length === 0) return null;
@@ -458,6 +460,8 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
   const rfpContextData = useMemo(() => {
     const lines: string[] = [
       `RFP: ${rfp.title}`,
+      rfp.fileName ? `File: ${rfp.fileName}` : "",
+      detectedSheetName ? `Source Tab: "${detectedSheetName}"` : "",
       `Status: ${rfp.status}`,
       rfp.value ? `Estimated Value: $${Number(rfp.value).toLocaleString()}` : "",
       rfp.dueDate ? `Due Date: ${rfp.dueDate}` : "",
@@ -528,6 +532,12 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
 
   return (
     <div className="space-y-4">
+      {detectedSheetName && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground px-1">
+          <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
+          <span>Analyzing data from tab <span className="font-semibold text-foreground">"{detectedSheetName}"</span> — the tab with the most lane data</span>
+        </div>
+      )}
       {highVolumeLanes.length > 0 && (
         <Card className="border-2 border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
           <CardHeader className="pb-3">
@@ -1236,9 +1246,10 @@ export default function RfpAwards() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
       setPendingFile(null);
+      const sheetInfo = data.sheetName ? ` (tab: "${data.sheetName}")` : "";
       toast({
         title: "RFP uploaded successfully",
-        description: `Analyzed ${data.analysis.laneCount} lanes from ${data.rfp.fileName}`,
+        description: `Analyzed ${data.analysis.laneCount} lanes from ${data.rfp.fileName}${sheetInfo}`,
       });
     },
     onError: (error: Error) => {
