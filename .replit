@@ -53,7 +53,7 @@ integrations = ["javascript_openai_ai_integrations:2.0.0", "javascript_anthropic
 [userenv]
 
 [userenv.shared]
-SMTP_HOST = "smtp.office365.com"
-SMTP_PORT = "587"
+SMTP_HOST = "smtpout.secureserver.net"
+SMTP_PORT = "465"
 SMTP_FROM = "info@freight-dna.com"
 SMTP_FROM_NAME = "Value Truck · Growth Chart"

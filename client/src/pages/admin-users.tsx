@@ -660,10 +660,10 @@ export default function AdminUsers() {
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             {[
-              { label: "Host", value: "smtp.office365.com" },
-              { label: "Port", value: "587 (STARTTLS)" },
+              { label: "Host", value: "smtpout.secureserver.net" },
+              { label: "Port", value: "465 (SSL)" },
               { label: "From", value: "info@freight-dna.com" },
-              { label: "Password", value: "••••••••  (stored as Secret)" },
+              { label: "Password", value: "•••••••• (Replit Secret)" },
             ].map(({ label, value }) => (
               <div key={label} className="bg-background border rounded-lg p-3">
                 <p className="text-muted-foreground mb-0.5">{label}</p>
@@ -674,14 +674,12 @@ export default function AdminUsers() {
 
           <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4 text-xs space-y-1.5">
             <p className="font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
-              <AlertTriangle className="w-3.5 h-3.5" /> Office 365 prerequisite checklist
+              <AlertTriangle className="w-3.5 h-3.5" /> Setup checklist
             </p>
             <ol className="text-amber-700 dark:text-amber-400 space-y-1 ml-5 list-decimal">
-              <li>Sign in to <strong>Microsoft 365 Admin Center</strong> (admin.microsoft.com)</li>
-              <li>Go to <strong>Users → Active users</strong> → click <em>info@freight-dna.com</em></li>
-              <li>Open the <strong>Mail</strong> tab → click <strong>"Manage email apps"</strong></li>
-              <li>Check <strong>"Authenticated SMTP"</strong> and save</li>
-              <li>If MFA is enabled: go to <strong>account.microsoft.com → Security → App passwords</strong>, create one, and paste it as <strong>SMTP_PASSWORD</strong> in Replit Secrets</li>
+              <li>In Replit, open <strong>Secrets</strong> and set <strong>SMTP_PASSWORD</strong> to the GoDaddy email password for <em>info@freight-dna.com</em></li>
+              <li>Click <strong>Test Connection</strong> below — a green message means emails are ready to send</li>
+              <li>Use the <strong>Email Report</strong> button on any rep's report card to send a manual test email</li>
             </ol>
           </div>
 
