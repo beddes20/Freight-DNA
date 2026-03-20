@@ -356,11 +356,12 @@ export default function Financials() {
     }
     const monthlyTrend = Object.entries(monthMap)
       .sort(([a], [b]) => b.localeCompare(a))
-      .slice(0, 6)
+      .slice(0, 5)
       .map(([key, data]) => {
         const [yr, mo] = key.split("-");
         const label = new Date(Number(yr), Number(mo) - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" });
-        return { key, label, ...data };
+        const marginPct = data.revenue > 0 ? (data.margin / data.revenue) * 100 : 0;
+        return { key, label, ...data, marginPct };
       });
 
     return { totalRevenueAll, totalMarginAll, totalLoadsAll: rows.length, spotCount, spotPct, contractCount, hybridCount, topReps, maxRepLoads, topCusts, maxCustRev, monthlyTrend };
@@ -723,23 +724,32 @@ export default function Financials() {
                 {dashboardMetrics.monthlyTrend.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-6 text-center">No date column detected in data</p>
                 ) : (
-                  <div className="space-y-2">
-                    {dashboardMetrics.monthlyTrend.map(m => (
-                      <div key={m.key} className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-muted-foreground w-14 shrink-0">{m.label}</span>
-                        <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-blue-500/70"
-                            style={{ width: `${Math.min(100, (m.loads / (dashboardMetrics.monthlyTrend[0]?.loads || 1)) * 100)}%` }}
-                          />
+                  <div>
+                    <div className="grid grid-cols-5 gap-x-2 pb-1 border-b mb-1">
+                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Month</span>
+                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide text-right">Loads</span>
+                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide text-right">Revenue</span>
+                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide text-right">Margin</span>
+                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide text-right">Mgn%</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {dashboardMetrics.monthlyTrend.map((m, i) => (
+                        <div key={m.key} className={`grid grid-cols-5 gap-x-2 py-0.5 ${i === 0 ? "font-semibold" : ""}`}>
+                          <span className="text-xs text-muted-foreground truncate">{m.label}</span>
+                          <span className="text-xs tabular-nums text-right">{m.loads.toLocaleString()}</span>
+                          <span className="text-xs tabular-nums text-right text-blue-600 dark:text-blue-400">
+                            {m.revenue >= 1_000_000 ? `$${(m.revenue / 1_000_000).toFixed(1)}M` : `$${(m.revenue / 1_000).toFixed(0)}K`}
+                          </span>
+                          <span className="text-xs tabular-nums text-right text-emerald-600 dark:text-emerald-400">
+                            {m.margin >= 1_000_000 ? `$${(m.margin / 1_000_000).toFixed(1)}M` : `$${(m.margin / 1_000).toFixed(0)}K`}
+                          </span>
+                          <span className={`text-xs tabular-nums text-right ${m.marginPct >= 15 ? "text-emerald-600 dark:text-emerald-400" : m.marginPct >= 10 ? "text-amber-600 dark:text-amber-400" : "text-red-500"}`}>
+                            {m.marginPct.toFixed(1)}%
+                          </span>
                         </div>
-                        <span className="text-xs tabular-nums w-8 text-right shrink-0 text-muted-foreground">{m.loads}</span>
-                        <span className="text-xs tabular-nums text-emerald-600 dark:text-emerald-400 w-16 text-right shrink-0">
-                          {m.margin >= 1_000_000 ? `$${(m.margin / 1_000_000).toFixed(1)}M` : `$${(m.margin / 1_000).toFixed(0)}K`}
-                        </span>
-                      </div>
-                    ))}
-                    <p className="text-[10px] text-muted-foreground pt-1 border-t">Most recent 6 months · Loads &amp; Margin</p>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground pt-2 border-t mt-2">Last 5 months · most recent first</p>
                   </div>
                 )}
               </CardContent>
