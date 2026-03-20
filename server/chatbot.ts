@@ -382,15 +382,36 @@ Guidelines:
         status: "new",
       }).returning();
 
+      // Determine type label from content prefix
+      const trimmed = content.trim();
+      const firstLine = trimmed.split("\n")[0].toUpperCase();
+      const isBug = firstLine.includes("BUG");
+      const isImprovement = firstLine.includes("IMPROVEMENT");
+      const typeLabel = isBug ? "Bug Report" : isImprovement ? "Improvement Request" : "Feature Request";
+      const typeEmoji = isBug ? "🐛" : isImprovement ? "🔧" : "✨";
+      const taskTitle = `${typeEmoji} ${typeLabel} from ${submitter.name}`;
+      const bodyPreview = trimmed.length > 120 ? trimmed.slice(0, 120) + "…" : trimmed;
+      const now = new Date().toISOString();
+
       const admins = await db.select().from(users).where(eq(users.role, "admin"));
       for (const admin of admins) {
         await db.insert(notifications).values({
           userId: admin.id,
           type: "app_suggestion",
-          title: `App Suggestion from ${submitter.name}`,
-          body: content.trim().length > 120 ? content.trim().slice(0, 120) + "…" : content.trim(),
+          title: taskTitle,
+          body: bodyPreview,
+          link: "/tasks",
           read: false,
           relatedId: suggestion.id,
+        });
+
+        await db.insert(tasks).values({
+          title: taskTitle,
+          notes: trimmed,
+          status: "open",
+          assignedTo: admin.id,
+          assignedBy: req.session.userId,
+          createdAt: now,
         });
       }
 
