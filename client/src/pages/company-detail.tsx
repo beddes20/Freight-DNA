@@ -229,13 +229,10 @@ export default function CompanyDetail() {
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState("");
   const [viewContact, setViewContact] = useState<Contact | null>(null);
-  const [expandedDeliveries, setExpandedDeliveries] = useState<Set<number>>(new Set());
-  const [expandedPickups, setExpandedPickups] = useState<Set<number>>(new Set());
-  const toggleExpanded = (set: Set<number>, idx: number, setter: (s: Set<number>) => void) => {
-    const next = new Set(set);
-    next.has(idx) ? next.delete(idx) : next.add(idx);
-    setter(next);
-  };
+  const [expandedDeliveryGroups, setExpandedDeliveryGroups] = useState<Set<string>>(new Set());
+  const [expandedDeliveryLanes, setExpandedDeliveryLanes] = useState<Set<string>>(new Set());
+  const [expandedPickupGroups, setExpandedPickupGroups] = useState<Set<string>>(new Set());
+  const [expandedPickupLanes, setExpandedPickupLanes] = useState<Set<string>>(new Set());
   const [quickTouchOpen, setQuickTouchOpen] = useState(false);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [quickTouchType, setQuickTouchType] = useState("call");
@@ -2326,73 +2323,115 @@ export default function CompanyDetail() {
                     </div>
                   ) : (
                     <div className="space-y-5">
-                      {/* Section 1: Our Deliveries → Their Pickups */}
+                      {/* Section 1: Our Deliveries → Their Pickups — grouped by our zone */}
                       {(() => {
                         const mkDeliveryKey = (m: { ourCity: string; ourState: string; customerCity: string; customerState: string }) =>
                           `match-delivery:${m.ourCity},${m.ourState}:${m.customerCity},${m.customerState}`;
                         const activeDeliveries = laneMatching.ourDeliveriesToTheirPickups.filter(m => !vendorRoutedKeys.includes(mkDeliveryKey(m)));
                         const handledDeliveries = laneMatching.ourDeliveriesToTheirPickups.filter(m => vendorRoutedKeys.includes(mkDeliveryKey(m)));
+
+                        type ZoneGroup = { ourCity: string; ourState: string; totalVolume: number; matches: typeof activeDeliveries };
+                        const zoneMap: Record<string, ZoneGroup> = {};
+                        for (const m of activeDeliveries) {
+                          const zk = `${m.ourCity}|${m.ourState}`;
+                          if (!zoneMap[zk]) zoneMap[zk] = { ourCity: m.ourCity, ourState: m.ourState, totalVolume: 0, matches: [] };
+                          zoneMap[zk].totalVolume += m.totalVolume;
+                          zoneMap[zk].matches.push(m);
+                        }
+                        const deliveryZones = Object.values(zoneMap)
+                          .sort((a, b) => b.totalVolume - a.totalVolume)
+                          .map(z => ({ ...z, matches: [...z.matches].sort((a, b) => b.totalVolume - a.totalVolume) }));
+
+                        const toggleStr = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
+                          const next = new Set(set); next.has(key) ? next.delete(key) : next.add(key); setter(next);
+                        };
+
                         return (
                           <div>
                             <div className="flex items-center gap-2 mb-1.5">
                               <ArrowDownToLine className="h-4 w-4 text-blue-500" />
                               <p className="text-sm font-semibold text-blue-700 dark:text-blue-300">Our Trucks Near Their Pickup Zones</p>
-                              {activeDeliveries.length > 0 && <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 text-[10px]">{activeDeliveries.length}</Badge>}
+                              {deliveryZones.length > 0 && <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 text-[10px]">{activeDeliveries.length} pairs across {deliveryZones.length} zone{deliveryZones.length !== 1 ? "s" : ""}</Badge>}
                             </div>
-                            <p className="text-xs text-muted-foreground mb-3">We already drop freight in these areas. We can pick up their loads on the way back — incremental revenue with trucks already in position.</p>
-                            {activeDeliveries.length === 0 && handledDeliveries.length === 0 ? (
+                            <p className="text-xs text-muted-foreground mb-3">We already drop freight in these areas — we can pick up their loads on the way back. Click a customer city to see specific lanes.</p>
+                            {deliveryZones.length === 0 && handledDeliveries.length === 0 ? (
                               <p className="text-sm text-muted-foreground text-center py-4">No matches within 50 miles.</p>
                             ) : (
                               <div className="space-y-2">
-                                {activeDeliveries.slice(0, 20).map((m, i) => {
-                                  const key = mkDeliveryKey(m);
-                                  const isExpanded = expandedDeliveries.has(i);
-                                  const visibleLanes = isExpanded ? m.matchingLanes : m.matchingLanes.slice(0, 3);
-                                  const hiddenCount = m.matchingLanes.length - 3;
-                                  const distClass = m.distance === 0 || m.distance < 10 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" : m.distance < 25 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" : "bg-muted text-muted-foreground";
+                                {deliveryZones.map((zone, zi) => {
+                                  const zoneKey = `${zone.ourCity}|${zone.ourState}`;
+                                  const isZoneExpanded = expandedDeliveryGroups.has(zoneKey);
+                                  const ZONE_LIMIT = 3;
+                                  const visibleMatches = isZoneExpanded ? zone.matches : zone.matches.slice(0, ZONE_LIMIT);
+                                  const hiddenZoneCount = zone.matches.length - ZONE_LIMIT;
                                   return (
-                                    <div key={i} className="rounded-lg border overflow-hidden" data-testid={`match-delivery-${i}`}>
-                                      <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-muted/20">
-                                        <div className="text-sm font-semibold truncate flex items-center gap-1.5">
-                                          <span className="text-blue-600 dark:text-blue-400">{m.ourCity}, {m.ourState}</span>
-                                          <ArrowRightLeft className="h-3 w-3 text-muted-foreground shrink-0" />
-                                          <span>{m.customerCity}, {m.customerState}</span>
+                                    <div key={zi} className="rounded-lg border overflow-hidden" data-testid={`match-delivery-zone-${zi}`}>
+                                      <div className="px-3 py-2.5 bg-blue-50/60 dark:bg-blue-950/30 border-b flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <span className="text-sm font-semibold text-blue-700 dark:text-blue-300">{zone.ourCity}, {zone.ourState}</span>
+                                          <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-300 dark:text-blue-400 shrink-0">{zone.matches.length} nearby pickup {zone.matches.length === 1 ? "zone" : "zones"}</Badge>
                                         </div>
-                                        <div className="flex items-center gap-2 shrink-0">
-                                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${distClass}`}>{m.distance === 0 ? "Exact" : `${m.distance} mi`}</span>
-                                          <span className="text-xs text-muted-foreground whitespace-nowrap">{m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol</span>
-                                          {canReassign && (
-                                            <Button size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
-                                              onClick={() => openForceTask(`Lane Match: ${m.ourCity}, ${m.ourState} ↔ ${m.customerCity}, ${m.customerState}`, `Lane Matching — Our Deliveries → Their Pickups\nWe Deliver To: ${m.ourCity}, ${m.ourState}\nCustomer Pickup: ${m.customerCity}, ${m.customerState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`)}
-                                              data-testid={`button-force-task-match-delivery-${i}`}>
-                                              <Zap className="h-3 w-3 mr-1" />Task
-                                            </Button>
-                                          )}
-                                          <Button size="sm" variant="outline" disabled={vendorRoutedToggle.isPending}
-                                            className={vendorRoutedKeys.includes(key) ? "bg-green-500 text-white border-green-500 hover:bg-green-600 h-6 px-2 text-xs" : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 h-6 px-2 text-xs"}
-                                            onClick={() => vendorRoutedToggle.mutate(key)}
-                                            data-testid={`button-handled-match-delivery-${i}`}>
-                                            <TruckIcon className="h-3 w-3 mr-1" />Handled
-                                          </Button>
-                                        </div>
+                                        <span className="text-xs text-muted-foreground shrink-0">{zone.totalVolume.toLocaleString()} total vol</span>
                                       </div>
                                       <div className="divide-y">
-                                        {visibleLanes.map((l, li) => (
-                                          <div key={li} className="flex items-center justify-between px-3 py-1.5 text-xs hover:bg-muted/30">
-                                            <span className="text-muted-foreground truncate">{l.lane}</span>
-                                            <span className="shrink-0 ml-2 text-muted-foreground">{l.volume.toLocaleString()} vol</span>
-                                          </div>
-                                        ))}
-                                        {m.matchingLanes.length > 3 && (
-                                          <button onClick={() => toggleExpanded(expandedDeliveries, i, setExpandedDeliveries)} className="w-full px-3 py-1.5 text-xs text-primary hover:bg-muted/30 text-left">
-                                            {isExpanded ? "▲ Show less" : `▼ Show ${hiddenCount} more lane${hiddenCount !== 1 ? "s" : ""}`}
+                                        {visibleMatches.map((m, mi) => {
+                                          const matchKey = `${zoneKey}|${m.customerCity}|${m.customerState}`;
+                                          const isLanesOpen = expandedDeliveryLanes.has(matchKey);
+                                          const handled = vendorRoutedKeys.includes(mkDeliveryKey(m));
+                                          const distClass = m.distance === 0 || m.distance < 10 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" : m.distance < 25 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" : "bg-muted text-muted-foreground";
+                                          return (
+                                            <div key={mi} data-testid={`match-delivery-${zi}-${mi}`}>
+                                              <div
+                                                className="flex items-center justify-between gap-2 px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors"
+                                                onClick={() => toggleStr(expandedDeliveryLanes, matchKey, setExpandedDeliveryLanes)}
+                                              >
+                                                <div className="flex items-center gap-1.5 min-w-0">
+                                                  <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${isLanesOpen ? "rotate-90" : ""}`} />
+                                                  <span className="text-sm truncate">{m.customerCity}, {m.customerState}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                  <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${distClass}`}>{m.distance === 0 ? "Exact" : `${m.distance} mi`}</span>
+                                                  <span className="text-xs text-muted-foreground hidden sm:inline">{m.matchingLanes.length} lane{m.matchingLanes.length !== 1 ? "s" : ""} · {m.totalVolume.toLocaleString()} vol</span>
+                                                  {canReassign && (
+                                                    <Button size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
+                                                      onClick={e => { e.stopPropagation(); openForceTask(`Lane Match: ${m.ourCity}, ${m.ourState} ↔ ${m.customerCity}, ${m.customerState}`, `Lane Matching — Our Deliveries → Their Pickups\nWe Deliver To: ${m.ourCity}, ${m.ourState}\nCustomer Pickup: ${m.customerCity}, ${m.customerState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`); }}
+                                                      data-testid={`button-force-task-match-delivery-${zi}-${mi}`}>
+                                                      <Zap className="h-3 w-3 mr-1" />Task
+                                                    </Button>
+                                                  )}
+                                                  <Button size="sm" variant="outline" disabled={vendorRoutedToggle.isPending}
+                                                    className={handled ? "bg-green-500 text-white border-green-500 hover:bg-green-600 h-6 px-2 text-xs" : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 h-6 px-2 text-xs"}
+                                                    onClick={e => { e.stopPropagation(); vendorRoutedToggle.mutate(mkDeliveryKey(m)); }}
+                                                    data-testid={`button-handled-match-delivery-${zi}-${mi}`}>
+                                                    <TruckIcon className="h-3 w-3 mr-1" />Handled
+                                                  </Button>
+                                                </div>
+                                              </div>
+                                              {isLanesOpen && (
+                                                <div className="bg-muted/20 border-t divide-y">
+                                                  <div className="px-4 py-1 flex items-center justify-between text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                                                    <span>Lane</span><span>{m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol</span>
+                                                  </div>
+                                                  {m.matchingLanes.map((l, li) => (
+                                                    <div key={li} className="flex items-center justify-between px-4 py-1.5 text-xs hover:bg-muted/30">
+                                                      <span className="text-muted-foreground truncate">{l.lane}</span>
+                                                      <span className="shrink-0 ml-2">{l.volume.toLocaleString()} vol</span>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                        {hiddenZoneCount > 0 && (
+                                          <button onClick={() => toggleStr(expandedDeliveryGroups, zoneKey, setExpandedDeliveryGroups)} className="w-full px-3 py-2 text-xs text-primary hover:bg-muted/30 text-left transition-colors">
+                                            {isZoneExpanded ? "▲ Show less" : `▼ Show ${hiddenZoneCount} more pickup zone${hiddenZoneCount !== 1 ? "s" : ""}`}
                                           </button>
                                         )}
                                       </div>
                                     </div>
                                   );
                                 })}
-                                {activeDeliveries.length > 20 && <p className="text-xs text-muted-foreground text-center pt-1">+{activeDeliveries.length - 20} more location pairs</p>}
                                 {handledDeliveries.length > 0 && (
                                   <details className="group">
                                     <summary className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer list-none hover:text-foreground">
@@ -2415,73 +2454,115 @@ export default function CompanyDetail() {
                         );
                       })()}
 
-                      {/* Section 2: Their Deliveries → Our Pickups */}
+                      {/* Section 2: Their Deliveries → Our Pickups — grouped by our zone */}
                       {(() => {
                         const mkPickupKey = (m: { customerCity: string; customerState: string; ourCity: string; ourState: string }) =>
                           `match-pickup:${m.customerCity},${m.customerState}:${m.ourCity},${m.ourState}`;
                         const activePickups = laneMatching.theirDeliveriesToOurPickups.filter(m => !vendorRoutedKeys.includes(mkPickupKey(m)));
                         const handledPickups = laneMatching.theirDeliveriesToOurPickups.filter(m => vendorRoutedKeys.includes(mkPickupKey(m)));
+
+                        type PickupZone = { ourCity: string; ourState: string; totalVolume: number; matches: typeof activePickups };
+                        const zoneMap: Record<string, PickupZone> = {};
+                        for (const m of activePickups) {
+                          const zk = `${m.ourCity}|${m.ourState}`;
+                          if (!zoneMap[zk]) zoneMap[zk] = { ourCity: m.ourCity, ourState: m.ourState, totalVolume: 0, matches: [] };
+                          zoneMap[zk].totalVolume += m.totalVolume;
+                          zoneMap[zk].matches.push(m);
+                        }
+                        const pickupZones = Object.values(zoneMap)
+                          .sort((a, b) => b.totalVolume - a.totalVolume)
+                          .map(z => ({ ...z, matches: [...z.matches].sort((a, b) => b.totalVolume - a.totalVolume) }));
+
+                        const toggleStr = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
+                          const next = new Set(set); next.has(key) ? next.delete(key) : next.add(key); setter(next);
+                        };
+
                         return (
                           <div className="border-t pt-4">
                             <div className="flex items-center gap-2 mb-1.5">
                               <ArrowUpFromLine className="h-4 w-4 text-green-500" />
                               <p className="text-sm font-semibold text-green-700 dark:text-green-300">Their Destinations Near Our Pickup Zones</p>
-                              {activePickups.length > 0 && <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 text-[10px]">{activePickups.length}</Badge>}
+                              {pickupZones.length > 0 && <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 text-[10px]">{activePickups.length} pairs across {pickupZones.length} zone{pickupZones.length !== 1 ? "s" : ""}</Badge>}
                             </div>
-                            <p className="text-xs text-muted-foreground mb-3">They need deliveries near where we already pick up freight — potential backhaul loads that fill our existing return trips.</p>
-                            {activePickups.length === 0 && handledPickups.length === 0 ? (
+                            <p className="text-xs text-muted-foreground mb-3">They need deliveries near where we already pick up freight — potential backhaul loads that fill our return trips. Click a customer city to see specific lanes.</p>
+                            {pickupZones.length === 0 && handledPickups.length === 0 ? (
                               <p className="text-sm text-muted-foreground text-center py-4">No matches within 50 miles.</p>
                             ) : (
                               <div className="space-y-2">
-                                {activePickups.slice(0, 20).map((m, i) => {
-                                  const key = mkPickupKey(m);
-                                  const isExpanded = expandedPickups.has(i);
-                                  const visibleLanes = isExpanded ? m.matchingLanes : m.matchingLanes.slice(0, 3);
-                                  const hiddenCount = m.matchingLanes.length - 3;
-                                  const distClass = m.distance === 0 || m.distance < 10 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" : m.distance < 25 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" : "bg-muted text-muted-foreground";
+                                {pickupZones.map((zone, zi) => {
+                                  const zoneKey = `${zone.ourCity}|${zone.ourState}`;
+                                  const isZoneExpanded = expandedPickupGroups.has(zoneKey);
+                                  const ZONE_LIMIT = 3;
+                                  const visibleMatches = isZoneExpanded ? zone.matches : zone.matches.slice(0, ZONE_LIMIT);
+                                  const hiddenZoneCount = zone.matches.length - ZONE_LIMIT;
                                   return (
-                                    <div key={i} className="rounded-lg border overflow-hidden" data-testid={`match-pickup-${i}`}>
-                                      <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-muted/20">
-                                        <div className="text-sm font-semibold truncate flex items-center gap-1.5">
-                                          <span>{m.customerCity}, {m.customerState}</span>
-                                          <ArrowRightLeft className="h-3 w-3 text-muted-foreground shrink-0" />
-                                          <span className="text-blue-600 dark:text-blue-400">{m.ourCity}, {m.ourState}</span>
+                                    <div key={zi} className="rounded-lg border overflow-hidden" data-testid={`match-pickup-zone-${zi}`}>
+                                      <div className="px-3 py-2.5 bg-green-50/60 dark:bg-green-950/30 border-b flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <span className="text-sm font-semibold text-green-700 dark:text-green-300">{zone.ourCity}, {zone.ourState}</span>
+                                          <Badge variant="outline" className="text-[10px] text-green-600 border-green-300 dark:text-green-400 shrink-0">{zone.matches.length} nearby delivery {zone.matches.length === 1 ? "zone" : "zones"}</Badge>
                                         </div>
-                                        <div className="flex items-center gap-2 shrink-0">
-                                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${distClass}`}>{m.distance === 0 ? "Exact" : `${m.distance} mi`}</span>
-                                          <span className="text-xs text-muted-foreground whitespace-nowrap">{m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol</span>
-                                          {canReassign && (
-                                            <Button size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
-                                              onClick={() => openForceTask(`Lane Match: ${m.customerCity}, ${m.customerState} ↔ ${m.ourCity}, ${m.ourState}`, `Lane Matching — Their Deliveries → Our Pickups\nCustomer Delivers To: ${m.customerCity}, ${m.customerState}\nWe Pick Up At: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`)}
-                                              data-testid={`button-force-task-match-pickup-${i}`}>
-                                              <Zap className="h-3 w-3 mr-1" />Task
-                                            </Button>
-                                          )}
-                                          <Button size="sm" variant="outline" disabled={vendorRoutedToggle.isPending}
-                                            className={vendorRoutedKeys.includes(key) ? "bg-green-500 text-white border-green-500 hover:bg-green-600 h-6 px-2 text-xs" : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 h-6 px-2 text-xs"}
-                                            onClick={() => vendorRoutedToggle.mutate(key)}
-                                            data-testid={`button-handled-match-pickup-${i}`}>
-                                            <TruckIcon className="h-3 w-3 mr-1" />Handled
-                                          </Button>
-                                        </div>
+                                        <span className="text-xs text-muted-foreground shrink-0">{zone.totalVolume.toLocaleString()} total vol</span>
                                       </div>
                                       <div className="divide-y">
-                                        {visibleLanes.map((l, li) => (
-                                          <div key={li} className="flex items-center justify-between px-3 py-1.5 text-xs hover:bg-muted/30">
-                                            <span className="text-muted-foreground truncate">{l.lane}</span>
-                                            <span className="shrink-0 ml-2 text-muted-foreground">{l.volume.toLocaleString()} vol</span>
-                                          </div>
-                                        ))}
-                                        {m.matchingLanes.length > 3 && (
-                                          <button onClick={() => toggleExpanded(expandedPickups, i, setExpandedPickups)} className="w-full px-3 py-1.5 text-xs text-primary hover:bg-muted/30 text-left">
-                                            {isExpanded ? "▲ Show less" : `▼ Show ${hiddenCount} more lane${hiddenCount !== 1 ? "s" : ""}`}
+                                        {visibleMatches.map((m, mi) => {
+                                          const matchKey = `${zoneKey}|${m.customerCity}|${m.customerState}`;
+                                          const isLanesOpen = expandedPickupLanes.has(matchKey);
+                                          const handled = vendorRoutedKeys.includes(mkPickupKey(m));
+                                          const distClass = m.distance === 0 || m.distance < 10 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" : m.distance < 25 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" : "bg-muted text-muted-foreground";
+                                          return (
+                                            <div key={mi} data-testid={`match-pickup-${zi}-${mi}`}>
+                                              <div
+                                                className="flex items-center justify-between gap-2 px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors"
+                                                onClick={() => toggleStr(expandedPickupLanes, matchKey, setExpandedPickupLanes)}
+                                              >
+                                                <div className="flex items-center gap-1.5 min-w-0">
+                                                  <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${isLanesOpen ? "rotate-90" : ""}`} />
+                                                  <span className="text-sm truncate">{m.customerCity}, {m.customerState}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                  <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${distClass}`}>{m.distance === 0 ? "Exact" : `${m.distance} mi`}</span>
+                                                  <span className="text-xs text-muted-foreground hidden sm:inline">{m.matchingLanes.length} lane{m.matchingLanes.length !== 1 ? "s" : ""} · {m.totalVolume.toLocaleString()} vol</span>
+                                                  {canReassign && (
+                                                    <Button size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
+                                                      onClick={e => { e.stopPropagation(); openForceTask(`Lane Match: ${m.customerCity}, ${m.customerState} ↔ ${m.ourCity}, ${m.ourState}`, `Lane Matching — Their Deliveries → Our Pickups\nCustomer Delivers To: ${m.customerCity}, ${m.customerState}\nWe Pick Up At: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`); }}
+                                                      data-testid={`button-force-task-match-pickup-${zi}-${mi}`}>
+                                                      <Zap className="h-3 w-3 mr-1" />Task
+                                                    </Button>
+                                                  )}
+                                                  <Button size="sm" variant="outline" disabled={vendorRoutedToggle.isPending}
+                                                    className={handled ? "bg-green-500 text-white border-green-500 hover:bg-green-600 h-6 px-2 text-xs" : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 h-6 px-2 text-xs"}
+                                                    onClick={e => { e.stopPropagation(); vendorRoutedToggle.mutate(mkPickupKey(m)); }}
+                                                    data-testid={`button-handled-match-pickup-${zi}-${mi}`}>
+                                                    <TruckIcon className="h-3 w-3 mr-1" />Handled
+                                                  </Button>
+                                                </div>
+                                              </div>
+                                              {isLanesOpen && (
+                                                <div className="bg-muted/20 border-t divide-y">
+                                                  <div className="px-4 py-1 flex items-center justify-between text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                                                    <span>Lane</span><span>{m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol</span>
+                                                  </div>
+                                                  {m.matchingLanes.map((l, li) => (
+                                                    <div key={li} className="flex items-center justify-between px-4 py-1.5 text-xs hover:bg-muted/30">
+                                                      <span className="text-muted-foreground truncate">{l.lane}</span>
+                                                      <span className="shrink-0 ml-2">{l.volume.toLocaleString()} vol</span>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                        {hiddenZoneCount > 0 && (
+                                          <button onClick={() => toggleStr(expandedPickupGroups, zoneKey, setExpandedPickupGroups)} className="w-full px-3 py-2 text-xs text-primary hover:bg-muted/30 text-left transition-colors">
+                                            {isZoneExpanded ? "▲ Show less" : `▼ Show ${hiddenZoneCount} more delivery zone${hiddenZoneCount !== 1 ? "s" : ""}`}
                                           </button>
                                         )}
                                       </div>
                                     </div>
                                   );
                                 })}
-                                {activePickups.length > 20 && <p className="text-xs text-muted-foreground text-center pt-1">+{activePickups.length - 20} more location pairs</p>}
                                 {handledPickups.length > 0 && (
                                   <details className="group">
                                     <summary className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer list-none hover:text-foreground">
