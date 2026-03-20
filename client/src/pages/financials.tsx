@@ -25,6 +25,8 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   CloudDownload,
   Check,
   Pencil,
@@ -33,6 +35,7 @@ import {
   Download,
   RefreshCw,
   Sparkles,
+  Users,
 } from "lucide-react";
 import { DataAnalystPortlet } from "@/components/data-analyst-portlet";
 
@@ -98,6 +101,7 @@ export default function Financials() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [page, setPage] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
+  const [tableCollapsed, setTableCollapsed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isAdminOrNam = user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales" || user?.role === "sales_director";
@@ -256,6 +260,72 @@ export default function Financials() {
   };
 
   const hasFilters = search || filterRep !== "all" || filterCustomer !== "all" || filterStatus !== "all";
+
+  const dashboardMetrics = useMemo(() => {
+    if (!rows.length) return null;
+    const totalRevenueAll = rows.reduce((s, r) => s + toNumber(r["Total charges"]), 0);
+    const totalFreightAll = rows.reduce((s, r) => s + toNumber(r["Freight charge"]), 0);
+    const totalMarginAll = totalRevenueAll - totalFreightAll;
+    const spotCount = rows.filter(r => /spot/i.test(String(r["Order Type"] || r["Movement type"] || ""))).length;
+    const spotPct = rows.length > 0 ? Math.round(spotCount / rows.length * 100) : 0;
+
+    const repMap: Record<string, { loads: number; revenue: number; margin: number }> = {};
+    rows.forEach(r => {
+      const rep = String(r["Operations user"] || r["Broker"] || "").trim();
+      if (!rep) return;
+      if (!repMap[rep]) repMap[rep] = { loads: 0, revenue: 0, margin: 0 };
+      repMap[rep].loads++;
+      repMap[rep].revenue += toNumber(r["Total charges"]);
+      repMap[rep].margin += toNumber(r["Total charges"]) - toNumber(r["Freight charge"]);
+    });
+    const topReps = Object.entries(repMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 5);
+    const maxRepLoads = topReps[0]?.[1].loads || 1;
+
+    const custMap: Record<string, { loads: number; revenue: number }> = {};
+    rows.forEach(r => {
+      const cust = String(r["Customer"] || "").trim();
+      if (!cust) return;
+      if (!custMap[cust]) custMap[cust] = { loads: 0, revenue: 0 };
+      custMap[cust].loads++;
+      custMap[cust].revenue += toNumber(r["Total charges"]);
+    });
+    const topCusts = Object.entries(custMap).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 5);
+    const maxCustRev = topCusts[0]?.[1].revenue || 1;
+
+    const dateCol = Object.keys(rows[0]).find(c => /date/i.test(c));
+    const parseDate = (val: any): Date | null => {
+      if (!val) return null;
+      if (typeof val === "number" && val > 1000) {
+        const d = new Date((val - 25569) * 86400 * 1000);
+        if (!isNaN(d.getTime())) return d;
+      }
+      const d = new Date(String(val));
+      return isNaN(d.getTime()) ? null : d;
+    };
+    type MonthData = { loads: number; revenue: number; margin: number };
+    const monthMap: Record<string, MonthData> = {};
+    if (dateCol) {
+      rows.forEach(r => {
+        const d = parseDate(r[dateCol]);
+        if (!d) return;
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        if (!monthMap[key]) monthMap[key] = { loads: 0, revenue: 0, margin: 0 };
+        monthMap[key].loads++;
+        monthMap[key].revenue += toNumber(r["Total charges"]);
+        monthMap[key].margin += toNumber(r["Total charges"]) - toNumber(r["Freight charge"]);
+      });
+    }
+    const monthlyTrend = Object.entries(monthMap)
+      .sort(([a], [b]) => b.localeCompare(a))
+      .slice(0, 6)
+      .map(([key, data]) => {
+        const [yr, mo] = key.split("-");
+        const label = new Date(Number(yr), Number(mo) - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" });
+        return { key, label, ...data };
+      });
+
+    return { totalRevenueAll, totalMarginAll, totalLoadsAll: rows.length, spotCount, spotPct, contractCount: rows.length - spotCount, topReps, maxRepLoads, topCusts, maxCustRev, monthlyTrend };
+  }, [rows]);
 
   const financialContextData = useMemo(() => {
     if (!rows.length) return "";
@@ -632,141 +702,303 @@ export default function Financials() {
       )}
 
       {isLoading ? (
-        <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-          {[1,2,3,4].map(i => <Skeleton key={i} className="h-24 w-full" />)}
+        <div className="space-y-4">
+          <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+            {[1,2,3,4].map(i => <Skeleton key={i} className="h-24 w-full" />)}
+          </div>
+          <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
+            {[1,2,3].map(i => <Skeleton key={i} className="h-52 w-full" />)}
+          </div>
+          <Skeleton className="h-64 w-full" />
         </div>
-      ) : financialData ? (
+      ) : financialData && dashboardMetrics ? (
         <>
+          {/* Floor-wide KPI cards */}
           <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
             {[
-              { label: "Total Revenue", value: `$${(totalRevenue / 1000).toFixed(1)}K`, sub: "Total charges", icon: DollarSign, color: "text-green-600 dark:text-green-400", bg: "bg-green-100 dark:bg-green-900/30" },
-              { label: "Total Freight", value: `$${(totalFreight / 1000).toFixed(1)}K`, sub: "Freight charges", icon: Truck, color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-100 dark:bg-blue-900/30" },
-              { label: "Load Count", value: loadCount.toLocaleString(), sub: "Filtered records", icon: Package, color: "text-purple-600 dark:text-purple-400", bg: "bg-purple-100 dark:bg-purple-900/30" },
-              { label: "Avg Rate", value: avgRate > 0 ? `$${avgRate.toFixed(0)}` : "—", sub: "Per load", icon: TrendingUp, color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-100 dark:bg-emerald-900/30" },
+              {
+                label: "Total Revenue",
+                value: dashboardMetrics.totalRevenueAll >= 1_000_000
+                  ? `$${(dashboardMetrics.totalRevenueAll / 1_000_000).toFixed(2)}M`
+                  : `$${(dashboardMetrics.totalRevenueAll / 1_000).toFixed(1)}K`,
+                sub: `${dashboardMetrics.totalLoadsAll.toLocaleString()} total loads`,
+                icon: DollarSign, color: "text-green-600 dark:text-green-400", bg: "bg-green-100 dark:bg-green-900/30",
+              },
+              {
+                label: "Gross Margin",
+                value: dashboardMetrics.totalMarginAll >= 1_000_000
+                  ? `$${(dashboardMetrics.totalMarginAll / 1_000_000).toFixed(2)}M`
+                  : `$${(dashboardMetrics.totalMarginAll / 1_000).toFixed(1)}K`,
+                sub: dashboardMetrics.totalLoadsAll > 0
+                  ? `$${Math.round(dashboardMetrics.totalMarginAll / dashboardMetrics.totalLoadsAll).toLocaleString()} avg/load`
+                  : "Revenue minus freight",
+                icon: TrendingUp, color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-100 dark:bg-emerald-900/30",
+              },
+              {
+                label: "Total Loads",
+                value: dashboardMetrics.totalLoadsAll.toLocaleString(),
+                sub: "All records in dataset",
+                icon: Package, color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-100 dark:bg-blue-900/30",
+              },
+              {
+                label: "Spot Loads",
+                value: dashboardMetrics.spotCount.toLocaleString(),
+                sub: `${dashboardMetrics.spotPct}% spot · ${dashboardMetrics.contractCount.toLocaleString()} contract`,
+                icon: Truck, color: "text-orange-600 dark:text-orange-400", bg: "bg-orange-100 dark:bg-orange-900/30",
+              },
             ].map(s => (
               <Card key={s.label} className="overflow-hidden">
-                <CardContent className="p-4 sm:p-6">
-                  <div className="flex flex-col gap-3">
-                    <div className="flex items-center justify-between">
-                      <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${s.bg}`}>
+                <CardContent className="p-4 sm:p-5">
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex items-center gap-2">
+                      <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${s.bg}`}>
                         <s.icon className={`h-4 w-4 ${s.color}`} />
                       </div>
+                      <span className="text-xs font-medium text-muted-foreground">{s.label}</span>
                     </div>
-                    <div>
-                      <div className="text-xl sm:text-2xl font-bold">{s.value}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">{s.sub}</p>
-                    </div>
+                    <div className="text-xl sm:text-2xl font-bold">{s.value}</div>
+                    <p className="text-xs text-muted-foreground">{s.sub}</p>
                   </div>
                 </CardContent>
               </Card>
             ))}
           </div>
 
+          {/* Insights row */}
+          <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-blue-500" />
+                  Monthly Trend
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {dashboardMetrics.monthlyTrend.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-6 text-center">No date column detected in data</p>
+                ) : (
+                  <div className="space-y-2">
+                    {dashboardMetrics.monthlyTrend.map(m => (
+                      <div key={m.key} className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-muted-foreground w-14 shrink-0">{m.label}</span>
+                        <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-blue-500/70"
+                            style={{ width: `${Math.min(100, (m.loads / (dashboardMetrics.monthlyTrend[0]?.loads || 1)) * 100)}%` }}
+                          />
+                        </div>
+                        <span className="text-xs tabular-nums w-8 text-right shrink-0 text-muted-foreground">{m.loads}</span>
+                        <span className="text-xs tabular-nums text-emerald-600 dark:text-emerald-400 w-16 text-right shrink-0">
+                          {m.margin >= 1_000_000 ? `$${(m.margin / 1_000_000).toFixed(1)}M` : `$${(m.margin / 1_000).toFixed(0)}K`}
+                        </span>
+                      </div>
+                    ))}
+                    <p className="text-[10px] text-muted-foreground pt-1 border-t">Most recent 6 months · Loads &amp; Margin</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <Users className="h-4 w-4 text-violet-500" />
+                  Top Reps by Loads
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {dashboardMetrics.topReps.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-6 text-center">No rep data found</p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {dashboardMetrics.topReps.map(([rep, d], idx) => (
+                      <div key={rep} className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground w-4 shrink-0">{idx + 1}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium truncate">{rep}</span>
+                            <span className="text-xs tabular-nums text-muted-foreground ml-2 shrink-0">{d.loads} loads</span>
+                          </div>
+                          <div className="h-1 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-violet-500/60"
+                              style={{ width: `${(d.loads / dashboardMetrics.maxRepLoads) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <p className="text-[10px] text-muted-foreground pt-1 border-t">By total load count in dataset</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <DollarSign className="h-4 w-4 text-green-500" />
+                  Top Customers by Revenue
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {dashboardMetrics.topCusts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-6 text-center">No customer data found</p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {dashboardMetrics.topCusts.map(([cust, d], idx) => (
+                      <div key={cust} className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground w-4 shrink-0">{idx + 1}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium truncate">{cust}</span>
+                            <span className="text-xs tabular-nums text-green-600 dark:text-green-400 ml-2 shrink-0">
+                              {d.revenue >= 1_000_000 ? `$${(d.revenue / 1_000_000).toFixed(1)}M` : `$${(d.revenue / 1_000).toFixed(0)}K`}
+                            </span>
+                          </div>
+                          <div className="h-1 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-green-500/60"
+                              style={{ width: `${(d.revenue / dashboardMetrics.maxCustRev) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <p className="text-[10px] text-muted-foreground pt-1 border-t">By total revenue in dataset</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Data table with collapse toggle */}
           <Card>
             <CardHeader className="pb-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="relative flex-1 min-w-36">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search orders, customers..."
-                    value={search}
-                    onChange={e => { setSearch(e.target.value); setPage(1); }}
-                    className="pl-8"
-                    data-testid="input-search-financials"
-                  />
-                </div>
-                <Select value={filterRep} onValueChange={v => { setFilterRep(v); setPage(1); }}>
-                  <SelectTrigger className="w-44" data-testid="select-filter-rep">
-                    <SelectValue placeholder="All Reps" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Reps</SelectItem>
-                    {uniqueReps.map(r => <SelectItem key={r} value={r!}>{r}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Select value={filterCustomer} onValueChange={v => { setFilterCustomer(v); setPage(1); }}>
-                  <SelectTrigger className="w-52" data-testid="select-filter-customer">
-                    <SelectValue placeholder="All Customers" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Customers</SelectItem>
-                    {uniqueCustomers.map(c => <SelectItem key={c} value={c!}>{c}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Select value={filterStatus} onValueChange={v => { setFilterStatus(v); setPage(1); }}>
-                  <SelectTrigger className="w-40" data-testid="select-filter-status">
-                    <SelectValue placeholder="All Statuses" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    {uniqueStatuses.map(s => <SelectItem key={s} value={s!}>{s}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                {hasFilters && (
-                  <Button variant="outline" size="sm" onClick={clearFilters} className="gap-1" data-testid="button-clear-filters">
-                    <X className="h-3 w-3" /> Clear
-                  </Button>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/40">
-                      {["Order #", "Customer", "Rep", "Date", "Origin", "Destination", "Status", "Freight", "Total", "Rate"].map(h => (
-                        <th key={h} className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paginated.length === 0 ? (
-                      <tr>
-                        <td colSpan={10} className="py-12 text-center text-muted-foreground text-sm">
-                          No records match your filters
-                        </td>
-                      </tr>
-                    ) : (
-                      paginated.map((r, i) => (
-                        <tr key={i} className="border-b hover:bg-muted/30 transition-colors" data-testid={`row-financial-${i}`}>
-                          <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{r["Order number"] || "—"}</td>
-                          <td className="px-3 py-2.5 font-medium max-w-[160px] truncate">{r["Customer"] || "—"}</td>
-                          <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{r["Operations user"] || "—"}</td>
-                          <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{formatDate(r["Date ordered"])}</td>
-                          <td className="px-3 py-2.5 whitespace-nowrap">{r["Shipper city"] ? `${r["Shipper city"]}, ${r["Shipper state"]}` : "—"}</td>
-                          <td className="px-3 py-2.5 whitespace-nowrap">{r["Consignee city"] ? `${r["Consignee city"]}, ${r["Consignee state"]}` : "—"}</td>
-                          <td className="px-3 py-2.5 whitespace-nowrap">
-                            {r["Status"] ? (
-                              <Badge variant="outline" className="text-xs capitalize">{r["Status"]}</Badge>
-                            ) : "—"}
-                          </td>
-                          <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs">{formatCurrency(r["Freight charge"])}</td>
-                          <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs font-semibold text-green-600 dark:text-green-400">{formatCurrency(r["Total charges"])}</td>
-                          <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs">{formatCurrency(r["Rate"])}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between px-4 py-3 border-t">
-                  <p className="text-xs text-muted-foreground">
-                    Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length.toLocaleString()}
-                  </p>
-                  <div className="flex items-center gap-1">
-                    <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
-                      <ChevronLeft className="h-3 w-3" />
-                    </Button>
-                    <span className="text-xs px-2">{page} / {totalPages}</span>
-                    <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
-                      <ChevronRight className="h-3 w-3" />
-                    </Button>
+              <div className="flex items-start gap-2">
+                <div className="flex flex-wrap flex-1 items-center gap-2">
+                  <div className="relative flex-1 min-w-36">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search orders, customers..."
+                      value={search}
+                      onChange={e => { setSearch(e.target.value); setPage(1); }}
+                      className="pl-8"
+                      data-testid="input-search-financials"
+                    />
                   </div>
+                  <Select value={filterRep} onValueChange={v => { setFilterRep(v); setPage(1); }}>
+                    <SelectTrigger className="w-44" data-testid="select-filter-rep">
+                      <SelectValue placeholder="All Reps" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Reps</SelectItem>
+                      {uniqueReps.map(r => <SelectItem key={r} value={r!}>{r}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={filterCustomer} onValueChange={v => { setFilterCustomer(v); setPage(1); }}>
+                    <SelectTrigger className="w-52" data-testid="select-filter-customer">
+                      <SelectValue placeholder="All Customers" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Customers</SelectItem>
+                      {uniqueCustomers.map(c => <SelectItem key={c} value={c!}>{c}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={filterStatus} onValueChange={v => { setFilterStatus(v); setPage(1); }}>
+                    <SelectTrigger className="w-40" data-testid="select-filter-status">
+                      <SelectValue placeholder="All Statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Statuses</SelectItem>
+                      {uniqueStatuses.map(s => <SelectItem key={s} value={s!}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {hasFilters && (
+                    <Button variant="outline" size="sm" onClick={clearFilters} className="gap-1" data-testid="button-clear-filters">
+                      <X className="h-3 w-3" /> Clear
+                    </Button>
+                  )}
                 </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 shrink-0"
+                  onClick={() => setTableCollapsed(c => !c)}
+                  data-testid="button-toggle-table"
+                  title={tableCollapsed ? "Expand table" : "Collapse table"}
+                >
+                  {tableCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+                </Button>
+              </div>
+              {!tableCollapsed && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {filtered.length.toLocaleString()} record{filtered.length !== 1 ? "s" : ""}
+                  {hasFilters ? " matching filters" : " total"}
+                  {" · "}Revenue {totalRevenue >= 1_000_000 ? `$${(totalRevenue / 1_000_000).toFixed(2)}M` : `$${(totalRevenue / 1_000).toFixed(1)}K`}
+                  {" · "}Margin ${Math.round(totalRevenue - totalFreight).toLocaleString()}
+                </p>
               )}
-            </CardContent>
+            </CardHeader>
+            {!tableCollapsed && (
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/40">
+                        {["Order #", "Customer", "Rep", "Date", "Origin", "Destination", "Status", "Freight", "Total", "Rate"].map(h => (
+                          <th key={h} className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginated.length === 0 ? (
+                        <tr>
+                          <td colSpan={10} className="py-12 text-center text-muted-foreground text-sm">
+                            No records match your filters
+                          </td>
+                        </tr>
+                      ) : (
+                        paginated.map((r, i) => (
+                          <tr key={i} className="border-b hover:bg-muted/30 transition-colors" data-testid={`row-financial-${i}`}>
+                            <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{r["Order number"] || "—"}</td>
+                            <td className="px-3 py-2.5 font-medium max-w-[160px] truncate">{r["Customer"] || "—"}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{r["Operations user"] || "—"}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{formatDate(r["Date ordered"])}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap">{r["Shipper city"] ? `${r["Shipper city"]}, ${r["Shipper state"]}` : "—"}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap">{r["Consignee city"] ? `${r["Consignee city"]}, ${r["Consignee state"]}` : "—"}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap">
+                              {r["Status"] ? (
+                                <Badge variant="outline" className="text-xs capitalize">{r["Status"]}</Badge>
+                              ) : "—"}
+                            </td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs">{formatCurrency(r["Freight charge"])}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs font-semibold text-green-600 dark:text-green-400">{formatCurrency(r["Total charges"])}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs">{formatCurrency(r["Rate"])}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between px-4 py-3 border-t">
+                    <p className="text-xs text-muted-foreground">
+                      Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length.toLocaleString()}
+                    </p>
+                    <div className="flex items-center gap-1">
+                      <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+                        <ChevronLeft className="h-3 w-3" />
+                      </Button>
+                      <span className="text-xs px-2">{page} / {totalPages}</span>
+                      <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+                        <ChevronRight className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            )}
           </Card>
 
         </>

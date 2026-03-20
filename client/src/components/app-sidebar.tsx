@@ -154,7 +154,7 @@ export function AppSidebar() {
                   <SidebarMenuButton asChild isActive={location === "/historical-data"}>
                     <Link href="/historical-data" data-testid="link-historical-data">
                       <History className="h-4 w-4" />
-                      <span>Historical Data</span>
+                      <span>Lane Analytics</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

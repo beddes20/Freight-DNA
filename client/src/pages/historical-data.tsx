@@ -554,7 +554,7 @@ export default function HistoricalData() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <History className="h-6 w-6 text-primary" />
-            <h1 className="text-2xl font-bold tracking-tight">Historical Data</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Lane Analytics</h1>
           </div>
           <Button variant="outline" size="sm" onClick={handleRefresh} data-testid="button-refresh-historical" className="gap-1.5 text-muted-foreground hover:text-foreground">
             <RefreshCw className="h-3.5 w-3.5" />
