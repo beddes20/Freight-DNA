@@ -18,6 +18,7 @@ import {
   DollarSign,
   Package,
   TrendingUp,
+  TrendingDown,
   Filter,
   X,
   FileSpreadsheet,
@@ -36,6 +37,13 @@ import {
   RefreshCw,
   Sparkles,
   Users,
+  Trophy,
+  CalendarDays,
+  Target,
+  Minus,
+  ArrowUp,
+  ArrowDown,
+  Medal,
 } from "lucide-react";
 import { DataAnalystPortlet } from "@/components/data-analyst-portlet";
 
@@ -123,6 +131,19 @@ export default function Financials() {
     queryKey: ["/api/settings/onedrive-url"],
     enabled: canSyncOneDrive,
   });
+
+  const { data: sheetsData } = useQuery<{
+    bestDealDaysSpot: Record<string, any>[];
+    bestDealDaysAll: Record<string, any>[];
+    trendAnalysis: Record<string, any>[];
+    averagesData: Record<string, any>[];
+    dailyAcquisition: Record<string, any>[];
+  }>({
+    queryKey: ["/api/financials/sheets"],
+  });
+
+  const [todayRepFilter, setTodayRepFilter] = useState("all");
+  const [todayTypeFilter, setTodayTypeFilter] = useState("all");
 
   const saveUrlMutation = useMutation({
     mutationFn: async (url: string) => {
@@ -631,9 +652,21 @@ export default function Financials() {
       </div>
 
       <Tabs defaultValue="data" className="w-full">
-        <TabsList data-testid="tabs-financials">
+        <TabsList data-testid="tabs-financials" className="flex-wrap h-auto">
           <TabsTrigger value="data" className="flex items-center gap-1.5" data-testid="tab-data">
             <BarChart3 className="h-3.5 w-3.5" />Data
+          </TabsTrigger>
+          <TabsTrigger value="records" className="flex items-center gap-1.5" data-testid="tab-records">
+            <Trophy className="h-3.5 w-3.5" />Records
+          </TabsTrigger>
+          <TabsTrigger value="trends" className="flex items-center gap-1.5" data-testid="tab-trends">
+            <TrendingUp className="h-3.5 w-3.5" />Trends
+          </TabsTrigger>
+          <TabsTrigger value="averages" className="flex items-center gap-1.5" data-testid="tab-averages">
+            <Target className="h-3.5 w-3.5" />Averages
+          </TabsTrigger>
+          <TabsTrigger value="today" className="flex items-center gap-1.5" data-testid="tab-today">
+            <CalendarDays className="h-3.5 w-3.5" />Today
           </TabsTrigger>
           <TabsTrigger value="analyze" className="flex items-center gap-1.5" data-testid="tab-analyze">
             <Sparkles className="h-3.5 w-3.5" />DNA Analysis
@@ -1115,6 +1148,295 @@ export default function Financials() {
         </div>
       ) : null}
 
+        </TabsContent>
+
+        {/* ── RECORDS TAB ─────────────────────────────────────────────── */}
+        <TabsContent value="records" className="mt-4 space-y-4">
+          {(!sheetsData?.bestDealDaysSpot?.length && !sheetsData?.bestDealDaysAll?.length) ? (
+            <Card><CardContent className="py-12 text-center text-muted-foreground">
+              <Trophy className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">Upload your NUMBERS.xlsx file to see rep records</p>
+            </CardContent></Card>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {[
+                { label: "Spot Records", icon: Trophy, data: sheetsData?.bestDealDaysSpot ?? [], color: "text-amber-500" },
+                { label: "All Loads Records", icon: Medal, data: sheetsData?.bestDealDaysAll ?? [], color: "text-blue-500" },
+              ].map(({ label, icon: Icon, data, color }) => (
+                <Card key={label}>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Icon className={`h-4 w-4 ${color}`} />
+                      {label}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    {data.length === 0 ? (
+                      <p className="text-sm text-muted-foreground px-6 pb-4">No data available</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b bg-muted/30">
+                              <th className="px-4 py-2 text-left font-medium text-muted-foreground text-xs">#</th>
+                              <th className="px-4 py-2 text-left font-medium text-muted-foreground text-xs">Rep</th>
+                              <th className="px-4 py-2 text-left font-medium text-muted-foreground text-xs">Best Day</th>
+                              <th className="px-4 py-2 text-right font-medium text-muted-foreground text-xs">Orders</th>
+                              <th className="px-4 py-2 text-right font-medium text-muted-foreground text-xs">Total</th>
+                              <th className="px-4 py-2 text-left font-medium text-muted-foreground text-xs">Note</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {data.map((row: any, i: number) => {
+                              const rank = row["Rank"] ?? (i + 1);
+                              const rep = row["Sales Rep"] ?? row["Rep"] ?? "";
+                              const bestDay = row["Best Day"] ?? "";
+                              const orders = row["Orders that day"] ?? row["Orders"] ?? "";
+                              const total = row["Total Orders"] ?? "";
+                              const prevBest = row["Prev Best"] ?? "";
+                              const prevDate = row["Prev Date"] ?? "";
+                              const isNewRecord = prevBest !== "" && prevBest !== null && prevBest !== undefined;
+                              return (
+                                <tr key={i} className={`border-b last:border-0 ${isNewRecord ? "bg-amber-50/50 dark:bg-amber-950/20" : "hover:bg-muted/30"}`}>
+                                  <td className="px-4 py-2.5">
+                                    {rank === 1 ? <Trophy className="h-4 w-4 text-amber-500" /> :
+                                     rank === 2 ? <Medal className="h-4 w-4 text-slate-400" /> :
+                                     rank === 3 ? <Medal className="h-4 w-4 text-amber-700" /> :
+                                     <span className="text-muted-foreground text-xs">{rank}</span>}
+                                  </td>
+                                  <td className="px-4 py-2.5 font-medium">{rep}</td>
+                                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{bestDay}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold">{orders}</td>
+                                  <td className="px-4 py-2.5 text-right text-muted-foreground text-xs">{total}</td>
+                                  <td className="px-4 py-2.5">
+                                    {isNewRecord && (
+                                      <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-xs">
+                                        🏆 New! (was {prevBest} on {prevDate})
+                                      </Badge>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ── TRENDS TAB ──────────────────────────────────────────────── */}
+        <TabsContent value="trends" className="mt-4">
+          {!sheetsData?.trendAnalysis?.length ? (
+            <Card><CardContent className="py-12 text-center text-muted-foreground">
+              <TrendingUp className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">Upload your NUMBERS.xlsx file to see account trends</p>
+            </CardContent></Card>
+          ) : (() => {
+            const rows = sheetsData.trendAnalysis;
+            const allKeys = Object.keys(rows[0] ?? {});
+            const weekCols = allKeys.filter(k => k !== "Customer" && k.trim() !== "");
+            return (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4 text-blue-500" />
+                    Account Trends — Week Over Week Load Acquisition
+                  </CardTitle>
+                  <p className="text-xs text-muted-foreground">Green = up from prior week · Red = down · Gray = same</p>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/30">
+                          <th className="px-4 py-2 text-left font-medium text-muted-foreground text-xs sticky left-0 bg-muted/30 min-w-[160px]">Customer</th>
+                          {weekCols.map(wk => (
+                            <th key={wk} className="px-3 py-2 text-right font-medium text-muted-foreground text-xs whitespace-nowrap">{wk}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((row: any, i: number) => (
+                          <tr key={i} className="border-b last:border-0 hover:bg-muted/20">
+                            <td className="px-4 py-2 font-medium sticky left-0 bg-background text-xs">{row["Customer"] ?? ""}</td>
+                            {weekCols.map((wk, wi) => {
+                              const val = row[wk];
+                              const num = Number(val);
+                              const prev = wi > 0 ? Number(row[weekCols[wi - 1]]) : null;
+                              const trend = prev !== null && !isNaN(num) && !isNaN(prev)
+                                ? num > prev ? "up" : num < prev ? "down" : "same"
+                                : "none";
+                              return (
+                                <td key={wk} className="px-3 py-2 text-right">
+                                  <span className={`inline-flex items-center justify-end gap-0.5 text-xs font-medium ${
+                                    trend === "up" ? "text-green-600 dark:text-green-400" :
+                                    trend === "down" ? "text-red-500 dark:text-red-400" :
+                                    "text-muted-foreground"
+                                  }`}>
+                                    {trend === "up" && <ArrowUp className="h-3 w-3" />}
+                                    {trend === "down" && <ArrowDown className="h-3 w-3" />}
+                                    {trend === "same" && <Minus className="h-3 w-3" />}
+                                    {val !== "" && val !== null && val !== undefined ? val : "—"}
+                                  </span>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
+        </TabsContent>
+
+        {/* ── AVERAGES TAB ────────────────────────────────────────────── */}
+        <TabsContent value="averages" className="mt-4">
+          {!sheetsData?.averagesData?.length ? (
+            <Card><CardContent className="py-12 text-center text-muted-foreground">
+              <Target className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">Upload your NUMBERS.xlsx file to see rep averages</p>
+            </CardContent></Card>
+          ) : (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Target className="h-4 w-4 text-green-500" />
+                  Rep Averages vs. Today
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">Yearly daily averages compared to today's acquisition + days hitting or beating their average this month</p>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/30">
+                        {Object.keys(sheetsData.averagesData[0] ?? {}).map(col => (
+                          <th key={col} className="px-4 py-2 text-left font-medium text-muted-foreground text-xs whitespace-nowrap">{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sheetsData.averagesData.map((row: any, i: number) => {
+                        const status = String(row["Status"] ?? "").toLowerCase();
+                        return (
+                          <tr key={i} className="border-b last:border-0 hover:bg-muted/20">
+                            {Object.entries(row).map(([col, val]: [string, any]) => (
+                              <td key={col} className="px-4 py-2.5 text-xs">
+                                {col === "Status" ? (
+                                  <Badge className={
+                                    status.includes("exceed") || status.includes("hit") || status === "on track" ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" :
+                                    status.includes("behind") ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" :
+                                    "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                                  }>{val}</Badge>
+                                ) : col === "Rank" ? (
+                                  <span className="font-bold">{val}</span>
+                                ) : col === "Sales Rep" ? (
+                                  <span className="font-medium">{val}</span>
+                                ) : (
+                                  <span>{val !== "" && val !== null && val !== undefined ? val : "—"}</span>
+                                )}
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        {/* ── TODAY TAB ───────────────────────────────────────────────── */}
+        <TabsContent value="today" className="mt-4 space-y-4">
+          {!sheetsData?.dailyAcquisition?.length ? (
+            <Card><CardContent className="py-12 text-center text-muted-foreground">
+              <CalendarDays className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">Upload your NUMBERS.xlsx file to see today's loads</p>
+            </CardContent></Card>
+          ) : (() => {
+            const allRows = sheetsData.dailyAcquisition;
+            const repOptions = [...new Set(allRows.map((r: any) => String(r["Operations User"] ?? r["Operations user"] ?? "").trim()).filter(Boolean))].sort();
+            const typeOptions = [...new Set(allRows.map((r: any) => String(r["Order Type"] ?? r["Order type"] ?? "").trim()).filter(Boolean))].sort();
+            const filtered = allRows.filter((r: any) => {
+              const rep = String(r["Operations User"] ?? r["Operations user"] ?? "").trim();
+              const type = String(r["Order Type"] ?? r["Order type"] ?? "").trim();
+              return (todayRepFilter === "all" || rep === todayRepFilter) &&
+                     (todayTypeFilter === "all" || type === todayTypeFilter);
+            });
+            const showCols = ["Order Number", "Order number", "Customer", "Operations User", "Operations user", "Order Type", "Order type", "Shipper City", "Shipper city", "Shipper State", "Shipper state", "Consignee city", "Consignee City", "Consignee state", "Consignee State", "Status", "Freight charge", "Freight Charge", "Total Charges", "Total charges"];
+            const availCols = Object.keys(allRows[0] ?? {}).filter(k => showCols.some(s => s.toLowerCase() === k.toLowerCase()));
+            return (
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div>
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <CalendarDays className="h-4 w-4 text-indigo-500" />
+                        Today's Load Activity
+                      </CardTitle>
+                      <p className="text-xs text-muted-foreground mt-0.5">{filtered.length} of {allRows.length} loads</p>
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                      <Select value={todayRepFilter} onValueChange={setTodayRepFilter}>
+                        <SelectTrigger className="h-8 text-xs w-36" data-testid="select-today-rep">
+                          <SelectValue placeholder="All Reps" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Reps</SelectItem>
+                          {repOptions.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Select value={todayTypeFilter} onValueChange={setTodayTypeFilter}>
+                        <SelectTrigger className="h-8 text-xs w-36" data-testid="select-today-type">
+                          <SelectValue placeholder="All Types" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Types</SelectItem>
+                          {typeOptions.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/30">
+                          {availCols.map(col => (
+                            <th key={col} className="px-3 py-2 text-left font-medium text-muted-foreground text-xs whitespace-nowrap">{col}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.map((row: any, i: number) => (
+                          <tr key={i} className="border-b last:border-0 hover:bg-muted/20">
+                            {availCols.map(col => (
+                              <td key={col} className="px-3 py-2.5 text-xs">
+                                {col === "Status" ? (
+                                  <Badge variant="outline" className="text-xs">{row[col]}</Badge>
+                                ) : (String(row[col] ?? "") || "—")}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
         </TabsContent>
 
         <TabsContent value="analyze" className="mt-4">

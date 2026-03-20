@@ -24,6 +24,29 @@ function findSheetByName(workbook: XLSX.WorkBook, preferredName: string): string
   return match || workbook.SheetNames[0];
 }
 
+function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
+  const readSheet = (name: string): any[] => {
+    const match = workbook.SheetNames.find(s => s.trim().toLowerCase() === name.toLowerCase());
+    if (!match) return [];
+    return XLSX.utils.sheet_to_json(workbook.Sheets[match], { defval: "" });
+  };
+  const boraRaw: any[] = readSheet("YTD BORA");
+  const rows = boraRaw.length > 0
+    ? boraRaw.filter((r: any) => {
+        const rc = (r["Revenue code"] || r["Revenue Code"] || "").toString().trim().toUpperCase();
+        return rc === "UTAHB";
+      })
+    : readSheet("All Data (YTD)");
+  return {
+    rows,
+    bestDealDaysSpot: readSheet("Best Deal Days (SPOT)"),
+    bestDealDaysAll: readSheet("Best Deal Days (ALL)"),
+    trendAnalysis: readSheet("Trend Analysis"),
+    averagesData: readSheet("Averages"),
+    dailyAcquisition: readSheet("Daily Acquisition Data"),
+  };
+}
+
 async function getVisibleFeedAuthorIds(user: { id: string; role: string; managerId: string | null }): Promise<string[] | undefined> {
   if (user.role === "admin") return undefined;
   if (user.role === "director" || user.role === "sales_director") {
@@ -2843,23 +2866,24 @@ export async function registerRoutes(
       if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
       const workbook = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true });
-      const sheetName = findSheetByName(workbook, "All Data (YTD)");
-      const sheet = workbook.Sheets[sheetName];
-      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const sheets = extractSheetsFromWorkbook(workbook);
 
       const summarySheetName = findSheetByName(workbook, "March Replit");
       const summarySheet = workbook.Sheets[summarySheetName];
-      const summaryRows: any[] = summarySheetName !== sheetName
-        ? XLSX.utils.sheet_to_json(summarySheet, { defval: "" })
-        : [];
+      const summaryRows: any[] = XLSX.utils.sheet_to_json(summarySheet, { defval: "" });
 
       const upload = await storage.createFinancialUpload({
         fileName: req.file.originalname,
         uploadedAt: new Date().toISOString(),
         uploadedBy: user.id,
-        rowCount: rows.length,
-        rows,
+        rowCount: sheets.rows.length,
+        rows: sheets.rows,
         summaryRows,
+        bestDealDaysSpot: sheets.bestDealDaysSpot,
+        bestDealDaysAll: sheets.bestDealDaysAll,
+        trendAnalysis: sheets.trendAnalysis,
+        averagesData: sheets.averagesData,
+        dailyAcquisition: sheets.dailyAcquisition,
       });
 
       await storage.setSetting("monthly_sync_failed", "");
@@ -2882,6 +2906,22 @@ export async function registerRoutes(
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete upload" });
+    }
+  });
+
+  app.get("/api/financials/sheets", requireAuth, async (req, res) => {
+    try {
+      const latest = await storage.getLatestFinancialUpload();
+      if (!latest) return res.json({ bestDealDaysSpot: [], bestDealDaysAll: [], trendAnalysis: [], averagesData: [], dailyAcquisition: [] });
+      res.json({
+        bestDealDaysSpot: (latest.bestDealDaysSpot as any[]) || [],
+        bestDealDaysAll: (latest.bestDealDaysAll as any[]) || [],
+        trendAnalysis: (latest.trendAnalysis as any[]) || [],
+        averagesData: (latest.averagesData as any[]) || [],
+        dailyAcquisition: (latest.dailyAcquisition as any[]) || [],
+      });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch sheets" });
     }
   });
 

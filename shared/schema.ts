@@ -153,6 +153,11 @@ export const financialUploads = pgTable("financial_uploads", {
   rowCount: integer("row_count").notNull().default(0),
   rows: jsonb("rows").notNull().default([]),
   summaryRows: jsonb("summary_rows").notNull().default([]),
+  bestDealDaysSpot: jsonb("best_deal_days_spot").notNull().default([]),
+  bestDealDaysAll: jsonb("best_deal_days_all").notNull().default([]),
+  trendAnalysis: jsonb("trend_analysis").notNull().default([]),
+  averagesData: jsonb("averages_data").notNull().default([]),
+  dailyAcquisition: jsonb("daily_acquisition").notNull().default([]),
 });
 
 export const insertFinancialUploadSchema = createInsertSchema(financialUploads).omit({

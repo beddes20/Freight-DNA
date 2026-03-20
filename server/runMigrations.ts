@@ -220,6 +220,13 @@ export async function runMigrations() {
     `);
     console.log("[migrations] market_share_entries table ensured");
 
+    await client.query(`ALTER TABLE financial_uploads ADD COLUMN IF NOT EXISTS best_deal_days_spot jsonb NOT NULL DEFAULT '[]'`);
+    await client.query(`ALTER TABLE financial_uploads ADD COLUMN IF NOT EXISTS best_deal_days_all jsonb NOT NULL DEFAULT '[]'`);
+    await client.query(`ALTER TABLE financial_uploads ADD COLUMN IF NOT EXISTS trend_analysis jsonb NOT NULL DEFAULT '[]'`);
+    await client.query(`ALTER TABLE financial_uploads ADD COLUMN IF NOT EXISTS averages_data jsonb NOT NULL DEFAULT '[]'`);
+    await client.query(`ALTER TABLE financial_uploads ADD COLUMN IF NOT EXISTS daily_acquisition jsonb NOT NULL DEFAULT '[]'`);
+    console.log("[migrations] financial_uploads extra sheets columns ensured");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {
