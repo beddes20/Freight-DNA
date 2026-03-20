@@ -917,20 +917,20 @@ export default function Financials() {
                       ) : (
                         paginated.map((r, i) => (
                           <tr key={i} className="border-b hover:bg-muted/30 transition-colors" data-testid={`row-financial-${i}`}>
-                            <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{r["Order number"] || "—"}</td>
-                            <td className="px-3 py-2.5 font-medium max-w-[160px] truncate">{r["Customer"] || "—"}</td>
-                            <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{r["Operations user"] || "—"}</td>
-                            <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{formatDate(r["Date ordered"])}</td>
-                            <td className="px-3 py-2.5 whitespace-nowrap">{r["Shipper city"] ? `${r["Shipper city"]}, ${r["Shipper state"]}` : "—"}</td>
-                            <td className="px-3 py-2.5 whitespace-nowrap">{r["Consignee city"] ? `${r["Consignee city"]}, ${r["Consignee state"]}` : "—"}</td>
+                            <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{r[colMap.orderNumber] as string || "—"}</td>
+                            <td className="px-3 py-2.5 font-medium max-w-[160px] truncate">{r[colMap.customer] as string || "—"}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{r[colMap.opsUser] as string || "—"}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">{formatDate(r[colMap.dateOrdered])}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap">{r[colMap.shipperCity] ? `${r[colMap.shipperCity]}, ${r[colMap.shipperState]}` : "—"}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap">{r[colMap.consigneeCity] ? `${r[colMap.consigneeCity]}, ${r[colMap.consigneeState]}` : "—"}</td>
                             <td className="px-3 py-2.5 whitespace-nowrap">
-                              {r["Status"] ? (
-                                <Badge variant="outline" className="text-xs capitalize">{r["Status"]}</Badge>
+                              {r[colMap.status] ? (
+                                <Badge variant="outline" className="text-xs capitalize">{r[colMap.status] as string}</Badge>
                               ) : "—"}
                             </td>
-                            <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs">{formatCurrency(r["Freight charge"])}</td>
-                            <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs font-semibold text-green-600 dark:text-green-400">{formatCurrency(r["Total charges"])}</td>
-                            <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs">{formatCurrency(r["Rate"])}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs">{formatCurrency(r[colMap.freightCharge])}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs font-semibold text-green-600 dark:text-green-400">{formatCurrency(r[colMap.totalCharges])}</td>
+                            <td className="px-3 py-2.5 whitespace-nowrap text-right font-mono text-xs">{formatCurrency(r[colMap.rate])}</td>
                           </tr>
                         ))
                       )}
