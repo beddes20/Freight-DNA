@@ -266,7 +266,13 @@ export default function Financials() {
     const totalRevenueAll = rows.reduce((s, r) => s + toNumber(r["Total charges"]), 0);
     const totalFreightAll = rows.reduce((s, r) => s + toNumber(r["Freight charge"]), 0);
     const totalMarginAll = totalRevenueAll - totalFreightAll;
-    const spotCount = rows.filter(r => /spot/i.test(String(r["Order Type"] || r["Movement type"] || ""))).length;
+
+    // Find order type column case-insensitively (TMS exports vary: "Order type", "Order Type", etc.)
+    const allKeys = Object.keys(rows[0] || {});
+    const orderTypeKey = allKeys.find(k => /order.?type/i.test(k));
+    const spotCount = rows.filter(r => /spot/i.test(String(orderTypeKey ? r[orderTypeKey] : ""))).length;
+    const contractCount = rows.filter(r => /contract/i.test(String(orderTypeKey ? r[orderTypeKey] : ""))).length;
+    const hybridCount = rows.filter(r => /hybrid/i.test(String(orderTypeKey ? r[orderTypeKey] : ""))).length;
     const spotPct = rows.length > 0 ? Math.round(spotCount / rows.length * 100) : 0;
 
     const repMap: Record<string, { loads: number; revenue: number; margin: number }> = {};
@@ -324,7 +330,7 @@ export default function Financials() {
         return { key, label, ...data };
       });
 
-    return { totalRevenueAll, totalMarginAll, totalLoadsAll: rows.length, spotCount, spotPct, contractCount: rows.length - spotCount, topReps, maxRepLoads, topCusts, maxCustRev, monthlyTrend };
+    return { totalRevenueAll, totalMarginAll, totalLoadsAll: rows.length, spotCount, spotPct, contractCount, hybridCount, topReps, maxRepLoads, topCusts, maxCustRev, monthlyTrend };
   }, [rows]);
 
   const financialContextData = useMemo(() => {
@@ -743,7 +749,7 @@ export default function Financials() {
               {
                 label: "Spot Loads",
                 value: dashboardMetrics.spotCount.toLocaleString(),
-                sub: `${dashboardMetrics.spotPct}% spot · ${dashboardMetrics.contractCount.toLocaleString()} contract`,
+                sub: `${dashboardMetrics.spotPct}% spot · ${dashboardMetrics.contractCount.toLocaleString()} contract${dashboardMetrics.hybridCount > 0 ? ` · ${dashboardMetrics.hybridCount} hybrid` : ""}`,
                 icon: Truck, color: "text-orange-600 dark:text-orange-400", bg: "bg-orange-100 dark:bg-orange-900/30",
               },
             ].map(s => (
