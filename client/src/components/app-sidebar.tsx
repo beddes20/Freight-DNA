@@ -30,7 +30,8 @@ const navItems = [
     roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
   },
   { title: "Goals",           url: "/goals",      icon: Target         },
-  { title: "My Report Card",  url: "/report/me",  icon: FileBarChart2  },
+  { title: "Report Cards",    url: "/reports",    icon: FileBarChart2, roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  { title: "My Report Card",  url: "/report/me",  icon: FileBarChart2, roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
   { title: "PTO Passoff",     url: "/pto-passoff",icon: Plane          },
 ];
 

@@ -142,8 +142,10 @@ export default function RepReportPage() {
   const managerLine = [rep.manager, rep.director].filter(Boolean).join(" · ");
   const tasksDoneLabel = `${tasks.completed} of ${tasks.completed + tasks.open} tasks`;
 
-  const canGoBack = user?.role === "admin" || user?.role === "director" ||
+  const isManager = user?.role === "admin" || user?.role === "director" ||
     user?.role === "national_account_manager" || user?.role === "sales_director";
+
+  const isViewingOwnReport = targetId === user?.id;
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-foreground font-sans" data-testid="page-rep-report">
@@ -153,15 +155,15 @@ export default function RepReportPage() {
         style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%)" }}
       >
         <div className="max-w-5xl mx-auto">
-          {/* Back button for managers */}
-          {canGoBack && (
+          {/* Back button */}
+          {isManager && (
             <button
-              onClick={() => navigate("/team-performance")}
+              onClick={() => navigate("/reports")}
               className="flex items-center gap-1.5 text-white/60 hover:text-white text-sm mb-4 transition-colors"
               data-testid="button-back-team"
             >
               <ArrowLeft className="h-4 w-4" />
-              Team Performance
+              All Report Cards
             </button>
           )}
 
