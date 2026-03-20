@@ -233,25 +233,26 @@ export default function Financials() {
     const keys = rows.length > 0 ? Object.keys(rows[0]) : [];
     const find = (pattern: RegExp, fallback: string) => keys.find(k => pattern.test(k)) ?? fallback;
     return {
-      totalCharges:     find(/total.?charges?|total.?revenue/i,              "Total charges"),
-      freightCharge:    find(/freight.?charge|carrier.?cost|linehaul/i,      "Freight charge"),
-      customer:         find(/customer/i,                                    "Customer"),
-      opsUser:          find(/operations?.?user|ops?.?user/i,               "Operations user"),
-      broker:           find(/^broker$/i,                                    "Broker"),
-      orderType:        find(/order.?type|load.?type|movement.?type/i,       "Order type"),
-      tenderMethod:     find(/tender/i,                                      "Tender Method"),
-      shipperCity:      find(/shipper.?city|origin.?city|pickup.?city/i,     "Shipper city"),
-      shipperState:     find(/shipper.?state|origin.?state|pickup.?state/i,  "Shipper state"),
-      consigneeCity:    find(/consignee.?city|dest.?city|delivery.?city/i,   "Consignee city"),
-      consigneeState:   find(/consignee.?state|dest.?state|delivery.?state/i,"Consignee state"),
-      status:           find(/^status$/i,                                    "Status"),
-      mode:             find(/^mode$/i,                                      "Mode"),
-      equipType:        find(/equipment.?type|equip.?type|trailer.?type/i,   "Equipment type"),
-      rate:             find(/^rate$|^price$/i,                              "Rate"),
-      orderNumber:      find(/order.?number|load.?number|shipment.?id/i,     "Order number"),
-      dateOrdered:      find(/date.?ordered|order.?date|ship.?date/i,        "Date ordered"),
-      shipperLocName:   find(/shipper.?location.?name/i,                     "Shipper location name"),
-      consigneeLocName: find(/consignee.?location.?name/i,                   "Consignee location name"),
+      totalCharges:     find(/total.?charges?|total.?revenue/i,                          "Total charges"),
+      freightCharge:    find(/freight.?charge|carrier.?cost|linehaul|^freight$/i,         "Freight charge"),
+      customer:         find(/customer/i,                                                 "Customer"),
+      opsUser:          find(/operations?.?user|ops?.?user/i,                            "Operations user"),
+      broker:           find(/^broker$/i,                                                 "Broker"),
+      orderType:        find(/order.?type|load.?type|movement.?type/i,                   "Order type"),
+      tenderMethod:     find(/tender/i,                                                   "Tender Method"),
+      shipperCity:      find(/shipper.?city|origin.?city|pickup.?city|^origin$/i,         "Shipper city"),
+      shipperState:     find(/shipper.?state|origin.?state|pickup.?state/i,               "Shipper state"),
+      consigneeCity:    find(/consignee.?city|dest.?city|delivery.?city|^destination$/i,  "Consignee city"),
+      consigneeState:   find(/consignee.?state|dest.?state|delivery.?state|destination.?state/i, "Consignee state"),
+      status:           find(/^status$/i,                                                 "Status"),
+      mode:             find(/^mode$/i,                                                   "Mode"),
+      equipType:        find(/equipment.?type|equip.?type|trailer.?type/i,               "Equipment type"),
+      rate:             find(/^rate$|^price$/i,                                           "Rate"),
+      orderNumber:      find(/order.?number|load.?number|shipment.?id|^order$/i,          "Order number"),
+      dateOrdered:      find(/date.?ordered|order.?date|ship.?date|delivery.?date/i,      "Date ordered"),
+      marginDollar:     find(/margin.?\$|^margin\s*\$|^margin$/i,                         "Margin $"),
+      shipperLocName:   find(/shipper.?location.?name/i,                                  "Shipper location name"),
+      consigneeLocName: find(/consignee.?location.?name/i,                                "Consignee location name"),
     };
   }, [rows]);
 
@@ -297,15 +298,21 @@ export default function Financials() {
 
   const dashboardMetrics = useMemo(() => {
     if (!rows.length) return null;
-    const { totalCharges: tcCol, freightCharge: fcCol, opsUser: ouCol, broker: brCol, customer: custCol, orderType: otCol, dateOrdered: doCol } = colMap;
+    const { totalCharges: tcCol, freightCharge: fcCol, opsUser: ouCol, broker: brCol,
+            customer: custCol, orderType: otCol, dateOrdered: doCol, marginDollar: mdCol } = colMap;
+
+    const allKeys = Object.keys(rows[0]);
+    const hasMargCol = allKeys.includes(mdCol);
+
+    const getRowMargin = (r: any) =>
+      hasMargCol ? toNumber(r[mdCol]) : toNumber(r[tcCol]) - toNumber(r[fcCol]);
 
     const totalRevenueAll = rows.reduce((s, r) => s + toNumber(r[tcCol]), 0);
-    const totalFreightAll = rows.reduce((s, r) => s + toNumber(r[fcCol]), 0);
-    const totalMarginAll = totalRevenueAll - totalFreightAll;
+    const totalMarginAll  = rows.reduce((s, r) => s + getRowMargin(r), 0);
 
-    const spotCount    = rows.filter(r => /spot/i.test(String(r[otCol] ?? ""))).length;
+    const spotCount     = rows.filter(r => /spot/i.test(String(r[otCol] ?? ""))).length;
     const contractCount = rows.filter(r => /contract/i.test(String(r[otCol] ?? ""))).length;
-    const hybridCount  = rows.filter(r => /hybrid/i.test(String(r[otCol] ?? ""))).length;
+    const hybridCount   = rows.filter(r => /hybrid/i.test(String(r[otCol] ?? ""))).length;
     const spotPct = rows.length > 0 ? Math.round(spotCount / rows.length * 100) : 0;
 
     const repMap: Record<string, { loads: number; revenue: number; margin: number }> = {};
@@ -315,7 +322,7 @@ export default function Financials() {
       if (!repMap[rep]) repMap[rep] = { loads: 0, revenue: 0, margin: 0 };
       repMap[rep].loads++;
       repMap[rep].revenue += toNumber(r[tcCol]);
-      repMap[rep].margin += toNumber(r[tcCol]) - toNumber(r[fcCol]);
+      repMap[rep].margin += getRowMargin(r);
     });
     const topReps = Object.entries(repMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 5);
     const maxRepLoads = topReps[0]?.[1].loads || 1;
@@ -331,7 +338,7 @@ export default function Financials() {
     const topCusts = Object.entries(custMap).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 5);
     const maxCustRev = topCusts[0]?.[1].revenue || 1;
 
-    const dateCol = doCol || Object.keys(rows[0]).find(c => /date/i.test(c));
+    const dateCol = allKeys.includes(doCol) ? doCol : allKeys.find(c => /date/i.test(c));
     const parseDate = (val: any): Date | null => {
       if (!val) return null;
       if (typeof val === "number" && val > 1000) {
@@ -351,7 +358,7 @@ export default function Financials() {
         if (!monthMap[key]) monthMap[key] = { loads: 0, revenue: 0, margin: 0 };
         monthMap[key].loads++;
         monthMap[key].revenue += toNumber(r[tcCol]);
-        monthMap[key].margin += toNumber(r[tcCol]) - toNumber(r[fcCol]);
+        monthMap[key].margin += getRowMargin(r);
       });
     }
     const monthlyTrend = Object.entries(monthMap)
@@ -373,7 +380,7 @@ export default function Financials() {
     const { totalCharges: tcCol, freightCharge: fcCol, opsUser: ouCol, broker: brCol,
             customer: custCol, orderType: otCol, tenderMethod: tendCol,
             shipperCity: scCol, shipperState: ssCol, consigneeCity: ccCol, consigneeState: csCol,
-            orderNumber: onCol, dateOrdered: doCol, status: stCol } = colMap;
+            orderNumber: onCol, dateOrdered: doCol, status: stCol, marginDollar: mdCol } = colMap;
 
     const fmt0 = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
     const pct = (n: number, d: number) => d > 0 ? `${((n / d) * 100).toFixed(1)}%` : "—";
@@ -396,8 +403,9 @@ export default function Financials() {
       return isNaN(d.getTime()) ? null : d;
     };
 
-    // Margin per row
-    const rowMargin = (r: any) => toNumber(r[tcCol]) - toNumber(r[fcCol]);
+    // Margin per row — use pre-computed column when available
+    const hasMargCol = allColumns.includes(mdCol);
+    const rowMargin = (r: any) => hasMargCol ? toNumber(r[mdCol]) : toNumber(r[tcCol]) - toNumber(r[fcCol]);
 
     const totalRevenue = rows.reduce((s, r) => s + toNumber(r[tcCol]), 0);
     const totalFreight = rows.reduce((s, r) => s + toNumber(r[fcCol]), 0);
