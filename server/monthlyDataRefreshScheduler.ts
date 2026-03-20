@@ -24,6 +24,26 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
     if (!match) return [];
     return XLSX.utils.sheet_to_json(workbook.Sheets[match], { defval: "" });
   };
+  const readSheetSmart = (name: string): any[] => {
+    const match = workbook.SheetNames.find(s => s.trim().toLowerCase() === name.toLowerCase());
+    if (!match) return [];
+    const raw: any[][] = XLSX.utils.sheet_to_json(workbook.Sheets[match], { header: 1, defval: "" }) as any[][];
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(10, raw.length); i++) {
+      const row = raw[i];
+      const nonEmpty = row.filter((c: any) => c !== "" && c !== null && c !== undefined);
+      const realStrings = nonEmpty.filter((c: any) => typeof c === "string" && !/^[\u{1F300}-\u{1FFFF}]/u.test(String(c)));
+      if (realStrings.length >= 2) { headerIdx = i; break; }
+    }
+    const headers = (raw[headerIdx] as any[]).map((h: any, i: number) => (h !== "" && h !== null ? String(h).trim() : `_c${i}`));
+    return raw.slice(headerIdx + 1)
+      .filter((row: any[]) => row.some((c: any) => c !== "" && c !== null && c !== undefined))
+      .map((row: any[]) => {
+        const obj: Record<string, any> = {};
+        headers.forEach((h: string, i: number) => { obj[h] = row[i] ?? ""; });
+        return obj;
+      });
+  };
   const boraRaw: any[] = readSheet("YTD BORA");
   const rows = boraRaw.length > 0
     ? boraRaw.filter((r: any) => {
@@ -35,9 +55,9 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
     rows,
     bestDealDaysSpot: readSheet("Best Deal Days (SPOT)"),
     bestDealDaysAll: readSheet("Best Deal Days (ALL)"),
-    trendAnalysis: readSheet("Trend Analysis"),
-    averagesData: readSheet("Averages"),
-    dailyAcquisition: readSheet("Daily Acquisition Data"),
+    trendAnalysis: readSheetSmart("Trend Analysis"),
+    averagesData: readSheetSmart("Averages"),
+    dailyAcquisition: readSheetSmart("Daily Acquisition Data"),
   };
 }
 
