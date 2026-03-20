@@ -29,11 +29,23 @@ export async function performOneDriveSync(uploadedBy: string): Promise<{ id: str
     .replace(/=/g, "")
     .replace(/\+/g, "-")
     .replace(/\//g, "_");
-  const downloadUrl = `https://api.onedrive.com/v1.0/shares/u!${base64}/root/content`;
 
-  const response = await fetch(downloadUrl, { redirect: "follow" });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch file from OneDrive (HTTP ${response.status}). Make sure the share link allows "Anyone with the link" to view.`);
+  // Try Microsoft Graph API first (works for OneDrive for Business / Microsoft 365),
+  // then fall back to the personal OneDrive API.
+  const endpoints = [
+    `https://graph.microsoft.com/v1.0/shares/u!${base64}/driveItem/content`,
+    `https://api.onedrive.com/v1.0/shares/u!${base64}/root/content`,
+  ];
+
+  let response: Response | null = null;
+  let lastStatus = 0;
+  for (const url of endpoints) {
+    const r = await fetch(url, { redirect: "follow" });
+    if (r.ok) { response = r; break; }
+    lastStatus = r.status;
+  }
+  if (!response) {
+    throw new Error(`Failed to fetch file from OneDrive (HTTP ${lastStatus}). Make sure the share link allows "Anyone with the link" to view and that it is a direct share link (not a folder link).`);
   }
 
   const arrayBuffer = await response.arrayBuffer();
