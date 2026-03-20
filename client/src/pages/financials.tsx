@@ -227,26 +227,60 @@ export default function Financials() {
 
   const rows: FinancialRow[] = financialData?.rows || [];
 
-  const uniqueReps = Array.from(new Set(rows.map(r => r["Operations user"]).filter(Boolean))).sort();
-  const uniqueCustomers = Array.from(new Set(rows.map(r => r["Customer"]).filter(Boolean))).sort();
-  const uniqueStatuses = Array.from(new Set(rows.map(r => r["Status"]).filter(Boolean))).sort();
+  // Resolve every key column name once, case-insensitively, from whatever headers the TMS export uses.
+  // This means "Order type", "Order Type", "ORDER TYPE" all work identically.
+  const colMap = useMemo(() => {
+    const keys = rows.length > 0 ? Object.keys(rows[0]) : [];
+    const find = (pattern: RegExp, fallback: string) => keys.find(k => pattern.test(k)) ?? fallback;
+    return {
+      totalCharges:   find(/total.?charges/i,        "Total charges"),
+      freightCharge:  find(/freight.?charge/i,        "Freight charge"),
+      customer:       find(/^customer$/i,             "Customer"),
+      opsUser:        find(/operations.?user/i,       "Operations user"),
+      broker:         find(/^broker$/i,               "Broker"),
+      orderType:      find(/order.?type/i,            "Order type"),
+      tenderMethod:   find(/tender/i,                 "Tender Method"),
+      shipperCity:    find(/shipper.?city/i,          "Shipper city"),
+      shipperState:   find(/shipper.?state/i,         "Shipper state"),
+      consigneeCity:  find(/consignee.?city/i,        "Consignee city"),
+      consigneeState: find(/consignee.?state/i,       "Consignee state"),
+      status:         find(/^status$/i,               "Status"),
+      mode:           find(/^mode$/i,                 "Mode"),
+      equipType:      find(/equipment.?type/i,        "Equipment type"),
+      rate:           find(/^rate$/i,                 "Rate"),
+      orderNumber:    find(/order.?number/i,          "Order number"),
+      dateOrdered:    find(/date.?ordered/i,          "Date ordered"),
+      shipperLocName: find(/shipper.?location.?name/i,"Shipper location name"),
+      consigneeLocName: find(/consignee.?location.?name/i, "Consignee location name"),
+    };
+  }, [rows]);
 
-  const filtered = rows.filter(r => {
+  const uniqueReps = useMemo(() =>
+    Array.from(new Set(rows.map(r => r[colMap.opsUser] as string).filter(Boolean))).sort(),
+    [rows, colMap]);
+  const uniqueCustomers = useMemo(() =>
+    Array.from(new Set(rows.map(r => r[colMap.customer] as string).filter(Boolean))).sort(),
+    [rows, colMap]);
+  const uniqueStatuses = useMemo(() =>
+    Array.from(new Set(rows.map(r => r[colMap.status] as string).filter(Boolean))).sort(),
+    [rows, colMap]);
+
+  const filtered = useMemo(() => rows.filter(r => {
     const q = search.toLowerCase();
-    if (filterRep !== "all" && r["Operations user"] !== filterRep) return false;
-    if (filterCustomer !== "all" && r["Customer"] !== filterCustomer) return false;
-    if (filterStatus !== "all" && r["Status"] !== filterStatus) return false;
+    if (filterRep !== "all" && r[colMap.opsUser] !== filterRep) return false;
+    if (filterCustomer !== "all" && r[colMap.customer] !== filterCustomer) return false;
+    if (filterStatus !== "all" && r[colMap.status] !== filterStatus) return false;
     if (q) {
-      const haystack = [r["Customer"], r["Operations user"], r["Shipper city"], r["Consignee city"], r["Order number"]].join(" ").toLowerCase();
+      const haystack = [r[colMap.customer], r[colMap.opsUser], r[colMap.shipperCity], r[colMap.consigneeCity], r[colMap.orderNumber]].join(" ").toLowerCase();
       if (!haystack.includes(q)) return false;
     }
     return true;
-  });
+  }), [rows, colMap, search, filterRep, filterCustomer, filterStatus]);
 
-  const totalRevenue = filtered.reduce((s, r) => s + toNumber(r["Total charges"]), 0);
-  const totalFreight = filtered.reduce((s, r) => s + toNumber(r["Freight charge"]), 0);
+  const totalRevenue = useMemo(() => filtered.reduce((s, r) => s + toNumber(r[colMap.totalCharges]), 0), [filtered, colMap]);
+  const totalFreight = useMemo(() => filtered.reduce((s, r) => s + toNumber(r[colMap.freightCharge]), 0), [filtered, colMap]);
   const loadCount = filtered.length;
-  const avgRate = loadCount > 0 ? filtered.reduce((s, r) => s + toNumber(r["Rate"]), 0) / loadCount : 0;
+  const avgRate = loadCount > 0 ? filtered.reduce((s, r) => s + toNumber(r[colMap.rate]), 0) / loadCount : 0;
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -263,42 +297,41 @@ export default function Financials() {
 
   const dashboardMetrics = useMemo(() => {
     if (!rows.length) return null;
-    const totalRevenueAll = rows.reduce((s, r) => s + toNumber(r["Total charges"]), 0);
-    const totalFreightAll = rows.reduce((s, r) => s + toNumber(r["Freight charge"]), 0);
+    const { totalCharges: tcCol, freightCharge: fcCol, opsUser: ouCol, broker: brCol, customer: custCol, orderType: otCol, dateOrdered: doCol } = colMap;
+
+    const totalRevenueAll = rows.reduce((s, r) => s + toNumber(r[tcCol]), 0);
+    const totalFreightAll = rows.reduce((s, r) => s + toNumber(r[fcCol]), 0);
     const totalMarginAll = totalRevenueAll - totalFreightAll;
 
-    // Find order type column case-insensitively (TMS exports vary: "Order type", "Order Type", etc.)
-    const allKeys = Object.keys(rows[0] || {});
-    const orderTypeKey = allKeys.find(k => /order.?type/i.test(k));
-    const spotCount = rows.filter(r => /spot/i.test(String(orderTypeKey ? r[orderTypeKey] : ""))).length;
-    const contractCount = rows.filter(r => /contract/i.test(String(orderTypeKey ? r[orderTypeKey] : ""))).length;
-    const hybridCount = rows.filter(r => /hybrid/i.test(String(orderTypeKey ? r[orderTypeKey] : ""))).length;
+    const spotCount    = rows.filter(r => /spot/i.test(String(r[otCol] ?? ""))).length;
+    const contractCount = rows.filter(r => /contract/i.test(String(r[otCol] ?? ""))).length;
+    const hybridCount  = rows.filter(r => /hybrid/i.test(String(r[otCol] ?? ""))).length;
     const spotPct = rows.length > 0 ? Math.round(spotCount / rows.length * 100) : 0;
 
     const repMap: Record<string, { loads: number; revenue: number; margin: number }> = {};
     rows.forEach(r => {
-      const rep = String(r["Operations user"] || r["Broker"] || "").trim();
+      const rep = String(r[ouCol] || r[brCol] || "").trim();
       if (!rep) return;
       if (!repMap[rep]) repMap[rep] = { loads: 0, revenue: 0, margin: 0 };
       repMap[rep].loads++;
-      repMap[rep].revenue += toNumber(r["Total charges"]);
-      repMap[rep].margin += toNumber(r["Total charges"]) - toNumber(r["Freight charge"]);
+      repMap[rep].revenue += toNumber(r[tcCol]);
+      repMap[rep].margin += toNumber(r[tcCol]) - toNumber(r[fcCol]);
     });
     const topReps = Object.entries(repMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 5);
     const maxRepLoads = topReps[0]?.[1].loads || 1;
 
     const custMap: Record<string, { loads: number; revenue: number }> = {};
     rows.forEach(r => {
-      const cust = String(r["Customer"] || "").trim();
+      const cust = String(r[custCol] || "").trim();
       if (!cust) return;
       if (!custMap[cust]) custMap[cust] = { loads: 0, revenue: 0 };
       custMap[cust].loads++;
-      custMap[cust].revenue += toNumber(r["Total charges"]);
+      custMap[cust].revenue += toNumber(r[tcCol]);
     });
     const topCusts = Object.entries(custMap).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 5);
     const maxCustRev = topCusts[0]?.[1].revenue || 1;
 
-    const dateCol = Object.keys(rows[0]).find(c => /date/i.test(c));
+    const dateCol = doCol || Object.keys(rows[0]).find(c => /date/i.test(c));
     const parseDate = (val: any): Date | null => {
       if (!val) return null;
       if (typeof val === "number" && val > 1000) {
@@ -317,8 +350,8 @@ export default function Financials() {
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
         if (!monthMap[key]) monthMap[key] = { loads: 0, revenue: 0, margin: 0 };
         monthMap[key].loads++;
-        monthMap[key].revenue += toNumber(r["Total charges"]);
-        monthMap[key].margin += toNumber(r["Total charges"]) - toNumber(r["Freight charge"]);
+        monthMap[key].revenue += toNumber(r[tcCol]);
+        monthMap[key].margin += toNumber(r[tcCol]) - toNumber(r[fcCol]);
       });
     }
     const monthlyTrend = Object.entries(monthMap)
@@ -331,13 +364,17 @@ export default function Financials() {
       });
 
     return { totalRevenueAll, totalMarginAll, totalLoadsAll: rows.length, spotCount, spotPct, contractCount, hybridCount, topReps, maxRepLoads, topCusts, maxCustRev, monthlyTrend };
-  }, [rows]);
+  }, [rows, colMap]);
 
   const financialContextData = useMemo(() => {
     if (!rows.length) return "";
 
+    const { totalCharges: tcCol, freightCharge: fcCol, opsUser: ouCol, broker: brCol,
+            customer: custCol, orderType: otCol, tenderMethod: tendCol,
+            shipperCity: scCol, shipperState: ssCol, consigneeCity: ccCol, consigneeState: csCol } = colMap;
+
     // --- Column discovery ---
-    const allColumns = rows.length > 0 ? Object.keys(rows[0]) : [];
+    const allColumns = Object.keys(rows[0]);
 
     // --- Detect date columns ---
     const dateCols = allColumns.filter(col => /date|day/i.test(col));
@@ -345,7 +382,6 @@ export default function Financials() {
     // Helper: parse a cell value as a JS Date
     const parseDate = (val: unknown): Date | null => {
       if (!val) return null;
-      // Excel serial number
       if (typeof val === "number" && val > 1000) {
         const d = new Date((val - 25569) * 86400 * 1000);
         if (!isNaN(d.getTime())) return d;
@@ -358,13 +394,15 @@ export default function Financials() {
       `Financial Data File: ${financialData?.fileName || "Unknown"}`,
       `Total Records: ${rows.length.toLocaleString()} (ALL aggregations below are computed from every row)`,
       `Columns (${allColumns.length}): ${allColumns.join(" | ")}`,
-      `Total Revenue (Total Charges): $${rows.reduce((s, r) => s + toNumber(r["Total charges"]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-      `Total Freight Charges: $${rows.reduce((s, r) => s + toNumber(r["Freight charge"]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      `Total Revenue (${tcCol}): $${rows.reduce((s, r) => s + toNumber(r[tcCol]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      `Total Freight Charges (${fcCol}): $${rows.reduce((s, r) => s + toNumber(r[fcCol]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
     ];
 
-    // --- Unique values for key categorical columns ---
-    const catCols = ["Customer", "Operations user", "Broker", "Shipper state", "Consignee state", "Tender Method", "Order Type", "Equipment type", "Status", "Mode"];
-    catCols.forEach(col => {
+    // --- Unique values for key categorical columns (resolved case-insensitively) ---
+    const catColKeys = [custCol, ouCol, brCol, ssCol, csCol, tendCol, otCol, colMap.equipType, colMap.status, colMap.mode]
+      .filter(Boolean)
+      .filter((v, i, a) => a.indexOf(v) === i);
+    catColKeys.forEach(col => {
       const vals = [...new Set(rows.map(r => String(r[col] || "")).filter(Boolean))];
       if (vals.length > 0 && vals.length <= 80) {
         lines.push(`Unique ${col} values (${vals.length}): ${vals.slice(0, 60).join(", ")}`);
@@ -372,10 +410,6 @@ export default function Financials() {
     });
 
     // --- Monthly breakdowns from ALL rows for each detected date column ---
-    const orderTypeCol = allColumns.find(c => /order.?type/i.test(c)) || "Order Type";
-    const tenderCol = allColumns.find(c => /tender/i.test(c)) || "Tender Method";
-    const repCol = allColumns.find(c => /operations.?user|broker/i.test(c)) || "Operations user";
-
     dateCols.forEach(dateCol => {
       type MonthEntry = { loads: number; revenue: number; byOrderType: Record<string, number>; byRep: Record<string, number> };
       const monthMap: Record<string, MonthEntry> = {};
@@ -387,10 +421,10 @@ export default function Financials() {
         if (!monthMap[key]) monthMap[key] = { loads: 0, revenue: 0, byOrderType: {}, byRep: {} };
         const entry = monthMap[key];
         entry.loads++;
-        entry.revenue += toNumber(r["Total charges"]);
-        const ot = String(r[orderTypeCol] || r[tenderCol] || "Unknown").trim();
+        entry.revenue += toNumber(r[tcCol]);
+        const ot = String(r[otCol] || r[tendCol] || "Unknown").trim();
         entry.byOrderType[ot] = (entry.byOrderType[ot] || 0) + 1;
-        const rep = String(r[repCol] || r["Broker"] || "Unknown").trim();
+        const rep = String(r[ouCol] || r[brCol] || "Unknown").trim();
         if (rep && rep !== "Unknown") entry.byRep[rep] = (entry.byRep[rep] || 0) + 1;
       });
 
@@ -424,14 +458,14 @@ export default function Financials() {
     const laneMap: Record<string, { loads: number; revenue: number }> = {};
 
     rows.forEach(r => {
-      const rep = r["Operations user"] || r["Broker"] || "";
-      const cust = r["Customer"] || "";
-      const origCity = r["Shipper city"] || "";
-      const origState = r["Shipper state"] || "";
-      const destCity = r["Consignee city"] || "";
-      const destState = r["Consignee state"] || "";
+      const rep = String(r[ouCol] || r[brCol] || "").trim();
+      const cust = String(r[custCol] || "").trim();
+      const origCity = String(r[scCol] || "").trim();
+      const origState = String(r[ssCol] || "").trim();
+      const destCity = String(r[ccCol] || "").trim();
+      const destState = String(r[csCol] || "").trim();
       const lane = origCity && destCity ? `${origCity}, ${origState} → ${destCity}, ${destState}` : "";
-      const rev = toNumber(r["Total charges"]);
+      const rev = toNumber(r[tcCol]);
 
       if (rep) { repMap[rep] = repMap[rep] || { loads: 0, revenue: 0 }; repMap[rep].loads++; repMap[rep].revenue += rev; }
       if (cust) { custMap[cust] = custMap[cust] || { loads: 0, revenue: 0 }; custMap[cust].loads++; custMap[cust].revenue += rev; }
@@ -465,7 +499,7 @@ export default function Financials() {
     });
 
     return lines.join("\n");
-  }, [rows, financialData]);
+  }, [rows, financialData, colMap]);
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
