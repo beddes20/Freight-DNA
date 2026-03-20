@@ -44,32 +44,44 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
         return obj;
       });
   };
-  const boraRaw: any[] = readSheet("YTD BORA");
+  // Check for a month-specific tab first: ReplitNumbers[Month] e.g. "ReplitNumbersMarch"
+  const monthNames = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+  const monthTabMatch = workbook.SheetNames.find(s => {
+    const lower = s.trim().toLowerCase();
+    return monthNames.some(m => lower === `replitnumbers${m}`);
+  });
+  const monthTabRows = monthTabMatch ? readSheet(monthTabMatch) : [];
+
   let rows: any[];
-  if (boraRaw.length > 0) {
-    const filtered = boraRaw.filter((r: any) => {
-      const rc = (r["Revenue code"] || r["Revenue Code"] || "").toString().trim().toUpperCase();
-      return rc === "UTAHB";
-    });
-    rows = filtered.length > 0 ? filtered : boraRaw;
+  if (monthTabRows.length > 0) {
+    rows = monthTabRows;
   } else {
-    const altRows = readSheet("All Data (YTD)");
-    if (altRows.length > 0) {
-      rows = altRows;
+    const boraRaw: any[] = readSheet("YTD BORA");
+    if (boraRaw.length > 0) {
+      const filtered = boraRaw.filter((r: any) => {
+        const rc = (r["Revenue code"] || r["Revenue Code"] || "").toString().trim().toUpperCase();
+        return rc === "UTAHB";
+      });
+      rows = filtered.length > 0 ? filtered : boraRaw;
     } else {
-      // Try "ReplitNumbers" tab — pre-filtered data, use as-is
-      const replitRows = readSheet("ReplitNumbers");
-      if (replitRows.length > 0) {
-        rows = replitRows;
+      const altRows = readSheet("All Data (YTD)");
+      if (altRows.length > 0) {
+        rows = altRows;
       } else {
-        // Last resort: read the sheet with the most data rows
-        const bestSheetName = workbook.SheetNames.reduce((best, name) => {
-          const sh = workbook.Sheets[name];
-          const len = (XLSX.utils.sheet_to_json(sh, { header: 1, defval: "" }) as any[][]).length;
-          const bestLen = (XLSX.utils.sheet_to_json(workbook.Sheets[best], { header: 1, defval: "" }) as any[][]).length;
-          return len > bestLen ? name : best;
-        }, workbook.SheetNames[0]);
-        rows = readSheet(bestSheetName);
+        // Try "ReplitNumbers" tab — pre-filtered data, use as-is
+        const replitRows = readSheet("ReplitNumbers");
+        if (replitRows.length > 0) {
+          rows = replitRows;
+        } else {
+          // Last resort: read the sheet with the most data rows
+          const bestSheetName = workbook.SheetNames.reduce((best, name) => {
+            const sh = workbook.Sheets[name];
+            const len = (XLSX.utils.sheet_to_json(sh, { header: 1, defval: "" }) as any[][]).length;
+            const bestLen = (XLSX.utils.sheet_to_json(workbook.Sheets[best], { header: 1, defval: "" }) as any[][]).length;
+            return len > bestLen ? name : best;
+          }, workbook.SheetNames[0]);
+          rows = readSheet(bestSheetName);
+        }
       }
     }
   }
