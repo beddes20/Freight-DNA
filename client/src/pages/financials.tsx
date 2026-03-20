@@ -372,10 +372,15 @@ export default function Financials() {
 
     const { totalCharges: tcCol, freightCharge: fcCol, opsUser: ouCol, broker: brCol,
             customer: custCol, orderType: otCol, tenderMethod: tendCol,
-            shipperCity: scCol, shipperState: ssCol, consigneeCity: ccCol, consigneeState: csCol } = colMap;
+            shipperCity: scCol, shipperState: ssCol, consigneeCity: ccCol, consigneeState: csCol,
+            orderNumber: onCol, dateOrdered: doCol, status: stCol } = colMap;
+
+    const fmt0 = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    const pct = (n: number, d: number) => d > 0 ? `${((n / d) * 100).toFixed(1)}%` : "—";
 
     // --- Column discovery ---
     const allColumns = Object.keys(rows[0]);
+    const totalRows = rows.length;
 
     // --- Detect date columns ---
     const dateCols = allColumns.filter(col => /date|day/i.test(col));
@@ -391,15 +396,44 @@ export default function Financials() {
       return isNaN(d.getTime()) ? null : d;
     };
 
+    // Margin per row
+    const rowMargin = (r: any) => toNumber(r[tcCol]) - toNumber(r[fcCol]);
+
+    const totalRevenue = rows.reduce((s, r) => s + toNumber(r[tcCol]), 0);
+    const totalFreight = rows.reduce((s, r) => s + toNumber(r[fcCol]), 0);
+    const totalMargin  = rows.reduce((s, r) => s + rowMargin(r), 0);
+    const marginPct    = totalRevenue > 0 ? (totalMargin / totalRevenue) * 100 : 0;
+
     const lines: string[] = [
       `Financial Data File: ${financialData?.fileName || "Unknown"}`,
-      `Total Records: ${rows.length.toLocaleString()} (ALL aggregations below are computed from every row)`,
+      `Total Records: ${totalRows.toLocaleString()} (ALL aggregations below are computed from every row)`,
       `Columns (${allColumns.length}): ${allColumns.join(" | ")}`,
-      `Total Revenue (${tcCol}): $${rows.reduce((s, r) => s + toNumber(r[tcCol]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-      `Total Freight Charges (${fcCol}): $${rows.reduce((s, r) => s + toNumber(r[fcCol]), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      `Total Revenue (${tcCol}): $${fmt0(totalRevenue)}`,
+      `Total Carrier Cost (${fcCol}): $${fmt0(totalFreight)}`,
+      `Total Margin: $${fmt0(totalMargin)} (${marginPct.toFixed(1)}% margin)`,
     ];
 
-    // --- Unique values for key categorical columns (resolved case-insensitively) ---
+    // ── DATA QUALITY STATS ──────────────────────────────────────────────────────
+    lines.push("", `DATA QUALITY (all ${totalRows.toLocaleString()} rows):`);
+    allColumns.forEach(col => {
+      const vals = rows.map(r => r[col]);
+      const nullCount   = vals.filter(v => v === null || v === undefined || String(v).trim() === "").length;
+      const uniqueCount = new Set(vals.map(v => String(v ?? "").trim().toLowerCase())).size;
+      const numericCount = vals.filter(v => v !== null && v !== undefined && String(v).trim() !== "" && !isNaN(Number(v))).length;
+      const nonNull = totalRows - nullCount;
+      const nullPctStr = pct(nullCount, totalRows);
+      // Only flag columns with notable issues
+      const issues: string[] = [];
+      if (nullCount > 0) issues.push(`${nullCount.toLocaleString()} blanks (${nullPctStr})`);
+      if (nonNull > 0 && numericCount > 0 && numericCount < nonNull) {
+        issues.push(`mixed types: ${numericCount.toLocaleString()} numeric + ${(nonNull - numericCount).toLocaleString()} text`);
+      }
+      if (issues.length > 0) {
+        lines.push(`  ${col}: ${nonNull.toLocaleString()} populated | ${issues.join(" | ")} | ${uniqueCount.toLocaleString()} unique values`);
+      }
+    });
+
+    // Categorical unique-value listing for low-cardinality columns
     const catColKeys = [custCol, ouCol, brCol, ssCol, csCol, tendCol, otCol, colMap.equipType, colMap.status, colMap.mode]
       .filter(Boolean)
       .filter((v, i, a) => a.indexOf(v) === i);
@@ -410,93 +444,128 @@ export default function Financials() {
       }
     });
 
-    // --- Monthly breakdowns from ALL rows for each detected date column ---
+    // ── MONTHLY BREAKDOWNS ───────────────────────────────────────────────────────
     dateCols.forEach(dateCol => {
-      type MonthEntry = { loads: number; revenue: number; byOrderType: Record<string, number>; byRep: Record<string, number> };
+      type MonthEntry = {
+        loads: number; revenue: number; margin: number;
+        byOrderType: Record<string, { loads: number; margin: number }>;
+        byRep: Record<string, { loads: number; margin: number }>;
+      };
       const monthMap: Record<string, MonthEntry> = {};
 
       rows.forEach(r => {
         const d = parseDate(r[dateCol]);
         if (!d) return;
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-        if (!monthMap[key]) monthMap[key] = { loads: 0, revenue: 0, byOrderType: {}, byRep: {} };
+        if (!monthMap[key]) monthMap[key] = { loads: 0, revenue: 0, margin: 0, byOrderType: {}, byRep: {} };
         const entry = monthMap[key];
+        const rev = toNumber(r[tcCol]);
+        const mgn = rowMargin(r);
         entry.loads++;
-        entry.revenue += toNumber(r[tcCol]);
+        entry.revenue += rev;
+        entry.margin  += mgn;
         const ot = String(r[otCol] || r[tendCol] || "Unknown").trim();
-        entry.byOrderType[ot] = (entry.byOrderType[ot] || 0) + 1;
+        if (!entry.byOrderType[ot]) entry.byOrderType[ot] = { loads: 0, margin: 0 };
+        entry.byOrderType[ot].loads++;
+        entry.byOrderType[ot].margin += mgn;
         const rep = String(r[ouCol] || r[brCol] || "Unknown").trim();
-        if (rep && rep !== "Unknown") entry.byRep[rep] = (entry.byRep[rep] || 0) + 1;
+        if (rep && rep !== "Unknown") {
+          if (!entry.byRep[rep]) entry.byRep[rep] = { loads: 0, margin: 0 };
+          entry.byRep[rep].loads++;
+          entry.byRep[rep].margin += mgn;
+        }
       });
 
       const sorted = Object.entries(monthMap).sort(([a], [b]) => a.localeCompare(b));
       if (sorted.length > 0) {
-        lines.push("", `MONTHLY BREAKDOWN BY ${dateCol.toUpperCase()} (all ${rows.length} rows, exact counts):`);
+        lines.push("", `MONTHLY BREAKDOWN BY ${dateCol.toUpperCase()} (all ${totalRows.toLocaleString()} rows, exact counts):`);
         sorted.forEach(([month, data]) => {
-          const label = (() => {
-            const [yr, mo] = month.split("-");
-            return new Date(Number(yr), Number(mo) - 1, 1).toLocaleString("default", { month: "long", year: "numeric" });
-          })();
+          const [yr, mo] = month.split("-");
+          const label = new Date(Number(yr), Number(mo) - 1, 1).toLocaleString("default", { month: "long", year: "numeric" });
+          const mPct = data.revenue > 0 ? ((data.margin / data.revenue) * 100).toFixed(1) : "0.0";
+          lines.push(`  ${label} (${month}): ${data.loads.toLocaleString()} loads | $${fmt0(data.revenue)} revenue | $${fmt0(data.margin)} margin (${mPct}%)`);
+
           const orderBreakdown = Object.entries(data.byOrderType)
-            .sort((a, b) => b[1] - a[1])
-            .map(([type, cnt]) => `${type}: ${cnt}`)
+            .sort((a, b) => b[1].loads - a[1].loads)
+            .map(([type, s]) => `${type}: ${s.loads} loads / $${fmt0(s.margin)} margin`)
             .join(", ");
-          const repBreakdown = Object.entries(data.byRep)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 8)
-            .map(([rep, cnt]) => `${rep}: ${cnt}`)
-            .join(", ");
-          lines.push(`  ${label} (${month}): ${data.loads} loads | $${data.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`);
           if (orderBreakdown) lines.push(`    Order Types: ${orderBreakdown}`);
+
+          const repBreakdown = Object.entries(data.byRep)
+            .sort((a, b) => b[1].loads - a[1].loads)
+            .slice(0, 10)
+            .map(([rep, s]) => `${rep}: ${s.loads} loads / $${fmt0(s.margin)} margin`)
+            .join(", ");
           if (repBreakdown) lines.push(`    By Rep: ${repBreakdown}`);
         });
       }
     });
 
-    // --- Aggregated summaries (all rows) ---
-    const repMap: Record<string, { loads: number; revenue: number }> = {};
-    const custMap: Record<string, { loads: number; revenue: number }> = {};
-    const laneMap: Record<string, { loads: number; revenue: number }> = {};
+    // ── AGGREGATED SUMMARIES ─────────────────────────────────────────────────────
+    const repMap:  Record<string, { loads: number; revenue: number; margin: number }> = {};
+    const custMap: Record<string, { loads: number; revenue: number; margin: number }> = {};
+    const laneMap: Record<string, { loads: number; revenue: number; margin: number }> = {};
 
     rows.forEach(r => {
-      const rep = String(r[ouCol] || r[brCol] || "").trim();
+      const rep  = String(r[ouCol] || r[brCol] || "").trim();
       const cust = String(r[custCol] || "").trim();
-      const origCity = String(r[scCol] || "").trim();
+      const origCity  = String(r[scCol] || "").trim();
       const origState = String(r[ssCol] || "").trim();
-      const destCity = String(r[ccCol] || "").trim();
+      const destCity  = String(r[ccCol] || "").trim();
       const destState = String(r[csCol] || "").trim();
       const lane = origCity && destCity ? `${origCity}, ${origState} → ${destCity}, ${destState}` : "";
       const rev = toNumber(r[tcCol]);
+      const mgn = rowMargin(r);
 
-      if (rep) { repMap[rep] = repMap[rep] || { loads: 0, revenue: 0 }; repMap[rep].loads++; repMap[rep].revenue += rev; }
-      if (cust) { custMap[cust] = custMap[cust] || { loads: 0, revenue: 0 }; custMap[cust].loads++; custMap[cust].revenue += rev; }
-      if (lane) { laneMap[lane] = laneMap[lane] || { loads: 0, revenue: 0 }; laneMap[lane].loads++; laneMap[lane].revenue += rev; }
+      if (rep)  { repMap[rep]   = repMap[rep]   || { loads: 0, revenue: 0, margin: 0 }; repMap[rep].loads++;   repMap[rep].revenue   += rev; repMap[rep].margin   += mgn; }
+      if (cust) { custMap[cust] = custMap[cust] || { loads: 0, revenue: 0, margin: 0 }; custMap[cust].loads++; custMap[cust].revenue += rev; custMap[cust].margin += mgn; }
+      if (lane) { laneMap[lane] = laneMap[lane] || { loads: 0, revenue: 0, margin: 0 }; laneMap[lane].loads++; laneMap[lane].revenue += rev; laneMap[lane].margin += mgn; }
     });
 
-    const topReps = Object.entries(repMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 15);
-    const topCusts = Object.entries(custMap).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 25);
-    const topLanes = Object.entries(laneMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 30);
+    const topReps  = Object.entries(repMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 20);
+    const topCusts = Object.entries(custMap).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 30);
+    const topLanes = Object.entries(laneMap).sort((a, b) => b[1].loads - a[1].loads).slice(0, 40);
 
     if (topReps.length) {
       lines.push("", "TOP REPS BY LOAD COUNT (all rows):");
-      topReps.forEach(([name, s]) => lines.push(`  • ${name}: ${s.loads.toLocaleString()} loads | $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`));
+      topReps.forEach(([name, s]) => {
+        const mp = s.revenue > 0 ? ((s.margin / s.revenue) * 100).toFixed(1) : "0.0";
+        lines.push(`  • ${name}: ${s.loads.toLocaleString()} loads | $${fmt0(s.revenue)} revenue | $${fmt0(s.margin)} margin (${mp}%)`);
+      });
     }
     if (topCusts.length) {
       lines.push("", "TOP CUSTOMERS BY REVENUE (all rows):");
-      topCusts.forEach(([name, s]) => lines.push(`  • ${name}: $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} | ${s.loads.toLocaleString()} loads`));
+      topCusts.forEach(([name, s]) => {
+        const mp = s.revenue > 0 ? ((s.margin / s.revenue) * 100).toFixed(1) : "0.0";
+        lines.push(`  • ${name}: ${s.loads.toLocaleString()} loads | $${fmt0(s.revenue)} revenue | $${fmt0(s.margin)} margin (${mp}%)`);
+      });
     }
     if (topLanes.length) {
       lines.push("", "TOP LANES BY LOAD COUNT (all rows):");
-      topLanes.forEach(([lane, s]) => lines.push(`  • ${lane}: ${s.loads.toLocaleString()} loads | $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`));
+      topLanes.forEach(([lane, s]) => {
+        const mp = s.revenue > 0 ? ((s.margin / s.revenue) * 100).toFixed(1) : "0.0";
+        lines.push(`  • ${lane}: ${s.loads.toLocaleString()} loads | $${fmt0(s.revenue)} revenue | $${fmt0(s.margin)} margin (${mp}%)`);
+      });
     }
 
-    // --- Raw row sample: up to 3000 rows for record-level lookups ---
-    const sampleSize = Math.min(rows.length, 3000);
+    // ── RAW DATA SAMPLE ──────────────────────────────────────────────────────────
+    // Send key columns only so we can include more rows without hitting token limits.
+    // Full aggregations above cover all rows; this section enables record-level lookups.
+    const keyCols = [onCol, doCol, custCol, ouCol, scCol, ssCol, ccCol, csCol,
+                     tcCol, fcCol, otCol, stCol, tendCol]
+      .filter(Boolean)
+      .filter((v, i, a) => a.indexOf(v) === i && allColumns.includes(v));
+
+    const sampleSize = Math.min(totalRows, 6000);
     const sampleRows = rows.slice(0, sampleSize);
-    lines.push("", `RAW DATA SAMPLE (${sampleSize} of ${rows.length} rows — use MONTHLY BREAKDOWN sections above for exact date-filtered totals):`);
-    lines.push(allColumns.join(" | "));
+    lines.push("",
+      `RAW DATA SAMPLE — key columns, ${sampleSize.toLocaleString()} of ${totalRows.toLocaleString()} rows`,
+      `(Note: "Margin" column is computed as ${tcCol} minus ${fcCol})`,
+      [...keyCols, "Margin"].join(" | ")
+    );
     sampleRows.forEach(r => {
-      lines.push(allColumns.map(col => String(r[col] ?? "")).join(" | "));
+      const mgn = rowMargin(r);
+      lines.push([...keyCols.map(col => String(r[col] ?? "")), fmt0(mgn)].join(" | "));
     });
 
     return lines.join("\n");
