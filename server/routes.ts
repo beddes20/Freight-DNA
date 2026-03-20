@@ -11,6 +11,7 @@ import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } f
 import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
+import { resolveColumns, getRepFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -279,24 +280,35 @@ function toMonthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function parseHistoricalRow(row: any): {
+function parseHistoricalRow(row: any, cols?: FinancialCols): {
   destCity: string; destState: string;
   origCity: string; origState: string;
   weekKey: string; monthKey: string; margin: number; revenue: number;
 } {
-  const hasNewFormat = "Origin state" in row || "Destination state" in row || ("Origin" in row && "Destination" in row);
+  const destK      = cols?.destination      ?? "Destination";
+  const destStateK = cols?.destinationState ?? "Destination state";
+  const origK      = cols?.origin           ?? "Origin";
+  const origStateK = cols?.originState      ?? "Origin state";
+  const weekK      = cols?.week             ?? "Week";
+  const delivK     = cols?.deliveryDate     ?? "Delivery date";
+  const marginK    = cols?.marginDollar     ?? "Margin $";
+  const revenueK   = cols?.revenue          ?? "Total revenue";
+
+  const hasNewFormat = row[origStateK] || row[destStateK]
+    || "Origin state" in row || "Destination state" in row
+    || ("Origin" in row && "Destination" in row);
+
   if (hasNewFormat) {
-    const destRaw = String(row["Destination"] || "").trim();
-    const destState = String(row["Destination state"] || "").trim();
-    const destCity = destRaw.includes(",") ? destRaw.split(",")[0].trim() : destRaw;
-    const origRaw = String(row["Origin"] || "").trim();
-    const origState = String(row["Origin state"] || "").trim();
-    const origCity = origRaw.includes(",") ? origRaw.split(",")[0].trim() : origRaw;
-    const weekRaw = String(row["Week"] || "").trim();
-    let weekKey = weekRaw || "";
+    const destRaw  = String(row[destK]      || "").trim();
+    const destState = String(row[destStateK] || "").trim();
+    const destCity  = destRaw.includes(",") ? destRaw.split(",")[0].trim() : destRaw;
+    const origRaw   = String(row[origK]     || "").trim();
+    const origState = String(row[origStateK] || "").trim();
+    const origCity  = origRaw.includes(",") ? origRaw.split(",")[0].trim() : origRaw;
+    const weekRaw   = String(row[weekK]     || "").trim();
+    let weekKey  = weekRaw || "";
     let monthKey = "";
-    // Prefer Delivery date serial for exact month
-    const serial = Number(row["Delivery date"]);
+    const serial = Number(row[delivK]);
     if (!isNaN(serial) && serial > 40000) {
       const d = new Date(new Date(1899, 11, 30).getTime() + serial * 86400000);
       monthKey = toMonthKey(d);
@@ -306,7 +318,6 @@ function parseHistoricalRow(row: any): {
         weekKey = `${y}-W${wn}`;
       }
     }
-    // Fall back to parsing "2025 W44" → first day of that week
     if (!monthKey && weekKey) {
       const m = weekKey.match(/^(\d{4})\s*W(\d+)$/);
       if (m) {
@@ -314,14 +325,28 @@ function parseHistoricalRow(row: any): {
         monthKey = toMonthKey(d);
       }
     }
-    return { destCity, destState, origCity, origState, weekKey, monthKey, margin: Number(row["Margin $"]) || 0, revenue: Number(row["Total revenue"]) || 0 };
+    return { destCity, destState, origCity, origState, weekKey, monthKey, margin: Number(row[marginK]) || 0, revenue: Number(row[revenueK]) || 0 };
   }
-  const destCity = String(row["Consignee city"] || row["consignee_city"] || "").trim();
-  const destState = String(row["Consignee state"] || row["consignee_state"] || "").trim();
-  const origCity = String(row["Shipper city"] || row["shipper_city"] || row["Origin City"] || "").trim();
-  const origState = String(row["Shipper state"] || row["shipper_state"] || row["Origin State"] || "").trim();
-  const dateStr = String(row["Date ordered"] || "").trim();
-  let weekKey = "";
+
+  // TMS / ReplistNumbers format
+  const consigneeCityK  = cols?.consigneeCity  ?? "Consignee city";
+  const consigneeStateK = cols?.consigneeState ?? "Consignee state";
+  const shipperCityK    = cols?.shipperCity    ?? "Shipper city";
+  const shipperStateK   = cols?.shipperState   ?? "Shipper state";
+  const dateOrderedK    = cols?.dateOrdered    ?? "Date ordered";
+  const totalChargesK   = cols?.totalCharges   ?? "Total charges";
+  const freightChargeK  = cols?.freightCharge  ?? "Freight charge";
+
+  const destCity  = String(row[consigneeCityK]  || "").trim();
+  const destState = String(row[consigneeStateK] || "").trim();
+  const origCity  = String(row[shipperCityK]    || "").trim();
+  const origState = String(row[shipperStateK]   || "").trim();
+  const dateStr   = String(row[dateOrderedK]    || "").trim();
+  const tc = Number(row[totalChargesK]  || 0);
+  const fc = Number(row[freightChargeK] || 0);
+  const rv = Number(row[revenueK]       || row[totalChargesK] || 0);
+
+  let weekKey  = "";
   let monthKey = "";
   if (dateStr) {
     try {
@@ -329,12 +354,12 @@ function parseHistoricalRow(row: any): {
       if (!isNaN(d.getTime())) {
         const y = d.getFullYear();
         const wn = Math.ceil(((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000 + new Date(y, 0, 1).getDay() + 1) / 7);
-        weekKey = `${y}-W${wn}`;
+        weekKey  = `${y}-W${wn}`;
         monthKey = toMonthKey(d);
       }
     } catch {}
   }
-  return { destCity, destState, origCity, origState, weekKey, monthKey, margin: 0, revenue: 0 };
+  return { destCity, destState, origCity, origState, weekKey, monthKey, margin: tc - fc, revenue: rv || tc };
 }
 
 export async function registerRoutes(
@@ -1516,24 +1541,24 @@ export async function registerRoutes(
       const uploads = await storage.getFinancialUploads();
       const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
 
+      const msCols = resolveColumns(allRows);
       // Filter rows matching this customer
       const matchedRows = allRows.filter(r => {
-        const cust = String(r["Customer"] || r["customer"] || "").toLowerCase().trim();
+        const cust = getCustomerFromRow(r, msCols).toLowerCase();
         return cust === customerName || cust.includes(customerName) || customerName.includes(cust);
       });
 
       // Group by month
       const byMonth: Record<string, { vtLoads: number; spotLoads: number }> = {};
       for (const row of matchedRows) {
-        const rawDate = row["Date ordered"] || row["date_ordered"] || row["Order Date"] || "";
+        const rawDate = row[msCols.dateOrdered] || "";
         if (!rawDate) continue;
         const d = new Date(rawDate);
         if (isNaN(d.getTime())) continue;
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
         if (!byMonth[key]) byMonth[key] = { vtLoads: 0, spotLoads: 0 };
         byMonth[key].vtLoads++;
-        // Detect spot: check for "spot", "transact", "brokerage" in tender method or order type columns
-        const tenderType = String(row["Tender Method"] || row["tender_method"] || row["Order Type"] || row["order_type"] || row["Status"] || "").toLowerCase();
+        const tenderType = String(row[msCols.tenderMethod] || row[msCols.orderType] || row[msCols.status] || "").toLowerCase();
         if (tenderType.includes("spot") || tenderType.includes("transact")) byMonth[key].spotLoads++;
       }
 
@@ -2531,21 +2556,22 @@ export async function registerRoutes(
           allRows.push(...(upload.rows as any[]));
         }
       }
-      allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+      const histCols = resolveColumns(allRows);
+      allRows = allRows.filter((r: any) => getStatusFromRow(r, histCols) !== "void");
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
         allRows = allRows.filter((r: any) => {
-          const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
+          const op = getRepFromRow(r, histCols);
           return teamNames.some(n => op.includes(n) || n.includes(op));
         });
       }
 
       const byDestWeek = new Map<string, Map<string, number>>();
       for (const row of allRows) {
-        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row);
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row, histCols);
         if (!city && !state) continue;
         const location = city && state ? `${city}, ${state}` : city || state;
         const week = weekKey || "unknown";
@@ -2593,27 +2619,28 @@ export async function registerRoutes(
           allRows.push(...(upload.rows as any[]));
         }
       }
-      allRows = allRows.filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+      const oppCols = resolveColumns(allRows);
+      allRows = allRows.filter((r: any) => getStatusFromRow(r, oppCols) !== "void");
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
         allRows = allRows.filter((r: any) => {
-          const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
+          const op = getRepFromRow(r, oppCols);
           return teamNames.some(n => op.includes(n) || n.includes(op));
         });
       } else if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
         const userName = user.name.toLowerCase();
         allRows = allRows.filter((r: any) => {
-          const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
+          const op = getRepFromRow(r, oppCols);
           return op.includes(userName) || userName.includes(op);
         });
       }
 
       const byDestWeek = new Map<string, Map<string, number>>();
       for (const row of allRows) {
-        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row);
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row, oppCols);
         if (!city && !state) continue;
         const location = city && state ? `${city}, ${state}` : city || state;
         const week = weekKey || "unknown";
@@ -2737,14 +2764,16 @@ export async function registerRoutes(
       const upload = await storage.getLatestFinancialUpload();
       if (!upload) return res.json(null);
 
-      let rows = ((upload.rows as any[]) || []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+      const rawRows: any[] = (upload.rows as any[]) || [];
+      const finCols = resolveColumns(rawRows);
+      let rows = rawRows.filter((r: any) => getStatusFromRow(r, finCols) !== "void");
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id);
         const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
         rows = rows.filter((r: any) => {
-          const op = String(r["Operations user"] || r["operations user"] || r["OPERATIONS USER"] || "").toLowerCase();
+          const op = getRepFromRow(r, finCols);
           return teamNames.some(n => op.includes(n) || n.includes(op));
         });
       }
@@ -2883,18 +2912,18 @@ export async function registerRoutes(
       // If no summary sheet, compute from transaction rows (new ReplistNumbers format)
       if (!raw.length) {
         const txRows: any[] = (latest.rows as any[]) || [];
+        const sumCols = resolveColumns(txRows);
         type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
         type CustomerEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number; repName: string; byMonth: Record<string, MonthBucket> };
         const byCustomer: Record<string, CustomerEntry> = {};
         for (const row of txRows) {
-          const customerName = String(row["Customer"] || "").trim();
+          const customerName = getCustomerFromRow(row, sumCols);
           if (!customerName) continue;
-          // Skip loads with no billed revenue — they are cancelled or error entries
-          const revenue = Number(row["Total revenue"] || row["Revenue"] || 0);
+          const revenue = Number(row[sumCols.revenue] || row[sumCols.totalCharges] || 0);
           if (revenue === 0) continue;
-          const { monthKey, margin } = parseHistoricalRow(row);
-          const rep = String(row["Salesperson"] || row["Operations user"] || "").trim();
-          const orderType = String(row["Order type"] || "").toLowerCase();
+          const { monthKey, margin } = parseHistoricalRow(row, sumCols);
+          const rep = getRepFromRow(row, sumCols) || String(row["Salesperson"] || "").trim();
+          const orderType = String(row[sumCols.orderType] || "").toLowerCase();
           const isSpot = orderType.includes("spot");
           if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0, repName: rep, byMonth: {} };
           byCustomer[customerName].totalLoads++;
@@ -3045,11 +3074,13 @@ export async function registerRoutes(
   app.get("/api/historical-data-summary", requireAuth, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploads();
-      const allRows = uploads.flatMap(u => (u.rows as any[]) || []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+      const rawHdsSrc = uploads.flatMap(u => (u.rows as any[]) || []);
+      const hdsCols = resolveColumns(rawHdsSrc);
+      const allRows = rawHdsSrc.filter((r: any) => getStatusFromRow(r, hdsCols) !== "void");
       const destWeekly: Record<string, Record<string, number>> = {};
       const destMeta: Record<string, { city: string; state: string }> = {};
       for (const row of allRows) {
-        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row);
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row, hdsCols);
         if (!city || !state) continue;
         const key = `${city.toLowerCase()}||${state.toLowerCase()}`;
         if (!destWeekly[key]) { destWeekly[key] = {}; destMeta[key] = { city, state }; }
@@ -3083,11 +3114,13 @@ export async function registerRoutes(
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const uploads = await storage.getFinancialUploads();
-      const allRows = uploads.flatMap(u => (u.rows as any[]) || []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+      const rawOppSrc2 = uploads.flatMap(u => (u.rows as any[]) || []);
+      const opp2Cols = resolveColumns(rawOppSrc2);
+      const allRows = rawOppSrc2.filter((r: any) => getStatusFromRow(r, opp2Cols) !== "void");
       const destWeekly: Record<string, Record<string, number>> = {};
       const destMeta: Record<string, { city: string; state: string }> = {};
       for (const row of allRows) {
-        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row);
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row, opp2Cols);
         if (!city || !state) continue;
         const key = `${city.toLowerCase()}||${state.toLowerCase()}`;
         if (!destWeekly[key]) { destWeekly[key] = {}; destMeta[key] = { city, state }; }
@@ -3157,9 +3190,11 @@ export async function registerRoutes(
       const uploads = await storage.getFinancialUploads();
       const corridorMap: Record<string, { origin: string; destination: string; originCity: string; originState: string; destCity: string; destState: string; loads: number }> = {};
       for (const upload of uploads) {
-        const rows: any[] = ((upload as any).rows ?? []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+        const rawCorrRows: any[] = (upload as any).rows ?? [];
+        const corrCols = resolveColumns(rawCorrRows);
+        const rows: any[] = rawCorrRows.filter((r: any) => getStatusFromRow(r, corrCols) !== "void");
         for (const row of rows) {
-          const { origCity: oc, origState: os, destCity: dc, destState: ds } = parseHistoricalRow(row);
+          const { origCity: oc, origState: os, destCity: dc, destState: ds } = parseHistoricalRow(row, corrCols);
           if (!oc || !dc) continue;
           const key = `${oc}|${os}→${dc}|${ds}`;
           if (!corridorMap[key]) {
@@ -3185,10 +3220,12 @@ export async function registerRoutes(
       const pickups: Record<string, { city: string; state: string; count: number }> = {};
       let totalRows = 0;
       for (const upload of uploads) {
-        const rows: any[] = (Array.isArray((upload as any).rows) ? (upload as any).rows : []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+        const rawHeatRows: any[] = Array.isArray((upload as any).rows) ? (upload as any).rows : [];
+        const heatCols = resolveColumns(rawHeatRows);
+        const rows: any[] = rawHeatRows.filter((r: any) => getStatusFromRow(r, heatCols) !== "void");
         totalRows += rows.length;
         for (const row of rows) {
-          const { destCity: dc, destState: ds, origCity: oc, origState: os } = parseHistoricalRow(row);
+          const { destCity: dc, destState: ds, origCity: oc, origState: os } = parseHistoricalRow(row, heatCols);
           if (dc) { const k = `${dc}|${ds}`; if (!deliveries[k]) deliveries[k] = { city: dc, state: ds, count: 0 }; deliveries[k].count++; }
           if (oc) { const k = `${oc}|${os}`; if (!pickups[k]) pickups[k] = { city: oc, state: os, count: 0 }; pickups[k].count++; }
         }
@@ -3244,12 +3281,13 @@ export async function registerRoutes(
       let totalLoads = 0, spotLoads = 0, totalMargin = 0;
 
       for (const upload of uploads) {
-        const rows: any[] = (Array.isArray(upload.rows) ? upload.rows as any[] : [])
-          .filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+        const rawCompRows: any[] = Array.isArray(upload.rows) ? upload.rows as any[] : [];
+        const compCols = resolveColumns(rawCompRows);
+        const rows: any[] = rawCompRows.filter((r: any) => getStatusFromRow(r, compCols) !== "void");
         for (const row of rows) {
           if (!rowMatchesCompany(row)) continue;
-          const { destCity, destState, origCity, origState, monthKey, margin } = parseHistoricalRow(row);
-          const orderType = String(row["Order type"] || "").toLowerCase();
+          const { destCity, destState, origCity, origState, monthKey, margin } = parseHistoricalRow(row, compCols);
+          const orderType = String(row[compCols.orderType] || "").toLowerCase();
           const isSpot = orderType.includes("spot");
           totalLoads++;
           totalMargin += margin;
@@ -3308,9 +3346,11 @@ export async function registerRoutes(
       // Build delivery zone frequency
       const deliveryMap: Record<string, { city: string; state: string; count: number }> = {};
       for (const upload of uploads) {
-        const rows: any[] = ((upload as any).rows ?? []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+        const rawDzRows: any[] = (upload as any).rows ?? [];
+        const dzCols = resolveColumns(rawDzRows);
+        const rows: any[] = rawDzRows.filter((r: any) => getStatusFromRow(r, dzCols) !== "void");
         for (const row of rows) {
-          const { destCity: c, destState: s } = parseHistoricalRow(row);
+          const { destCity: c, destState: s } = parseHistoricalRow(row, dzCols);
           if (!c) continue;
           const k = `${c}|${s}`;
           if (!deliveryMap[k]) deliveryMap[k] = { city: c, state: s, count: 0 };
@@ -3386,9 +3426,11 @@ export async function registerRoutes(
       const ourPickupMap: Record<string, { city: string; state: string; count: number; lat: number; lng: number }> = {};
 
       for (const upload of uploads) {
-        const rows: any[] = (Array.isArray((upload as any).rows) ? (upload as any).rows : []).filter((r: any) => String(r["Status"] || "").toLowerCase() !== "void");
+        const rawProxRows: any[] = Array.isArray((upload as any).rows) ? (upload as any).rows : [];
+        const proxCols = resolveColumns(rawProxRows);
+        const rows: any[] = rawProxRows.filter((r: any) => getStatusFromRow(r, proxCols) !== "void");
         for (const row of rows) {
-          const { destCity: dc, destState: ds, origCity: oc, origState: os } = parseHistoricalRow(row);
+          const { destCity: dc, destState: ds, origCity: oc, origState: os } = parseHistoricalRow(row, proxCols);
           if (dc) {
             const k = `${dc}|${ds}`;
             if (!ourDeliveryMap[k]) {
@@ -4100,11 +4142,12 @@ export async function registerRoutes(
             let total = 0;
             if (!raw.length) {
               const txRows: any[] = (latestUpload.rows as any[]) || [];
+              const goalTxCols = resolveColumns(txRows);
               const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
               const byRep: Record<string, Record<string, number>> = {};
               for (const row of txRows) {
-                const { monthKey, margin } = parseHistoricalRow(row);
-                const rep = String(row["Operations user"] || row["Salesperson"] || "").trim().toLowerCase();
+                const { monthKey, margin } = parseHistoricalRow(row, goalTxCols);
+                const rep = getRepFromRow(row, goalTxCols);
                 if (!rep) continue;
                 if (!byRep[rep]) byRep[rep] = {};
                 if (monthKey) byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
@@ -4115,10 +4158,11 @@ export async function registerRoutes(
               const usesEmptyKeys = "__EMPTY" in firstRow;
               let rows = raw;
               if (usesEmptyKeys) rows = raw.filter((r: any) => { const n = String(r["__EMPTY"] || "").trim(); return n && n !== "Customer Name" && n !== "TOTAL" && n !== "Customer code"; });
+              const sumRawCols = resolveColumns(rows);
               for (const r of rows) {
                 let repName: string, totalMargin: number;
                 if (usesEmptyKeys) { repName = String(r["__EMPTY_6"] || "").trim(); totalMargin = Number(r["__EMPTY_3"] ?? 0); }
-                else { repName = String(r["Rep Name"] || r["Rep"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim(); totalMargin = Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0); }
+                else { repName = getRepFromRow(r, sumRawCols); totalMargin = Number(r["Total Margin $"] || r["Total Margin"] || 0); }
                 if (repName.toLowerCase() === repKeyLower) total += totalMargin;
               }
             }
@@ -4184,11 +4228,12 @@ export async function registerRoutes(
             let total = 0;
             if (!raw.length) {
               const txRows: any[] = (latestUpload.rows as any[]) || [];
+              const lbTxCols = resolveColumns(txRows);
               const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
               const byRep: Record<string, Record<string, number>> = {};
               for (const row of txRows) {
-                const { monthKey, margin } = parseHistoricalRow(row);
-                const rep = String(row["Operations user"] || row["Salesperson"] || "").trim().toLowerCase();
+                const { monthKey, margin } = parseHistoricalRow(row, lbTxCols);
+                const rep = getRepFromRow(row, lbTxCols);
                 if (!rep) continue;
                 if (!byRep[rep]) byRep[rep] = {};
                 if (monthKey) byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
@@ -4408,14 +4453,14 @@ export async function registerRoutes(
               if (!raw.length) {
                 // Transaction rows (ReplistNumbers) — group directly by rep, not customer
                 const txRows: any[] = (latest.rows as any[]) || [];
+                const progTxCols = resolveColumns(txRows);
                 // Derive the target month key from startDate (e.g. "2026-03-01" → "2026-03")
                 const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
                 // byRep: repCode → monthKey → totalMargin
                 const byRep: Record<string, Record<string, number>> = {};
                 for (const row of txRows) {
-                  const { monthKey, margin } = parseHistoricalRow(row);
-                  // Operations user holds the rep code (e.g. "m.moore"); Salesperson is a full-name code
-                  const rep = String(row["Operations user"] || row["Salesperson"] || "").trim().toLowerCase();
+                  const { monthKey, margin } = parseHistoricalRow(row, progTxCols);
+                  const rep = getRepFromRow(row, progTxCols);
                   if (!rep) continue;
                   if (!byRep[rep]) byRep[rep] = {};
                   if (monthKey) {
@@ -4473,12 +4518,13 @@ export async function registerRoutes(
       if (!uploads.length) return res.json({ months: [] });
       const latest = uploads[uploads.length - 1];
       const txRows: any[] = (latest.rows as any[]) || [];
+      const trendCols = resolveColumns(txRows);
       const repKeyLower = repKey.toLowerCase();
       const byMonth: Record<string, number> = {};
       for (const row of txRows) {
-        const { monthKey, margin } = parseHistoricalRow(row);
+        const { monthKey, margin } = parseHistoricalRow(row, trendCols);
         if (!monthKey) continue;
-        const rep = String(row["Operations user"] || row["Salesperson"] || "").trim().toLowerCase();
+        const rep = getRepFromRow(row, trendCols);
         if (rep !== repKeyLower) continue;
         byMonth[monthKey] = (byMonth[monthKey] || 0) + margin;
       }
