@@ -101,6 +101,7 @@ import { TaskDialog } from "@/components/task-dialog";
 import { CalloutDialog } from "@/components/callout-dialog";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
+import { MarketShareCard } from "@/components/market-share-card";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
@@ -1382,6 +1383,9 @@ export default function CompanyDetail() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Market Share */}
+      <MarketShareCard companyId={companyId} rfps={companyRfps} />
 
       {/* Account Tasks */}
       <Card data-testid="card-company-tasks">

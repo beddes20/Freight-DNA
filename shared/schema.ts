@@ -99,6 +99,29 @@ export const insertAwardSchema = createInsertSchema(awards).omit({
 export type InsertAward = z.infer<typeof insertAwardSchema>;
 export type Award = typeof awards.$inferSelect;
 
+export const marketShareEntries = pgTable("market_share_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  entryType: text("entry_type").notNull().default("monthly"), // 'monthly' | 'rfp_cycle'
+  periodLabel: text("period_label").notNull(),
+  periodStart: text("period_start"),
+  periodEnd: text("period_end"),
+  totalMarketLoads: integer("total_market_loads"),
+  vtLoads: integer("vt_loads").default(0),
+  spotLoads: integer("spot_loads").default(0),
+  rfpId: varchar("rfp_id"),
+  notes: text("notes"),
+  createdAt: text("created_at"),
+  createdBy: varchar("created_by"),
+});
+
+export const insertMarketShareEntrySchema = createInsertSchema(marketShareEntries).omit({
+  id: true,
+});
+
+export type InsertMarketShareEntry = z.infer<typeof insertMarketShareEntrySchema>;
+export type MarketShareEntry = typeof marketShareEntries.$inferSelect;
+
 export const userRoles = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director", "logistics_manager", "logistics_coordinator"] as const;
 export type UserRole = typeof userRoles[number];
 

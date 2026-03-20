@@ -1490,7 +1490,119 @@ export async function registerRoutes(
     }
   });
 
-  // ── Task Assignment ──────────────────────────────────────────────────────
+  // ── Market Share ──────────────────────────────────────────────────────────
+
+  app.get("/api/companies/:id/market-share", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const entries = await storage.getMarketShareEntries(req.params.id);
+      res.json(entries);
+    } catch (error) {
+      console.error("Error fetching market share:", error);
+      res.status(500).json({ error: "Failed to fetch market share data" });
+    }
+  });
+
+  // Auto-calculate monthly load counts from financial data for a given company
+  app.get("/api/companies/:id/market-share/auto-calc", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const company = await storage.getCompany(req.params.id);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const customerName = (company.financialAlias || company.name).toLowerCase().trim();
+      const uploads = await storage.getFinancialUploads();
+      const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
+
+      // Filter rows matching this customer
+      const matchedRows = allRows.filter(r => {
+        const cust = String(r["Customer"] || r["customer"] || "").toLowerCase().trim();
+        return cust === customerName || cust.includes(customerName) || customerName.includes(cust);
+      });
+
+      // Group by month
+      const byMonth: Record<string, { vtLoads: number; spotLoads: number }> = {};
+      for (const row of matchedRows) {
+        const rawDate = row["Date ordered"] || row["date_ordered"] || row["Order Date"] || "";
+        if (!rawDate) continue;
+        const d = new Date(rawDate);
+        if (isNaN(d.getTime())) continue;
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        if (!byMonth[key]) byMonth[key] = { vtLoads: 0, spotLoads: 0 };
+        byMonth[key].vtLoads++;
+        // Detect spot: check for "spot", "transact", "brokerage" in tender method or order type columns
+        const tenderType = String(row["Tender Method"] || row["tender_method"] || row["Order Type"] || row["order_type"] || row["Status"] || "").toLowerCase();
+        if (tenderType.includes("spot") || tenderType.includes("transact")) byMonth[key].spotLoads++;
+      }
+
+      const months = Object.keys(byMonth).sort();
+      const result = months.map(key => {
+        const [year, month] = key.split("-");
+        const date = new Date(Number(year), Number(month) - 1, 1);
+        const label = date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+        return {
+          periodKey: key,
+          periodLabel: label,
+          periodStart: `${key}-01`,
+          periodEnd: new Date(Number(year), Number(month), 0).toISOString().split("T")[0],
+          vtLoads: byMonth[key].vtLoads,
+          spotLoads: byMonth[key].spotLoads,
+        };
+      });
+
+      res.json({ months: result, totalRows: matchedRows.length, customerName });
+    } catch (error) {
+      console.error("Error auto-calculating market share:", error);
+      res.status(500).json({ error: "Failed to calculate from financial data" });
+    }
+  });
+
+  app.post("/api/companies/:id/market-share", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const entry = await storage.createMarketShareEntry({
+        ...req.body,
+        companyId: req.params.id,
+        createdAt: new Date().toISOString(),
+        createdBy: user.id,
+      });
+      res.status(201).json(entry);
+    } catch (error) {
+      console.error("Error creating market share entry:", error);
+      res.status(500).json({ error: "Failed to create market share entry" });
+    }
+  });
+
+  app.patch("/api/market-share/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const updated = await storage.updateMarketShareEntry(req.params.id, req.body);
+      if (!updated) return res.status(404).json({ error: "Entry not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating market share entry:", error);
+      res.status(500).json({ error: "Failed to update entry" });
+    }
+  });
+
+  app.delete("/api/market-share/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const deleted = await storage.deleteMarketShareEntry(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Entry not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting market share entry:", error);
+      res.status(500).json({ error: "Failed to delete entry" });
+    }
+  });
+
+  // ── Task Assignment ──────────────────────────────────────────────────────────
 
   app.get("/api/tasks", async (req, res) => {
     try {

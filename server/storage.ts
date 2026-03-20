@@ -7,6 +7,7 @@ import {
   contacts,
   rfps,
   awards,
+  marketShareEntries,
   financialUploads,
   appSettings,
   tasks,
@@ -73,6 +74,8 @@ import {
   taskComments,
   type TaskComment,
   type InsertTaskComment,
+  type MarketShareEntry,
+  type InsertMarketShareEntry,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -235,6 +238,11 @@ export interface IStorage {
   getInternalPosts(userId: string, role: string): Promise<any[]>;
   createInternalPost(data: { content: string; authorId: string; recipientIds: string[]; parentId?: string | null; createdAt: string }): Promise<any>;
   deleteInternalPost(id: string): Promise<boolean>;
+
+  getMarketShareEntries(companyId: string): Promise<MarketShareEntry[]>;
+  createMarketShareEntry(entry: InsertMarketShareEntry): Promise<MarketShareEntry>;
+  updateMarketShareEntry(id: string, data: Partial<InsertMarketShareEntry>): Promise<MarketShareEntry | undefined>;
+  deleteMarketShareEntry(id: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -1259,6 +1267,27 @@ export class DatabaseStorage implements IStorage {
 
   async deleteInternalPost(id: string): Promise<boolean> {
     const result = await db.delete(internalPosts).where(eq(internalPosts.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getMarketShareEntries(companyId: string): Promise<MarketShareEntry[]> {
+    return db.select().from(marketShareEntries)
+      .where(eq(marketShareEntries.companyId, companyId))
+      .orderBy(marketShareEntries.periodStart, marketShareEntries.createdAt);
+  }
+
+  async createMarketShareEntry(entry: InsertMarketShareEntry): Promise<MarketShareEntry> {
+    const [created] = await db.insert(marketShareEntries).values(entry).returning();
+    return created;
+  }
+
+  async updateMarketShareEntry(id: string, data: Partial<InsertMarketShareEntry>): Promise<MarketShareEntry | undefined> {
+    const [updated] = await db.update(marketShareEntries).set(data).where(eq(marketShareEntries.id, id)).returning();
+    return updated;
+  }
+
+  async deleteMarketShareEntry(id: string): Promise<boolean> {
+    const result = await db.delete(marketShareEntries).where(eq(marketShareEntries.id, id)).returning();
     return result.length > 0;
   }
 }

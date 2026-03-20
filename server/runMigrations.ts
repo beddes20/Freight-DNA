@@ -200,6 +200,26 @@ export async function runMigrations() {
     `);
     console.log("[migrations] internal_posts table ensured");
 
+    // Market share entries table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS market_share_entries (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        entry_type text NOT NULL DEFAULT 'monthly',
+        period_label text NOT NULL,
+        period_start text,
+        period_end text,
+        total_market_loads integer,
+        vt_loads integer DEFAULT 0,
+        spot_loads integer DEFAULT 0,
+        rfp_id varchar,
+        notes text,
+        created_at text,
+        created_by varchar
+      )
+    `);
+    console.log("[migrations] market_share_entries table ensured");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {
