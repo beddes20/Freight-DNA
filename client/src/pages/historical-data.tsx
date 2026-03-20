@@ -437,6 +437,7 @@ export default function HistoricalData() {
   const { data, isLoading } = useQuery<SummaryResponse>({ queryKey: ["/api/historical-data-summary"] });
   const { data: uploads = [], isLoading: uploadsLoading } = useQuery<UploadMeta[]>({ queryKey: ["/api/financials/uploads"], enabled: isAdmin });
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: laneCorridors = [] } = useQuery<{ origin: string; destination: string; loads: number }[]>({ queryKey: ["/api/historical-lane-corridors"], staleTime: Infinity, refetchOnWindowFocus: false });
   const { data: trendsData, isLoading: trendsLoading } = useQuery<HistoricalTrends>({
     queryKey: ["/api/companies", trendsCompanyId, "historical-trends"],
     enabled: !!trendsCompanyId,
@@ -506,38 +507,32 @@ export default function HistoricalData() {
 
   const historicalContextData = useMemo(() => {
     if (!data || data.totalRows === 0) return "";
+    const allDests = data.summary || [];
+    const hotZones = allDests.filter(d => d.isHotZone);
     const lines: string[] = [
       `Total Historical Records: ${data.totalRows.toLocaleString()}`,
-      `Total Destinations: ${(data.summary || []).length}`,
-      `Hot Zones (high-frequency): ${(data.summary || []).filter(d => d.isHotZone).length}`,
+      `Total Unique Delivery Destinations: ${allDests.length}`,
+      `Hot Zones (5+ loads/week at peak): ${hotZones.length}`,
     ];
-    const top20 = (data.summary || []).slice(0, 20);
-    if (top20.length) {
-      lines.push("", "TOP DELIVERY DESTINATIONS:");
-      top20.forEach(d => {
-        lines.push(`  • ${d.destination}: ${d.totalLoads.toLocaleString()} total loads | avg ${d.avgWeekly.toFixed(1)}/week${d.isHotZone ? " 🔥 HOT ZONE" : ""}`);
+
+    // All destinations (up to 200), sorted by avg weekly frequency
+    if (allDests.length) {
+      lines.push("", `ALL DELIVERY DESTINATIONS (${Math.min(allDests.length, 200)} of ${allDests.length}, sorted by avg weekly loads):`);
+      allDests.slice(0, 200).forEach(d => {
+        lines.push(`  • ${d.destination}: ${d.totalLoads.toLocaleString()} total loads | avg ${d.avgWeekly.toFixed(1)}/week | peak ${d.maxWeekly}/week${d.isHotZone ? " 🔥 HOT ZONE" : ""}`);
       });
     }
-    if (data.topCorridors?.length) {
-      lines.push("", "TOP LANE CORRIDORS:");
-      data.topCorridors.slice(0, 20).forEach((c: any) => {
-        lines.push(`  • ${c.origin || c.originState || ""} → ${c.destination || c.destinationState || ""}: ${(c.loadCount || c.count || 0).toLocaleString()} loads`);
+
+    // Full city-to-city lane corridors from the lane corridors API (up to 200)
+    if (laneCorridors.length) {
+      lines.push("", `CITY-TO-CITY LANE CORRIDORS (${Math.min(laneCorridors.length, 200)} of ${laneCorridors.length}, sorted by load count):`);
+      laneCorridors.slice(0, 200).forEach(c => {
+        lines.push(`  • ${c.origin} → ${c.destination}: ${c.loads.toLocaleString()} loads`);
       });
     }
-    if (data.originHubs?.length) {
-      lines.push("", "TOP ORIGIN HUBS:");
-      data.originHubs.slice(0, 10).forEach((h: any) => {
-        lines.push(`  • ${h.city || h.hub || h.origin}: ${(h.loadCount || h.count || 0).toLocaleString()} loads`);
-      });
-    }
-    if (data.stateMatrix?.length) {
-      lines.push("", "TOP STATE-TO-STATE FLOWS:");
-      data.stateMatrix.slice(0, 10).forEach((m: any) => {
-        lines.push(`  • ${m.originState} → ${m.destinationState}: ${(m.loadCount || m.count || 0).toLocaleString()} loads`);
-      });
-    }
+
     return lines.join("\n");
-  }, [data]);
+  }, [data, laneCorridors]);
 
   const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["/api/historical-data-summary"] });

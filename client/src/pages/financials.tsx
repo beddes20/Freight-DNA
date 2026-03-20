@@ -316,8 +316,8 @@ export default function Financials() {
       topLanes.forEach(([lane, s]) => lines.push(`  • ${lane}: ${s.loads.toLocaleString()} loads | $${s.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} revenue`));
     }
 
-    // --- Raw row sample: up to 200 rows, all columns, pipe-separated ---
-    const sampleRows = rows.slice(0, 200);
+    // --- Raw row sample: up to 2000 rows, all columns, pipe-separated ---
+    const sampleRows = rows.slice(0, 2000);
     lines.push("", `RAW DATA SAMPLE (${sampleRows.length} of ${rows.length} rows, all columns):`);
     lines.push(allColumns.join(" | "));
     sampleRows.forEach(r => {

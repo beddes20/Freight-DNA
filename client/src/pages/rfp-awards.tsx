@@ -507,11 +507,10 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
         });
       }
 
-      // Raw row sample so AI can see all column values
-      const sampleRows = rows.slice(0, 150);
-      lines.push("", `RAW RFP DATA SAMPLE (${sampleRows.length} of ${rows.length} rows, all columns):`);
+      // Full raw rows — send all of them so the AI can analyze every lane
+      lines.push("", `FULL RFP RAW DATA (${rows.length} rows, all columns):`);
       lines.push(allColumns.join(" | "));
-      sampleRows.forEach(r => {
+      rows.forEach(r => {
         lines.push(allColumns.map(col => String(r[col] ?? "")).join(" | "));
       });
     }
