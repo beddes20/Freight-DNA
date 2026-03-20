@@ -50,11 +50,11 @@ The application uses React, TypeScript, and Tailwind CSS with `shadcn/ui` for a 
 - **OneDrive API (Microsoft Graph API)**: Financial data synchronization.
 - **node-cron**: Scheduling recurring jobs.
 ### Email / SMTP
-- **Provider**: Office 365 via `smtp.office365.com:587` (STARTTLS)
+- **Provider**: GoDaddy email via `smtpout.secureserver.net:465` (SSL)
 - **From address**: `info@freight-dna.com` (env: `SMTP_FROM`)
-- **Secrets**: `SMTP_PASSWORD` (stored in Replit Secrets)
-- **Env vars**: `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_FROM_NAME` (all set)
-- **Note**: SMTP AUTH must be enabled on the mailbox in M365 Admin Center. If MFA is on, use an App Password.
+- **Secrets**: `SMTP_PASSWORD` (stored in Replit Secrets — GoDaddy email account password)
+- **Env vars**: `SMTP_HOST=smtpout.secureserver.net`, `SMTP_PORT=465`, `SMTP_FROM`, `SMTP_FROM_NAME` (all set in shared env)
 - **Rep Report emails**: Weekly (Mon 7am cron) + Monthly (1st of month 7am cron) via `repReportScheduler.ts`
 - **Template**: Styled HTML matching brand colors; built in `emailService.ts` → `buildRepReportEmail()`
 - **Manual send**: `POST /api/report/rep/:userId/send-email` (button on report page)
+- **SMTP test**: `POST /api/admin/smtp/test` — admin-only; UI panel at bottom of User Management page
