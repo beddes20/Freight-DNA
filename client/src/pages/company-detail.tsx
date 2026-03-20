@@ -408,7 +408,7 @@ export default function CompanyDetail() {
   type TrendMonth = { monthKey: string; totalLoads: number; spotLoads: number; totalMargin: number };
   type TrendDest = { city: string; state: string; count: number };
   type TrendCorridor = { origin: string; destination: string; loads: number };
-  type TrendsData = { months: TrendMonth[]; destinations: TrendDest[]; corridors: TrendCorridor[]; totalLoads: number; spotLoads: number; totalMargin: number };
+  type TrendsData = { months: TrendMonth[]; topDestinations: TrendDest[]; topCorridors: TrendCorridor[]; totalLoads: number; spotLoads: number; totalMargin: number };
   const { data: trendsData, isLoading: trendsLoading } = useQuery<TrendsData>({
     queryKey: ["/api/companies", companyId, "historical-trends"],
     enabled: showTrends,
@@ -3195,7 +3195,7 @@ export default function CompanyDetail() {
 
               {/* Top Destinations + Top Corridors side by side */}
               <div className="grid grid-cols-2 gap-4">
-                {trendsData.destinations.length > 0 && (
+                {(trendsData.topDestinations ?? []).length > 0 && (
                   <div>
                     <h3 className="text-sm font-semibold mb-2">Top Delivery Destinations</h3>
                     <div className="rounded-md border overflow-hidden">
@@ -3207,7 +3207,7 @@ export default function CompanyDetail() {
                           </tr>
                         </thead>
                         <tbody className="divide-y">
-                          {trendsData.destinations.map((d, i) => (
+                          {(trendsData.topDestinations ?? []).map((d, i) => (
                             <tr key={i} className="hover:bg-muted/30 transition-colors">
                               <td className="px-3 py-1.5">{d.city}{d.state ? `, ${d.state}` : ""}</td>
                               <td className="px-3 py-1.5 text-right font-medium">{d.count}</td>
@@ -3219,7 +3219,7 @@ export default function CompanyDetail() {
                   </div>
                 )}
 
-                {trendsData.corridors.length > 0 && (
+                {(trendsData.topCorridors ?? []).length > 0 && (
                   <div>
                     <h3 className="text-sm font-semibold mb-2">Top Lane Corridors</h3>
                     <div className="rounded-md border overflow-hidden">
@@ -3231,7 +3231,7 @@ export default function CompanyDetail() {
                           </tr>
                         </thead>
                         <tbody className="divide-y">
-                          {trendsData.corridors.map((c, i) => (
+                          {(trendsData.topCorridors ?? []).map((c, i) => (
                             <tr key={i} className="hover:bg-muted/30 transition-colors">
                               <td className="px-3 py-1.5 text-xs">
                                 <span className="font-medium">{c.origin}</span>
