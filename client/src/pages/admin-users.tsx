@@ -231,6 +231,7 @@ function OrgChartView({ users, onEdit }: { users: SafeUser[]; onEdit: (u: SafeUs
 function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: SafeUser[]; onClose: () => void; isNAM?: boolean }) {
   const [name, setName] = useState(user?.name || "");
   const [username, setUsername] = useState(user?.username || "");
+  const [email, setEmail] = useState((user as any)?.email || "");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState(user?.role || "account_manager");
   const [managerId, setManagerId] = useState(user?.managerId || "none");
@@ -257,7 +258,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const data: any = { name, username, role, managerId: managerId === "none" ? null : managerId };
+    const data: any = { name, username, email: email.trim() || null, role, managerId: managerId === "none" ? null : managerId };
     if (password) data.password = password;
     if (!user && !password) {
       toast({ title: "Error", description: "Password is required", variant: "destructive" });
@@ -273,8 +274,12 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
         <Input data-testid="input-user-name" value={name} onChange={(e) => setName(e.target.value)} required />
       </div>
       <div className="space-y-2">
-        <Label>Email</Label>
+        <Label>Login Email (Username)</Label>
         <Input data-testid="input-user-email" type="email" value={username} onChange={(e) => setUsername(e.target.value)} required />
+      </div>
+      <div className="space-y-2">
+        <Label>Report Delivery Email <span className="text-muted-foreground font-normal text-xs">(if different from login)</span></Label>
+        <Input data-testid="input-user-report-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={username || "Same as login email"} />
       </div>
       <div className="space-y-2">
         <Label>{user ? "New Password (leave blank to keep)" : "Password"}</Label>

@@ -105,7 +105,11 @@ export default function RepReportPage() {
       return res.json();
     },
     onSuccess: (d) => {
-      toast({ title: d.success ? "Email sent!" : "Could not send email", description: d.message, variant: d.success ? "default" : "destructive" });
+      toast({
+        title: d.success ? "Email sent!" : "Could not send email",
+        description: d.success && d.sentTo ? `Delivered to ${d.sentTo}` : d.message,
+        variant: d.success ? "default" : "destructive",
+      });
     },
     onError: () => {
       toast({ title: "Send failed", description: "Check SMTP configuration or try again.", variant: "destructive" });

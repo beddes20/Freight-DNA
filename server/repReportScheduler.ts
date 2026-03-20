@@ -9,15 +9,15 @@ function logMessage(msg: string) {
 
 const PORTAL_BASE = process.env.APP_URL || "https://sales-org-builder.replit.app";
 
-async function sendReportToUser(userId: string, period: "weekly" | "monthly"): Promise<boolean> {
+async function sendReportToUser(userId: string, period: "weekly" | "monthly"): Promise<{ ok: boolean; email: string | null }> {
   const allUsers = await storage.getUsers();
   const user = allUsers.find(u => u.id === userId);
-  if (!user) return false;
+  if (!user) return { ok: false, email: null };
 
   const email = (user as any).email || (user.username?.includes("@") ? user.username : null);
   if (!email) {
     logMessage(`Skipping ${user.name} — no email address configured`);
-    return false;
+    return { ok: false, email: null };
   }
 
   const data = await storage.getRepReport(userId, period);
@@ -31,7 +31,8 @@ async function sendReportToUser(userId: string, period: "weekly" | "monthly"): P
     ? `[Growth Chart] Weekly Report — ${data.rep.name} — ${data.period.label}`
     : `[Growth Chart] Monthly Report — ${data.rep.name} — ${data.period.label}`;
 
-  return sendEmail({ to: email, subject, html });
+  const ok = await sendEmail({ to: email, subject, html });
+  return { ok, email };
 }
 
 async function sendWeeklyReports(): Promise<void> {
@@ -47,7 +48,7 @@ async function sendWeeklyReports(): Promise<void> {
   );
   let sent = 0;
   for (const rep of reps) {
-    const ok = await sendReportToUser(rep.id, "weekly");
+    const { ok } = await sendReportToUser(rep.id, "weekly");
     if (ok) sent++;
   }
   logMessage(`Weekly reports complete — ${sent}/${reps.length} sent`);
@@ -66,13 +67,13 @@ async function sendMonthlyReports(): Promise<void> {
   );
   let sent = 0;
   for (const rep of reps) {
-    const ok = await sendReportToUser(rep.id, "monthly");
+    const { ok } = await sendReportToUser(rep.id, "monthly");
     if (ok) sent++;
   }
   logMessage(`Monthly reports complete — ${sent}/${reps.length} sent`);
 }
 
-export async function sendRepReportEmail(userId: string, period: "weekly" | "monthly"): Promise<boolean> {
+export async function sendRepReportEmail(userId: string, period: "weekly" | "monthly"): Promise<{ ok: boolean; email: string | null }> {
   return sendReportToUser(userId, period);
 }
 

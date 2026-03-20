@@ -665,6 +665,7 @@ export async function registerRoutes(
       const data: any = {};
       if (req.body.name !== undefined) data.name = req.body.name;
       if (req.body.username !== undefined) data.username = req.body.username;
+      if (req.body.email !== undefined) data.email = req.body.email || null;
       if (req.body.password) data.password = await bcrypt.hash(req.body.password, 10);
       if (currentUser.role === "admin") {
         if (req.body.role !== undefined) {
@@ -4495,11 +4496,11 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
       const { sendRepReportEmail } = await import("./repReportScheduler");
-      const ok = await sendRepReportEmail(userId, period);
+      const { ok, email: sentTo } = await sendRepReportEmail(userId, period);
       if (ok) {
-        res.json({ success: true, message: "Report email sent" });
+        res.json({ success: true, message: "Report email sent", sentTo });
       } else {
-        res.status(422).json({ success: false, message: "Email could not be sent — check SMTP config or user email address" });
+        res.status(422).json({ success: false, message: sentTo ? "Email could not be sent — check SMTP config" : "No email address configured for this user", sentTo });
       }
     } catch (error: any) {
       console.error("send-email error:", error);
