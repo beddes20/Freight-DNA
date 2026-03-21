@@ -39,9 +39,25 @@ const rfpSchema = z.object({
   value: z.string().optional(),
   dueDate: z.string().optional(),
   notes: z.string().optional(),
+  closeReason: z.string().optional(),
+  closeNotes: z.string().optional(),
 });
 
 type RfpFormData = z.infer<typeof rfpSchema>;
+
+const CLOSED_STATUSES = ["lost", "awarded", "partially_awarded", "declined"];
+
+const CLOSE_REASONS = [
+  { value: "price", label: "Price / Rate too high" },
+  { value: "incumbent", label: "Incumbent advantage" },
+  { value: "no_response", label: "No response from customer" },
+  { value: "capacity", label: "Capacity constraints" },
+  { value: "lane_coverage", label: "Lane coverage gap" },
+  { value: "relationship", label: "Relationship / trust" },
+  { value: "service", label: "Service concerns" },
+  { value: "awarded_us", label: "Awarded to us" },
+  { value: "other", label: "Other" },
+];
 
 interface RfpDialogProps {
   open: boolean;
@@ -66,8 +82,13 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
       value: "",
       dueDate: "",
       notes: "",
+      closeReason: "",
+      closeNotes: "",
     },
   });
+
+  const watchedStatus = form.watch("status");
+  const showCloseFields = CLOSED_STATUSES.includes(watchedStatus);
 
   useEffect(() => {
     if (rfp) {
@@ -78,6 +99,8 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
         value: rfp.value || "",
         dueDate: rfp.dueDate || "",
         notes: rfp.notes || "",
+        closeReason: (rfp as any).closeReason || "",
+        closeNotes: (rfp as any).closeNotes || "",
       });
     } else {
       form.reset({
@@ -87,6 +110,8 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
         value: "",
         dueDate: "",
         notes: "",
+        closeReason: "",
+        closeNotes: "",
       });
     }
   }, [rfp, form]);
@@ -123,13 +148,15 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
   });
 
   const onSubmit = (data: RfpFormData) => {
-    const payload: InsertRfp = {
+    const payload: any = {
       companyId: data.companyId,
       title: data.title,
       status: data.status,
       value: data.value || null,
       dueDate: data.dueDate || null,
       notes: data.notes || null,
+      closeReason: CLOSED_STATUSES.includes(data.status) ? (data.closeReason || null) : null,
+      closeNotes: CLOSED_STATUSES.includes(data.status) ? (data.closeNotes || null) : null,
       fileName: isEditing ? (rfp?.fileName ?? null) : null,
       fileData: isEditing ? (rfp?.fileData ?? null) : null,
       laneCount: isEditing ? (rfp?.laneCount ?? null) : null,
@@ -209,12 +236,54 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
                     <SelectContent>
                       <SelectItem value="pending">Pending</SelectItem>
                       <SelectItem value="submitted">Submitted</SelectItem>
+                      <SelectItem value="awarded">Awarded ✅</SelectItem>
+                      <SelectItem value="partially_awarded">Partially Awarded ✅</SelectItem>
+                      <SelectItem value="lost">Lost ❌</SelectItem>
+                      <SelectItem value="declined">Declined / No Bid</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
                 </FormItem>
               )}
             />
+
+            {showCloseFields && (
+              <>
+                <FormField
+                  control={form.control}
+                  name="closeReason"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Close Reason</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value || ""}>
+                        <FormControl>
+                          <SelectTrigger data-testid="select-rfp-close-reason">
+                            <SelectValue placeholder="Why did this close?" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {CLOSE_REASONS.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="closeNotes"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Close Notes <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormControl>
+                        <Textarea placeholder="What happened? What did we learn?" {...field} data-testid="input-rfp-close-notes" rows={2} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
 
             <FormField
               control={form.control}

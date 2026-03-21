@@ -23,6 +23,8 @@ import {
   X,
   UserCheck,
   ArrowUpDown,
+  Bookmark,
+  BookmarkCheck,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -93,10 +95,47 @@ export default function Customers() {
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [quickTouchType, setQuickTouchType] = useState("call");
   const [quickTouchNote, setQuickTouchNote] = useState("");
+  const [quickTouchSentiment, setQuickTouchSentiment] = useState("");
+  const [saveFilterName, setSaveFilterName] = useState("");
+  const [showSaveFilter, setShowSaveFilter] = useState(false);
+
+  type SavedFilter = { name: string; rep: string; industry: string; touch: string; sort: string };
+
+  const { data: savedFiltersData } = useQuery<{ filters: SavedFilter[] }>({
+    queryKey: ["/api/users/saved-filters"],
+  });
+  const savedFilters: SavedFilter[] = savedFiltersData?.filters || [];
+
+  const saveFilterMutation = useMutation({
+    mutationFn: (filters: SavedFilter[]) => apiRequest("PUT", "/api/users/saved-filters", { filters }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users/saved-filters"] });
+      setSaveFilterName("");
+      setShowSaveFilter(false);
+      toast({ title: "Filter preset saved!" });
+    },
+  });
+
+  const handleSaveFilter = () => {
+    if (!saveFilterName.trim()) return;
+    const newFilter: SavedFilter = { name: saveFilterName.trim(), rep: repFilter, industry: industryFilter, touch: touchFilter, sort: sortBy };
+    saveFilterMutation.mutate([...savedFilters.filter(f => f.name !== newFilter.name), newFilter]);
+  };
+
+  const handleLoadFilter = (f: SavedFilter) => {
+    setRepFilter(f.rep || "all");
+    setIndustryFilter(f.industry || "all");
+    setTouchFilter(f.touch || "all");
+    setSortBy(f.sort || "name");
+  };
+
+  const handleDeleteFilter = (name: string) => {
+    saveFilterMutation.mutate(savedFilters.filter(f => f.name !== name));
+  };
 
   const logTouchMutation = useMutation({
-    mutationFn: ({ contactId, type, notes }: { contactId: string; type: string; notes: string }) =>
-      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes }),
+    mutationFn: ({ contactId, type, notes, sentiment }: { contactId: string; type: string; notes: string; sentiment?: string }) =>
+      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
       toast({ title: "Touch logged!" });
@@ -104,6 +143,7 @@ export default function Customers() {
       setQuickTouchContactId("");
       setQuickTouchType("call");
       setQuickTouchNote("");
+      setQuickTouchSentiment("");
     },
     onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
   });
@@ -376,6 +416,42 @@ export default function Customers() {
               </SelectContent>
             </Select>
           </div>
+          <div className="ml-auto flex items-center gap-2">
+            {savedFilters.length > 0 && savedFilters.map(f => (
+              <div key={f.name} className="flex items-center gap-0.5">
+                <button
+                  onClick={() => handleLoadFilter(f)}
+                  className="flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-border bg-background hover:bg-muted transition-colors"
+                  data-testid={`button-load-filter-${f.name}`}
+                >
+                  <BookmarkCheck className="h-3 w-3 text-blue-500" />
+                  {f.name}
+                </button>
+                <button onClick={() => handleDeleteFilter(f.name)} className="text-muted-foreground hover:text-destructive p-0.5" data-testid={`button-delete-filter-${f.name}`}>
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+            {!showSaveFilter ? (
+              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => setShowSaveFilter(true)} data-testid="button-show-save-filter">
+                <Bookmark className="h-3.5 w-3.5" /> Save
+              </Button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <Input
+                  value={saveFilterName}
+                  onChange={e => setSaveFilterName(e.target.value)}
+                  placeholder="Filter name"
+                  className="h-7 text-xs w-24"
+                  onKeyDown={e => { if (e.key === "Enter") handleSaveFilter(); if (e.key === "Escape") setShowSaveFilter(false); }}
+                  autoFocus
+                  data-testid="input-save-filter-name"
+                />
+                <Button size="sm" className="h-7 text-xs px-2" onClick={handleSaveFilter} disabled={!saveFilterName.trim() || saveFilterMutation.isPending} data-testid="button-confirm-save-filter">Save</Button>
+                <Button variant="ghost" size="sm" className="h-7 px-1" onClick={() => setShowSaveFilter(false)}><X className="h-3.5 w-3.5" /></Button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -591,11 +667,27 @@ export default function Customers() {
                 data-testid="input-quick-touch-note"
               />
             </div>
+            <div>
+              <label className="text-sm font-medium block mb-1">Call Vibe</label>
+              <div className="flex gap-2">
+                {[{ val: "positive", label: "😊 Positive", cls: "border-green-500 bg-green-50 dark:bg-green-950/40 text-green-700" }, { val: "neutral", label: "😐 Neutral", cls: "border-yellow-500 bg-yellow-50 dark:bg-yellow-950/40 text-yellow-700" }, { val: "negative", label: "😟 Negative", cls: "border-red-500 bg-red-50 dark:bg-red-950/40 text-red-700" }].map(s => (
+                  <button
+                    key={s.val}
+                    type="button"
+                    onClick={() => setQuickTouchSentiment(v => v === s.val ? "" : s.val)}
+                    className={`flex-1 py-1 text-xs rounded border font-medium transition-colors ${quickTouchSentiment === s.val ? s.cls : "border-border bg-background text-muted-foreground hover:bg-muted"}`}
+                    data-testid={`button-sentiment-${s.val}`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setQuickTouch(null)}>Cancel</Button>
             <Button
-              onClick={() => logTouchMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote })}
+              onClick={() => logTouchMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote, sentiment: quickTouchSentiment })}
               disabled={!quickTouchContactId || logTouchMutation.isPending}
               data-testid="button-submit-quick-touch"
             >

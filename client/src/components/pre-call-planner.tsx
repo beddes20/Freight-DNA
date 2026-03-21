@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -23,7 +23,10 @@ import {
   Activity,
   DollarSign,
   Building2,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
 import type { Company, Contact, Touchpoint, Rfp, Award } from "@shared/schema";
 
 type TaskLike = { id: string | number; title: string; status: string; dueDate?: string | null };
@@ -73,6 +76,29 @@ export function PreCallPlanner({
   healthScore,
 }: PreCallPlannerProps) {
   const printRef = useRef<HTMLDivElement>(null);
+  const [talkingPoints, setTalkingPoints] = useState<string[]>([]);
+  const [loadingPoints, setLoadingPoints] = useState(false);
+
+  const generateTalkingPoints = async () => {
+    setLoadingPoints(true);
+    try {
+      const res = await apiRequest("POST", "/api/ai/talking-points", {
+        company,
+        contacts,
+        touchpoints,
+        tasks,
+        rfps,
+        financialSummary: financialSummary ? { ytdLoads: financialSummary.totalLoads, ytdMargin: financialSummary.totalMargin } : null,
+        accountIntelligence: { quirks: (company as any).accountQuirks, spotProcess: (company as any).spotProcess },
+      });
+      const data = await res.json();
+      setTalkingPoints(data.points || []);
+    } catch {
+      setTalkingPoints(["Unable to generate talking points. Try again."]);
+    } finally {
+      setLoadingPoints(false);
+    }
+  };
 
   const handlePrint = () => {
     const win = window.open("", "_blank");
@@ -124,19 +150,42 @@ export function PreCallPlanner({
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <DialogTitle className="flex items-center gap-2">
               <ClipboardList className="h-5 w-5 text-primary" />
               Pre-Call Brief
             </DialogTitle>
-            <Button variant="outline" size="sm" onClick={handlePrint} className="mr-8" data-testid="button-print-precall">
-              <Printer className="h-4 w-4 mr-1.5" />
-              Print
-            </Button>
+            <div className="flex items-center gap-2 mr-8">
+              <Button variant="outline" size="sm" onClick={generateTalkingPoints} disabled={loadingPoints} data-testid="button-ai-talking-points">
+                {loadingPoints ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1.5 text-purple-500" />}
+                {loadingPoints ? "Generating..." : "AI Points"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handlePrint} data-testid="button-print-precall">
+                <Printer className="h-4 w-4 mr-1.5" />
+                Print
+              </Button>
+            </div>
           </div>
         </DialogHeader>
 
         <div ref={printRef} className="space-y-5 py-2">
+          {/* AI Talking Points */}
+          {talkingPoints.length > 0 && (
+            <section className="bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 rounded-lg p-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-purple-700 dark:text-purple-300 mb-2 flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5" /> AI Talking Points
+              </h3>
+              <ol className="space-y-2">
+                {talkingPoints.map((pt, i) => (
+                  <li key={i} className="flex gap-2 text-sm" data-testid={`precall-talking-point-${i}`}>
+                    <span className="font-bold text-purple-600 dark:text-purple-400 shrink-0">{i + 1}.</span>
+                    <span>{pt}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+
           {/* Company Header */}
           <div className="flex items-start gap-3">
             <div className="h-10 w-10 rounded-md bg-primary/10 flex items-center justify-center shrink-0">

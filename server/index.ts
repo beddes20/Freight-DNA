@@ -9,6 +9,7 @@ import { initRfpDeadlineScheduler } from "./rfpDeadlineScheduler";
 import { initDailyDigestScheduler } from "./dailyDigestScheduler";
 import { initRepReportScheduler } from "./repReportScheduler";
 import { initOneOnOneReminderScheduler } from "./oneOnOneReminderScheduler";
+import { initHealthAlertScheduler } from "./healthAlertScheduler";
 import { runMigrations } from "./runMigrations";
 
 const app = express();
@@ -115,6 +116,7 @@ app.use((req, res, next) => {
       initDailyDigestScheduler();
       initRepReportScheduler();
       initOneOnOneReminderScheduler();
+      initHealthAlertScheduler();
     },
   );
 })();

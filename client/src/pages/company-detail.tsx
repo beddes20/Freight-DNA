@@ -246,6 +246,7 @@ export default function CompanyDetail() {
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [quickTouchType, setQuickTouchType] = useState("call");
   const [quickTouchNote, setQuickTouchNote] = useState("");
+  const [quickTouchSentiment, setQuickTouchSentiment] = useState<string>("");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
   const [focusTaskComments, setFocusTaskComments] = useState(false);
@@ -576,8 +577,8 @@ export default function CompanyDetail() {
   });
 
   const logTouchFromDetailMutation = useMutation({
-    mutationFn: ({ contactId, type, notes }: { contactId: string; type: string; notes: string }) =>
-      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes }),
+    mutationFn: ({ contactId, type, notes, sentiment }: { contactId: string; type: string; notes: string; sentiment?: string }) =>
+      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
       toast({ title: "Touch logged!" });
@@ -585,6 +586,7 @@ export default function CompanyDetail() {
       setQuickTouchContactId("");
       setQuickTouchType("call");
       setQuickTouchNote("");
+      setQuickTouchSentiment("");
     },
     onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
   });
@@ -3257,7 +3259,7 @@ export default function CompanyDetail() {
         onEdit={(c) => { setViewContact(null); handleEditContact(c); }}
       />
 
-      <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); setQuickTouchNote(""); } }}>
+      <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); setQuickTouchNote(""); setQuickTouchSentiment(""); } }}>
         <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch-detail">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -3309,12 +3311,31 @@ export default function CompanyDetail() {
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
               />
             </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Call Vibe <span className="font-normal">(optional)</span></label>
+              <div className="flex gap-2">
+                {[{ value: "positive", label: "😊 Positive" }, { value: "neutral", label: "😐 Neutral" }, { value: "negative", label: "😟 Negative" }].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setQuickTouchSentiment(quickTouchSentiment === opt.value ? "" : opt.value)}
+                    data-testid={`button-sentiment-${opt.value}`}
+                    className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${
+                      quickTouchSentiment === opt.value
+                        ? opt.value === "positive" ? "bg-green-100 text-green-800 border-green-300 dark:bg-green-900/40 dark:text-green-300"
+                          : opt.value === "neutral" ? "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/40 dark:text-blue-300"
+                          : "bg-red-100 text-red-800 border-red-300 dark:bg-red-900/40 dark:text-red-300"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    }`}
+                  >{opt.label}</button>
+                ))}
+              </div>
+            </div>
             <div className="flex gap-2 pt-1">
-              <Button variant="outline" className="flex-1" onClick={() => { setQuickTouchOpen(false); setQuickTouchNote(""); }} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
+              <Button variant="outline" className="flex-1" onClick={() => { setQuickTouchOpen(false); setQuickTouchNote(""); setQuickTouchSentiment(""); }} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
               <Button
                 className="flex-1"
                 disabled={!quickTouchContactId || logTouchFromDetailMutation.isPending}
-                onClick={() => logTouchFromDetailMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote })}
+                onClick={() => logTouchFromDetailMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote, sentiment: quickTouchSentiment || undefined })}
                 data-testid="button-submit-quick-touch-detail"
               >
                 Log Touch

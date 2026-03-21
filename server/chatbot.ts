@@ -307,15 +307,13 @@ Data scope: ${scopeLabel}
 Here is the current CRM data:
 ${crmContext}
 
-Guidelines:
-- Answer questions about accounts, contacts, RFPs, touchpoints, tasks, and goals using the data above
-- For ranking questions (e.g. "who has the most contacts this month"), use the TEAM MEMBERS section which has per-rep stats
-- Be concise and direct — reps are busy
-- Format lists clearly with bullet points
-- When referencing contacts marked "NEW THIS MONTH", use that to answer questions about contacts added this month
-- If you don't have specific data, say so honestly rather than guessing
-- You can suggest follow-up actions when appropriate
-- Keep responses friendly but professional`;
+Keep it short and casual — reps are busy. No fluff, no filler.
+- Use the data above to answer questions about accounts, contacts, RFPs, touchpoints, tasks, and goals
+- For ranking questions use the TEAM MEMBERS section for per-rep stats
+- Bullet points for lists, plain sentences otherwise
+- If data isn't there, just say so
+- Suggest a quick next action when it's obvious
+- Talk like a sharp colleague, not a corporate assistant`;
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -552,6 +550,46 @@ ${ANALYST_RULES}`,
       } else {
         res.status(500).json({ error: "Failed to analyze data" });
       }
+    }
+  });
+
+  app.post("/api/ai/talking-points", async (req: Request, res: Response) => {
+    try {
+      const { company, contacts: contactList, touchpoints: tps, tasks: tsks, rfps: rfpList, financialSummary, accountIntelligence } = req.body;
+      if (!company) return res.status(400).json({ error: "Company data required" });
+
+      const lastTouches = (contactList || []).slice(0, 6).map((c: any) => {
+        const last = (tps || []).filter((t: any) => t.contactId === c.id).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+        return `${c.name}${c.title ? ` (${c.title})` : ""}: last touch ${last ? `${last.type} on ${last.date}` : "never"}`;
+      }).join("\n");
+
+      const openRfps = (rfpList || []).filter((r: any) => r.status === "open" || r.status === "pending");
+      const overdueTasks = (tsks || []).filter((t: any) => t.status === "open" && t.dueDate && new Date(t.dueDate) < new Date());
+
+      const prompt = `You're helping a freight broker prep for a call with ${company.name}.
+
+Key contacts:\n${lastTouches || "None on file"}
+${financialSummary ? `\nFinancial: YTD loads ${financialSummary.ytdLoads ?? "?"}, margin $${financialSummary.ytdMargin ?? "?"}` : ""}
+${openRfps.length > 0 ? `\nOpen RFPs: ${openRfps.map((r: any) => r.title).join(", ")}` : ""}
+${overdueTasks.length > 0 ? `\nOverdue tasks: ${overdueTasks.map((t: any) => t.title).join(", ")}` : ""}
+${accountIntelligence?.quirks ? `\nAccount quirks: ${accountIntelligence.quirks}` : ""}
+${accountIntelligence?.spotProcess ? `\nSpot process: ${accountIntelligence.spotProcess}` : ""}
+
+Give exactly 3 punchy talking points for this call. 1-2 sentences each, specific and actionable. No filler. Numbered list.`;
+
+      const message = await anthropic.messages.create({
+        model: "claude-opus-4-5",
+        max_tokens: 400,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const text = message.content[0].type === "text" ? message.content[0].text : "";
+      const lines = text.split(/\n/).map((l: string) => l.trim()).filter(Boolean);
+      const points = lines.filter((l: string) => l.match(/^\d[\.\)]/)).map((l: string) => l.replace(/^\d[\.\)]\s*/, ""));
+      res.json({ points: points.length >= 2 ? points.slice(0, 3) : lines.slice(0, 3) });
+    } catch (err: any) {
+      console.error("Talking points error:", err);
+      res.status(500).json({ error: "Failed to generate talking points" });
     }
   });
 }

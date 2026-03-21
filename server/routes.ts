@@ -5573,6 +5573,137 @@ export async function registerRoutes(
     }
   });
 
+  // Streak routes
+  app.get("/api/users/streak", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const goalSetting = await storage.getSetting("streak_goal");
+      const goal = parseInt(goalSetting || "5");
+
+      const since = new Date(); since.setDate(since.getDate() - 60);
+      const tps = await storage.getTouchpointsByUser(user.id, since.toISOString().slice(0, 10));
+
+      const byDate: Record<string, number> = {};
+      for (const tp of tps) {
+        byDate[tp.date] = (byDate[tp.date] || 0) + 1;
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const todayCount = byDate[today] || 0;
+
+      let streak = 0;
+      const cur = new Date();
+      for (let i = 0; i < 60; i++) {
+        const d = cur.toISOString().slice(0, 10);
+        const count = byDate[d] || 0;
+        if (i === 0 && count < goal) { cur.setDate(cur.getDate() - 1); continue; }
+        if (count >= goal) { streak++; cur.setDate(cur.getDate() - 1); }
+        else break;
+      }
+
+      res.json({ streak, goal, todayCount });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to compute streak" });
+    }
+  });
+
+  app.get("/api/settings/streak-goal", requireAuth, async (req, res) => {
+    try {
+      const val = await storage.getSetting("streak_goal");
+      res.json({ goal: parseInt(val || "5") });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch streak goal" });
+    }
+  });
+
+  app.put("/api/settings/streak-goal", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director", "national_account_manager"].includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+      const { goal } = req.body;
+      if (!goal || goal < 1 || goal > 50) return res.status(400).json({ error: "Goal must be between 1 and 50" });
+      await storage.setSetting("streak_goal", String(goal));
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to update streak goal" });
+    }
+  });
+
+  // Saved customer filters
+  app.get("/api/users/saved-filters", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const val = await storage.getSetting(`saved_filters_${user.id}`);
+      res.json({ filters: val ? JSON.parse(val) : [] });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch saved filters" });
+    }
+  });
+
+  app.put("/api/users/saved-filters", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { filters } = req.body;
+      if (!Array.isArray(filters)) return res.status(400).json({ error: "filters must be an array" });
+      await storage.setSetting(`saved_filters_${user.id}`, JSON.stringify(filters.slice(0, 10)));
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to save filters" });
+    }
+  });
+
+  // Daily briefing data
+  app.get("/api/dashboard/briefing", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const today = new Date().toISOString().slice(0, 10);
+      const [allTasks, allCompanies, tps, streak] = await Promise.all([
+        storage.getTasks(),
+        storage.getCompanies(),
+        storage.getTouchpointsByUser(user.id, today),
+        (async () => {
+          const goalSetting = await storage.getSetting("streak_goal");
+          const goal = parseInt(goalSetting || "5");
+          const since = new Date(); since.setDate(since.getDate() - 60);
+          const userTps = await storage.getTouchpointsByUser(user.id, since.toISOString().slice(0, 10));
+          const byDate: Record<string, number> = {};
+          for (const tp of userTps) byDate[tp.date] = (byDate[tp.date] || 0) + 1;
+          let s = 0;
+          const cur = new Date();
+          for (let i = 0; i < 60; i++) {
+            const d = cur.toISOString().slice(0, 10);
+            const count = byDate[d] || 0;
+            if (i === 0 && count < goal) { cur.setDate(cur.getDate() - 1); continue; }
+            if (count >= goal) { s++; cur.setDate(cur.getDate() - 1); }
+            else break;
+          }
+          return { streak: s, goal, todayCount: byDate[today] || 0 };
+        })(),
+      ]);
+
+      const myCompanyIds = new Set(allCompanies.filter(c => c.salesPersonId === user.id || user.role === "admin").map(c => c.id));
+      const dueTasks = allTasks.filter(t => t.assignedTo === user.id && t.status === "open" && t.dueDate && t.dueDate <= today);
+      const todayTouchpoints = tps.length;
+
+      res.json({
+        dueTasks: dueTasks.length,
+        todayTouchpoints,
+        streak: streak.streak,
+        streakGoal: streak.goal,
+        streakToday: streak.todayCount,
+      });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load briefing data" });
+    }
+  });
+
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {
       if (err.code === "LIMIT_FILE_SIZE") {

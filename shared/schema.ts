@@ -72,6 +72,8 @@ export const rfps = pgTable("rfps", {
   totalVolume: text("total_volume"),
   originStates: text("origin_states").array(),
   destinationStates: text("destination_states").array(),
+  closeReason: text("close_reason"),
+  closeNotes: text("close_notes"),
 });
 
 export const insertRfpSchema = createInsertSchema(rfps).omit({
@@ -305,6 +307,8 @@ export type FeedPostReaction = typeof feedPostReactions.$inferSelect;
 export const appSettings = pgTable("app_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
+  updatedAt: text("updated_at"),
+  updatedById: varchar("updated_by_id").references(() => users.id),
 });
 
 export type AppSetting = typeof appSettings.$inferSelect;
@@ -369,6 +373,7 @@ export const touchpoints = pgTable("touchpoints", {
   type: text("type").notNull(),
   date: text("date").notNull(),
   notes: text("notes"),
+  sentiment: text("sentiment"),
   loggedById: varchar("logged_by_id").notNull().references(() => users.id),
   createdAt: text("created_at").notNull(),
 });
@@ -509,3 +514,4 @@ export const internalPosts = pgTable("internal_posts", {
 export const insertInternalPostSchema = createInsertSchema(internalPosts).omit({ id: true });
 export type InsertInternalPost = z.infer<typeof insertInternalPostSchema>;
 export type InternalPost = typeof internalPosts.$inferSelect;
+

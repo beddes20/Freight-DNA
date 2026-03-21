@@ -185,6 +185,27 @@ export default function Dashboard() {
 
   const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string } | undefined>();
   const [prefillDialogOpen, setPrefillDialogOpen] = useState(false);
+  const [briefingDismissed, setBriefingDismissed] = useState(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return localStorage.getItem("briefing_dismissed") === today;
+  });
+
+  const { data: streakData } = useQuery<{ streak: number; goal: number; todayCount: number }>({
+    queryKey: ["/api/users/streak"],
+    refetchInterval: 300000,
+  });
+
+  const { data: briefingData } = useQuery<{ dueTasks: number; todayTouchpoints: number; streak: number; streakGoal: number; streakToday: number }>({
+    queryKey: ["/api/dashboard/briefing"],
+    enabled: !briefingDismissed,
+    staleTime: 60000,
+  });
+
+  const dismissBriefing = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    localStorage.setItem("briefing_dismissed", today);
+    setBriefingDismissed(true);
+  };
 
   const dismissSyncAlertMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/sync-alert/dismiss"),
@@ -476,6 +497,14 @@ export default function Dashboard() {
       color: "text-emerald-600 dark:text-emerald-400",
       bg: "bg-emerald-100 dark:bg-emerald-900/30",
     },
+    ...(streakData ? [{
+      title: "Touch Streak",
+      value: streakData.streak > 0 ? `🔥 ${streakData.streak}d` : `${streakData.todayCount}/${streakData.goal}`,
+      icon: Target,
+      description: streakData.streak > 0 ? `${streakData.todayCount}/${streakData.goal} today` : "Touches today / goal",
+      color: "text-orange-600 dark:text-orange-400",
+      bg: "bg-orange-100 dark:bg-orange-900/30",
+    }] : []),
   ];
 
   const nams = allUsers.filter((u) => u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director");
@@ -524,6 +553,38 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
+
+      {/* Daily Briefing Popup */}
+      {!briefingDismissed && briefingData && (
+        <div className="flex items-start gap-3 rounded-lg border border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/40 p-4" data-testid="banner-daily-briefing">
+          <BellRing className="h-5 w-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm text-indigo-800 dark:text-indigo-200">
+              Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, {currentUser?.name?.split(" ")[0]}! Here's your day at a glance.
+            </p>
+            <div className="flex flex-wrap gap-3 mt-1.5">
+              {briefingData.dueTasks > 0 && (
+                <span className="text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
+                  <ListTodo className="h-3.5 w-3.5" />
+                  {briefingData.dueTasks} task{briefingData.dueTasks !== 1 ? "s" : ""} due today
+                </span>
+              )}
+              <span className="text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
+                <PhoneCall className="h-3.5 w-3.5" />
+                {briefingData.streakToday}/{briefingData.streakGoal} touches today
+              </span>
+              {briefingData.streak > 0 && (
+                <span className="text-xs text-orange-600 dark:text-orange-400 font-semibold flex items-center gap-1">
+                  🔥 {briefingData.streak}-day streak!
+                </span>
+              )}
+            </div>
+          </div>
+          <button onClick={dismissBriefing} className="shrink-0 text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300" data-testid="button-dismiss-briefing">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {syncAlert?.failed && (
         <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/50 p-4" data-testid="banner-sync-failed">
