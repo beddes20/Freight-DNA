@@ -4473,8 +4473,27 @@ export async function registerRoutes(
       } else {
         teamIds = await storage.getTeamMemberIds(user.id);
       }
+
+      const now = new Date();
+      const todayStr = now.toISOString().split("T")[0];
+      const period = (req.query.period as string) || "current";
+      let startDate: string;
+      let endDate: string;
+      if (period === "last") {
+        const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        startDate = lastMonth.toISOString().split("T")[0];
+        endDate = lastMonthEnd.toISOString().split("T")[0];
+      } else if (period === "ytd") {
+        startDate = `${now.getFullYear()}-01-01`;
+        endDate = todayStr;
+      } else {
+        startDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+        endDate = todayStr;
+      }
+
       const [perf, allUsers] = await Promise.all([
-        storage.getTeamPerformance(teamIds),
+        storage.getTeamPerformance(teamIds, startDate, endDate),
         storage.getUsers(),
       ]);
       const result = perf.map(p => {

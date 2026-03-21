@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
@@ -7,8 +8,30 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
-  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2
+  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info
 } from "lucide-react";
+
+type PeriodOption = "current" | "last" | "ytd";
+
+function getPeriodLabel(period: PeriodOption): string {
+  const now = new Date();
+  const monthNames = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"];
+  if (period === "current") {
+    const month = monthNames[now.getMonth()];
+    const day = now.getDate();
+    return `${month} 1 – ${month} ${day}, ${now.getFullYear()}`;
+  } else if (period === "last") {
+    const lastMonthIdx = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+    const lastMonthYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+    const lastDay = new Date(lastMonthYear, lastMonthIdx + 1, 0).getDate();
+    return `${monthNames[lastMonthIdx]} 1 – ${monthNames[lastMonthIdx]} ${lastDay}, ${lastMonthYear}`;
+  } else {
+    const month = monthNames[now.getMonth()];
+    const day = now.getDate();
+    return `Jan 1 – ${month} ${day}, ${now.getFullYear()}`;
+  }
+}
 
 interface RepPerf {
   userId: string;
@@ -177,9 +200,15 @@ function matchRepName(repName: string, userName: string): boolean {
 
 export default function TeamPerformancePage() {
   const { user } = useAuth();
+  const [period, setPeriod] = useState<PeriodOption>("current");
 
   const { data: reps = [], isLoading } = useQuery<RepPerf[]>({
-    queryKey: ["/api/team/performance"],
+    queryKey: ["/api/team/performance", period],
+    queryFn: async () => {
+      const res = await fetch(`/api/team/performance?period=${period}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`Failed to fetch team performance: ${res.status}`);
+      return res.json();
+    },
   });
 
   const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
@@ -232,13 +261,36 @@ export default function TeamPerformancePage() {
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex items-center gap-3">
-        <div className="h-9 w-9 rounded-lg bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
-          <BarChart3 className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="h-9 w-9 rounded-lg bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
+            <BarChart3 className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold" data-testid="text-page-title">Team Performance</h1>
+            <p className="text-sm text-muted-foreground">KPIs across your team — tasks, accounts, and activity</p>
+          </div>
         </div>
-        <div>
-          <h1 className="text-xl font-semibold" data-testid="text-page-title">Team Performance</h1>
-          <p className="text-sm text-muted-foreground">KPIs across your team — tasks, accounts, and activity</p>
+        <div className="flex flex-col items-start sm:items-end gap-1.5">
+          <div className="flex items-center rounded-lg border bg-muted/40 p-0.5 gap-0.5" data-testid="toggle-period">
+            {(["current", "last", "ytd"] as PeriodOption[]).map((opt) => (
+              <button
+                key={opt}
+                data-testid={`button-period-${opt}`}
+                onClick={() => setPeriod(opt)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  period === opt
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {opt === "current" ? "This Month" : opt === "last" ? "Last Month" : "YTD"}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground" data-testid="text-period-label">
+            {getPeriodLabel(period)}
+          </p>
         </div>
       </div>
 
@@ -287,6 +339,7 @@ export default function TeamPerformancePage() {
               ))}
             </div>
             {hasSummaryData && (
+              <>
               <div className={`grid gap-3 ${totalMarginPctAll !== null ? "grid-cols-3" : "grid-cols-2"}`}>
                 <Card>
                   <CardContent className="pt-4 pb-3">
@@ -322,6 +375,11 @@ export default function TeamPerformancePage() {
                   </Card>
                 )}
               </div>
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5 mt-1" data-testid="text-financial-note">
+                <Info className="h-3 w-3 shrink-0" />
+                Financial data reflects the latest uploaded period and is not filtered by the selected date range.
+              </p>
+              </>
             )}
           </div>
 

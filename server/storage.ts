@@ -215,7 +215,7 @@ export interface IStorage {
   searchRfps(query: string): Promise<Rfp[]>;
 
   getCompanyActivity(companyId: string): Promise<Array<{ type: string; title: string; subtitle?: string; date: string; link?: string }>>;
-  getTeamPerformance(managerIds: string[]): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number }>>;
+  getTeamPerformance(managerIds: string[], startDate?: string, endDate?: string): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number }>>;
 
   getNotifications(userId: string): Promise<import('../shared/schema').Notification[]>;
   createNotification(data: import('../shared/schema').InsertNotification): Promise<import('../shared/schema').Notification>;
@@ -988,17 +988,18 @@ export class DatabaseStorage implements IStorage {
     return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 30);
   }
 
-  async getTeamPerformance(teamMemberIds: string[]): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number }>> {
+  async getTeamPerformance(teamMemberIds: string[], startDate?: string, endDate?: string): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number }>> {
     if (teamMemberIds.length === 0) return [];
     const now = new Date();
     const today = now.toISOString().split("T")[0];
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const periodStart = startDate ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const periodEnd = endDate ?? today;
 
     const [allTasks, allCompanies, allTouchpoints, allContacts] = await Promise.all([
       db.select().from(tasks).where(inArray(tasks.assignedTo, teamMemberIds)),
       db.select().from(companies).where(inArray(companies.assignedTo, teamMemberIds)),
       db.select().from(touchpoints).where(
-        and(inArray(touchpoints.loggedById, teamMemberIds), gte(touchpoints.date, monthStart))
+        and(inArray(touchpoints.loggedById, teamMemberIds), gte(touchpoints.date, periodStart), lte(touchpoints.date, periodEnd))
       ),
       db.select().from(contacts),
     ]);
@@ -1017,12 +1018,12 @@ export class DatabaseStorage implements IStorage {
         overdueTasks: userTasks.filter(t => (t.status === "open" || t.status === "in_progress") && t.dueDate && t.dueDate < today).length,
         completedTasks: userTasks.filter(t => t.status === "completed").length,
         companyCount: userCompanies.length,
-        newContacts: userContacts.filter(c => c.createdAt && c.createdAt >= monthStart).length,
+        newContacts: userContacts.filter(c => { const d = c.createdAt?.slice(0, 10); return d && d >= periodStart && d <= periodEnd; }).length,
         callTouchpoints: userTouchpoints.filter(t => t.type === "call").length,
         textTouchpoints: userTouchpoints.filter(t => t.type === "text").length,
         emailTouchpoints: userTouchpoints.filter(t => t.type === "email").length,
         contactsTouched: touchedContactIds.size,
-        baseAdvanced: userContacts.filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart).length,
+        baseAdvanced: userContacts.filter(c => { const d = c.baseAdvancedAt?.slice(0, 10); return d && d >= periodStart && d <= periodEnd; }).length,
       };
     });
   }
