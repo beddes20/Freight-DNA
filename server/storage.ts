@@ -135,6 +135,7 @@ export interface IStorage {
   createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload>;
   deleteFinancialUpload(id: string): Promise<boolean>;
   deleteAllFinancialUploads(): Promise<void>;
+  deleteEmptyFinancialUploads(): Promise<number>;
 
   searchCompanies(query: string): Promise<Company[]>;
   searchUsers(query: string, roles: string[]): Promise<Omit<User, 'password'>[]>;
@@ -470,7 +471,45 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload> {
-    const [created] = await db.insert(financialUploads).values(upload).returning();
+    console.log(`[createFinancialUpload] rows.length=${upload.rows ? (upload.rows as any[]).length : 0}, rowCount=${upload.rowCount}`);
+
+    const result = await pool.query<FinancialUpload & { id: string }>(
+      `INSERT INTO financial_uploads
+        (file_name, uploaded_at, uploaded_by, row_count, rows, summary_rows,
+         best_deal_days_spot, best_deal_days_all, trend_analysis, averages_data, daily_acquisition)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb)
+       RETURNING *`,
+      [
+        upload.fileName,
+        upload.uploadedAt,
+        upload.uploadedBy,
+        upload.rowCount,
+        JSON.stringify(upload.rows ?? []),
+        JSON.stringify(upload.summaryRows ?? []),
+        JSON.stringify(upload.bestDealDaysSpot ?? []),
+        JSON.stringify(upload.bestDealDaysAll ?? []),
+        JSON.stringify(upload.trendAnalysis ?? []),
+        JSON.stringify(upload.averagesData ?? []),
+        JSON.stringify(upload.dailyAcquisition ?? []),
+      ]
+    );
+
+    const created = result.rows[0] as unknown as FinancialUpload;
+
+    const verifyResult = await pool.query<{ len: string }>(
+      `SELECT jsonb_array_length(rows) AS len FROM financial_uploads WHERE id = $1`,
+      [created.id]
+    );
+    const storedLength = parseInt(verifyResult.rows[0]?.len ?? "0", 10);
+    console.log(`[createFinancialUpload] stored rows length=${storedLength}, expected=${upload.rowCount}`);
+
+    if (storedLength !== upload.rowCount) {
+      await pool.query(`DELETE FROM financial_uploads WHERE id = $1`, [created.id]);
+      throw new Error(
+        `Row storage mismatch: expected ${upload.rowCount} rows but only ${storedLength} were stored. Please retry the upload.`
+      );
+    }
+
     return created;
   }
 
@@ -481,6 +520,17 @@ export class DatabaseStorage implements IStorage {
 
   async deleteAllFinancialUploads(): Promise<void> {
     await db.delete(financialUploads);
+  }
+
+  async deleteEmptyFinancialUploads(): Promise<number> {
+    const result = await pool.query(
+      `DELETE FROM financial_uploads WHERE jsonb_array_length(rows) = 0 RETURNING id`
+    );
+    const deleted = result.rowCount ?? 0;
+    if (deleted > 0) {
+      console.log(`[startup] Deleted ${deleted} financial upload record(s) with empty rows array.`);
+    }
+    return deleted;
   }
 
   async searchCompanies(query: string): Promise<Company[]> {

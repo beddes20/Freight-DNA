@@ -3207,7 +3207,8 @@ export async function registerRoutes(
       res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
     } catch (error) {
       console.error("Error uploading financials:", error);
-      res.status(500).json({ error: "Failed to upload financials" });
+      const message = error instanceof Error ? error.message : "Failed to upload financials";
+      res.status(500).json({ error: message });
     }
   });
 

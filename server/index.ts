@@ -11,6 +11,7 @@ import { initRepReportScheduler } from "./repReportScheduler";
 import { initOneOnOneReminderScheduler } from "./oneOnOneReminderScheduler";
 import { initHealthAlertScheduler } from "./healthAlertScheduler";
 import { runMigrations } from "./runMigrations";
+import { storage } from "./storage";
 
 const app = express();
 const httpServer = createServer(app);
@@ -71,6 +72,7 @@ app.use((req, res, next) => {
 
 (async () => {
   await runMigrations();
+  await storage.deleteEmptyFinancialUploads();
   setupAuth(app);
   await registerRoutes(httpServer, app);
 
