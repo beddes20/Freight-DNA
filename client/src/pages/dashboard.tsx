@@ -38,6 +38,7 @@ type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
 const METRIC_LABELS: Record<string, string> = {
   contacts_added: "New Contacts",
   touchpoints: "Touchpoints",
+  meaningful_touchpoints: "Meaningful Touchpoints",
   load_count: "Load Count",
   margin: "Margin",
   custom: "Custom",
@@ -107,6 +108,15 @@ export default function Dashboard() {
 
   const { data: coldContacts = [] } = useQuery<Array<{ contact: Contact; company: { id: string; name: string }; daysSince: number; lastType: string | null }>>({
     queryKey: ["/api/dashboard/cold-contacts"],
+  });
+
+  const { data: meaningfulOverdue = [] } = useQuery<Array<{ contact: Contact; company: { id: string; name: string }; daysSinceLastMeaningful: number }>>({
+    queryKey: ["/api/dashboard/meaningful-overdue"],
+  });
+
+  const { data: opportunityLeaderboard = [] } = useQuery<Array<{ companyId: string; companyName: string; potentialMargin: number; currentLoads: number; rfpVolume: number | null; hasRfp: boolean }>>({
+    queryKey: ["/api/dashboard/opportunity-leaderboard"],
+    refetchOnWindowFocus: false,
   });
 
   const { data: allTasks = [], isLoading: tasksLoading } = useQuery<Task[]>({
@@ -1062,6 +1072,76 @@ export default function Dashboard() {
                 );
               })}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {meaningfulOverdue.length > 0 && (
+        <Card data-testid="card-meaningful-overdue">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <MessageSquare className="h-4 w-4 text-purple-500" />
+              No Meaningful Conversation in 30+ Days
+              <Badge variant="secondary" className="ml-auto font-normal">{meaningfulOverdue.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="divide-y">
+              {meaningfulOverdue.slice(0, 6).map(({ contact, company, daysSinceLastMeaningful }) => {
+                const days = daysSinceLastMeaningful >= 999 ? null : daysSinceLastMeaningful;
+                const badgeClass = daysSinceLastMeaningful >= 999 ? "bg-muted text-muted-foreground" : "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400";
+                return (
+                  <div key={contact.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors group" data-testid={`meaningful-overdue-row-${contact.id}`}>
+                    <span className="h-2.5 w-2.5 rounded-full shrink-0 bg-purple-400" />
+                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setViewContact(contact)}>
+                      <p className="text-sm font-medium truncate">{contact.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{company.name}{contact.title ? ` · ${contact.title}` : ""}</p>
+                    </div>
+                    <div className={`text-right rounded-md px-2 py-0.5 ${badgeClass}`}>
+                      {days !== null
+                        ? <p className="text-xs font-bold leading-tight">{days}d ago</p>
+                        : <p className="text-xs font-medium">Never</p>
+                      }
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {opportunityLeaderboard.length > 0 && (
+        <Card data-testid="card-opportunity-leaderboard">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
+              Top Wallet Share Opportunities
+              <Badge variant="secondary" className="ml-auto font-normal">YTD</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-2">
+            {opportunityLeaderboard.map((item, idx) => (
+              <Link key={item.companyId} href={`/companies/${item.companyId}`}>
+                <div className="flex items-center justify-between gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer" data-testid={`opportunity-row-${item.companyId}`}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs font-bold text-muted-foreground w-5 shrink-0">#{idx + 1}</span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{item.companyName}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {item.hasRfp
+                          ? `${item.currentLoads.toLocaleString()} of ${item.rfpVolume!.toLocaleString()} RFP loads captured`
+                          : `${item.currentLoads.toLocaleString()} loads YTD · est. spend on file`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-bold text-green-700 dark:text-green-400">+${Math.round(item.potentialMargin).toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">potential margin</p>
+                  </div>
+                </div>
+              </Link>
+            ))}
           </CardContent>
         </Card>
       )}

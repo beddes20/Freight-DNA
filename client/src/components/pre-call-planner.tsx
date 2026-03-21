@@ -210,6 +210,13 @@ export function PreCallPlanner({
                   </a>
                 )}
               </div>
+              {((company as any).shippingModes?.length > 0) && (
+                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                  {((company as any).shippingModes as string[]).map((m: string) => (
+                    <span key={m} className="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/30">{m}</span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -237,6 +244,32 @@ export function PreCallPlanner({
               </div>
             </section>
           )}
+
+          {/* Last Meaningful Conversation */}
+          {(() => {
+            const lastMeaningful = [...touchpoints]
+              .filter(t => (t as any).isMeaningful)
+              .sort((a, b) => b.date.localeCompare(a.date))[0];
+            if (!lastMeaningful) return null;
+            const contact = contacts.find(c => c.id === lastMeaningful.contactId);
+            const daysAgo = Math.floor((Date.now() - new Date(lastMeaningful.date).getTime()) / 86400000);
+            return (
+              <section className="bg-green-50/60 dark:bg-green-950/20 border border-green-200/70 dark:border-green-800/40 rounded-lg p-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-green-700 dark:text-green-400 mb-2 flex items-center gap-1.5">
+                  <MessageSquare className="h-3.5 w-3.5" /> Last Meaningful Conversation
+                </h3>
+                <div className="text-sm space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">{contact?.name || "Unknown contact"}</span>
+                    <span className="text-xs text-muted-foreground">{daysAgo}d ago · {lastMeaningful.date}</span>
+                  </div>
+                  {lastMeaningful.notes && (
+                    <p className="text-xs text-muted-foreground italic">"{lastMeaningful.notes}"</p>
+                  )}
+                </div>
+              </section>
+            );
+          })()}
 
           {/* Key Contacts */}
           <section>

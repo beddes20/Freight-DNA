@@ -61,7 +61,7 @@ interface RepReportData {
   rep: { id: string; name: string; role: string };
   period: { type: string; label: string; start: string; end: string };
   goals: Array<{ id: string; label: string; metric: string; current: number; target: number; pct: number }>;
-  touchpoints: { total: number; call: number; email: number; text: number; site_visit: number };
+  touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; meaningful?: number };
   contacts: { newThisPeriod: number };
   tasks: { completed: number; open: number; overdue: number };
   topAccounts: Array<{ name: string; touches: number; lastTouch: string }>;
@@ -81,7 +81,14 @@ function ReportCardSlice({ data, label }: { data: RepReportData; label: string }
       <div className="bg-muted/40 rounded-lg p-3 space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium">Touchpoints</span>
-          <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{tp.total}</span>
+          <div className="flex items-center gap-2">
+            {tp.meaningful != null && tp.meaningful > 0 && (
+              <span className="text-xs text-purple-600 dark:text-purple-400 font-medium bg-purple-50 dark:bg-purple-950/40 px-1.5 py-0.5 rounded">
+                {tp.meaningful} meaningful
+              </span>
+            )}
+            <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{tp.total}</span>
+          </div>
         </div>
         <div className="flex gap-3 text-xs text-muted-foreground">
           <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{tp.call}</span>

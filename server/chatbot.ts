@@ -63,7 +63,8 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
     ctx += `\n=== ALL ACCOUNTS (${allCompanies.length}) ===\n`;
     allCompanies.slice(0, 120).forEach(c => {
       const rep = allUsers.find(u => u.id === c.assignedTo);
-      ctx += `- ${c.name}${c.financialAlias ? ` (alias: ${c.financialAlias})` : ""} → ${rep?.name || "Unassigned"}\n`;
+      const modes = (c as any).shippingModes?.length ? ` [Modes: ${(c as any).shippingModes.join(", ")}]` : "";
+      ctx += `- ${c.name}${c.financialAlias ? ` (alias: ${c.financialAlias})` : ""}${modes} → ${rep?.name || "Unassigned"}\n`;
     });
     if (allCompanies.length > 120) ctx += `  ...and ${allCompanies.length - 120} more accounts\n`;
 
@@ -164,7 +165,8 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
 
     ctx += `=== ACCOUNTS (${visibleCompanies.length}) ===\n`;
     visibleCompanies.slice(0, 80).forEach((c) => {
-      ctx += `- ${c.name}${c.financialAlias ? ` (alias: ${c.financialAlias})` : ""}\n`;
+      const modes = (c as any).shippingModes?.length ? ` [Modes: ${(c as any).shippingModes.join(", ")}]` : "";
+      ctx += `- ${c.name}${c.financialAlias ? ` (alias: ${c.financialAlias})` : ""}${modes}\n`;
     });
     if (visibleCompanies.length > 80) ctx += `  ...and ${visibleCompanies.length - 80} more accounts\n`;
 

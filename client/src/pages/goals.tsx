@@ -22,12 +22,13 @@ import {
 import type { Goal, GoalComment } from "@shared/schema";
 
 const METRICS = [
-  { value: "contacts_added", label: "New Contacts", icon: Users, color: "bg-blue-500", unit: "contacts" },
-  { value: "touchpoints",    label: "Touchpoints",  icon: TrendingUp, color: "bg-cyan-500", unit: "touches" },
-  { value: "load_count",     label: "Load Count",   icon: Truck, color: "bg-green-500", unit: "loads" },
-  { value: "margin",         label: "Margin ($)",   icon: DollarSign, color: "bg-violet-500", unit: "$" },
-  { value: "margin_pct",    label: "Margin %",     icon: Percent, color: "bg-emerald-500", unit: "%" },
-  { value: "custom",         label: "Custom",       icon: Sliders, color: "bg-orange-500", unit: "units" },
+  { value: "contacts_added",        label: "New Contacts",         icon: Users,       color: "bg-blue-500",    unit: "contacts" },
+  { value: "touchpoints",           label: "Touchpoints",          icon: TrendingUp,  color: "bg-cyan-500",    unit: "touches" },
+  { value: "meaningful_touchpoints",label: "Meaningful Touchpoints",icon: TrendingUp,  color: "bg-purple-500",  unit: "convos" },
+  { value: "load_count",            label: "Load Count",           icon: Truck,       color: "bg-green-500",   unit: "loads" },
+  { value: "margin",                label: "Margin ($)",           icon: DollarSign,  color: "bg-violet-500",  unit: "$" },
+  { value: "margin_pct",           label: "Margin %",             icon: Percent,     color: "bg-emerald-500", unit: "%" },
+  { value: "custom",                label: "Custom",               icon: Sliders,     color: "bg-orange-500",  unit: "units" },
 ];
 
 const PERIODS = [
@@ -78,7 +79,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
   const current = parseFloat(goal.currentValue || "0");
   const target = parseFloat(goal.target || "0");
   const pct = progressPct(current, target);
-  const isAutoTracked = goal.metric === "contacts_added" || goal.metric === "touchpoints" || goal.metric === "margin";
+  const isAutoTracked = goal.metric === "contacts_added" || goal.metric === "touchpoints" || goal.metric === "meaningful_touchpoints" || goal.metric === "margin";
   const isFinancialTracked = goal.metric === "margin";
 
   const { data: autoProgress } = useQuery<{ autoValue: number | null; currentValue: number }>({
@@ -745,6 +746,14 @@ export default function GoalsPage() {
                 <p className="text-xs text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
                   <TrendingUp className="h-3.5 w-3.5 shrink-0" />
                   New Contacts are automatically tracked from the CRM — no manual updates needed.
+                </p>
+              </div>
+            )}
+            {form.metric === "meaningful_touchpoints" && (
+              <div className="rounded-md bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 p-3">
+                <p className="text-xs text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                  <TrendingUp className="h-3.5 w-3.5 shrink-0" />
+                  Meaningful Touchpoints are automatically tracked — counts conversations flagged as meaningful (freight needs, rates, real opportunity, strategy).
                 </p>
               </div>
             )}

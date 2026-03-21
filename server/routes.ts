@@ -5253,6 +5253,117 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/dashboard/meaningful-overdue", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const days = parseInt(req.query.days as string) || 30;
+      if (user.role === "admin") {
+        const results = await storage.getMeaningfulOverdueContacts(null, days);
+        return res.json(results);
+      }
+      if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
+        const teamIds = await storage.getTeamMemberIds(user.id);
+        const results = await storage.getMeaningfulOverdueContacts(null, days, teamIds);
+        return res.json(results);
+      }
+      const results = await storage.getMeaningfulOverdueContacts(user.id, days);
+      res.json(results);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch meaningful overdue contacts" });
+    }
+  });
+
+  app.get("/api/dashboard/opportunity-leaderboard", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const companies = await storage.getCompanies();
+      const uploads = await storage.getFinancialUploads();
+      const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
+      const msCols = resolveColumns(allRows);
+
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      type FinSummary = { totalLoads: number; totalMargin: number; totalRevenue: number };
+      const byCustomer: Record<string, FinSummary> = {};
+      const now = new Date();
+      const ytdStart = `${now.getFullYear()}-01-01`;
+      for (const row of allRows) {
+        const cust = getCustomerFromRow(row, msCols);
+        if (!cust) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, msCols);
+        if (!monthKey) continue;
+        const periodStart = monthKey + "-01";
+        if (periodStart < ytdStart) continue;
+        const revenue = Number(row[msCols.revenue] || row[msCols.totalCharges] || 0);
+        if (revenue === 0) continue;
+        const key = normalize(cust);
+        if (!byCustomer[key]) byCustomer[key] = { totalLoads: 0, totalMargin: 0, totalRevenue: 0 };
+        byCustomer[key].totalLoads++;
+        byCustomer[key].totalMargin += margin;
+        byCustomer[key].totalRevenue += revenue;
+      }
+
+      const allRfps = await storage.getRfps();
+      const rfpsByCompany: Record<string, typeof allRfps> = {};
+      for (const rfp of allRfps) {
+        if (!rfpsByCompany[rfp.companyId]) rfpsByCompany[rfp.companyId] = [];
+        rfpsByCompany[rfp.companyId].push(rfp);
+      }
+
+      const results: { companyId: string; companyName: string; potentialMargin: number; currentLoads: number; rfpVolume: number | null; hasRfp: boolean }[] = [];
+
+      for (const company of companies) {
+        const rfps = rfpsByCompany[company.id] || [];
+        const rfpVolume = rfps.length > 0
+          ? rfps.reduce((sum, r) => sum + (Number((r as any).totalVolume) || 0), 0)
+          : 0;
+        const hasRfp = rfpVolume > 0;
+
+        const aliasNorm = normalize((company as any).financialAlias || company.name);
+        const fin = byCustomer[aliasNorm] ||
+          Object.entries(byCustomer).find(([k]) => k.includes(aliasNorm) || aliasNorm.includes(k))?.[1];
+
+        const ytdLoads = fin?.totalLoads || 0;
+        const ytdMargin = fin?.totalMargin || 0;
+        const avgMarginPerLoad = ytdLoads > 0 ? ytdMargin / ytdLoads : 0;
+
+        let potentialMargin = 0;
+        if (hasRfp && ytdLoads > 0 && rfpVolume > ytdLoads) {
+          potentialMargin = (rfpVolume - ytdLoads) * avgMarginPerLoad;
+        } else if (!hasRfp) {
+          const estimatedSpend = parseFloat(String((company as any).estimatedFreightSpend || 0)) || 0;
+          if (estimatedSpend > 0 && avgMarginPerLoad > 0) {
+            const avgRevPerLoad = ytdLoads > 0 ? (fin?.totalRevenue || 0) / ytdLoads : 0;
+            if (avgRevPerLoad > 0) {
+              const estimatedLoads = estimatedSpend / avgRevPerLoad;
+              potentialMargin = (estimatedLoads - ytdLoads) * avgMarginPerLoad;
+            }
+          }
+        }
+
+        if (potentialMargin > 0) {
+          results.push({
+            companyId: company.id,
+            companyName: company.name,
+            potentialMargin,
+            currentLoads: ytdLoads,
+            rfpVolume: hasRfp ? rfpVolume : null,
+            hasRfp,
+          });
+        }
+      }
+
+      results.sort((a, b) => b.potentialMargin - a.potentialMargin);
+      res.json(results.slice(0, 5));
+    } catch (error) {
+      console.error("Error computing opportunity leaderboard:", error);
+      res.status(500).json({ error: "Failed to compute opportunity leaderboard" });
+    }
+  });
+
   async function canAccessAttachmentEntity(user: { id: string; role: string; managerId: string | null }, entityType: string, entityId: string): Promise<boolean> {
     try {
       if (entityType === "feed_post") {

@@ -78,6 +78,7 @@ export default function Customers() {
   const [repFilter, setRepFilter] = useState(() => initParam("rep"));
   const [industryFilter, setIndustryFilter] = useState(() => initParam("industry"));
   const [touchFilter, setTouchFilter] = useState(() => initParam("touch"));
+  const [modeFilter, setModeFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState(() => initParam("sort", "name"));
 
   useEffect(() => {
@@ -233,7 +234,7 @@ export default function Customers() {
   // Set of NAM/AM user IDs so we can filter company lists
   const namAmIds = useMemo(() => new Set(amUsers.map(u => u.id)), [amUsers]);
 
-  const activeFiltersCount = [repFilter !== "all", industryFilter !== "all", touchFilter !== "all"].filter(Boolean).length;
+  const activeFiltersCount = [repFilter !== "all", industryFilter !== "all", touchFilter !== "all", modeFilter !== "all"].filter(Boolean).length;
 
   function applyFilters(list: Company[] | undefined) {
     if (!list) return [];
@@ -249,6 +250,10 @@ export default function Customers() {
         const tps = tpSummary[company.id] || { week: 0, month: 0 };
         if (touchFilter === "not_this_month" && tps.month > 0) return false;
         if (touchFilter === "not_this_week" && tps.week > 0) return false;
+      }
+      if (modeFilter !== "all") {
+        const modes: string[] = (company as any).shippingModes || [];
+        if (!modes.includes(modeFilter)) return false;
       }
       return true;
     });
@@ -278,6 +283,7 @@ export default function Customers() {
     setRepFilter("all");
     setIndustryFilter("all");
     setTouchFilter("all");
+    setModeFilter("all");
   }
 
   return (
@@ -417,6 +423,19 @@ export default function Customers() {
                 <SelectItem value="not_this_month">Not touched this month</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Mode</span>
+            {["LTL", "FTL", "Drayage", "IMDL"].map(mode => (
+              <button
+                key={mode}
+                onClick={() => setModeFilter(modeFilter === mode ? "all" : mode)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${modeFilter === mode ? "bg-blue-600 text-white border-blue-600" : "bg-background border-border text-muted-foreground hover:border-blue-400 hover:text-blue-600"}`}
+                data-testid={`button-mode-filter-${mode.toLowerCase()}`}
+              >
+                {mode}
+              </button>
+            ))}
           </div>
           <div className="ml-auto flex items-center gap-2">
             {savedFilters.length > 0 && savedFilters.map(f => (

@@ -99,7 +99,7 @@ export interface RepReportData {
   rep: { id: string; name: string; role: string; manager: string | null; director: string | null };
   period: { type: string; label: string; start: string; end: string };
   goals: Array<{ id: string; label: string; metric: string; period: string; current: number; target: number; pct: number }>;
-  touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; weeklyTrend: number[] };
+  touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; meaningful: number; weeklyTrend: number[] };
   contacts: { newThisPeriod: number };
   tasks: { completed: number; open: number; overdue: number };
   topAccounts: Array<{ name: string; touches: number; lastTouch: string }>;
@@ -230,8 +230,10 @@ export interface IStorage {
   createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint>;
   deleteTouchpoint(id: string): Promise<boolean>;
   getColdContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>>;
+  getMeaningfulOverdueContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSinceLastMeaningful: number }>>;
 
   getTouchpointCountByAm(amId: string, startDate: string, endDate: string): Promise<number>;
+  getMeaningfulTouchpointCountByAm(amId: string, startDate: string, endDate: string): Promise<number>;
 
   getRepReport(userId: string, period: "weekly" | "monthly"): Promise<RepReportData>;
 
@@ -1188,6 +1190,49 @@ export class DatabaseStorage implements IStorage {
     return results.sort((a, b) => b.daysSince - a.daysSince).slice(0, 20);
   }
 
+  async getMeaningfulOverdueContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSinceLastMeaningful: number }>> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysSince);
+    const cutoffStr = cutoff.toISOString().split("T")[0];
+
+    let companiesResult: Company[];
+    if (teamUserIds && teamUserIds.length > 0) {
+      companiesResult = await db.select().from(companies).where(inArray(companies.assignedTo, teamUserIds));
+    } else if (assignedToUserId) {
+      companiesResult = await db.select().from(companies).where(eq(companies.assignedTo, assignedToUserId));
+    } else {
+      companiesResult = await db.select().from(companies);
+    }
+    if (companiesResult.length === 0) return [];
+    const companyIds = companiesResult.map(c => c.id);
+    const companyMap = new Map(companiesResult.map(c => [c.id, c]));
+
+    const allContacts = await db.select().from(contacts).where(inArray(contacts.companyId, companyIds));
+    const meaningfulTps = await db.select().from(touchpoints).where(
+      and(inArray(touchpoints.companyId, companyIds), eq(touchpoints.isMeaningful, true))
+    );
+
+    const lastMeaningfulByContact = new Map<string, string>();
+    for (const tp of meaningfulTps) {
+      const existing = lastMeaningfulByContact.get(tp.contactId);
+      if (!existing || tp.date > existing) lastMeaningfulByContact.set(tp.contactId, tp.date);
+    }
+
+    const results: Array<{ contact: Contact; company: Company; daysSinceLastMeaningful: number }> = [];
+    const today = new Date();
+    for (const contact of allContacts) {
+      const lastMeaningful = lastMeaningfulByContact.get(contact.id);
+      if (!lastMeaningful || lastMeaningful < cutoffStr) {
+        const days = lastMeaningful
+          ? Math.floor((today.getTime() - new Date(lastMeaningful).getTime()) / 86400000)
+          : 999;
+        const comp = companyMap.get(contact.companyId);
+        if (comp) results.push({ contact, company: comp, daysSinceLastMeaningful: days });
+      }
+    }
+    return results.sort((a, b) => b.daysSinceLastMeaningful - a.daysSinceLastMeaningful).slice(0, 20);
+  }
+
   async getContactsAddedByAm(amId: string, startDate: string, endDate: string): Promise<number> {
     const allCompanies = await db.select().from(companies).where(eq(companies.assignedTo, amId));
     if (allCompanies.length === 0) return 0;
@@ -1204,6 +1249,16 @@ export class DatabaseStorage implements IStorage {
     if (allCompanies.length === 0) return 0;
     const companyIds = allCompanies.map(c => c.id);
     const allTps = await db.select().from(touchpoints).where(inArray(touchpoints.companyId, companyIds));
+    return allTps.filter(tp => tp.date >= startDate && tp.date <= endDate).length;
+  }
+
+  async getMeaningfulTouchpointCountByAm(amId: string, startDate: string, endDate: string): Promise<number> {
+    const allCompanies = await db.select().from(companies).where(eq(companies.assignedTo, amId));
+    if (allCompanies.length === 0) return 0;
+    const companyIds = allCompanies.map(c => c.id);
+    const allTps = await db.select().from(touchpoints).where(
+      and(inArray(touchpoints.companyId, companyIds), eq(touchpoints.isMeaningful, true))
+    );
     return allTps.filter(tp => tp.date >= startDate && tp.date <= endDate).length;
   }
 
@@ -1247,6 +1302,8 @@ export class DatabaseStorage implements IStorage {
         autoValue = await this.getContactsAddedByAm(userId, g.startDate, g.endDate);
       } else if (g.metric === "touchpoints") {
         autoValue = await this.getTouchpointCountByAm(userId, g.startDate, g.endDate);
+      } else if (g.metric === "meaningful_touchpoints") {
+        autoValue = await this.getMeaningfulTouchpointCountByAm(userId, g.startDate, g.endDate);
       }
       const displayCurrent = autoValue !== null ? autoValue : parseFloat(g.currentValue || "0");
       const target = parseFloat(g.target);
@@ -1280,6 +1337,7 @@ export class DatabaseStorage implements IStorage {
       email: periodTps.filter(t => t.type === "email").length,
       text: periodTps.filter(t => t.type === "text").length,
       site_visit: periodTps.filter(t => t.type === "site_visit").length,
+      meaningful: periodTps.filter(t => t.isMeaningful).length,
     };
 
     const weeklyTrend: number[] = [];
@@ -1384,6 +1442,8 @@ export class DatabaseStorage implements IStorage {
               autoValue = await this.getContactsAddedByAm(dr.id, g.startDate, g.endDate);
             } else if (g.metric === "touchpoints") {
               autoValue = await this.getTouchpointCountByAm(dr.id, g.startDate, g.endDate);
+            } else if (g.metric === "meaningful_touchpoints") {
+              autoValue = await this.getMeaningfulTouchpointCountByAm(dr.id, g.startDate, g.endDate);
             }
             const displayCurrent = autoValue !== null ? autoValue : parseFloat(g.currentValue || "0");
             const target = parseFloat(g.target);

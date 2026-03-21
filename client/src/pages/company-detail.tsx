@@ -87,6 +87,7 @@ import {
   Activity,
   Printer,
   Brain,
+  Copy,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -1877,6 +1878,24 @@ export default function CompanyDetail() {
                   <p className="text-sm font-semibold" data-testid="text-avg-margin-per-load">${(avgMarginPerLoad ?? 0).toFixed(0)}</p>
                 </div>
               </div>
+
+              {/* Copy as talking point */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full mt-3 text-xs gap-1.5"
+                data-testid="button-wallet-copy-talking-point"
+                onClick={() => {
+                  const talkingPoint = hasRfp
+                    ? `If ${company.name} gives us just ${sliderPct}% more of their freight, that's ~${additionalLoads.toLocaleString()} more loads and roughly $${extraMarginDollars.toLocaleString(undefined, { maximumFractionDigits: 0 })} in additional margin. Their RFP shows ${rfpTotalVolume.toLocaleString()} loads/yr total and we're currently at ${currentSharePct?.toFixed(1) ?? "0"}% share.`
+                    : `If ${company.name} gives us just ${sliderPct}% more of their estimated $${estimatedSpend!.toLocaleString()} in freight spend, that's ~${additionalLoads.toLocaleString()} more loads and roughly $${extraMarginDollars.toLocaleString(undefined, { maximumFractionDigits: 0 })} in additional margin.`;
+                  navigator.clipboard.writeText(talkingPoint);
+                  toast({ title: "Talking point copied!", description: "Paste it into your next call prep or email." });
+                }}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy as Talking Point
+              </Button>
             </CardContent>
           </Card>
         ) : null;
@@ -2304,8 +2323,27 @@ export default function CompanyDetail() {
                             )}
                             {(() => {
                               const awardedRfpTitleSet = new Set(companyRfps.filter(r => r.status === "awarded" || r.status === "partially_awarded").map(r => r.title));
+                              const weShipCount = filteredCorridors.filter(c => c.rfpTitles.some(t => awardedRfpTitleSet.has(t))).length;
+                              const topUnawarded = filteredCorridors
+                                .filter(c => !c.rfpTitles.some(t => awardedRfpTitleSet.has(t)))
+                                .sort((a, b) => b.totalVolume - a.totalVolume)
+                                .slice(0, 3);
                               return (
                             <div className="space-y-2">
+                              {weShipCount > 0 && (
+                                <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-green-50/70 dark:bg-green-950/20 border border-green-200/60 dark:border-green-800/40 text-xs">
+                                  <span className="font-medium text-green-700 dark:text-green-400">✓ We ship {weShipCount} of {filteredCorridors.length} corridor{filteredCorridors.length !== 1 ? "s" : ""}</span>
+                                  <span className="text-muted-foreground">— {filteredCorridors.length - weShipCount} still to win</span>
+                                </div>
+                              )}
+                              {topUnawarded.length > 0 && (
+                                <div className="rounded-md px-3 py-2 bg-amber-50/60 dark:bg-amber-950/15 border border-amber-200/50 dark:border-amber-800/30 text-xs space-y-0.5">
+                                  <p className="font-medium text-amber-700 dark:text-amber-400">Top unawarded lanes — high priority to win:</p>
+                                  {topUnawarded.map((c, i) => (
+                                    <p key={i} className="text-muted-foreground pl-1">· {c.lane} ({c.totalVolume.toLocaleString()} loads/yr)</p>
+                                  ))}
+                                </div>
+                              )}
                               {activeCorridors.map((c, i) => {
                                 const awardedRfpMatch = c.rfpTitles.find(t => awardedRfpTitleSet.has(t));
                                 return (
