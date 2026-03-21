@@ -112,6 +112,10 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, level }: Contac
   const dot = recencyDot(days);
   const monthCount = countMonth(tps);
   const weekCount = countThisWeek(tps);
+  const lastMeaningfulTp = tps
+    .filter(t => (t as any).isMeaningful)
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
+  const lastMeaningfulDays = lastMeaningfulTp ? Math.floor((new Date().getTime() - new Date(lastMeaningfulTp.date).getTime()) / 86400000) : null;
 
   return (
     <Card
@@ -184,6 +188,15 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, level }: Contac
               <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground">
                 {monthCount} this mo.
               </span>
+              {lastMeaningfulDays !== null && (
+                <span
+                  className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
+                  title="Last meaningful conversation"
+                  data-testid={`badge-last-meaningful-${contact.id}`}
+                >
+                  ✓ {lastMeaningfulDays === 0 ? "today" : `${lastMeaningfulDays}d`}
+                </span>
+              )}
             </div>
 
             <div className="mt-3 space-y-2">

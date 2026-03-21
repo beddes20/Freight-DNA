@@ -21,6 +21,8 @@ export const companies = pgTable("companies", {
   spotProcess: text("spot_process"),
   dlEmail: varchar("dl_email"),
   salesPersonId: varchar("sales_person_id"),
+  shippingModes: text("shipping_modes").array(),
+  estimatedFreightSpend: decimal("estimated_freight_spend", { precision: 14, scale: 2 }),
 });
 
 export const insertCompanySchema = createInsertSchema(companies).omit({
@@ -374,6 +376,7 @@ export const touchpoints = pgTable("touchpoints", {
   date: text("date").notNull(),
   notes: text("notes"),
   sentiment: text("sentiment"),
+  isMeaningful: boolean("is_meaningful").default(false),
   loggedById: varchar("logged_by_id").notNull().references(() => users.id),
   createdAt: text("created_at").notNull(),
 });

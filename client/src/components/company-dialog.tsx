@@ -1,6 +1,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
 import { z } from "zod";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
@@ -29,12 +30,15 @@ import type { Company, InsertCompany, User } from "@shared/schema";
 
 type SafeUser = Omit<User, "password">;
 
+const SHIPPING_MODES = ["LTL", "FTL", "Drayage", "IMDL"];
+
 const companySchema = z.object({
   name: z.string().min(1, "Company name is required"),
   industry: z.string().optional(),
   website: z.string().optional(),
   notes: z.string().optional(),
   assignedTo: z.string().optional(),
+  estimatedFreightSpend: z.string().optional(),
 });
 
 type CompanyFormData = z.infer<typeof companySchema>;
@@ -54,6 +58,12 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
   const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
   const canAssign = isAdmin || isNAM;
 
+  const [shippingModes, setShippingModes] = useState<string[]>([]);
+
+  useEffect(() => {
+    setShippingModes(company?.shippingModes ?? []);
+  }, [company, open]);
+
   const { data: users = [] } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
     enabled: canAssign,
@@ -67,8 +77,27 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
       website: company?.website || "",
       notes: company?.notes || "",
       assignedTo: company?.assignedTo || (currentUser?.id || ""),
+      estimatedFreightSpend: company?.estimatedFreightSpend?.toString() || "",
     },
   });
+
+  useEffect(() => {
+    if (open) {
+      form.reset({
+        name: company?.name || "",
+        industry: company?.industry || "",
+        website: company?.website || "",
+        notes: company?.notes || "",
+        assignedTo: company?.assignedTo || (currentUser?.id || ""),
+        estimatedFreightSpend: company?.estimatedFreightSpend?.toString() || "",
+      });
+      setShippingModes(company?.shippingModes ?? []);
+    }
+  }, [open, company]);
+
+  const toggleMode = (mode: string) => {
+    setShippingModes(prev => prev.includes(mode) ? prev.filter(m => m !== mode) : [...prev, mode]);
+  };
 
   const createMutation = useMutation({
     mutationFn: async (data: InsertCompany) => {
@@ -104,12 +133,14 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
   });
 
   const onSubmit = (data: CompanyFormData) => {
-    const payload: InsertCompany = {
+    const payload: any = {
       name: data.name,
       industry: data.industry || null,
       website: data.website || null,
       notes: data.notes || null,
       assignedTo: data.assignedTo || currentUser?.id || null,
+      shippingModes: shippingModes.length > 0 ? shippingModes : [],
+      estimatedFreightSpend: data.estimatedFreightSpend ? data.estimatedFreightSpend : null,
     };
 
     if (isEditing) {
@@ -157,6 +188,48 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
                 </FormItem>
               )}
             />
+
+            {/* Shipping Modes */}
+            <div>
+              <label className="text-sm font-medium">Shipping Modes</label>
+              <div className="flex gap-2 mt-1.5 flex-wrap">
+                {SHIPPING_MODES.map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => toggleMode(mode)}
+                    data-testid={`button-shipping-mode-${mode.toLowerCase()}`}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                      shippingModes.includes(mode)
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <FormField
+              control={form.control}
+              name="estimatedFreightSpend"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Est. Total Freight Spend ($/yr)</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      placeholder="e.g., 5000000"
+                      {...field}
+                      data-testid="input-estimated-freight-spend"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
             <FormField
               control={form.control}
               name="website"

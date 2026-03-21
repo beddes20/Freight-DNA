@@ -247,6 +247,8 @@ export default function CompanyDetail() {
   const [quickTouchType, setQuickTouchType] = useState("call");
   const [quickTouchNote, setQuickTouchNote] = useState("");
   const [quickTouchSentiment, setQuickTouchSentiment] = useState<string>("");
+  const [quickTouchMeaningful, setQuickTouchMeaningful] = useState(false);
+  const [walletSharePct, setWalletSharePct] = useState(5);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
   const [focusTaskComments, setFocusTaskComments] = useState(false);
@@ -577,16 +579,18 @@ export default function CompanyDetail() {
   });
 
   const logTouchFromDetailMutation = useMutation({
-    mutationFn: ({ contactId, type, notes, sentiment }: { contactId: string; type: string; notes: string; sentiment?: string }) =>
-      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null }),
+    mutationFn: ({ contactId, type, notes, sentiment, isMeaningful }: { contactId: string; type: string; notes: string; sentiment?: string; isMeaningful?: boolean }) =>
+      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "touchpoints"] });
       toast({ title: "Touch logged!" });
       setQuickTouchOpen(false);
       setQuickTouchContactId("");
       setQuickTouchType("call");
       setQuickTouchNote("");
       setQuickTouchSentiment("");
+      setQuickTouchMeaningful(false);
     },
     onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
   });
@@ -973,9 +977,14 @@ export default function CompanyDetail() {
                   );
                 })()}
               </div>
-              <div className="flex items-center gap-2 text-muted-foreground">
+              <div className="flex items-center gap-2 text-muted-foreground flex-wrap">
                 {company.industry && (
                   <Badge variant="secondary">{company.industry}</Badge>
+                )}
+                {(company as any).shippingModes && (company as any).shippingModes.length > 0 && (
+                  (company as any).shippingModes.map((mode: string) => (
+                    <Badge key={mode} variant="outline" className="text-[11px] border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400">{mode}</Badge>
+                  ))
                 )}
                 {company.website && (
                   <a
@@ -1775,6 +1784,104 @@ export default function CompanyDetail() {
       {/* Market Share */}
       <MarketShareCard companyId={companyId} rfps={companyRfps} />
 
+      {/* Wallet Share Calculator */}
+      {(() => {
+        const ytd = accountPerf?.ytd;
+        const hasFinancial = ytd && ytd.totalLoads > 0;
+        const avgMarginPerLoad = hasFinancial ? ytd.totalMargin / ytd.totalLoads : null;
+        const avgRevenuePerLoad = hasFinancial && (ytd.totalRevenue ?? 0) > 0 ? (ytd.totalRevenue ?? 0) / ytd.totalLoads : null;
+
+        // Total available market from RFPs
+        const rfpTotalVolume = companyRfps.reduce((sum, r) => {
+          const vol = parseInt(String((r as any).totalVolume || "0"), 10);
+          return sum + (isNaN(vol) ? 0 : vol);
+        }, 0);
+        const hasRfp = companyRfps.length > 0 && rfpTotalVolume > 0;
+
+        const estimatedSpend = (company as any).estimatedFreightSpend ? parseFloat(String((company as any).estimatedFreightSpend)) : null;
+        const hasEstimate = !hasRfp && estimatedSpend && estimatedSpend > 0;
+
+        // Calculate opportunity
+        const sliderPct = walletSharePct;
+        let additionalLoads = 0;
+        let extraMarginDollars = 0;
+        let currentSharePct: number | null = null;
+
+        if (hasRfp && hasFinancial) {
+          additionalLoads = Math.round(rfpTotalVolume * sliderPct / 100);
+          extraMarginDollars = additionalLoads * (avgMarginPerLoad ?? 0);
+          currentSharePct = ytd.totalLoads / rfpTotalVolume * 100;
+        } else if (hasEstimate && hasFinancial && avgRevenuePerLoad) {
+          additionalLoads = Math.round((estimatedSpend! * sliderPct / 100) / avgRevenuePerLoad);
+          extraMarginDollars = additionalLoads * (avgMarginPerLoad ?? 0);
+        }
+
+        const showCalculator = (hasRfp || hasEstimate) && hasFinancial;
+
+        return showCalculator ? (
+          <Card data-testid="card-wallet-share-calculator">
+            <CardContent className="pt-4 pb-4">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="flex h-7 w-7 items-center justify-center rounded-md bg-green-100 dark:bg-green-900/40">
+                  <DollarSign className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold">Wallet Share Calculator</p>
+                  <p className="text-xs text-muted-foreground">
+                    {hasRfp ? `Based on ${rfpTotalVolume.toLocaleString()} loads across ${companyRfps.length} RFP${companyRfps.length !== 1 ? "s" : ""}` : `Based on $${estimatedSpend!.toLocaleString()} estimated freight spend`}
+                  </p>
+                </div>
+              </div>
+
+              {/* Current share */}
+              {currentSharePct !== null && (
+                <div className="mb-3 flex items-center gap-3">
+                  <div className="text-xs text-muted-foreground shrink-0">Our current share:</div>
+                  <div className="flex-1 bg-muted rounded-full h-2">
+                    <div className="bg-blue-500 h-2 rounded-full transition-all" style={{ width: `${Math.min(currentSharePct, 100).toFixed(1)}%` }} />
+                  </div>
+                  <div className="text-xs font-medium shrink-0 w-14 text-right">{currentSharePct.toFixed(1)}%</div>
+                </div>
+              )}
+
+              {/* Slider */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium">If we capture <span className="text-green-600 dark:text-green-400 font-bold">{sliderPct}%</span> more of their freight:</label>
+                  <span className="text-xs text-muted-foreground">~{additionalLoads.toLocaleString()} loads</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={25}
+                  value={sliderPct}
+                  onChange={e => setWalletSharePct(parseInt(e.target.value))}
+                  className="w-full accent-green-500"
+                  data-testid="slider-wallet-share"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>1%</span><span>5%</span><span>10%</span><span>15%</span><span>20%</span><span>25%</span>
+                </div>
+              </div>
+
+              {/* Opportunity */}
+              <div className="mt-3 flex items-center justify-between rounded-md bg-green-50 dark:bg-green-950/30 border border-green-200/60 dark:border-green-800/40 px-3 py-2">
+                <div>
+                  <p className="text-xs text-muted-foreground">Margin opportunity</p>
+                  <p className="text-lg font-bold text-green-700 dark:text-green-400" data-testid="text-wallet-margin-opportunity">
+                    ${extraMarginDollars.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-muted-foreground">Avg margin/load</p>
+                  <p className="text-sm font-semibold" data-testid="text-avg-margin-per-load">${(avgMarginPerLoad ?? 0).toFixed(0)}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null;
+      })()}
+
       {/* Transfer Account Dialog */}
       <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
         <DialogContent>
@@ -2195,11 +2302,16 @@ export default function CompanyDetail() {
                                 <span><span className="font-medium text-blue-700 dark:text-blue-300">{multiRfpCount} corridor{multiRfpCount !== 1 ? "s" : ""}</span> appear in 2+ RFPs — highest priority for outreach.</span>
                               </div>
                             )}
+                            {(() => {
+                              const awardedRfpTitleSet = new Set(companyRfps.filter(r => r.status === "awarded" || r.status === "partially_awarded").map(r => r.title));
+                              return (
                             <div className="space-y-2">
-                              {activeCorridors.map((c, i) => (
-                                <div key={i} className={`flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors ${c.appearsInMultipleRfps ? "border-blue-200 dark:border-blue-800/50" : ""}`} data-testid={`corridor-${i}`}>
+                              {activeCorridors.map((c, i) => {
+                                const awardedRfpMatch = c.rfpTitles.find(t => awardedRfpTitleSet.has(t));
+                                return (
+                                <div key={i} className={`flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors ${awardedRfpMatch ? "border-green-300 dark:border-green-700/60 bg-green-50/30 dark:bg-green-950/10" : c.appearsInMultipleRfps ? "border-blue-200 dark:border-blue-800/50" : ""}`} data-testid={`corridor-${i}`}>
                                   <div className="flex items-center gap-3 min-w-0 flex-1">
-                                    <div className="flex h-7 w-7 items-center justify-center rounded-md bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 shrink-0">
+                                    <div className={`flex h-7 w-7 items-center justify-center rounded-md shrink-0 ${awardedRfpMatch ? "bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400" : "bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400"}`}>
                                       <TruckIcon className="h-3.5 w-3.5" />
                                     </div>
                                     <div className="min-w-0">
@@ -2208,7 +2320,8 @@ export default function CompanyDetail() {
                                         <span>{c.totalVolume.toLocaleString()} loads/yr</span>
                                         {c.originState && c.destinationState && <span className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded">{c.originState} → {c.destinationState}</span>}
                                         {c.count > 1 && <span className="text-blue-600 dark:text-blue-400 font-medium">×{c.count}</span>}
-                                        {c.appearsInMultipleRfps && <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 text-[10px] px-1.5 py-0">Multi-RFP</Badge>}
+                                        {awardedRfpMatch && <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 text-[10px] px-1.5 py-0">✓ We Ship This</Badge>}
+                                        {c.appearsInMultipleRfps && !awardedRfpMatch && <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 text-[10px] px-1.5 py-0">Multi-RFP</Badge>}
                                       </div>
                                     </div>
                                   </div>
@@ -2229,8 +2342,11 @@ export default function CompanyDetail() {
                                     </Button>
                                   </div>
                                 </div>
-                              ))}
+                                );
+                              })}
                             </div>
+                          );
+                            })()}
                             {handledCorridors.length > 0 && (
                               <details className="group">
                                 <summary className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer list-none hover:text-foreground">
@@ -3259,7 +3375,7 @@ export default function CompanyDetail() {
         onEdit={(c) => { setViewContact(null); handleEditContact(c); }}
       />
 
-      <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); setQuickTouchNote(""); setQuickTouchSentiment(""); } }}>
+      <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); setQuickTouchNote(""); setQuickTouchSentiment(""); setQuickTouchMeaningful(false); } }}>
         <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch-detail">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -3300,15 +3416,38 @@ export default function CompanyDetail() {
                 ))}
               </div>
             </div>
+            {/* Meaningful toggle */}
+            <div className="flex items-center gap-3 py-1">
+              <button
+                type="button"
+                onClick={() => setQuickTouchMeaningful(v => !v)}
+                data-testid="button-meaningful-toggle"
+                className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ${quickTouchMeaningful ? "bg-green-500" : "bg-muted border border-border"}`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${quickTouchMeaningful ? "left-4" : "left-0.5"}`} />
+              </button>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-medium">Meaningful conversation?</span>
+                <span
+                  className="text-[10px] text-muted-foreground cursor-help border-b border-dashed border-muted-foreground"
+                  title="A real conversation that moves the needle — freight needs, rates, an opportunity, or account strategy. Not just 'what are you working on?'"
+                  data-testid="tooltip-meaningful"
+                >
+                  What's this?
+                </span>
+              </div>
+            </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Notes <span className="font-normal">(optional)</span></label>
+              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
+                Notes {quickTouchMeaningful ? <span className="text-red-500">*required for meaningful</span> : <span className="font-normal">(optional)</span>}
+              </label>
               <textarea
                 value={quickTouchNote}
                 onChange={e => setQuickTouchNote(e.target.value)}
-                placeholder="What did you discuss? Any follow-ups?"
+                placeholder={quickTouchMeaningful ? "What made this conversation meaningful?" : "What did you discuss? Any follow-ups?"}
                 rows={3}
                 data-testid="textarea-quick-touch-note-detail"
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                className={`w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none ${quickTouchMeaningful && !quickTouchNote.trim() ? "border-red-300 dark:border-red-700" : "border-input"}`}
               />
             </div>
             <div>
@@ -3331,11 +3470,11 @@ export default function CompanyDetail() {
               </div>
             </div>
             <div className="flex gap-2 pt-1">
-              <Button variant="outline" className="flex-1" onClick={() => { setQuickTouchOpen(false); setQuickTouchNote(""); setQuickTouchSentiment(""); }} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
+              <Button variant="outline" className="flex-1" onClick={() => { setQuickTouchOpen(false); setQuickTouchNote(""); setQuickTouchSentiment(""); setQuickTouchMeaningful(false); }} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
               <Button
                 className="flex-1"
-                disabled={!quickTouchContactId || logTouchFromDetailMutation.isPending}
-                onClick={() => logTouchFromDetailMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote, sentiment: quickTouchSentiment || undefined })}
+                disabled={!quickTouchContactId || logTouchFromDetailMutation.isPending || (quickTouchMeaningful && !quickTouchNote.trim())}
+                onClick={() => logTouchFromDetailMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote, sentiment: quickTouchSentiment || undefined, isMeaningful: quickTouchMeaningful })}
                 data-testid="button-submit-quick-touch-detail"
               >
                 Log Touch

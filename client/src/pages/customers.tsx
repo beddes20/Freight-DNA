@@ -96,6 +96,7 @@ export default function Customers() {
   const [quickTouchType, setQuickTouchType] = useState("call");
   const [quickTouchNote, setQuickTouchNote] = useState("");
   const [quickTouchSentiment, setQuickTouchSentiment] = useState("");
+  const [quickTouchMeaningful, setQuickTouchMeaningful] = useState(false);
   const [saveFilterName, setSaveFilterName] = useState("");
   const [showSaveFilter, setShowSaveFilter] = useState(false);
 
@@ -134,8 +135,8 @@ export default function Customers() {
   };
 
   const logTouchMutation = useMutation({
-    mutationFn: ({ contactId, type, notes, sentiment }: { contactId: string; type: string; notes: string; sentiment?: string }) =>
-      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null }),
+    mutationFn: ({ contactId, type, notes, sentiment, isMeaningful }: { contactId: string; type: string; notes: string; sentiment?: string; isMeaningful?: boolean }) =>
+      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
       toast({ title: "Touch logged!" });
@@ -144,6 +145,7 @@ export default function Customers() {
       setQuickTouchType("call");
       setQuickTouchNote("");
       setQuickTouchSentiment("");
+      setQuickTouchMeaningful(false);
     },
     onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
   });
@@ -658,13 +660,34 @@ export default function Customers() {
                 </SelectContent>
               </Select>
             </div>
+            {/* Meaningful toggle */}
+            <div className="flex items-center gap-3 py-0.5">
+              <button
+                type="button"
+                onClick={() => setQuickTouchMeaningful(v => !v)}
+                data-testid="button-meaningful-toggle-customers"
+                className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ${quickTouchMeaningful ? "bg-green-500" : "bg-muted border border-border"}`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${quickTouchMeaningful ? "left-4" : "left-0.5"}`} />
+              </button>
+              <span className="text-sm font-medium">Meaningful conversation?</span>
+              <span
+                className="text-xs text-muted-foreground cursor-help border-b border-dashed border-muted-foreground"
+                title="A real conversation that moves the needle — freight needs, rates, an opportunity, or account strategy. Not just 'what are you working on?'"
+              >
+                What's this?
+              </span>
+            </div>
             <div>
-              <label className="text-sm font-medium block mb-1">Note (optional)</label>
+              <label className="text-sm font-medium block mb-1">
+                Note {quickTouchMeaningful ? <span className="text-red-500 font-normal">*required</span> : <span className="font-normal">(optional)</span>}
+              </label>
               <Input
-                placeholder="Quick note..."
+                placeholder={quickTouchMeaningful ? "What made this conversation meaningful?" : "Quick note..."}
                 value={quickTouchNote}
                 onChange={e => setQuickTouchNote(e.target.value)}
                 data-testid="input-quick-touch-note"
+                className={quickTouchMeaningful && !quickTouchNote.trim() ? "border-red-300 dark:border-red-700" : ""}
               />
             </div>
             <div>
@@ -687,8 +710,8 @@ export default function Customers() {
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setQuickTouch(null)}>Cancel</Button>
             <Button
-              onClick={() => logTouchMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote, sentiment: quickTouchSentiment })}
-              disabled={!quickTouchContactId || logTouchMutation.isPending}
+              onClick={() => logTouchMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote, sentiment: quickTouchSentiment, isMeaningful: quickTouchMeaningful })}
+              disabled={!quickTouchContactId || logTouchMutation.isPending || (quickTouchMeaningful && !quickTouchNote.trim())}
               data-testid="button-submit-quick-touch"
             >
               Log Touch

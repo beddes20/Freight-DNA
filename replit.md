@@ -41,6 +41,10 @@ The application uses React, TypeScript, and Tailwind CSS with `shadcn/ui` for a 
     - **Dashboard Alerts**: Contextual alerts for RFP deadlines, goal progress, missing goals, and pending 1:1 topics.
     - **Task from Cold Contacts**: Direct task creation for contacts needing attention from the dashboard.
     - **PTO Passoff Handback**: Functionality for PTO owners to close and return accounts upon their return.
+    - **Meaningful Touchpoints**: Toggle on quick-touch dialogs (both customer list and company detail) to flag a conversation as "meaningful" (freight needs, rates, real opportunity, strategy). Requires a note if marked meaningful. Last meaningful date shown as green badge on contact cards in the org chart.
+    - **Shipping Modes**: Company profile includes LTL/FTL/Drayage/IMDL checkboxes (stored as `shipping_modes text[]`). Modes display as blue outline badges near Industry on company detail header.
+    - **Wallet Share Calculator**: Panel below Market Share card on company detail. If RFP exists, uses RFP total volume + our financial data to project incremental margin from capturing X% more of freight. If no RFP, uses `estimated_freight_spend` (company field). Slider 1-25% with live calculation.
+    - **Awarded Lane Highlighting**: In RFP Intelligence Lane Patterns → Corridors tab, lanes that appear in an awarded/partially-awarded RFP are highlighted with a green "✓ We Ship This" badge and green border.
 
 ## External Dependencies
 - **PostgreSQL**: Database and session storage.

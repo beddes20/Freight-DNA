@@ -5066,6 +5066,8 @@ export async function registerRoutes(
         type: req.body.type || "call",
         date: req.body.date || now.toISOString().split("T")[0],
         notes: req.body.notes || null,
+        sentiment: req.body.sentiment || null,
+        isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true" ? true : false,
         loggedById: user.id,
         createdAt: now.toISOString(),
       });
