@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
-  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck
+  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart
 } from "lucide-react";
 
 type PeriodOption = "current" | "last" | "ytd";
@@ -49,6 +49,7 @@ interface RepPerf {
   emailTouchpoints: number;
   contactsTouched: number;
   baseAdvanced: number;
+  meaningfulTouchpoints: number;
 }
 
 interface AccountSummaryRow {
@@ -142,11 +143,12 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf;
           </div>
         )}
 
-        <div className="grid grid-cols-4 gap-1.5 mb-2">
+        <div className="grid grid-cols-5 gap-1.5 mb-2">
           <StatPill value={rep.openTasks} label="Open" color={rep.openTasks > 5 ? "text-amber-600" : "text-foreground"} />
           <StatPill value={rep.overdueTasks} label="Overdue" color={rep.overdueTasks > 0 ? "text-red-600" : "text-foreground"} />
           <StatPill value={rep.companyCount} label="Accounts" color="text-blue-600" />
           <StatPill value={rep.newContacts} label="New Contacts" color="text-emerald-600" icon={<UserPlus className="h-3 w-3 text-emerald-500" />} />
+          <StatPill value={rep.baseAdvanced} label="Rel. Moved" color="text-teal-600" icon={<ArrowUpRight className="h-3 w-3 text-teal-500" />} />
         </div>
 
         <div className="grid grid-cols-5 gap-1.5 mb-4">
@@ -154,7 +156,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf;
           <StatPill value={rep.textTouchpoints} label="Texts" color="text-green-600" icon={<MessageSquare className="h-3 w-3 text-green-500" />} />
           <StatPill value={rep.emailTouchpoints} label="Emails" color="text-purple-600" icon={<Mail className="h-3 w-3 text-purple-500" />} />
           <StatPill value={rep.contactsTouched} label="Touched" color="text-cyan-600" icon={<UserCheck className="h-3 w-3 text-cyan-500" />} />
-          <StatPill value={rep.baseAdvanced} label="Rel. Moved" color="text-teal-600" icon={<ArrowUpRight className="h-3 w-3 text-teal-500" />} />
+          <StatPill value={rep.meaningfulTouchpoints ?? 0} label="Meaningful" color="text-rose-600" icon={<Heart className="h-3 w-3 text-rose-500" />} />
         </div>
 
         <div className="space-y-1">
@@ -264,6 +266,7 @@ export default function TeamPerformancePage() {
   const totalEmails = reps.reduce((sum, r) => sum + r.emailTouchpoints, 0);
   const totalTouched = reps.reduce((sum, r) => sum + r.contactsTouched, 0);
   const totalBaseAdvanced = reps.reduce((sum, r) => sum + r.baseAdvanced, 0);
+  const totalMeaningful = reps.reduce((sum, r) => sum + (r.meaningfulTouchpoints ?? 0), 0);
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
@@ -307,12 +310,13 @@ export default function TeamPerformancePage() {
       ) : (
         <>
           <div className="space-y-3">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               {[
                 { label: "Open Tasks", value: totalOpenTasks, icon: <Clock className="h-4 w-4 text-amber-500" />, color: "text-amber-600" },
                 { label: "Overdue", value: totalOverdue, icon: <AlertTriangle className="h-4 w-4 text-red-500" />, color: "text-red-600" },
                 { label: "Total Accounts", value: totalAccounts, icon: <Building2 className="h-4 w-4 text-blue-500" />, color: "text-blue-600" },
                 { label: "New Contacts", value: totalNewContacts, icon: <UserPlus className="h-4 w-4 text-emerald-500" />, color: "text-emerald-600" },
+                { label: "Relationships Moved", value: totalBaseAdvanced, icon: <ArrowUpRight className="h-4 w-4 text-teal-500" />, color: "text-teal-600" },
               ].map(stat => (
                 <Card key={stat.label}>
                   <CardContent className="pt-4 pb-3">
@@ -331,7 +335,7 @@ export default function TeamPerformancePage() {
                 { label: "Texts", value: totalTexts, icon: <MessageSquare className="h-4 w-4 text-green-500" />, color: "text-green-600" },
                 { label: "Emails", value: totalEmails, icon: <Mail className="h-4 w-4 text-purple-500" />, color: "text-purple-600" },
                 { label: "Touched", value: totalTouched, icon: <UserCheck className="h-4 w-4 text-cyan-500" />, color: "text-cyan-600" },
-                { label: "Base Advanced", value: totalBaseAdvanced, icon: <ArrowUpRight className="h-4 w-4 text-teal-500" />, color: "text-teal-600" },
+                { label: "Meaningful", value: totalMeaningful, icon: <Heart className="h-4 w-4 text-rose-500" />, color: "text-rose-600" },
               ].map(stat => (
                 <Card key={stat.label}>
                   <CardContent className="pt-4 pb-3">

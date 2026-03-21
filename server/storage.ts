@@ -215,7 +215,7 @@ export interface IStorage {
   searchRfps(query: string): Promise<Rfp[]>;
 
   getCompanyActivity(companyId: string): Promise<Array<{ type: string; title: string; subtitle?: string; date: string; link?: string }>>;
-  getTeamPerformance(managerIds: string[], startDate?: string, endDate?: string): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number }>>;
+  getTeamPerformance(managerIds: string[], startDate?: string, endDate?: string): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number; meaningfulTouchpoints: number }>>;
 
   getNotifications(userId: string): Promise<import('../shared/schema').Notification[]>;
   createNotification(data: import('../shared/schema').InsertNotification): Promise<import('../shared/schema').Notification>;
@@ -990,7 +990,7 @@ export class DatabaseStorage implements IStorage {
     return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 30);
   }
 
-  async getTeamPerformance(teamMemberIds: string[], startDate?: string, endDate?: string): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number }>> {
+  async getTeamPerformance(teamMemberIds: string[], startDate?: string, endDate?: string): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number; meaningfulTouchpoints: number }>> {
     if (teamMemberIds.length === 0) return [];
     const now = new Date();
     const today = now.toISOString().split("T")[0];
@@ -1026,6 +1026,7 @@ export class DatabaseStorage implements IStorage {
         emailTouchpoints: userTouchpoints.filter(t => t.type === "email").length,
         contactsTouched: touchedContactIds.size,
         baseAdvanced: userContacts.filter(c => { const d = c.baseAdvancedAt?.slice(0, 10); return d && d >= periodStart && d <= periodEnd; }).length,
+        meaningfulTouchpoints: userTouchpoints.filter(t => t.isMeaningful).length,
       };
     });
   }
