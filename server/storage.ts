@@ -1,4 +1,4 @@
-import { eq, inArray, ilike, or, and, desc, isNull, gte, lte, sql } from "drizzle-orm";
+import { eq, inArray, ilike, or, and, desc, isNull, isNotNull, gte, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -190,6 +190,8 @@ export interface IStorage {
   deleteTopicReply(replyId: string): Promise<boolean>;
   getArchivedSessions(namId: string, amId: string): Promise<OneOnOneSession[]>;
   updateSessionNotes(sessionId: string, notes: string): Promise<OneOnOneSession | undefined>;
+  updateSessionMeetingDate(sessionId: string, meetingDate: string | null): Promise<OneOnOneSession | undefined>;
+  getActiveSessionsWithMeetingDate(): Promise<OneOnOneSession[]>;
   getActionItemsByPairing(namId: string, amId: string): Promise<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>;
 
   searchContacts(query: string): Promise<Contact[]>;
@@ -843,6 +845,23 @@ export class DatabaseStorage implements IStorage {
       .where(eq(oneOnOneSessions.id, sessionId))
       .returning();
     return updated;
+  }
+
+  async updateSessionMeetingDate(sessionId: string, meetingDate: string | null): Promise<OneOnOneSession | undefined> {
+    const [updated] = await db.update(oneOnOneSessions)
+      .set({ meetingDate })
+      .where(eq(oneOnOneSessions.id, sessionId))
+      .returning();
+    return updated;
+  }
+
+  async getActiveSessionsWithMeetingDate(): Promise<OneOnOneSession[]> {
+    return db.select().from(oneOnOneSessions).where(
+      and(
+        eq(oneOnOneSessions.status, "active"),
+        isNotNull(oneOnOneSessions.meetingDate)
+      )
+    );
   }
 
   async getActionItemsByPairing(namId: string, amId: string): Promise<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]> {

@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Users, Plus, CheckCircle2, Circle, Trash2, ChevronDown, ChevronUp,
   Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle,
-  StickyNote, ClipboardList, CornerDownRight,
+  StickyNote, ClipboardList, CornerDownRight, CalendarClock, Pencil, X,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -249,6 +249,8 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const [showArchived, setShowArchived] = useState(false);
   const [activeTab, setActiveTab] = useState<"topics" | "action-items">("topics");
   const [topicPendingFiles, setTopicPendingFiles] = useState<PendingFile[]>([]);
+  const [editingDate, setEditingDate] = useState(false);
+  const [dateInput, setDateInput] = useState("");
 
   const sessionKey = ["/api/1on1/session", managerId, repId];
   const { data, isLoading } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }>({
@@ -337,6 +339,19 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
     },
     onError: () => toast({ title: "Failed to close session", variant: "destructive" }),
   });
+
+  const meetingDateMutation = useMutation({
+    mutationFn: async ({ sessionId, meetingDate }: { sessionId: string; meetingDate: string | null }) => {
+      const res = await apiRequest("PATCH", `/api/1on1/session/${sessionId}/meeting-date`, { meetingDate });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: sessionKey });
+      setEditingDate(false);
+      toast({ title: "Meeting date saved", description: "Both participants will get daily reminders leading up to the meeting." });
+    },
+    onError: () => toast({ title: "Failed to save meeting date", variant: "destructive" }),
+  });
   const { data: actionItemData = [] } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>({
     queryKey: actionItemsKey,
     queryFn: async () => {
@@ -375,11 +390,65 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   return (
     <div className="flex flex-col h-full">
       {/* Session stats bar */}
-      <div className="flex gap-4 px-6 py-4 border-b flex-wrap">
+      <div className="flex gap-4 px-6 py-4 border-b flex-wrap items-center">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <CalendarDays className="h-4 w-4" />
           <span>Started {formatDate(session.startDate)}</span>
         </div>
+
+        {/* Meeting date */}
+        <div className="flex items-center gap-1.5">
+          {editingDate ? (
+            <>
+              <input
+                type="date"
+                className="h-7 px-2 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                value={dateInput}
+                min={new Date().toISOString().split("T")[0]}
+                onChange={(e) => setDateInput(e.target.value)}
+                data-testid="input-meeting-date"
+                autoFocus
+              />
+              <Button
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => meetingDateMutation.mutate({ sessionId: session.id, meetingDate: dateInput || null })}
+                disabled={meetingDateMutation.isPending}
+                data-testid="btn-save-meeting-date"
+              >
+                Save
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-1.5"
+                onClick={() => setEditingDate(false)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          ) : (session as any).meetingDate ? (
+            <button
+              className="flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+              onClick={() => { setDateInput((session as any).meetingDate || ""); setEditingDate(true); }}
+              data-testid="btn-edit-meeting-date"
+            >
+              <CalendarClock className="h-4 w-4" />
+              <span>Next Meeting: {formatDate((session as any).meetingDate)}</span>
+              <Pencil className="h-3 w-3 opacity-60" />
+            </button>
+          ) : (
+            <button
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => { setDateInput(""); setEditingDate(true); }}
+              data-testid="btn-set-meeting-date"
+            >
+              <CalendarClock className="h-4 w-4" />
+              <span>Set meeting date</span>
+            </button>
+          )}
+        </div>
+
         {openActionItemCount > 0 && (
           <div className="flex items-center gap-1.5 text-sm text-orange-600 dark:text-orange-400">
             <AlertCircle className="h-4 w-4" />

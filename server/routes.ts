@@ -2712,6 +2712,24 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/1on1/session/:id/meeting-date", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { meetingDate } = req.body;
+      const session = await storage.getSession(req.params.id);
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === session.namId || user.id === session.amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const updated = await storage.updateSessionMeetingDate(req.params.id, meetingDate || null);
+      if (!updated) return res.status(404).json({ error: "Session not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update meeting date" });
+    }
+  });
+
   app.patch("/api/1on1/session/:id/notes", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
