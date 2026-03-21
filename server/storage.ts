@@ -80,6 +80,18 @@ import {
 
 const { Pool } = pg;
 
+export interface TeamMemberSummary {
+  id: string;
+  name: string;
+  role: string;
+  touchpoints: number;
+  newContacts: number;
+  tasks: { completed: number; open: number; overdue: number };
+  goalsAvgPct: number;
+  hasActiveGoals: boolean;
+  accountsNeedingAttention: number;
+}
+
 export interface RepReportData {
   rep: { id: string; name: string; role: string; manager: string | null; director: string | null };
   period: { type: string; label: string; start: string; end: string };
@@ -90,6 +102,7 @@ export interface RepReportData {
   topAccounts: Array<{ name: string; touches: number; lastTouch: string }>;
   accountsNeedingAttention: number;
   wins: Array<{ id: string; text: string; category: string }>;
+  teamMembers: TeamMemberSummary[];
 }
 
 export interface IStorage {
@@ -1323,6 +1336,87 @@ export class DatabaseStorage implements IStorage {
       .slice(0, 5)
       .map(p => ({ id: p.id, text: p.content, category: p.category }));
 
+    // Compute team member summaries for direct reports
+    const directReports = allUsers.filter(u => u.managerId === userId);
+    const teamMembers: TeamMemberSummary[] = await Promise.all(
+      directReports.map(async (dr) => {
+        const drCompanies = await db.select().from(companies).where(eq(companies.assignedTo, dr.id));
+        const drCompanyIds = drCompanies.map(c => c.id);
+
+        let drPeriodTps: typeof touchpoints.$inferSelect[] = [];
+        if (drCompanyIds.length > 0) {
+          drPeriodTps = await db.select().from(touchpoints).where(
+            and(
+              eq(touchpoints.loggedById, dr.id),
+              gte(touchpoints.date, periodStart),
+              lte(touchpoints.date, periodEnd)
+            )
+          );
+        }
+
+        const drNewContacts = drCompanyIds.length > 0
+          ? (await db.select().from(contacts).where(inArray(contacts.companyId, drCompanyIds)))
+              .filter(c => c.createdAt && c.createdAt >= periodStart && c.createdAt <= periodEnd).length
+          : 0;
+
+        const drTasks = allTasks.filter(t => t.assignedTo === dr.id);
+        const drTaskStats = {
+          completed: drTasks.filter(t => t.status === "completed").length,
+          open: drTasks.filter(t => t.status === "open" || t.status === "in_progress").length,
+          overdue: drTasks.filter(t => (t.status === "open" || t.status === "in_progress") && t.dueDate && t.dueDate < today).length,
+        };
+
+        const drGoals = await this.getGoals({ amId: dr.id });
+        const drActiveGoals = drGoals.filter(g => g.startDate <= periodEnd && g.endDate >= periodStart);
+        const hasActiveGoals = drActiveGoals.length > 0;
+        let drGoalsAvgPct = 0;
+        if (hasActiveGoals) {
+          const pcts = await Promise.all(drActiveGoals.map(async (g) => {
+            let autoValue: number | null = null;
+            if (g.metric === "contacts_added") {
+              autoValue = await this.getContactsAddedByAm(dr.id, g.startDate, g.endDate);
+            } else if (g.metric === "touchpoints") {
+              autoValue = await this.getTouchpointCountByAm(dr.id, g.startDate, g.endDate);
+            }
+            const displayCurrent = autoValue !== null ? autoValue : parseFloat(g.currentValue || "0");
+            const target = parseFloat(g.target);
+            return target > 0 ? Math.min(100, Math.round((displayCurrent / target) * 100)) : 0;
+          }));
+          drGoalsAvgPct = Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length);
+        }
+
+        let drAllTps: typeof touchpoints.$inferSelect[] = [];
+        if (drCompanyIds.length > 0) {
+          drAllTps = await db.select().from(touchpoints).where(eq(touchpoints.loggedById, dr.id));
+        }
+        const twoWeeksAgo = new Date(now);
+        twoWeeksAgo.setDate(now.getDate() - 14);
+        const twoWeeksAgoStr = twoWeeksAgo.toISOString().slice(0, 10);
+        const drLastTouchByCompany: Record<string, string> = {};
+        for (const tp of drAllTps) {
+          if (!drLastTouchByCompany[tp.companyId] || tp.date > drLastTouchByCompany[tp.companyId]) {
+            drLastTouchByCompany[tp.companyId] = tp.date;
+          }
+        }
+        const drAccountsNeedingAttention = drCompanies.filter(c => {
+          const last = drLastTouchByCompany[c.id];
+          return !last || last < twoWeeksAgoStr;
+        }).length;
+
+        return {
+          id: dr.id,
+          name: dr.name,
+          role: dr.role,
+          touchpoints: drPeriodTps.length,
+          newContacts: drNewContacts,
+          tasks: drTaskStats,
+          goalsAvgPct: drGoalsAvgPct,
+          hasActiveGoals,
+          accountsNeedingAttention: drAccountsNeedingAttention,
+        };
+      })
+    );
+
     return {
       rep: {
         id: userId,
@@ -1339,6 +1433,7 @@ export class DatabaseStorage implements IStorage {
       topAccounts,
       accountsNeedingAttention,
       wins,
+      teamMembers,
     };
   }
 

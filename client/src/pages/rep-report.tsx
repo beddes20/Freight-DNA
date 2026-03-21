@@ -9,8 +9,20 @@ import { apiRequest } from "@/lib/queryClient";
 import {
   TrendingUp, TrendingDown, Minus, Phone, Mail, MessageSquare, Building2,
   Users, CheckSquare, AlertCircle, Target, ChevronRight, Zap, Trophy, Flame,
-  Clock, ArrowLeft, Send, Loader2,
+  Clock, ArrowLeft, Send, Loader2, ExternalLink,
 } from "lucide-react";
+
+interface TeamMemberSummary {
+  id: string;
+  name: string;
+  role: string;
+  touchpoints: number;
+  newContacts: number;
+  tasks: { completed: number; open: number; overdue: number };
+  goalsAvgPct: number;
+  hasActiveGoals: boolean;
+  accountsNeedingAttention: number;
+}
 
 interface RepReportData {
   rep: { id: string; name: string; role: string; manager: string | null; director: string | null };
@@ -22,6 +34,7 @@ interface RepReportData {
   topAccounts: Array<{ name: string; touches: number; lastTouch: string }>;
   accountsNeedingAttention: number;
   wins: Array<{ id: string; text: string; category: string }>;
+  teamMembers: TeamMemberSummary[];
 }
 
 function pct(current: number, target: number) {
@@ -139,7 +152,7 @@ export default function RepReportPage() {
     );
   }
 
-  const { rep, period: p, goals, touchpoints: tp, contacts, tasks, topAccounts, accountsNeedingAttention, wins } = data;
+  const { rep, period: p, goals, touchpoints: tp, contacts, tasks, topAccounts, accountsNeedingAttention, wins, teamMembers } = data;
   const initials = rep.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
   const roleLabel = rep.role.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
 
@@ -419,6 +432,99 @@ export default function RepReportPage() {
             )}
           </div>
         </div>
+
+        {/* Your Team section */}
+        {teamMembers && teamMembers.length > 0 && (
+          <section data-testid="section-your-team">
+            <div className="flex items-center gap-2 mb-3">
+              <Users className="h-4 w-4 text-primary" />
+              <h2 className="text-sm font-semibold">Your Team</h2>
+              <span className="text-xs text-muted-foreground ml-auto">{teamMembers.length} direct report{teamMembers.length !== 1 ? "s" : ""}</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {teamMembers.map((member) => {
+                const memberInitials = member.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+                const memberRoleLabel = member.role.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+                const goalsColor = member.goalsAvgPct >= 80
+                  ? "text-green-600 dark:text-green-400"
+                  : member.goalsAvgPct >= 50
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-red-500";
+                return (
+                  <div
+                    key={member.id}
+                    className="rounded-xl border bg-card p-4 space-y-3 hover:bg-muted/30 transition-colors"
+                    data-testid={`team-member-card-${member.id}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
+                          {memberInitials}
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold leading-tight">{member.name}</p>
+                          <p className="text-xs text-muted-foreground">{memberRoleLabel}</p>
+                        </div>
+                      </div>
+                      <a
+                        href={`/report/${member.id}`}
+                        className="text-muted-foreground/50 hover:text-primary transition-colors"
+                        title="View full report"
+                        data-testid={`link-team-member-report-${member.id}`}
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <Zap className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-muted-foreground">Touchpoints</span>
+                        <span className="ml-auto font-semibold text-foreground">{member.touchpoints}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Users className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-muted-foreground">New Contacts</span>
+                        <span className="ml-auto font-semibold text-foreground">{member.newContacts}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 col-span-2">
+                        <CheckSquare className="h-3 w-3 text-muted-foreground shrink-0" />
+                        <span className="text-muted-foreground">Tasks</span>
+                        <span className="ml-auto font-semibold text-foreground">
+                          <span className="text-green-600 dark:text-green-400">{member.tasks.completed} done</span>
+                          {member.tasks.open > 0 && <span className="text-muted-foreground"> · {member.tasks.open} open</span>}
+                          {member.tasks.overdue > 0 && <span className="text-red-500"> · {member.tasks.overdue} overdue</span>}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 col-span-2">
+                        <AlertCircle className="h-3 w-3 text-muted-foreground shrink-0" />
+                        <span className="text-muted-foreground">Accounts Needing Attention</span>
+                        <span className={`ml-auto font-semibold ${member.accountsNeedingAttention > 0 ? "text-amber-600" : "text-foreground"}`}>
+                          {member.accountsNeedingAttention}
+                        </span>
+                      </div>
+                    </div>
+
+                    {member.hasActiveGoals && (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <Target className="h-3 w-3 text-muted-foreground" />
+                            <span className="text-muted-foreground">Goals Avg</span>
+                          </div>
+                          <span className={`font-semibold ${member.goalsAvgPct === 0 ? "text-muted-foreground" : goalsColor}`}>
+                            {member.goalsAvgPct}%
+                          </span>
+                        </div>
+                        <PctBar p={member.goalsAvgPct} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );
