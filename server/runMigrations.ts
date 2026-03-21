@@ -236,6 +236,10 @@ export async function runMigrations() {
     await client.query(`ALTER TABLE feed_posts ADD COLUMN IF NOT EXISTS pinned_at text`);
     console.log("[migrations] feed_posts pinned columns added");
 
+    // Fix chat_conversations sequence to be in sync with max existing id
+    await client.query(`SELECT setval('chat_conversations_id_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM chat_conversations), 1))`);
+    console.log("[migrations] chat_conversations sequence synced");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

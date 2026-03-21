@@ -1858,7 +1858,7 @@ export default function Dashboard() {
                         const pct = Math.min(entry.pct, 100);
                         const overGoal = entry.pct >= 100;
                         return (
-                          <div key={entry.amId} className={`rounded-md p-2 ${medalBg[idx] || ""}`} data-testid={`leaderboard-entry-${group.metric}-${entry.rank}`}>
+                          <div key={`${entry.amId}-${idx}`} className={`rounded-md p-2 ${medalBg[idx] || ""}`} data-testid={`leaderboard-entry-${group.metric}-${entry.rank}`}>
                             <div className="flex items-center justify-between mb-1">
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <span className="text-base leading-none">{medals[idx]}</span>

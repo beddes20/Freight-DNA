@@ -243,6 +243,7 @@ export function registerChatbotRoutes(app: Express): void {
       }).returning();
       res.json(convo);
     } catch (err) {
+      console.error("Failed to create chatbot conversation:", err);
       res.status(500).json({ error: "Failed to create conversation" });
     }
   });
