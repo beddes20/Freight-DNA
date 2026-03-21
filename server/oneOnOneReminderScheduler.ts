@@ -56,24 +56,24 @@ function buildReminderEmail(params: {
   return baseEmailTemplate(`1:1 Reminder — ${partnerName}`, body);
 }
 
-async function sendOneOnOneReminders(): Promise<void> {
-  if (!emailEnabled()) {
-    logMessage("Email not configured — skipping reminders");
-    return;
-  }
+interface SessionReminder {
+  session: { id: string; namId: string; amId: string; meetingDate: string };
+  nam: { id: string; name: string; username: string; email?: string | null };
+  am: { id: string; name: string; username: string; email?: string | null };
+  pendingCount: number;
+  daysUntil: number;
+  friendlyDate: string;
+}
 
+async function getUpcomingSessionReminders(): Promise<SessionReminder[]> {
   const sessions = await storage.getActiveSessionsWithMeetingDate();
-  if (sessions.length === 0) {
-    logMessage("No sessions with meeting dates — skipping");
-    return;
-  }
+  if (sessions.length === 0) return [];
 
   const allUsers = await storage.getUsers();
-  let sent = 0;
+  const reminders: SessionReminder[] = [];
 
   for (const session of sessions) {
     if (!session.meetingDate) continue;
-
     const daysUntil = getDaysUntil(session.meetingDate);
     if (daysUntil < 0 || daysUntil > 7) continue;
 
@@ -84,8 +84,71 @@ async function sendOneOnOneReminders(): Promise<void> {
     const topics = await storage.getTopicsBySession(session.id);
     const pendingCount = topics.filter(t => t.status === "pending").length;
 
-    const friendlyDate = formatDateFriendly(session.meetingDate);
-    const portalUrl = `${PORTAL_BASE}/one-on-one`;
+    reminders.push({
+      session: { id: session.id, namId: session.namId, amId: session.amId, meetingDate: session.meetingDate },
+      nam: nam as any,
+      am: am as any,
+      pendingCount,
+      daysUntil,
+      friendlyDate: formatDateFriendly(session.meetingDate),
+    });
+  }
+
+  return reminders;
+}
+
+// Mon / Wed / Fri — send emails
+async function sendEmailReminders(): Promise<void> {
+  if (!emailEnabled()) {
+    logMessage("Email not configured — skipping email reminders");
+    return;
+  }
+
+  const reminders = await getUpcomingSessionReminders();
+  if (reminders.length === 0) {
+    logMessage("No upcoming meetings — skipping email reminders");
+    return;
+  }
+
+  let sent = 0;
+  const portalUrl = `${PORTAL_BASE}/one-on-one`;
+
+  for (const { nam, am, pendingCount, daysUntil, friendlyDate } of reminders) {
+    const pairs = [
+      { user: nam, partnerName: am.name },
+      { user: am, partnerName: nam.name },
+    ];
+    for (const { user, partnerName } of pairs) {
+      const email = (user as any).email || (user.username?.includes("@") ? user.username : null);
+      if (!email) {
+        logMessage(`Skipping ${user.name} — no email configured`);
+        continue;
+      }
+      const html = buildReminderEmail({ recipientName: user.name, partnerName, meetingDate: friendlyDate, pendingCount, portalUrl, daysUntil });
+      const subject = `[Growth Chart] 1:1 with ${partnerName} — ${friendlyDate}`;
+      const ok = await sendEmail({ to: email, subject, html });
+      if (ok) { logMessage(`Email sent to ${user.name} — meeting with ${partnerName} on ${friendlyDate}`); sent++; }
+    }
+  }
+
+  logMessage(`Email reminders complete — ${sent} sent`);
+}
+
+// Tue / Thu — create in-app notifications
+async function sendPortalNotifications(): Promise<void> {
+  const reminders = await getUpcomingSessionReminders();
+  if (reminders.length === 0) {
+    logMessage("No upcoming meetings — skipping portal notifications");
+    return;
+  }
+
+  let created = 0;
+
+  for (const { session, nam, am, pendingCount, daysUntil, friendlyDate } of reminders) {
+    const urgencyText = daysUntil === 0 ? "today" : daysUntil === 1 ? "tomorrow" : `in ${daysUntil} days`;
+    const topicText = pendingCount === 0
+      ? "No topics added yet — add yours before the meeting."
+      : `${pendingCount} topic${pendingCount !== 1 ? "s" : ""} queued. Anything to add?`;
 
     const pairs = [
       { user: nam, partnerName: am.name },
@@ -93,35 +156,34 @@ async function sendOneOnOneReminders(): Promise<void> {
     ];
 
     for (const { user, partnerName } of pairs) {
-      const email = (user as any).email || (user.username?.includes("@") ? user.username : null);
-      if (!email) {
-        logMessage(`Skipping ${user.name} — no email configured`);
-        continue;
-      }
-      const html = buildReminderEmail({
-        recipientName: user.name,
-        partnerName,
-        meetingDate: friendlyDate,
-        pendingCount,
-        portalUrl,
-        daysUntil,
+      await storage.createNotification({
+        userId: user.id,
+        type: "one_on_one_reminder",
+        title: `1:1 with ${partnerName} is ${urgencyText}`,
+        body: `${friendlyDate} — ${topicText}`,
+        link: "/one-on-one",
+        relatedId: session.id,
+        read: false,
       });
-      const subject = `[Growth Chart] 1:1 with ${partnerName} — ${friendlyDate}`;
-      const ok = await sendEmail({ to: email, subject, html });
-      if (ok) {
-        logMessage(`Reminder sent to ${user.name} (${email}) — meeting with ${partnerName} on ${session.meetingDate}`);
-        sent++;
-      }
+      logMessage(`Portal notification created for ${user.name} — meeting with ${partnerName} on ${friendlyDate}`);
+      created++;
     }
   }
 
-  logMessage(`1:1 reminders complete — ${sent} email${sent !== 1 ? "s" : ""} sent`);
+  logMessage(`Portal notifications complete — ${created} created`);
 }
 
 export function initOneOnOneReminderScheduler(): void {
-  const reminderCron = process.env.ONEONONE_REMINDER_CRON || "0 9 * * 1-5";
-  cron.schedule(reminderCron, () => {
-    sendOneOnOneReminders().catch(err => logMessage(`Error sending reminders: ${err.message}`));
+  const emailCron  = process.env.ONEONONE_EMAIL_CRON  || "0 9 * * 1,3,5";
+  const alertCron  = process.env.ONEONONE_ALERT_CRON  || "0 9 * * 2,4";
+
+  cron.schedule(emailCron, () => {
+    sendEmailReminders().catch(err => logMessage(`Error in email reminders: ${err.message}`));
   });
-  logMessage(`1:1 reminder scheduler initialized (cron: ${reminderCron})`);
+
+  cron.schedule(alertCron, () => {
+    sendPortalNotifications().catch(err => logMessage(`Error in portal notifications: ${err.message}`));
+  });
+
+  logMessage(`1:1 reminder scheduler initialized — emails: Mon/Wed/Fri, alerts: Tue/Thu`);
 }
