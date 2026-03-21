@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
-  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info
+  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck
 } from "lucide-react";
 
 type PeriodOption = "current" | "last" | "ytd";
@@ -251,7 +251,8 @@ export default function TeamPerformancePage() {
   const totalRevenueAll = Object.values(repLoadsMap).reduce((s, v) => s + v.revenue, 0);
   const totalMarginPctAll = totalRevenueAll > 0 ? (totalMarginAll / totalRevenueAll) * 100 : null;
 
-  const ams = reps.filter(r => r.role === "account_manager" || r.role === "logistics_manager" || r.role === "logistics_coordinator");
+  const ams = reps.filter(r => r.role === "account_manager");
+  const logistics = reps.filter(r => r.role === "logistics_manager" || r.role === "logistics_coordinator");
   const nams = reps.filter(r => r.role === "national_account_manager" || r.role === "director" || r.role === "sales_director");
 
   const totalOpenTasks = reps.reduce((sum, r) => sum + r.openTasks, 0);
@@ -416,6 +417,26 @@ export default function TeamPerformancePage() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {ams.map(rep => (
+                  <RepCard
+                    key={rep.userId}
+                    rep={rep}
+                    totalLoads={repLoadsMap[rep.userId]?.loads}
+                    totalMargin={repLoadsMap[rep.userId]?.margin}
+                    totalRevenue={repLoadsMap[rep.userId]?.revenue}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {logistics.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Truck className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Logistics Managers</h2>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {logistics.map(rep => (
                   <RepCard
                     key={rep.userId}
                     rep={rep}
