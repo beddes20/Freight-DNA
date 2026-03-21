@@ -1,14 +1,21 @@
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
 function logMessage(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
   console.log(`${t} [email] ${msg}`);
 }
 
+function getResend(): Resend | null {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return null;
+  return new Resend(key);
+}
+
 function getTransporter() {
   const host = process.env.SMTP_HOST;
   const port = parseInt(process.env.SMTP_PORT || "587", 10);
-  const user = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const user = process.env.SMTP_USER || process.env.SMTP_FROM;
   const pass = process.env.SMTP_PASSWORD || process.env.SMTP_PASS;
 
   if (!host || !user || !pass) return null;
@@ -31,37 +38,65 @@ export interface EmailOptions {
 }
 
 export async function sendEmail(opts: EmailOptions): Promise<boolean> {
+  const fromAddr = process.env.SMTP_FROM || "noreply@freight-dna.com";
+  const fromName = process.env.SMTP_FROM_NAME || "Value Truck · Growth Chart";
+  const from = `${fromName} <${fromAddr}>`;
+
+  const resend = getResend();
+  if (resend) {
+    try {
+      const { error } = await resend.emails.send({
+        from,
+        to: opts.to,
+        subject: opts.subject,
+        html: opts.html,
+        text: opts.text,
+      });
+      if (error) {
+        logMessage(`Resend error for ${opts.to}: ${error.message}`);
+        return false;
+      }
+      logMessage(`Email sent via Resend to ${opts.to}: "${opts.subject}"`);
+      return true;
+    } catch (err: any) {
+      logMessage(`Resend exception for ${opts.to}: ${err.message}`);
+      return false;
+    }
+  }
+
   const transporter = getTransporter();
   if (!transporter) {
-    logMessage(`SMTP not configured — skipping email to ${opts.to}: "${opts.subject}"`);
+    logMessage(`Email not configured — skipping email to ${opts.to}: "${opts.subject}"`);
     return false;
   }
   try {
-    const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@freight-dna.com";
-    const fromName = process.env.SMTP_FROM_NAME || "Value Truck · Growth Chart";
-    const from = `"${fromName}" <${fromAddr}>`;
     await transporter.sendMail({ from, to: opts.to, subject: opts.subject, html: opts.html, text: opts.text });
-    logMessage(`Email sent to ${opts.to}: "${opts.subject}"`);
+    logMessage(`Email sent via SMTP to ${opts.to}: "${opts.subject}"`);
     return true;
   } catch (err: any) {
-    logMessage(`Failed to send email to ${opts.to}: ${err.message}`);
+    logMessage(`SMTP error for ${opts.to}: ${err.message}`);
     return false;
   }
 }
 
-export async function verifySmtp(): Promise<{ ok: boolean; error?: string }> {
+export async function verifySmtp(): Promise<{ ok: boolean; provider?: string; error?: string }> {
+  const resend = getResend();
+  if (resend) {
+    return { ok: true, provider: "Resend" };
+  }
   const transporter = getTransporter();
-  if (!transporter) return { ok: false, error: "SMTP not configured" };
+  if (!transporter) return { ok: false, error: "No email provider configured (set RESEND_API_KEY or SMTP_HOST/SMTP_PASSWORD)" };
   try {
     await transporter.verify();
-    return { ok: true };
+    return { ok: true, provider: "SMTP" };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
 }
 
 export function emailEnabled(): boolean {
-  const user = process.env.SMTP_FROM || process.env.SMTP_USER;
+  if (process.env.RESEND_API_KEY) return true;
+  const user = process.env.SMTP_USER || process.env.SMTP_FROM;
   const pass = process.env.SMTP_PASSWORD || process.env.SMTP_PASS;
   return !!(process.env.SMTP_HOST && user && pass);
 }

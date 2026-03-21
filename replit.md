@@ -49,15 +49,18 @@ The application uses React, TypeScript, and Tailwind CSS with `shadcn/ui` for a 
 - **Leaflet**: Interactive mapping.
 - **OneDrive API (Microsoft Graph API)**: Financial data synchronization.
 - **node-cron**: Scheduling recurring jobs.
-### Email / SMTP
-- **Provider**: GoDaddy email via `smtpout.secureserver.net:465` (SSL)
+### Email
+- **Primary provider**: Resend (`RESEND_API_KEY` Replit Secret) — recommended; works from cloud hosting
+- **Fallback provider**: GoDaddy SMTP via `smtpout.secureserver.net:465` (SSL) — blocked by GoDaddy from cloud IPs; only works locally
 - **From address**: `info@freight-dna.com` (env: `SMTP_FROM`)
-- **Secrets**: `SMTP_PASSWORD` (stored in Replit Secrets — GoDaddy email account password)
-- **Env vars**: `SMTP_HOST=smtpout.secureserver.net`, `SMTP_PORT=465`, `SMTP_FROM`, `SMTP_FROM_NAME` (all set in shared env)
+- **Env vars**: `SMTP_HOST=smtpout.secureserver.net`, `SMTP_PORT=465`, `SMTP_FROM=info@freight-dna.com`, `SMTP_FROM_NAME` (all set in shared env)
+- **Secrets**: `SMTP_PASSWORD` (GoDaddy password — kept for fallback), `RESEND_API_KEY` (Resend API key — set this to fix email)
+- **Priority**: `emailService.ts` checks `RESEND_API_KEY` first; falls back to SMTP if not set
+- **Domain verification**: `freight-dna.com` must be verified in Resend dashboard (add DNS records in GoDaddy)
 - **Rep Report emails**: Weekly (Mon 7am cron) + Monthly (1st of month 7am cron) via `repReportScheduler.ts`
 - **Template**: Styled HTML matching brand colors; built in `emailService.ts` → `buildRepReportEmail()`
 - **Manual send**: `POST /api/report/rep/:userId/send-email` (button on report page)
-- **SMTP test**: `POST /api/admin/smtp/test` — admin-only; UI panel at bottom of User Management page
+- **Email config test**: `POST /api/admin/smtp/test` — admin-only; UI panel at bottom of User Management page
 ### Relationship Health & Pre-Call Planner
 - **Health Score**: `GET /api/companies/:id/health-score` — computes a 0–100 score from 5 factors: Touchpoint Recency (30), Engagement Frequency (25), Contact Depth (20), RFP/Award Activity (15), Financial Data (10). Returns grade (Excellent/Good/Fair/At Risk) and color. Badge renders next to company name on detail page; clicking opens Pre-Call Brief.
 - **Pre-Call Planner**: Modal (`client/src/components/pre-call-planner.tsx`) accessible from company detail header — shows financial snapshot, key contacts with last touch, last 5 touchpoints, open tasks, active RFPs/awards, account intelligence (quirks, spot process, tender style, DL email), and full health score factor breakdown. Includes print button.

@@ -4493,7 +4493,7 @@ export async function registerRoutes(
       if (!viewer || viewer.role !== "admin") return res.status(403).json({ error: "Admin only" });
       const { verifySmtp, emailEnabled } = await import("./emailService");
       if (!emailEnabled()) {
-        return res.status(422).json({ ok: false, error: "SMTP_HOST, SMTP_FROM (or SMTP_USER), and SMTP_PASSWORD must all be set." });
+        return res.status(422).json({ ok: false, error: "No email provider configured. Set RESEND_API_KEY (recommended) or SMTP_HOST + SMTP_USER + SMTP_PASSWORD." });
       }
       const result = await verifySmtp();
       res.json(result);
