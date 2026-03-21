@@ -10,6 +10,7 @@ import {
   Users, Plus, CheckCircle2, Circle, Trash2, ChevronDown, ChevronUp,
   Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle,
   StickyNote, ClipboardList, CornerDownRight, CalendarClock, Pencil, X,
+  BarChart2, Phone, Mail, MessageCircle, MapPin, Target, CheckCheck, Clock,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -52,6 +53,87 @@ function avatarColor(name: string) {
 
 function initials(name: string) {
   return name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
+}
+
+// ─── Report Card types ────────────────────────────────────────────────────────
+
+interface RepReportData {
+  rep: { id: string; name: string; role: string };
+  period: { type: string; label: string; start: string; end: string };
+  goals: Array<{ id: string; label: string; metric: string; current: number; target: number; pct: number }>;
+  touchpoints: { total: number; call: number; email: number; text: number; site_visit: number };
+  contacts: { newThisPeriod: number };
+  tasks: { completed: number; open: number; overdue: number };
+  topAccounts: Array<{ name: string; touches: number; lastTouch: string }>;
+  accountsNeedingAttention: number;
+}
+
+function ReportCardSlice({ data, label }: { data: RepReportData; label: string }) {
+  const tp = data.touchpoints;
+  const tasks = data.tasks;
+  const pctColor = (p: number) => p >= 80 ? "bg-green-500" : p >= 50 ? "bg-amber-400" : "bg-red-400";
+
+  return (
+    <div className="flex-1 min-w-0 space-y-3">
+      <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{label}</div>
+
+      {/* Touchpoints row */}
+      <div className="bg-muted/40 rounded-lg p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium">Touchpoints</span>
+          <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{tp.total}</span>
+        </div>
+        <div className="flex gap-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{tp.call}</span>
+          <span className="flex items-center gap-1"><Mail className="h-3 w-3" />{tp.email}</span>
+          <span className="flex items-center gap-1"><MessageCircle className="h-3 w-3" />{tp.text}</span>
+          <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{tp.site_visit}</span>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+          <div className="text-xs text-muted-foreground mb-0.5">New Contacts</div>
+          <div className="text-base font-bold text-green-600 dark:text-green-400">{data.contacts.newThisPeriod}</div>
+        </div>
+        <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+          <div className="text-xs text-muted-foreground mb-0.5">Tasks Done</div>
+          <div className="text-base font-bold text-blue-600 dark:text-blue-400">{tasks.completed}</div>
+        </div>
+        <div className={`rounded-lg p-2.5 text-center ${tasks.overdue > 0 ? "bg-red-50 dark:bg-red-950/30" : "bg-muted/40"}`}>
+          <div className="text-xs text-muted-foreground mb-0.5">Overdue</div>
+          <div className={`text-base font-bold ${tasks.overdue > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{tasks.overdue}</div>
+        </div>
+      </div>
+
+      {/* Needs attention */}
+      {data.accountsNeedingAttention > 0 && (
+        <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 rounded-lg px-3 py-2">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+          {data.accountsNeedingAttention} account{data.accountsNeedingAttention !== 1 ? "s" : ""} needing attention
+        </div>
+      )}
+
+      {/* Goals */}
+      {data.goals.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Target className="h-3 w-3" />Goals</div>
+          {data.goals.map(g => (
+            <div key={g.id} className="space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="truncate text-foreground">{g.label}</span>
+                <span className="text-muted-foreground ml-2 shrink-0">{g.current}/{g.target} <span className="font-semibold">{g.pct}%</span></span>
+              </div>
+              <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                <div className={`h-1.5 rounded-full ${pctColor(g.pct)}`} style={{ width: `${Math.min(100, g.pct)}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Session Notes (auto-saving) ──────────────────────────────────────────────
@@ -251,6 +333,33 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const [topicPendingFiles, setTopicPendingFiles] = useState<PendingFile[]>([]);
   const [editingDate, setEditingDate] = useState(false);
   const [dateInput, setDateInput] = useState("");
+  const [showReport, setShowReport] = useState(false);
+  const [reportPeriod, setReportPeriod] = useState<"weekly" | "monthly" | "both">("weekly");
+
+  const weeklyReportKey = ["/api/report/rep", repId, "weekly"];
+  const monthlyReportKey = ["/api/report/rep", repId, "monthly"];
+
+  const { data: weeklyReport, isLoading: weeklyLoading } = useQuery<RepReportData>({
+    queryKey: weeklyReportKey,
+    queryFn: async () => {
+      const res = await fetch(`/api/report/rep/${repId}?period=weekly`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      const json = await res.json();
+      return json.payload ?? json;
+    },
+    enabled: showReport && (reportPeriod === "weekly" || reportPeriod === "both"),
+  });
+
+  const { data: monthlyReport, isLoading: monthlyLoading } = useQuery<RepReportData>({
+    queryKey: monthlyReportKey,
+    queryFn: async () => {
+      const res = await fetch(`/api/report/rep/${repId}?period=monthly`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      const json = await res.json();
+      return json.payload ?? json;
+    },
+    enabled: showReport && (reportPeriod === "monthly" || reportPeriod === "both"),
+  });
 
   const sessionKey = ["/api/1on1/session", managerId, repId];
   const { data, isLoading } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }>({
@@ -455,7 +564,17 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
             <span data-testid="text-open-action-count">{openActionItemCount} open action item{openActionItemCount !== 1 ? "s" : ""}</span>
           </div>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant={showReport ? "default" : "outline"}
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            onClick={() => setShowReport(v => !v)}
+            data-testid="btn-pull-report-card"
+          >
+            <BarChart2 className="h-3.5 w-3.5" />
+            {showReport ? "Hide Report" : "Pull Report Card"}
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -469,6 +588,47 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
           </Button>
         </div>
       </div>
+
+      {/* Inline Report Card Panel */}
+      {showReport && (
+        <div className="border-b bg-slate-50 dark:bg-slate-900/50 px-6 py-4 space-y-4">
+          {/* Period selector */}
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium">Report Card</span>
+            <div className="flex rounded-lg border border-border overflow-hidden text-xs">
+              {(["weekly", "monthly", "both"] as const).map(p => (
+                <button
+                  key={p}
+                  onClick={() => setReportPeriod(p)}
+                  className={`px-3 py-1.5 font-medium transition-colors ${reportPeriod === p ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:bg-muted"}`}
+                  data-testid={`btn-report-period-${p}`}
+                >
+                  {p === "weekly" ? "Last Week" : p === "monthly" ? "Last Month" : "Both"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Report data */}
+          <div className={`flex gap-6 ${reportPeriod === "both" ? "flex-row" : "flex-col"}`}>
+            {(reportPeriod === "weekly" || reportPeriod === "both") && (
+              weeklyLoading
+                ? <div className="flex-1 space-y-2"><Skeleton className="h-20 w-full" /><Skeleton className="h-16 w-full" /></div>
+                : weeklyReport
+                  ? <ReportCardSlice data={weeklyReport} label="This Week" />
+                  : <p className="text-xs text-muted-foreground">No weekly data available.</p>
+            )}
+            {reportPeriod === "both" && <div className="w-px bg-border self-stretch" />}
+            {(reportPeriod === "monthly" || reportPeriod === "both") && (
+              monthlyLoading
+                ? <div className="flex-1 space-y-2"><Skeleton className="h-20 w-full" /><Skeleton className="h-16 w-full" /></div>
+                : monthlyReport
+                  ? <ReportCardSlice data={monthlyReport} label="This Month" />
+                  : <p className="text-xs text-muted-foreground">No monthly data available.</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Tab switcher */}
       <div className="flex border-b px-6">
