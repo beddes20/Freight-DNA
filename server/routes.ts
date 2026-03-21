@@ -5023,6 +5023,116 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/companies/:id/health-score", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const [company, touchpoints, contacts, allRfps, allAwards, uploads] = await Promise.all([
+        storage.getCompany(req.params.id),
+        storage.getTouchpointsByCompany(req.params.id),
+        storage.getContactsByCompany(req.params.id),
+        storage.getRfps(),
+        storage.getAwards(),
+        storage.getFinancialUploads(),
+      ]);
+
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now); thirtyDaysAgo.setDate(now.getDate() - 30);
+      const thirtyDaysStr = thirtyDaysAgo.toISOString().slice(0, 10);
+
+      // Factor 1: Touchpoint recency (30 pts)
+      const sortedTps = [...touchpoints].sort((a, b) => b.date.localeCompare(a.date));
+      const lastTp = sortedTps[0];
+      let recencyScore = 0;
+      let recencyLabel = "No touchpoints on record";
+      if (lastTp) {
+        const daysSince = Math.floor((now.getTime() - new Date(lastTp.date + "T12:00:00").getTime()) / 86400000);
+        if (daysSince <= 7)       { recencyScore = 30; recencyLabel = `Last touch ${daysSince === 0 ? "today" : `${daysSince}d ago`}`; }
+        else if (daysSince <= 14) { recencyScore = 22; recencyLabel = `Last touch ${daysSince}d ago`; }
+        else if (daysSince <= 30) { recencyScore = 15; recencyLabel = `Last touch ${daysSince}d ago`; }
+        else if (daysSince <= 60) { recencyScore = 7;  recencyLabel = `Last touch ${daysSince}d ago`; }
+        else                      { recencyScore = 0;  recencyLabel = `Last touch ${daysSince}d ago — needs attention`; }
+      }
+
+      // Factor 2: Touchpoint frequency last 30 days (25 pts)
+      const recentCount = touchpoints.filter(t => t.date >= thirtyDaysStr).length;
+      let freqScore = 0;
+      let freqLabel = "";
+      if (recentCount >= 5)      { freqScore = 25; freqLabel = `${recentCount} touches in last 30 days`; }
+      else if (recentCount >= 3) { freqScore = 18; freqLabel = `${recentCount} touches in last 30 days`; }
+      else if (recentCount >= 2) { freqScore = 12; freqLabel = `${recentCount} touches in last 30 days`; }
+      else if (recentCount === 1){ freqScore = 7;  freqLabel = `1 touch in last 30 days`; }
+      else                       { freqScore = 0;  freqLabel = "No touches in last 30 days"; }
+
+      // Factor 3: Contact depth (20 pts)
+      const contactCount = contacts.length;
+      let contactScore = 0;
+      const contactLabel = `${contactCount} contact${contactCount !== 1 ? "s" : ""} in account`;
+      if (contactCount >= 4)      contactScore = 20;
+      else if (contactCount === 3) contactScore = 15;
+      else if (contactCount === 2) contactScore = 10;
+      else if (contactCount === 1) contactScore = 5;
+
+      // Factor 4: Active RFP or Award (15 pts)
+      const companyRfps = allRfps.filter(r => r.companyId === req.params.id);
+      const companyAwards = allAwards.filter(a => a.companyId === req.params.id);
+      const activeRfp = companyRfps.find(r => r.status === "open" || r.status === "pending");
+      const hasAward = companyAwards.length > 0;
+      const rfpScore = activeRfp ? 10 : 0;
+      const awardScore = hasAward ? 5 : 0;
+      const rfpLabel = activeRfp ? `Active RFP: ${activeRfp.title}` : hasAward ? "Award on file (no active RFP)" : "No active RFP or award";
+
+      // Factor 5: Financial data presence (10 pts)
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const crmNorm = normalize(company.name);
+      const aliasNorm = company.financialAlias ? normalize(company.financialAlias) : null;
+      let hasFinancialData = false;
+      let totalLoadsYtd = 0;
+      for (const upload of uploads) {
+        const rows = (upload.data as any[]) || [];
+        for (const row of rows) {
+          const custName = normalize(String(row.customerName || ""));
+          if (custName === crmNorm || (aliasNorm && custName === aliasNorm)) {
+            totalLoadsYtd += Number(row.totalLoads || 0);
+            hasFinancialData = true;
+          }
+        }
+      }
+      const finScore = hasFinancialData ? 10 : 0;
+      const finLabel = hasFinancialData ? `${totalLoadsYtd} YTD loads on record` : "No financial data matched";
+
+      const total = recencyScore + freqScore + contactScore + rfpScore + awardScore + finScore;
+      let grade: string;
+      let color: string;
+      if (total >= 80)      { grade = "Excellent"; color = "green"; }
+      else if (total >= 60) { grade = "Good";      color = "blue"; }
+      else if (total >= 40) { grade = "Fair";      color = "amber"; }
+      else                  { grade = "At Risk";   color = "red"; }
+
+      res.json({
+        score: total,
+        grade,
+        color,
+        factors: [
+          { name: "Touchpoint Recency",   score: recencyScore, max: 30, label: recencyLabel },
+          { name: "Engagement Frequency", score: freqScore,    max: 25, label: freqLabel },
+          { name: "Contact Depth",        score: contactScore, max: 20, label: contactLabel },
+          { name: "RFP / Award Activity", score: rfpScore + awardScore, max: 15, label: rfpLabel },
+          { name: "Financial Data",       score: finScore,     max: 10, label: finLabel },
+        ],
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to compute health score" });
+    }
+  });
+
+  app.get("/api/config/claims-url", requireAuth, async (req, res) => {
+    res.json({ url: process.env.CLAIMS_PORTAL_URL || null });
+  });
+
   app.get("/api/companies/:id/touchpoints", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

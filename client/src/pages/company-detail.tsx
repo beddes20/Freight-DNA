@@ -84,6 +84,9 @@ import {
   AlertCircle,
   FileText,
   Mail,
+  Activity,
+  Printer,
+  Brain,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -103,6 +106,7 @@ import { CalloutDialog } from "@/components/callout-dialog";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 import { MarketShareCard } from "@/components/market-share-card";
+import { PreCallPlanner } from "@/components/pre-call-planner";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
@@ -256,6 +260,7 @@ export default function CompanyDetail() {
   const [expandedCallouts, setExpandedCallouts] = useState<Set<string>>(new Set());
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [preCallOpen, setPreCallOpen] = useState(false);
   const [importRows, setImportRows] = useState<any[]>([]);
   const [importFileName, setImportFileName] = useState("");
   const [detailTab, setDetailTab] = useState<string>(() => {
@@ -363,6 +368,20 @@ export default function CompanyDetail() {
   const { data: accountSummaryAll = [] } = useQuery<Array<{ customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number; repName: string; byMonth?: Record<string, MonthBucket> }>>({
     queryKey: ["/api/financials/account-summary"],
   });
+
+  type HealthFactor = { name: string; score: number; max: number; label: string };
+  type HealthScore = { score: number; grade: string; color: string; factors: HealthFactor[] };
+  const { data: healthScore } = useQuery<HealthScore>({
+    queryKey: ["/api/companies", companyId, "health-score"],
+    enabled: !!companyId,
+    staleTime: 60_000,
+  });
+
+  const { data: claimsConfig } = useQuery<{ url: string | null }>({
+    queryKey: ["/api/config/claims-url"],
+    staleTime: 300_000,
+  });
+
   const matchedPerf = (() => {
     if (!company) return null;
     // Normalize: lowercase, collapse whitespace, strip punctuation
@@ -928,9 +947,30 @@ export default function CompanyDetail() {
               <Building2 className="h-6 w-6" />
             </div>
             <div>
-              <h1 className="text-2xl font-semibold" data-testid="text-company-name">
-                {company.name}
-              </h1>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-2xl font-semibold" data-testid="text-company-name">
+                  {company.name}
+                </h1>
+                {healthScore && (() => {
+                  const colorMap: Record<string, string> = {
+                    green: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300 border-green-200 dark:border-green-800",
+                    blue:  "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 border-blue-200 dark:border-blue-800",
+                    amber: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800",
+                    red:   "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 border-red-200 dark:border-red-800",
+                  };
+                  return (
+                    <button
+                      onClick={() => setPreCallOpen(true)}
+                      className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${colorMap[healthScore.color] ?? colorMap.amber}`}
+                      title="Click to open Pre-Call Brief"
+                      data-testid="badge-health-score"
+                    >
+                      <Activity className="h-3 w-3" />
+                      {healthScore.grade} · {healthScore.score}/100
+                    </button>
+                  );
+                })()}
+              </div>
               <div className="flex items-center gap-2 text-muted-foreground">
                 {company.industry && (
                   <Badge variant="secondary">{company.industry}</Badge>
@@ -960,6 +1000,22 @@ export default function CompanyDetail() {
               <PhoneCall className="h-4 w-4 mr-2" />
               Log Touch
             </Button>
+          )}
+
+          {!company.archivedAt && (
+            <Button variant="outline" onClick={() => setPreCallOpen(true)} data-testid="button-precall-brief">
+              <ClipboardList className="h-4 w-4 mr-2" />
+              Pre-Call Brief
+            </Button>
+          )}
+
+          {claimsConfig?.url && (
+            <a href={claimsConfig.url} target="_blank" rel="noopener noreferrer" data-testid="button-claims-portal">
+              <Button variant="outline">
+                <FileText className="h-4 w-4 mr-2" />
+                Claims
+              </Button>
+            </a>
           )}
 
           <div className="relative inline-flex">
@@ -3443,6 +3499,21 @@ export default function CompanyDetail() {
           )}
         </DialogContent>
       </Dialog>
+
+      {company && (
+        <PreCallPlanner
+          open={preCallOpen}
+          onClose={() => setPreCallOpen(false)}
+          company={company}
+          contacts={contacts ?? []}
+          touchpoints={companyTouchpoints}
+          tasks={companyTasks}
+          rfps={allRfps}
+          awards={allAwards}
+          financialSummary={matchedPerf?.ytd ?? null}
+          healthScore={healthScore}
+        />
+      )}
     </div>
   );
 }
