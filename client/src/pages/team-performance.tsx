@@ -78,7 +78,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf;
   const totalTasks = rep.openTasks + rep.completedTasks;
   const completionPct = totalTasks > 0 ? Math.round((rep.completedTasks / totalTasks) * 100) : 0;
   const marginDisplay = totalMargin != null && totalMargin >= 1000
-    ? `$${(totalMargin / 1000).toFixed(1)}K`
+    ? `$${(totalMargin / 1000).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}K`
     : totalMargin != null ? `$${totalMargin.toLocaleString()}` : null;
   const marginPct = totalRevenue != null && totalRevenue > 0 && totalMargin != null
     ? (totalMargin / totalRevenue) * 100
@@ -212,7 +212,12 @@ export default function TeamPerformancePage() {
   });
 
   const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
-    queryKey: ["/api/financials/account-summary"],
+    queryKey: ["/api/financials/account-summary", period],
+    queryFn: async () => {
+      const res = await fetch(`/api/financials/account-summary?period=${period}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch account summary");
+      return res.json();
+    },
   });
 
   if (!user || user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
@@ -377,7 +382,7 @@ export default function TeamPerformancePage() {
               </div>
               <p className="text-xs text-muted-foreground flex items-center gap-1.5 mt-1" data-testid="text-financial-note">
                 <Info className="h-3 w-3 shrink-0" />
-                Financial data reflects the latest uploaded period and is not filtered by the selected date range.
+                Financial data is from the latest uploaded file, filtered to the selected period.
               </p>
               </>
             )}

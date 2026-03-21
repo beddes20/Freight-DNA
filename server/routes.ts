@@ -3265,6 +3265,25 @@ export async function registerRoutes(
       const latest = uploads[uploads.length - 1];
       const raw = (latest.summaryRows as any[]) || [];
 
+      // Determine which month keys are valid for the requested period
+      const period = String(req.query.period || "current");
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth(); // 0-indexed
+      function mk(y: number, m: number) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+      let allowedMonths: Set<string> | null = null; // null = all months
+      if (period === "current") {
+        allowedMonths = new Set([mk(curYear, curMonth)]);
+      } else if (period === "last") {
+        const lm = curMonth === 0 ? 11 : curMonth - 1;
+        const ly = curMonth === 0 ? curYear - 1 : curYear;
+        allowedMonths = new Set([mk(ly, lm)]);
+      } else if (period === "ytd") {
+        const keys = new Set<string>();
+        for (let m = 0; m <= curMonth; m++) keys.add(mk(curYear, m));
+        allowedMonths = keys;
+      }
+
       // If no summary sheet OR summary data looks like documentation, compute from transaction rows
       if (isBadSummaryData(raw)) {
         const txRows: any[] = (latest.rows as any[]) || [];
@@ -3278,6 +3297,8 @@ export async function registerRoutes(
           const revenue = Number(row[sumCols.revenue] || row[sumCols.totalCharges] || 0);
           if (revenue === 0) continue;
           const { monthKey, margin } = parseHistoricalRow(row, sumCols);
+          // Filter by period if applicable
+          if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
           const rep = getRepFromRow(row, sumCols) || String(row["Salesperson"] || "").trim();
           const orderType = String(row[sumCols.orderType] || "").toLowerCase();
           const isSpot = orderType.includes("spot");
