@@ -363,7 +363,7 @@ export default function TeamPerformancePage() {
                       <span className="text-xs text-muted-foreground">Total Margin (all reps)</span>
                     </div>
                     <p className="text-2xl font-bold text-green-600">
-                      {totalMarginAll >= 1000 ? `$${(totalMarginAll / 1000).toFixed(1)}K` : `$${totalMarginAll.toLocaleString()}`}
+                      {totalMarginAll >= 1000 ? `$${(totalMarginAll / 1000).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}K` : `$${totalMarginAll.toLocaleString()}`}
                     </p>
                   </CardContent>
                 </Card>

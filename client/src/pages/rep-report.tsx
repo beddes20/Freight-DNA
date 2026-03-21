@@ -10,7 +10,28 @@ import {
   TrendingUp, TrendingDown, Minus, Phone, Mail, MessageSquare, Building2,
   Users, CheckSquare, AlertCircle, Target, ChevronRight, Zap, Trophy, Flame,
   Clock, ArrowLeft, Send, Loader2, ExternalLink, BookOpen, ChevronDown, ChevronUp, Save,
+  Package, DollarSign,
 } from "lucide-react";
+
+interface AccountSummaryRow {
+  customerName: string;
+  totalLoads: number;
+  totalMargin: number;
+  totalRevenue?: number;
+  repName: string;
+}
+
+function matchRepName(repName: string, userName: string): boolean {
+  const a = repName.toLowerCase().trim();
+  const b = userName.toLowerCase().trim();
+  if (a === b) return true;
+  const aParts = a.split(/\s+/);
+  const bParts = b.split(/\s+/);
+  if (aParts.length === 1 && aParts[0].length > 1) {
+    return bParts.some(p => p.startsWith(aParts[0]) || aParts[0].startsWith(p));
+  }
+  return aParts.some(p => p.length > 1 && bParts.includes(p));
+}
 
 interface TeamMemberSummary {
   id: string;
@@ -308,6 +329,15 @@ export default function RepReportPage() {
     enabled: !!targetId,
   });
 
+  const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
+    queryKey: ["/api/financials/account-summary", "current"],
+    queryFn: async () => {
+      const res = await fetch(`/api/financials/account-summary?period=current`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch financial data");
+      return res.json();
+    },
+  });
+
   if (isLoading) return <LoadingSkeleton />;
 
   if (error || !data) {
@@ -322,6 +352,15 @@ export default function RepReportPage() {
   }
 
   const { rep, period: p, goals, touchpoints: tp, contacts, tasks, topAccounts, accountsNeedingAttention, wins, teamMembers } = data;
+
+  // Compute financial totals for this rep from account-summary data
+  const repFinancials = accountSummary
+    .filter(row => row.repName && matchRepName(row.repName, rep.name))
+    .reduce((acc, row) => ({ loads: acc.loads + row.totalLoads, margin: acc.margin + row.totalMargin }), { loads: 0, margin: 0 });
+  const hasFinancials = accountSummary.length > 0;
+  const marginDisplay = repFinancials.margin >= 1000
+    ? `$${(repFinancials.margin / 1000).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}K`
+    : `$${repFinancials.margin.toLocaleString()}`;
   const initials = rep.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
   const roleLabel = rep.role.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
 
@@ -414,12 +453,16 @@ export default function RepReportPage() {
           </div>
 
           {/* KPI quick-stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8">
+          <div className={`grid gap-3 mt-8 ${hasFinancials ? "grid-cols-2 md:grid-cols-3" : "grid-cols-2 md:grid-cols-4"}`}>
             {[
               { label: "Touchpoints", value: String(tp.total), sub: `this ${period === "weekly" ? "week" : "month"}`, trend: 0, icon: Zap },
               { label: "New Contacts", value: String(contacts.newThisPeriod), sub: `this ${period === "weekly" ? "week" : "month"}`, trend: 0, icon: Users },
               { label: "Tasks Done", value: tasksDoneLabel, sub: `${tasks.overdue} overdue`, trend: tasks.overdue > 0 ? -1 : 0, icon: CheckSquare },
               { label: "Need Attention", value: String(accountsNeedingAttention), sub: "14+ days quiet", trend: accountsNeedingAttention > 0 ? -1 : 0, icon: AlertCircle },
+              ...(hasFinancials ? [
+                { label: "Loads", value: repFinancials.loads.toLocaleString(), sub: "this month", trend: 0, icon: Package },
+                { label: "Margin", value: marginDisplay, sub: "this month", trend: 0, icon: DollarSign },
+              ] : []),
             ].map(({ label, value, sub, trend, icon: Icon }) => (
               <div key={label} className="bg-white/10 rounded-xl p-3 border border-white/10 backdrop-blur-sm" data-testid={`stat-${label.toLowerCase().replace(/\s/g, "-")}`}>
                 <div className="flex items-center gap-2 mb-1">
