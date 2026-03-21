@@ -14,9 +14,9 @@ async function sendReportToUser(userId: string, period: "weekly" | "monthly"): P
   const user = allUsers.find(u => u.id === userId);
   if (!user) return { ok: false, email: null };
 
-  const email = (user as any).email || (user.username?.includes("@") ? user.username : null);
+  const email = (user as any).email || user.username;
   if (!email) {
-    logMessage(`Skipping ${user.name} — no email address configured`);
+    logMessage(`Skipping ${user.name} — no username/email configured`);
     return { ok: false, email: null };
   }
 

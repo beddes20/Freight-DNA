@@ -4518,7 +4518,7 @@ export async function registerRoutes(
       if (ok) {
         res.json({ success: true, message: "Report email sent", sentTo });
       } else {
-        res.json({ success: false, message: sentTo ? "Email could not be sent — check SMTP config" : "No email address on file for this user. Add one in their profile under 'Report Delivery Email'.", sentTo });
+        res.json({ success: false, message: sentTo ? "Email could not be sent — check SMTP configuration and try again." : "No username found for this user.", sentTo });
       }
     } catch (error: any) {
       console.error("send-email error:", error);
