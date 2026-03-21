@@ -4545,6 +4545,49 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/report/rep/:userId/snapshot", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Not authenticated" });
+      const { userId } = req.params;
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const period = (req.body?.period as string) === "monthly" ? "monthly" : "weekly";
+      const payload = await storage.getRepReport(userId, period);
+      const snapshot = await storage.createReportCardSnapshot({
+        userId,
+        periodType: period,
+        periodLabel: payload.period.label,
+        snapshotDate: new Date().toISOString(),
+        payload,
+        savedById: viewer.id,
+      });
+      res.json(snapshot);
+    } catch (error) {
+      console.error("snapshot error:", error);
+      res.status(500).json({ error: "Failed to save snapshot" });
+    }
+  });
+
+  app.get("/api/report/rep/:userId/snapshots", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Not authenticated" });
+      const { userId } = req.params;
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const snapshots = await storage.getReportCardSnapshots(userId);
+      res.json(snapshots);
+    } catch (error) {
+      console.error("snapshots error:", error);
+      res.status(500).json({ error: "Failed to load snapshots" });
+    }
+  });
+
   // ── Goals ─────────────────────────────────────────────────────────────────
   app.get("/api/goals", requireAuth, async (req, res) => {
     try {

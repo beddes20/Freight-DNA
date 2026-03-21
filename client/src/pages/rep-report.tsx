@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { useParams, useLocation } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   TrendingUp, TrendingDown, Minus, Phone, Mail, MessageSquare, Building2,
   Users, CheckSquare, AlertCircle, Target, ChevronRight, Zap, Trophy, Flame,
-  Clock, ArrowLeft, Send, Loader2, ExternalLink,
+  Clock, ArrowLeft, Send, Loader2, ExternalLink, BookOpen, ChevronDown, ChevronUp, Save,
 } from "lucide-react";
 
 interface TeamMemberSummary {
@@ -35,6 +35,16 @@ interface RepReportData {
   accountsNeedingAttention: number;
   wins: Array<{ id: string; text: string; category: string }>;
   teamMembers: TeamMemberSummary[];
+}
+
+interface ReportCardSnapshot {
+  id: string;
+  userId: string;
+  periodType: string;
+  periodLabel: string;
+  snapshotDate: string;
+  payload: RepReportData;
+  savedById: string;
 }
 
 function pct(current: number, target: number) {
@@ -81,6 +91,13 @@ function formatDate(iso: string) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function formatDateTime(iso: string) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) +
+    " " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
 function winCategoryLabel(cat: string) {
   if (cat === "growth") return "🚀 Growth";
   if (cat === "celebrate") return "🎉 Win";
@@ -99,6 +116,134 @@ function LoadingSkeleton() {
           <Skeleton className="h-32 rounded-xl" />
         </div>
       </div>
+    </div>
+  );
+}
+
+function SnapshotCard({ snapshot }: { snapshot: ReportCardSnapshot }) {
+  const [expanded, setExpanded] = useState(false);
+  const p = snapshot.payload;
+  const tp = p.touchpoints;
+
+  return (
+    <div className="rounded-xl border bg-card overflow-hidden" data-testid={`snapshot-card-${snapshot.id}`}>
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors text-left"
+        onClick={() => setExpanded(!expanded)}
+        data-testid={`snapshot-toggle-${snapshot.id}`}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-foreground">{snapshot.periodLabel}</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary capitalize">{snapshot.periodType}</span>
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5">Saved {formatDateTime(snapshot.snapshotDate)}</p>
+        </div>
+        <div className="flex items-center gap-4 shrink-0">
+          <div className="text-center">
+            <p className="text-sm font-bold text-foreground">{tp.total}</p>
+            <p className="text-xs text-muted-foreground">Touches</p>
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-bold text-foreground">{p.contacts.newThisPeriod}</p>
+            <p className="text-xs text-muted-foreground">Contacts</p>
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-bold text-foreground">{p.tasks.completed}</p>
+            <p className="text-xs text-muted-foreground">Tasks</p>
+          </div>
+          {expanded
+            ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+            : <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          }
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-border/50 px-4 py-4 space-y-4 bg-muted/10">
+          {p.goals.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Goals</p>
+              <div className="space-y-2">
+                {p.goals.map((g) => {
+                  const pc = pct(g.current, g.target);
+                  const isMoney = g.metric === "margin" || g.metric === "revenue";
+                  const fmt = (v: number) => isMoney ? `$${v.toLocaleString()}` : String(Math.round(v));
+                  const color = pc >= 80 ? "text-green-600 dark:text-green-400" : pc >= 50 ? "text-amber-600" : "text-red-500";
+                  return (
+                    <div key={g.id} className="flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs text-foreground truncate">{g.label}</span>
+                          <span className={`text-xs font-semibold ${color}`}>{fmt(g.current)} / {fmt(g.target)}</span>
+                        </div>
+                        <PctBar p={pc} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Touchpoints</p>
+            <div className="grid grid-cols-4 gap-2">
+              {[
+                { label: "Calls", count: tp.call },
+                { label: "Emails", count: tp.email },
+                { label: "Texts", count: tp.text },
+                { label: "Visits", count: tp.site_visit },
+              ].map(({ label, count }) => (
+                <div key={label} className="text-center bg-background rounded-lg p-2 border border-border/50">
+                  <p className="text-sm font-bold text-foreground">{count}</p>
+                  <p className="text-xs text-muted-foreground">{label}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {p.tasks && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Tasks</p>
+              <div className="flex items-center gap-4 text-sm">
+                <span className="text-green-600 dark:text-green-400">{p.tasks.completed} done</span>
+                <span className="text-muted-foreground">{p.tasks.open} open</span>
+                {p.tasks.overdue > 0 && <span className="text-red-500">{p.tasks.overdue} overdue</span>}
+              </div>
+            </div>
+          )}
+
+          {p.topAccounts.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Top Accounts</p>
+              <div className="space-y-1">
+                {p.topAccounts.slice(0, 5).map((a, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-4 h-4 rounded bg-primary/10 flex items-center justify-center text-primary font-bold shrink-0 text-[10px]">{a.name[0]}</span>
+                    <span className="flex-1 truncate text-foreground">{a.name}</span>
+                    <span className="text-muted-foreground">{a.touches} touches</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {p.wins.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Wins</p>
+              <div className="space-y-1">
+                {p.wins.map((w) => (
+                  <div key={w.id} className="text-xs text-foreground bg-background rounded-lg px-3 py-2 border border-border/50">
+                    <span className="text-amber-600 dark:text-amber-400 font-medium">{winCategoryLabel(w.category)} </span>
+                    {w.text}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -129,11 +274,35 @@ export default function RepReportPage() {
     },
   });
 
+  const saveSnapshotMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/report/rep/${targetId}/snapshot`, { period });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Saved to history!", description: "This report card has been saved." });
+      queryClient.invalidateQueries({ queryKey: ["/api/report/rep", targetId, "snapshots"] });
+    },
+    onError: () => {
+      toast({ title: "Save failed", description: "Could not save snapshot.", variant: "destructive" });
+    },
+  });
+
   const { data, isLoading, error } = useQuery<RepReportData>({
     queryKey: ["/api/report/rep", targetId, period],
     queryFn: async () => {
       const res = await fetch(`/api/report/rep/${targetId}?period=${period}`);
       if (!res.ok) throw new Error("Failed to load report");
+      return res.json();
+    },
+    enabled: !!targetId,
+  });
+
+  const { data: snapshots } = useQuery<ReportCardSnapshot[]>({
+    queryKey: ["/api/report/rep", targetId, "snapshots"],
+    queryFn: async () => {
+      const res = await fetch(`/api/report/rep/${targetId}/snapshots`);
+      if (!res.ok) throw new Error("Failed to load snapshots");
       return res.json();
     },
     enabled: !!targetId,
@@ -161,8 +330,6 @@ export default function RepReportPage() {
 
   const isManager = user?.role === "admin" || user?.role === "director" ||
     user?.role === "national_account_manager" || user?.role === "sales_director";
-
-  const isViewingOwnReport = targetId === user?.id;
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-foreground font-sans" data-testid="page-rep-report">
@@ -198,9 +365,9 @@ export default function RepReportPage() {
               </div>
             </div>
 
-            {/* Period toggle + email */}
+            {/* Period toggle + actions */}
             <div className="flex flex-col items-start md:items-end gap-2">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <div className="flex items-center gap-1 bg-white/10 rounded-xl p-1">
                   <button
                     onClick={() => setPeriod("weekly")}
@@ -217,6 +384,18 @@ export default function RepReportPage() {
                     Monthly
                   </button>
                 </div>
+                <button
+                  onClick={() => saveSnapshotMutation.mutate()}
+                  disabled={saveSnapshotMutation.isPending}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-medium transition-all disabled:opacity-50"
+                  data-testid="button-save-history"
+                  title="Save a snapshot to history"
+                >
+                  {saveSnapshotMutation.isPending
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Save className="h-3.5 w-3.5" />}
+                  Save to History
+                </button>
                 <button
                   onClick={() => sendEmailMutation.mutate()}
                   disabled={sendEmailMutation.isPending}
@@ -525,6 +704,32 @@ export default function RepReportPage() {
             </div>
           </section>
         )}
+
+        {/* ── Report Card History ── */}
+        <section data-testid="section-history">
+          <div className="flex items-center gap-2 mb-3">
+            <BookOpen className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold">Report Card History</h2>
+            {snapshots && snapshots.length > 0 && (
+              <span className="text-xs text-muted-foreground ml-auto">{snapshots.length} saved</span>
+            )}
+          </div>
+          {!snapshots ? (
+            <Skeleton className="h-16 rounded-xl" />
+          ) : snapshots.length === 0 ? (
+            <div className="rounded-xl border bg-card px-4 py-8 text-center">
+              <BookOpen className="h-8 w-8 mx-auto text-muted-foreground/30 mb-2" />
+              <p className="text-sm text-muted-foreground">No saved snapshots yet.</p>
+              <p className="text-xs text-muted-foreground/70 mt-1">Click "Save to History" to capture the current report card.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {snapshots.map((s) => (
+                <SnapshotCard key={s.id} snapshot={s} />
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );

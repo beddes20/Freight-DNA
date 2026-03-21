@@ -76,6 +76,9 @@ import {
   type InsertTaskComment,
   type MarketShareEntry,
   type InsertMarketShareEntry,
+  reportCardSnapshots,
+  type ReportCardSnapshot,
+  type InsertReportCardSnapshot,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -275,6 +278,9 @@ export interface IStorage {
   createMarketShareEntry(entry: InsertMarketShareEntry): Promise<MarketShareEntry>;
   updateMarketShareEntry(id: string, data: Partial<InsertMarketShareEntry>): Promise<MarketShareEntry | undefined>;
   deleteMarketShareEntry(id: string): Promise<boolean>;
+
+  getReportCardSnapshots(userId: string): Promise<ReportCardSnapshot[]>;
+  createReportCardSnapshot(data: InsertReportCardSnapshot): Promise<ReportCardSnapshot>;
 }
 
 const pool = new Pool({
@@ -1637,6 +1643,17 @@ export class DatabaseStorage implements IStorage {
   async deleteMarketShareEntry(id: string): Promise<boolean> {
     const result = await db.delete(marketShareEntries).where(eq(marketShareEntries.id, id)).returning();
     return result.length > 0;
+  }
+
+  async getReportCardSnapshots(userId: string): Promise<ReportCardSnapshot[]> {
+    return db.select().from(reportCardSnapshots)
+      .where(eq(reportCardSnapshots.userId, userId))
+      .orderBy(desc(reportCardSnapshots.snapshotDate));
+  }
+
+  async createReportCardSnapshot(data: InsertReportCardSnapshot): Promise<ReportCardSnapshot> {
+    const [created] = await db.insert(reportCardSnapshots).values(data).returning();
+    return created;
   }
 }
 

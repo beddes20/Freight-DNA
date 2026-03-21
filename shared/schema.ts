@@ -503,6 +503,20 @@ export const insertAppSuggestionSchema = createInsertSchema(appSuggestions).omit
 export type InsertAppSuggestion = z.infer<typeof insertAppSuggestionSchema>;
 export type AppSuggestion = typeof appSuggestions.$inferSelect;
 
+export const reportCardSnapshots = pgTable("report_card_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  periodType: text("period_type").notNull(),
+  periodLabel: text("period_label").notNull(),
+  snapshotDate: text("snapshot_date").notNull(),
+  payload: jsonb("payload").notNull(),
+  savedById: varchar("saved_by_id").notNull().references(() => users.id),
+});
+
+export const insertReportCardSnapshotSchema = createInsertSchema(reportCardSnapshots).omit({ id: true });
+export type InsertReportCardSnapshot = z.infer<typeof insertReportCardSnapshotSchema>;
+export type ReportCardSnapshot = typeof reportCardSnapshots.$inferSelect;
+
 export const internalPosts = pgTable("internal_posts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   content: text("content").notNull(),
