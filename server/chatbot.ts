@@ -419,7 +419,7 @@ Keep it short and casual — reps are busy. No fluff, no filler.
           createdAt: now,
         });
 
-        // Send branded email notification to admin
+        // Send branded email notification to admin (ValueTruck + freight-dna)
         if (admin.username) {
           const html = buildFeedbackEmail({
             submitterName: submitter.name,
@@ -428,11 +428,11 @@ Keep it short and casual — reps are busy. No fluff, no filler.
             content: trimmed,
             portalUrl,
           });
-          sendEmail({
-            to: admin.username,
-            subject: `[Growth Chart] ${taskTitle}`,
-            html,
-          }).catch((e) => console.error("Feedback email error:", e));
+          const subject = `[Growth Chart] ${taskTitle}`;
+          sendEmail({ to: admin.username, subject, html })
+            .catch((e) => console.error("Feedback email error:", e));
+          sendEmail({ to: "info@freight-dna.com", subject, html })
+            .catch((e) => console.error("Feedback email (freight-dna) error:", e));
         }
       }
 
