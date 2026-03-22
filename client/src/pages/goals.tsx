@@ -17,14 +17,14 @@ import {
 import {
   Target, Plus, MessageSquare, Trash2, ChevronDown, ChevronUp,
   TrendingUp, Users, Truck, DollarSign, CalendarDays, Pencil, Send,
-  CheckCircle2, BarChart3, BellRing, X, Sliders, Percent,
+  CheckCircle2, BarChart3, BellRing, X, Sliders, Percent, Heart,
 } from "lucide-react";
 import type { Goal, GoalComment } from "@shared/schema";
 
 const METRICS = [
   { value: "contacts_added",        label: "New Contacts",         icon: Users,       color: "bg-blue-500",    unit: "contacts" },
   { value: "touchpoints",           label: "Touchpoints",          icon: TrendingUp,  color: "bg-cyan-500",    unit: "touches" },
-  { value: "meaningful_touchpoints",label: "Meaningful Touchpoints",icon: TrendingUp,  color: "bg-purple-500",  unit: "convos" },
+  { value: "meaningful_touchpoints",label: "Meaningful Conversations (auto-tracked)",icon: Heart,  color: "bg-rose-500",  unit: "convos" },
   { value: "load_count",            label: "Load Count",           icon: Truck,       color: "bg-green-500",   unit: "loads" },
   { value: "margin",                label: "Margin ($)",           icon: DollarSign,  color: "bg-violet-500",  unit: "$" },
   { value: "margin_pct",           label: "Margin %",             icon: Percent,     color: "bg-emerald-500", unit: "%" },

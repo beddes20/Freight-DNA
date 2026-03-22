@@ -6,10 +6,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
-  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart
+  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart, ArrowUpDown
 } from "lucide-react";
+import { matchRepName } from "@/lib/rep-utils";
 
 type PeriodOption = "current" | "last" | "ytd";
 
@@ -61,12 +63,13 @@ interface AccountSummaryRow {
   repName: string;
 }
 
-function StatPill({ value, label, color, icon }: { value: number; label: string; color: string; icon?: React.ReactNode }) {
+function StatPill({ value, label, color, icon, note }: { value: number; label: string; color: string; icon?: React.ReactNode; note?: string }) {
   return (
     <div className="flex flex-col items-center px-2 py-2 rounded-lg bg-muted/50 min-w-[58px]">
       {icon && <div className="mb-0.5">{icon}</div>}
       <span className={`text-base font-bold leading-none ${color}`}>{value}</span>
       <span className="text-[10px] text-muted-foreground leading-tight text-center mt-0.5">{label}</span>
+      {note && <span className="text-[9px] text-muted-foreground/70 leading-tight text-center">{note}</span>}
     </div>
   );
 }
@@ -78,6 +81,9 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf;
   const color = colors[rep.name.charCodeAt(0) % colors.length];
   const totalTasks = rep.openTasks + rep.completedTasks;
   const completionPct = totalTasks > 0 ? Math.round((rep.completedTasks / totalTasks) * 100) : 0;
+  const totalRepTouchpoints = rep.callTouchpoints + rep.textTouchpoints + rep.emailTouchpoints;
+  const meaningfulPct = totalRepTouchpoints > 0 ? Math.round(((rep.meaningfulTouchpoints ?? 0) / totalRepTouchpoints) * 100) : 0;
+  const meaningfulNote = totalRepTouchpoints > 0 ? `of ${totalRepTouchpoints} (${meaningfulPct}%)` : undefined;
   const marginDisplay = totalMargin != null && totalMargin >= 1000
     ? `$${(totalMargin / 1000).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}K`
     : totalMargin != null ? `$${totalMargin.toLocaleString()}` : null;
@@ -156,7 +162,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf;
           <StatPill value={rep.textTouchpoints} label="Texts" color="text-green-600" icon={<MessageSquare className="h-3 w-3 text-green-500" />} />
           <StatPill value={rep.emailTouchpoints} label="Emails" color="text-purple-600" icon={<Mail className="h-3 w-3 text-purple-500" />} />
           <StatPill value={rep.contactsTouched} label="Touched" color="text-cyan-600" icon={<UserCheck className="h-3 w-3 text-cyan-500" />} />
-          <StatPill value={rep.meaningfulTouchpoints ?? 0} label="Meaningful" color="text-rose-600" icon={<Heart className="h-3 w-3 text-rose-500" />} />
+          <StatPill value={rep.meaningfulTouchpoints ?? 0} label="Meaningful" color="text-rose-600" icon={<Heart className="h-3 w-3 text-rose-500" />} note={meaningfulNote} />
         </div>
 
         <div className="space-y-1">
@@ -187,22 +193,25 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf;
   );
 }
 
-function matchRepName(repName: string, userName: string): boolean {
-  const a = repName.toLowerCase().trim();
-  const b = userName.toLowerCase().trim();
-  if (a === b) return true;
-  const aParts = a.split(/\s+/);
-  const bParts = b.split(/\s+/);
-  // First-name-only match: if repName is a single word, check if it matches any part of the user's name
-  if (aParts.length === 1 && aParts[0].length > 1) {
-    return bParts.some(p => p.startsWith(aParts[0]) || aParts[0].startsWith(p));
-  }
-  return aParts.some(p => p.length > 1 && bParts.includes(p));
+type SortOption = "alpha" | "calls" | "meaningful" | "overdue" | "accounts";
+
+function sortReps(arr: RepPerf[], by: SortOption): RepPerf[] {
+  return [...arr].sort((a, b) => {
+    switch (by) {
+      case "alpha": return a.name.localeCompare(b.name);
+      case "calls": return (b.callTouchpoints + b.textTouchpoints + b.emailTouchpoints) - (a.callTouchpoints + a.textTouchpoints + a.emailTouchpoints);
+      case "meaningful": return (b.meaningfulTouchpoints ?? 0) - (a.meaningfulTouchpoints ?? 0);
+      case "overdue": return b.overdueTasks - a.overdueTasks;
+      case "accounts": return b.companyCount - a.companyCount;
+      default: return 0;
+    }
+  });
 }
 
 export default function TeamPerformancePage() {
   const { user } = useAuth();
   const [period, setPeriod] = useState<PeriodOption>("current");
+  const [sortBy, setSortBy] = useState<SortOption>("alpha");
 
   const { data: reps = [], isLoading } = useQuery<RepPerf[]>({
     queryKey: ["/api/team/performance", period],
@@ -253,9 +262,9 @@ export default function TeamPerformancePage() {
   const totalRevenueAll = Object.values(repLoadsMap).reduce((s, v) => s + v.revenue, 0);
   const totalMarginPctAll = totalRevenueAll > 0 ? (totalMarginAll / totalRevenueAll) * 100 : null;
 
-  const ams = reps.filter(r => r.role === "account_manager");
-  const logistics = reps.filter(r => r.role === "logistics_manager" || r.role === "logistics_coordinator");
-  const nams = reps.filter(r => r.role === "national_account_manager" || r.role === "director" || r.role === "sales_director");
+  const ams = sortReps(reps.filter(r => r.role === "account_manager"), sortBy);
+  const logistics = sortReps(reps.filter(r => r.role === "logistics_manager" || r.role === "logistics_coordinator"), sortBy);
+  const nams = sortReps(reps.filter(r => r.role === "national_account_manager" || r.role === "director" || r.role === "sales_director"), sortBy);
 
   const totalOpenTasks = reps.reduce((sum, r) => sum + r.openTasks, 0);
   const totalOverdue = reps.reduce((sum, r) => sum + r.overdueTasks, 0);
@@ -267,6 +276,8 @@ export default function TeamPerformancePage() {
   const totalTouched = reps.reduce((sum, r) => sum + r.contactsTouched, 0);
   const totalBaseAdvanced = reps.reduce((sum, r) => sum + r.baseAdvanced, 0);
   const totalMeaningful = reps.reduce((sum, r) => sum + (r.meaningfulTouchpoints ?? 0), 0);
+  const totalAllTouchpoints = totalCalls + totalTexts + totalEmails;
+  const totalMeaningfulPct = totalAllTouchpoints > 0 ? Math.round((totalMeaningful / totalAllTouchpoints) * 100) : 0;
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
@@ -280,22 +291,37 @@ export default function TeamPerformancePage() {
             <p className="text-sm text-muted-foreground">KPIs across your team — tasks, accounts, and activity</p>
           </div>
         </div>
-        <div className="flex flex-col items-start sm:items-end gap-1.5">
-          <div className="flex items-center rounded-lg border bg-muted/40 p-0.5 gap-0.5" data-testid="toggle-period">
-            {(["current", "last", "ytd"] as PeriodOption[]).map((opt) => (
-              <button
-                key={opt}
-                data-testid={`button-period-${opt}`}
-                onClick={() => setPeriod(opt)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                  period === opt
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {opt === "current" ? "This Month" : opt === "last" ? "Last Month" : "YTD"}
-              </button>
-            ))}
+        <div className="flex flex-col items-start sm:items-end gap-2">
+          <div className="flex items-center gap-2">
+            <Select value={sortBy} onValueChange={v => setSortBy(v as SortOption)}>
+              <SelectTrigger className="h-8 w-44 text-xs" data-testid="select-sort-by">
+                <ArrowUpDown className="h-3 w-3 mr-1 text-muted-foreground shrink-0" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="alpha">Alphabetical</SelectItem>
+                <SelectItem value="calls">Most Activity</SelectItem>
+                <SelectItem value="meaningful">Most Meaningful</SelectItem>
+                <SelectItem value="overdue">Most Overdue</SelectItem>
+                <SelectItem value="accounts">Most Accounts</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="flex items-center rounded-lg border bg-muted/40 p-0.5 gap-0.5" data-testid="toggle-period">
+              {(["current", "last", "ytd"] as PeriodOption[]).map((opt) => (
+                <button
+                  key={opt}
+                  data-testid={`button-period-${opt}`}
+                  onClick={() => setPeriod(opt)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                    period === opt
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {opt === "current" ? "This Month" : opt === "last" ? "Last Month" : "YTD"}
+                </button>
+              ))}
+            </div>
           </div>
           <p className="text-xs text-muted-foreground" data-testid="text-period-label">
             {getPeriodLabel(period)}
@@ -331,11 +357,11 @@ export default function TeamPerformancePage() {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               {[
-                { label: "Calls", value: totalCalls, icon: <Phone className="h-4 w-4 text-blue-500" />, color: "text-blue-600" },
-                { label: "Texts", value: totalTexts, icon: <MessageSquare className="h-4 w-4 text-green-500" />, color: "text-green-600" },
-                { label: "Emails", value: totalEmails, icon: <Mail className="h-4 w-4 text-purple-500" />, color: "text-purple-600" },
-                { label: "Touched", value: totalTouched, icon: <UserCheck className="h-4 w-4 text-cyan-500" />, color: "text-cyan-600" },
-                { label: "Meaningful", value: totalMeaningful, icon: <Heart className="h-4 w-4 text-rose-500" />, color: "text-rose-600" },
+                { label: "Calls", value: totalCalls, icon: <Phone className="h-4 w-4 text-blue-500" />, color: "text-blue-600", sub: null },
+                { label: "Texts", value: totalTexts, icon: <MessageSquare className="h-4 w-4 text-green-500" />, color: "text-green-600", sub: null },
+                { label: "Emails", value: totalEmails, icon: <Mail className="h-4 w-4 text-purple-500" />, color: "text-purple-600", sub: null },
+                { label: "Touched", value: totalTouched, icon: <UserCheck className="h-4 w-4 text-cyan-500" />, color: "text-cyan-600", sub: null },
+                { label: "Meaningful", value: totalMeaningful, icon: <Heart className="h-4 w-4 text-rose-500" />, color: "text-rose-600", sub: totalAllTouchpoints > 0 ? `of ${totalAllTouchpoints} (${totalMeaningfulPct}%)` : null },
               ].map(stat => (
                 <Card key={stat.label}>
                   <CardContent className="pt-4 pb-3">
@@ -344,6 +370,7 @@ export default function TeamPerformancePage() {
                       <span className="text-xs text-muted-foreground">{stat.label}</span>
                     </div>
                     <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+                    {stat.sub && <p className="text-xs text-muted-foreground mt-0.5">{stat.sub}</p>}
                   </CardContent>
                 </Card>
               ))}
