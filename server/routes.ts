@@ -305,8 +305,9 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     if (bestNumericCol && bestNumericCount > rows.length * 0.3) {
       volumeCol = bestNumericCol;
       // If max value is small (< 52), it's likely weekly loads
-      const maxVal = Math.max(...rows.map(r => parseFloat(String(r[bestNumericCol!] || "").replace(/[^0-9.]/g, ""))).filter(v => !isNaN(v)));
-      if (maxVal <= 52) isWeeklyVolume = true;
+      const numericVals = rows.map(r => parseFloat(String(r[bestNumericCol!] || "").replace(/[^0-9.]/g, ""))).filter(v => !isNaN(v));
+      const maxVal = numericVals.length > 0 ? Math.max(...numericVals) : 0;
+      if (numericVals.length > 0 && maxVal <= 52) isWeeklyVolume = true;
     }
   } else {
     // Check if the detected volume column has small values suggesting weekly cadence
@@ -627,7 +628,7 @@ export async function registerRoutes(
         const name = String(row["display_name"] || "").trim();
         const email = String(row["Email"] || row["user_principle_name"] || "").trim();
         const title = String(row["title"] || "").trim();
-        const role = TITLE_TO_ROLE[title] || "account_manager";
+        const role = (TITLE_TO_ROLE[title] || "account_manager") as User["role"];
 
         if (!name || !email) {
           errors.push(`Skipped row — missing name or email`);
@@ -1901,7 +1902,7 @@ export async function registerRoutes(
           return {
             companyId: c.id,
             companyName: c.name,
-            amName: am ? `${am.firstName} ${am.lastName}`.trim() : null,
+            amName: am ? am.name : null,
             currentPct,
             prevPct,
             trend,
@@ -5254,7 +5255,7 @@ export async function registerRoutes(
       let hasFinancialData = false;
       let totalLoadsYtd = 0;
       for (const upload of uploads) {
-        const rows = (upload.data as any[]) || [];
+        const rows = (upload.rows as any[]) || [];
         for (const row of rows) {
           const custName = normalize(String(row.customerName || ""));
           if (custName === crmNorm || (aliasNorm && custName === aliasNorm)) {

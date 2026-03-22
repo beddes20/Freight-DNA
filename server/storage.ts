@@ -565,6 +565,8 @@ export class DatabaseStorage implements IStorage {
       name: users.name,
       role: users.role,
       managerId: users.managerId,
+      lastLoginAt: users.lastLoginAt,
+      financialRepId: users.financialRepId,
     }).from(users).where(
       and(
         inArray(users.role, roles),
