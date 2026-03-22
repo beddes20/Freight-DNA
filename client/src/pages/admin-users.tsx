@@ -810,6 +810,12 @@ export default function AdminUsers() {
                         <Clock className="w-3 h-3" />
                         Last login: {formatLastLogin(u.lastLoginAt)}
                       </p>
+                      {currentUser?.role === "admin" && u.role !== "admin" && !(u as any).financialRepId && (
+                        <span className="inline-flex items-center gap-1 mt-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 rounded px-1.5 py-0.5 cursor-pointer hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors" title="Set a Financial Rep ID so this user's data is matched in financial uploads" onClick={() => { setEditUser(u); setDialogOpen(true); }} data-testid={`badge-missing-fin-id-${u.id}`}>
+                          <AlertTriangle className="w-2.5 h-2.5" />
+                          No Financial ID
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">

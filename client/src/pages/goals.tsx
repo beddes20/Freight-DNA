@@ -356,6 +356,21 @@ const defaultForm: GoalFormData = {
   amId: "",
 };
 
+const defaultBulkForm = {
+  metric: "contacts_added",
+  period: "monthly",
+  target: "",
+  notes: "",
+  ...(() => {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    return { startDate: fmt(first), endDate: fmt(last) };
+  })(),
+};
+
 export default function GoalsPage() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -364,6 +379,8 @@ export default function GoalsPage() {
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [form, setForm] = useState<GoalFormData>(defaultForm);
   const [alertDismissed, setAlertDismissed] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkForm, setBulkForm] = useState(defaultBulkForm);
 
   const isNam = user?.role === "national_account_manager" || user?.role === "director" || user?.role === "sales" || user?.role === "admin" || user?.role === "sales_director";
   const isAm = user?.role === "account_manager" || user?.role === "logistics_manager" || user?.role === "logistics_coordinator";
@@ -418,6 +435,18 @@ export default function GoalsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       toast({ description: "Goal deleted." });
     },
+  });
+
+  const bulkGoalMutation = useMutation({
+    mutationFn: (data: object) => apiRequest("POST", "/api/goals/bulk", data),
+    onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/goals/monthly-check"] });
+      setBulkOpen(false);
+      setBulkForm(defaultBulkForm);
+      toast({ description: res?.created ? `${res.created} goals created for your team.` : "Goals created for your team." });
+    },
+    onError: () => toast({ variant: "destructive", description: "Failed to create bulk goals." }),
   });
 
   // LM direct reports of this AM (AMs can set goals for their LM reports)
@@ -522,12 +551,20 @@ export default function GoalsPage() {
             {isAm ? "Track your performance goals and progress" : "Set and track goals for your team"}
           </p>
         </div>
-        {(isNam || amCanSetGoals) && (
-          <Button onClick={() => openCreate()} data-testid="button-create-goal">
-            <Plus className="h-4 w-4 mr-2" />
-            New Goal
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {isNam && uniqueAms.length > 1 && (
+            <Button variant="outline" onClick={() => setBulkOpen(true)} data-testid="button-bulk-goals">
+              <Users className="h-4 w-4 mr-2" />
+              Set for All AMs
+            </Button>
+          )}
+          {(isNam || amCanSetGoals) && (
+            <Button onClick={() => openCreate()} data-testid="button-create-goal">
+              <Plus className="h-4 w-4 mr-2" />
+              New Goal
+            </Button>
+          )}
+        </div>
       </div>
 
       {isNam && !alertDismissed && missingMonthlyGoals.length > 0 && (
@@ -806,6 +843,85 @@ export default function GoalsPage() {
             <Button variant="outline" onClick={() => { setDialogOpen(false); setEditingGoal(null); }}>Cancel</Button>
             <Button onClick={handleSubmit} disabled={createGoal.isPending || updateGoalMutation.isPending} data-testid="button-save-goal">
               {editingGoal ? "Save Changes" : "Create Goal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Goal Dialog */}
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent className="max-w-md" data-testid="dialog-bulk-goals">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5 text-primary" />
+              Set Goal for All AMs
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              This will create the same goal for all {uniqueAms.length} members on your team. Existing goals are not overwritten.
+            </p>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Metric</label>
+              <Select value={bulkForm.metric} onValueChange={(v) => setBulkForm(f => ({ ...f, metric: v }))}>
+                <SelectTrigger data-testid="select-bulk-metric"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {METRICS.map(m => (
+                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Period</label>
+              <Select value={bulkForm.period} onValueChange={(v) => setBulkForm(f => ({ ...f, period: v }))}>
+                <SelectTrigger data-testid="select-bulk-period"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PERIODS.map(p => (
+                    <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Start Date</label>
+                <Input type="date" value={bulkForm.startDate} onChange={(e) => setBulkForm(f => ({ ...f, startDate: e.target.value }))} data-testid="input-bulk-start" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">End Date</label>
+                <Input type="date" value={bulkForm.endDate} onChange={(e) => setBulkForm(f => ({ ...f, endDate: e.target.value }))} data-testid="input-bulk-end" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Target ({getMetric(bulkForm.metric).unit})</label>
+              <Input
+                type="number"
+                placeholder="e.g. 50"
+                value={bulkForm.target}
+                onChange={(e) => setBulkForm(f => ({ ...f, target: e.target.value }))}
+                data-testid="input-bulk-target"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Notes (optional)</label>
+              <Input placeholder="Context or instructions..." value={bulkForm.notes} onChange={(e) => setBulkForm(f => ({ ...f, notes: e.target.value }))} data-testid="input-bulk-notes" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!bulkForm.target || bulkGoalMutation.isPending}
+              onClick={() => {
+                if (!bulkForm.target) { toast({ variant: "destructive", description: "Enter a target value." }); return; }
+                bulkGoalMutation.mutate({
+                  ...bulkForm,
+                  amIds: uniqueAms.map(a => a.amId),
+                });
+              }}
+              data-testid="button-confirm-bulk-goals"
+            >
+              {bulkGoalMutation.isPending ? "Creating..." : `Create for ${uniqueAms.length} people`}
             </Button>
           </DialogFooter>
         </DialogContent>

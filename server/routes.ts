@@ -3555,6 +3555,168 @@ export async function registerRoutes(
     }
   });
 
+  // ── Last Upload Info ─────────────────────────────────────────────────────────
+  app.get("/api/financials/last-upload-info", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploads();
+      if (!uploads.length) return res.json({ uploadedAt: null, fileName: null });
+      const latest = uploads[uploads.length - 1];
+      res.json({ uploadedAt: latest.uploadedAt, fileName: (latest as any).fileName || null });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch upload info" });
+    }
+  });
+
+  // ── Attribution Gaps ──────────────────────────────────────────────────────────
+  app.get("/api/financials/attribution-gaps", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+
+      const uploads = await storage.getFinancialUploads();
+      if (!uploads.length) return res.json({ opsUserGaps: [], dispatcherGaps: [], salespersonGaps: [], usersMissingId: [] });
+      const latest = uploads[uploads.length - 1];
+
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const cols = resolveColumns(txRows);
+      const allUsers = await storage.getUsers();
+
+      function backendMatchRep(excelName: string, userName: string): boolean {
+        const a = excelName.toLowerCase().trim();
+        const b = userName.toLowerCase().trim();
+        if (a === b) return true;
+        const aParts = a.split(/\s+/);
+        const bParts = b.split(/\s+/);
+        if (aParts.length === 1 && aParts[0].length > 1) {
+          return bParts.some(p => p.startsWith(aParts[0]) || aParts[0].startsWith(p));
+        }
+        return aParts.some(p => p.length > 1 && bParts.includes(p));
+      }
+
+      function matchesAnyUser(name: string): boolean {
+        const nameLower = name.toLowerCase().trim();
+        return allUsers.some(u => {
+          const frid = (u as any).financialRepId;
+          if (frid && frid.toLowerCase() === nameLower) return true;
+          return backendMatchRep(name, u.name);
+        });
+      }
+
+      const opsUserCounts: Record<string, number> = {};
+      const dispatcherCounts: Record<string, number> = {};
+      const salespersonCounts: Record<string, number> = {};
+
+      for (const row of txRows) {
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || 0);
+        if (revenue === 0) continue;
+        const opsUser = getRepFromRow(row, cols);
+        if (opsUser) opsUserCounts[opsUser] = (opsUserCounts[opsUser] || 0) + 1;
+        const dispatcher = getDispatcherFromRow(row, cols);
+        if (dispatcher) dispatcherCounts[dispatcher] = (dispatcherCounts[dispatcher] || 0) + 1;
+        const salesperson = getSalespersonFromRow(row, cols);
+        if (salesperson) salespersonCounts[salesperson] = (salespersonCounts[salesperson] || 0) + 1;
+      }
+
+      const opsUserGaps = Object.entries(opsUserCounts)
+        .filter(([name]) => !matchesAnyUser(name))
+        .map(([name, loads]) => ({ name, loads, column: "OpsUser" }))
+        .sort((a, b) => b.loads - a.loads);
+
+      const dispatcherGaps = Object.entries(dispatcherCounts)
+        .filter(([name]) => !matchesAnyUser(name))
+        .map(([name, loads]) => ({ name, loads, column: "Dispatcher" }))
+        .sort((a, b) => b.loads - a.loads);
+
+      const salespersonGaps = Object.entries(salespersonCounts)
+        .filter(([name]) => !matchesAnyUser(name))
+        .map(([name, loads]) => ({ name, loads, column: "Salesperson" }))
+        .sort((a, b) => b.loads - a.loads);
+
+      const usersMissingId = allUsers
+        .filter(u => !(u as any).financialRepId)
+        .map(u => ({ id: u.id, name: u.name, role: u.role }));
+
+      res.json({ opsUserGaps, dispatcherGaps, salespersonGaps, usersMissingId });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch attribution gaps" });
+    }
+  });
+
+  // ── Salesperson Accounts ──────────────────────────────────────────────────────
+  app.get("/api/financials/salesperson-accounts", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploads();
+      if (!uploads.length) return res.json([]);
+      const latest = uploads[uploads.length - 1];
+
+      const period = String(req.query.period || "current");
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth();
+      function mk(y: number, m: number) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+      let allowedMonths: Set<string> | null = null;
+      if (period === "current") {
+        allowedMonths = new Set([mk(curYear, curMonth)]);
+      } else if (period === "last") {
+        const lm = curMonth === 0 ? 11 : curMonth - 1;
+        const ly = curMonth === 0 ? curYear - 1 : curYear;
+        allowedMonths = new Set([mk(ly, lm)]);
+      } else if (period === "ytd") {
+        const keys = new Set<string>();
+        for (let m = 0; m <= curMonth; m++) keys.add(mk(curYear, m));
+        allowedMonths = keys;
+      }
+
+      const repId = String(req.query.repId || "").toLowerCase().trim();
+      const repName = String(req.query.repName || "").toLowerCase().trim();
+
+      function backendMatchRep2(excelName: string, targetName: string): boolean {
+        const a = excelName.toLowerCase().trim();
+        const b = targetName.toLowerCase().trim();
+        if (a === b) return true;
+        const aParts = a.split(/\s+/);
+        const bParts = b.split(/\s+/);
+        if (aParts.length === 1 && aParts[0].length > 1) {
+          return bParts.some(p => p.startsWith(aParts[0]) || aParts[0].startsWith(p));
+        }
+        return aParts.some(p => p.length > 1 && bParts.includes(p));
+      }
+
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const cols = resolveColumns(txRows);
+
+      type AcctEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+      const byCustomer: Record<string, AcctEntry> = {};
+
+      for (const row of txRows) {
+        const salesperson = getSalespersonFromRow(row, cols);
+        if (!salesperson) continue;
+        const spLower = salesperson.toLowerCase().trim();
+        const isMatch = (repId && repId === spLower) || (repName && backendMatchRep2(salesperson, repName));
+        if (!isMatch) continue;
+
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || row["Total charges"] || 0);
+        if (revenue === 0) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, cols);
+        if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
+
+        const customer = String(row[cols.customer] || "Unknown").trim();
+        const orderType = String(row[cols.orderType] || "").toLowerCase();
+        const isSpot = orderType.includes("spot");
+        const key = customer.toLowerCase();
+        if (!byCustomer[key]) byCustomer[key] = { customerName: customer, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
+        byCustomer[key].totalLoads++;
+        byCustomer[key].totalMargin += margin;
+        byCustomer[key].totalRevenue += revenue;
+        if (isSpot) byCustomer[key].spotLoads++;
+      }
+
+      res.json(Object.values(byCustomer).sort((a, b) => b.totalLoads - a.totalLoads));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch salesperson accounts" });
+    }
+  });
+
   // ── OneDrive Sync & Settings ────────────────────────────────────────────────
 
   app.get("/api/settings/onedrive-url", requireAuth, async (req, res) => {
@@ -4712,13 +4874,47 @@ export async function registerRoutes(
         endDate = todayStr;
       }
 
-      const [perf, allUsers] = await Promise.all([
+      // Compute previous-period dates for trend comparison
+      let prevStartDate: string;
+      let prevEndDate: string;
+      if (period === "last") {
+        const twoBack = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+        const twoBackEnd = new Date(now.getFullYear(), now.getMonth() - 1, 0);
+        prevStartDate = twoBack.toISOString().split("T")[0];
+        prevEndDate = twoBackEnd.toISOString().split("T")[0];
+      } else if (period === "ytd") {
+        prevStartDate = `${now.getFullYear() - 1}-01-01`;
+        prevEndDate = `${now.getFullYear() - 1}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      } else {
+        const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        prevStartDate = lastMonthStart.toISOString().split("T")[0];
+        prevEndDate = lastMonthEnd.toISOString().split("T")[0];
+      }
+
+      const [perf, prevPerf, allUsers] = await Promise.all([
         storage.getTeamPerformance(teamIds, startDate, endDate),
+        storage.getTeamPerformance(teamIds, prevStartDate, prevEndDate),
         storage.getUsers(),
       ]);
+      const prevPerfMap: Record<string, typeof prevPerf[0]> = {};
+      for (const p of prevPerf) prevPerfMap[p.userId] = p;
+
       const result = perf.map(p => {
         const u = allUsers.find(u => u.id === p.userId);
-        return { ...p, name: u?.name || "Unknown", role: u?.role || "account_manager", managerId: u?.managerId, financialRepId: (u as any)?.financialRepId || null, createdAt: u?.createdAt || null };
+        const prev = prevPerfMap[p.userId];
+        return {
+          ...p,
+          name: u?.name || "Unknown",
+          role: u?.role || "account_manager",
+          managerId: u?.managerId,
+          financialRepId: (u as any)?.financialRepId || null,
+          createdAt: u?.createdAt || null,
+          prevCallTouchpoints: prev?.callTouchpoints ?? 0,
+          prevTextTouchpoints: prev?.textTouchpoints ?? 0,
+          prevEmailTouchpoints: prev?.emailTouchpoints ?? 0,
+          prevMeaningfulTouchpoints: prev?.meaningfulTouchpoints ?? 0,
+        };
       });
       res.json(result);
     } catch (error) {
@@ -5120,6 +5316,50 @@ export async function registerRoutes(
       res.status(201).json(goal);
     } catch (error) {
       res.status(500).json({ error: "Failed to create goal" });
+    }
+  });
+
+  // ── Bulk Goal Creation ──────────────────────────────────────────────────────
+  app.post("/api/goals/bulk", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const namRoles = ["admin", "director", "national_account_manager"];
+      if (!namRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
+      const { metric, period, target, startDate, endDate, notes, amIds } = req.body;
+      if (!metric || !period || !target || !startDate || !endDate || !Array.isArray(amIds) || !amIds.length) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+      const created = [];
+      for (const amId of amIds) {
+        const goal = await storage.createGoal({
+          namId: user.id,
+          amId,
+          metric,
+          period,
+          target: String(target),
+          currentValue: "0",
+          startDate,
+          endDate,
+          notes: notes || null,
+          status: "active",
+          createdAt: new Date().toISOString(),
+          createdById: user.id,
+        });
+        storage.createNotification({
+          userId: amId,
+          type: "goal_set",
+          title: `${user.name} set a goal for you`,
+          body: `${metric.replace(/_/g, " ")} — target: ${target}`,
+          link: "/goals",
+          relatedId: goal.id,
+          read: false,
+        }).catch(() => {});
+        created.push(goal);
+      }
+      res.status(201).json({ created: created.length });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to bulk create goals" });
     }
   });
 

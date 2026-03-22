@@ -10,9 +10,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
+  Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, TrendingDown, BarChart3,
   Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart, ArrowUpDown,
-  Send, Loader2, XCircle, Star, Award
+  Send, Loader2, XCircle, Star, Award, ChevronDown, ChevronUp, CalendarClock, ShieldAlert
 } from "lucide-react";
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -58,6 +58,10 @@ interface RepPerf {
   contactsTouched: number;
   baseAdvanced: number;
   meaningfulTouchpoints: number;
+  prevCallTouchpoints?: number;
+  prevTextTouchpoints?: number;
+  prevEmailTouchpoints?: number;
+  prevMeaningfulTouchpoints?: number;
 }
 
 interface AccountSummaryRow {
@@ -236,7 +240,19 @@ function StatPill({ value, label, color, icon, note }: { value: number; label: s
   );
 }
 
-function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominations, canNominate, onNominate }: {
+function TrendBadge({ current, prev }: { current: number; prev: number }) {
+  const delta = current - prev;
+  if (delta === 0 || prev === 0) return null;
+  const isUp = delta > 0;
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[9px] font-semibold leading-none ${isUp ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
+      {isUp ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
+      {isUp ? "+" : ""}{delta}
+    </span>
+  );
+}
+
+function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominations, canNominate, onNominate, period }: {
   rep: RepPerf;
   totalLoads?: number;
   totalMargin?: number;
@@ -245,6 +261,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
   nominations?: PromotionNomination[];
   canNominate?: boolean;
   onNominate?: (rep: RepPerf) => void;
+  period?: string;
 }) {
   const [, navigate] = useLocation();
   const initials = rep.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
@@ -265,7 +282,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
     <Card
       className="hover:shadow-md transition-shadow cursor-pointer"
       data-testid={`card-rep-${rep.userId}`}
-      onClick={() => navigate(`/reps/${rep.userId}`)}
+      onClick={() => navigate(`/reps/${rep.userId}${period ? `?period=${period}` : ""}`)}
     >
       <CardContent className="pt-5 pb-4">
         <div className="flex items-start gap-3 mb-4">
@@ -326,13 +343,22 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
           <StatPill value={rep.baseAdvanced} label="Rel. Moved" color="text-teal-600" icon={<ArrowUpRight className="h-3 w-3 text-teal-500" />} />
         </div>
 
-        <div className="grid grid-cols-5 gap-1.5 mb-4">
+        <div className="grid grid-cols-5 gap-1.5 mb-1.5">
           <StatPill value={rep.callTouchpoints} label="Calls" color="text-blue-600" icon={<Phone className="h-3 w-3 text-blue-500" />} />
           <StatPill value={rep.textTouchpoints} label="Texts" color="text-green-600" icon={<MessageSquare className="h-3 w-3 text-green-500" />} />
           <StatPill value={rep.emailTouchpoints} label="Emails" color="text-purple-600" icon={<Mail className="h-3 w-3 text-purple-500" />} />
           <StatPill value={rep.contactsTouched} label="Touched" color="text-cyan-600" icon={<UserCheck className="h-3 w-3 text-cyan-500" />} />
           <StatPill value={rep.meaningfulTouchpoints ?? 0} label="Meaningful" color="text-rose-600" icon={<Heart className="h-3 w-3 text-rose-500" />} note={meaningfulNote} />
         </div>
+        {(rep.prevCallTouchpoints != null || rep.prevTextTouchpoints != null) && (
+          <div className="flex items-center gap-2 px-1 mb-3">
+            <span className="text-[10px] text-muted-foreground/60">vs last period:</span>
+            <TrendBadge current={rep.callTouchpoints} prev={rep.prevCallTouchpoints ?? 0} />
+            <TrendBadge current={rep.textTouchpoints} prev={rep.prevTextTouchpoints ?? 0} />
+            <TrendBadge current={rep.emailTouchpoints} prev={rep.prevEmailTouchpoints ?? 0} />
+            <TrendBadge current={rep.meaningfulTouchpoints ?? 0} prev={rep.prevMeaningfulTouchpoints ?? 0} />
+          </div>
+        )}
 
         <div className="space-y-1">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -450,6 +476,22 @@ export default function TeamPerformancePage() {
       if (!res.ok) return [];
       return res.json();
     },
+  });
+
+  const { data: lastUploadInfo } = useQuery<{ uploadedAt: string | null; fileName: string | null }>({
+    queryKey: ["/api/financials/last-upload-info"],
+  });
+
+  const [showGaps, setShowGaps] = useState(false);
+  type GapEntry = { name: string; loads: number; column: string };
+  const { data: attributionGaps } = useQuery<{
+    opsUserGaps: GapEntry[];
+    dispatcherGaps: GapEntry[];
+    salespersonGaps: GapEntry[];
+    usersMissingId: { id: string; name: string; role: string }[];
+  }>({
+    queryKey: ["/api/financials/attribution-gaps"],
+    enabled: user?.role === "admin",
   });
 
   const { data: bulkPreview, isLoading: previewLoading } = useQuery<{ recipients: { id: string; name: string; role: string; email: string }[]; total: number }>({
@@ -626,9 +668,17 @@ export default function TeamPerformancePage() {
               ))}
             </div>
           </div>
-          <p className="text-xs text-muted-foreground" data-testid="text-period-label">
-            {getPeriodLabel(period)}
-          </p>
+          <div className="flex items-center gap-3">
+            <p className="text-xs text-muted-foreground" data-testid="text-period-label">
+              {getPeriodLabel(period)}
+            </p>
+            {lastUploadInfo?.uploadedAt && (
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground/70 border border-dashed border-muted-foreground/30 rounded px-1.5 py-0.5" data-testid="text-data-as-of">
+                <CalendarClock className="h-3 w-3" />
+                Data as of {new Date(lastUploadInfo.uploadedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -741,6 +791,7 @@ export default function TeamPerformancePage() {
                     nominations={nominations}
                     canNominate={canNominate}
                     onNominate={setNominationTarget}
+                    period={period}
                   />
                 ))}
               </div>
@@ -765,6 +816,7 @@ export default function TeamPerformancePage() {
                     nominations={nominations}
                     canNominate={canNominate}
                     onNominate={setNominationTarget}
+                    period={period}
                   />
                 ))}
               </div>
@@ -789,6 +841,7 @@ export default function TeamPerformancePage() {
                     nominations={nominations}
                     canNominate={canNominate}
                     onNominate={setNominationTarget}
+                    period={period}
                   />
                 ))}
               </div>
@@ -810,7 +863,7 @@ export default function TeamPerformancePage() {
                     <Card
                       key={rep.userId}
                       className="hover:shadow-md transition-shadow cursor-pointer"
-                      onClick={() => navigate(`/reps/${rep.userId}`)}
+                      onClick={() => navigate(`/reps/${rep.userId}${period ? `?period=${period}` : ""}`)}
                       data-testid={`card-sales-rep-${rep.userId}`}
                     >
                       <CardContent className="pt-4 pb-4">
@@ -919,6 +972,67 @@ export default function TeamPerformancePage() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Attribution Gaps (Admin only) */}
+      {user?.role === "admin" && attributionGaps && (
+        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
+          <button
+            className="w-full flex items-center justify-between px-4 py-3 text-left"
+            onClick={() => setShowGaps(v => !v)}
+            data-testid="button-toggle-attribution-gaps"
+          >
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">Financial Attribution Gaps</span>
+              {(attributionGaps.opsUserGaps.length + attributionGaps.dispatcherGaps.length + attributionGaps.salespersonGaps.length) > 0 && (
+                <Badge className="bg-amber-200 text-amber-800 dark:bg-amber-800 dark:text-amber-200 text-[10px] px-1.5">
+                  {attributionGaps.opsUserGaps.length + attributionGaps.dispatcherGaps.length + attributionGaps.salespersonGaps.length} unmatched
+                </Badge>
+              )}
+            </div>
+            {showGaps ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+          </button>
+          {showGaps && (
+            <div className="px-4 pb-4 space-y-4">
+              <p className="text-xs text-muted-foreground">Names from the financial upload that couldn't be matched to any CRM user. Set their Financial Rep ID in User Management to fix attribution.</p>
+              {[
+                { label: "OpsUser column (NAMs / AMs)", gaps: attributionGaps.opsUserGaps },
+                { label: "Dispatcher column (Logistics Managers)", gaps: attributionGaps.dispatcherGaps },
+                { label: "Salesperson column (Sales roles)", gaps: attributionGaps.salespersonGaps },
+              ].map(({ label, gaps }) => gaps.length > 0 && (
+                <div key={label}>
+                  <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 mb-1.5">{label}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {gaps.map(g => (
+                      <span key={g.name} className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-[11px] px-2 py-0.5 font-medium">
+                        {g.name}
+                        <span className="text-amber-500 dark:text-amber-400">({g.loads} loads)</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {attributionGaps.usersMissingId.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground mb-1.5">Users missing Financial Rep ID</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {attributionGaps.usersMissingId.map(u => (
+                      <span key={u.id} className="inline-flex items-center gap-1 rounded-full bg-muted text-muted-foreground text-[11px] px-2 py-0.5">
+                        {u.name} <span className="opacity-60 capitalize">({u.role.replace(/_/g, " ")})</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(attributionGaps.opsUserGaps.length + attributionGaps.dispatcherGaps.length + attributionGaps.salespersonGaps.length) === 0 && (
+                <p className="text-sm text-green-700 dark:text-green-400 flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4" /> All financial rows are matched to CRM users.
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
 

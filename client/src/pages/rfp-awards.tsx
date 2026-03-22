@@ -1347,7 +1347,11 @@ export default function RfpAwards() {
     totalAwards: allAwards?.length || 0,
     rfpPipeline: rfps?.reduce((acc, r) => acc + (r.value ? parseFloat(r.value) : 0), 0) || 0,
     awardedValue: allAwards?.reduce((acc, a) => acc + (a.value ? parseFloat(a.value) : 0), 0) || 0,
+    pendingRfps: rfps?.filter(r => r.status === "pending").length || 0,
+    submittedRfps: rfps?.filter(r => r.status === "submitted").length || 0,
   };
+  const winOpportunities = stats.submittedRfps + stats.totalAwards;
+  const winRate = winOpportunities > 0 ? Math.round((stats.totalAwards / winOpportunities) * 100) : null;
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6">
@@ -1420,6 +1424,52 @@ export default function RfpAwards() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Win/Loss Summary Bar */}
+      {(stats.totalRfps > 0 || stats.totalAwards > 0) && (
+        <Card data-testid="card-win-loss-summary">
+          <CardContent className="p-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Pipeline Summary</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-4 text-sm">
+                <div className="flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-yellow-400 inline-block" />
+                  <span className="text-muted-foreground">Pending:</span>
+                  <span className="font-semibold">{stats.pendingRfps}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-blue-400 inline-block" />
+                  <span className="text-muted-foreground">Submitted:</span>
+                  <span className="font-semibold">{stats.submittedRfps}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-green-500 inline-block" />
+                  <span className="text-muted-foreground">Awarded:</span>
+                  <span className="font-semibold">{stats.totalAwards}</span>
+                </div>
+                {winRate !== null && (
+                  <div className="flex items-center gap-1.5 border-l pl-4 ml-1">
+                    <Trophy className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                    <span className="text-muted-foreground">Win Rate:</span>
+                    <span className={`font-bold ${winRate >= 50 ? "text-green-600 dark:text-green-400" : winRate >= 25 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400"}`}>{winRate}%</span>
+                    <span className="text-xs text-muted-foreground">({stats.totalAwards}/{winOpportunities} submitted+won)</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            {winOpportunities > 0 && (
+              <div className="mt-3 flex h-2 w-full rounded-full overflow-hidden gap-px">
+                <div className="bg-green-500" style={{ width: `${(stats.totalAwards / (stats.totalRfps + stats.totalAwards)) * 100}%` }} />
+                <div className="bg-blue-400" style={{ width: `${(stats.submittedRfps / (stats.totalRfps + stats.totalAwards)) * 100}%` }} />
+                <div className="bg-yellow-400" style={{ width: `${(stats.pendingRfps / (stats.totalRfps + stats.totalAwards)) * 100}%` }} />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card
         className={`border-2 border-dashed transition-colors ${isDragging ? "border-primary bg-primary/5" : "border-muted-foreground/25"}`}

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, useParams, useLocation } from "wouter";
+import { Link, useParams, useLocation, useSearch } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,7 +19,7 @@ import {
   DollarSign,
   Percent,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { Company, Contact, User } from "@shared/schema";
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
 
@@ -87,8 +87,15 @@ function getPeriodLabel(period: PeriodOption): string {
 export default function RepCustomers() {
   const { userId } = useParams<{ userId: string }>();
   const [, navigate] = useLocation();
+  const search = useSearch();
+  const urlPeriod = new URLSearchParams(search).get("period") as PeriodOption | null;
   const [searchQuery, setSearchQuery] = useState("");
-  const [period, setPeriod] = useState<PeriodOption>("current");
+  const [period, setPeriod] = useState<PeriodOption>(urlPeriod || "current");
+
+  useEffect(() => {
+    if (urlPeriod && urlPeriod !== period) setPeriod(urlPeriod);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlPeriod]);
 
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/users"],
@@ -116,6 +123,21 @@ export default function RepCustomers() {
   });
 
   const rep = allUsers.find((u) => u.id === userId);
+  const isSalesRep = rep?.role === "sales" || rep?.role === "sales_director";
+
+  const { data: salespersonAccounts = [] } = useQuery<AccountSummaryRow[]>({
+    queryKey: ["/api/financials/salesperson-accounts", period, userId],
+    queryFn: async () => {
+      if (!rep) return [];
+      const params = new URLSearchParams({ period });
+      if ((rep as any).financialRepId) params.set("repId", (rep as any).financialRepId);
+      params.set("repName", rep.name);
+      const res = await fetch(`/api/financials/salesperson-accounts?${params}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: isSalesRep && !!rep,
+  });
   const directReports = allUsers.filter((u) => u.managerId === userId).sort((a, b) => a.name.localeCompare(b.name));
 
   const repCompanies = companies.filter((c) => c.assignedTo === userId).sort((a, b) => a.name.localeCompare(b.name));
@@ -173,12 +195,12 @@ export default function RepCustomers() {
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <div className="flex items-center gap-3">
         <button
-          onClick={() => navigate("/")}
+          onClick={() => navigate(`/?period=${period}`)}
           className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
           data-testid="button-back-dashboard"
         >
           <ArrowLeft className="h-4 w-4" />
-          Dashboard
+          Team Performance
         </button>
       </div>
 
@@ -240,7 +262,80 @@ export default function RepCustomers() {
         </div>
       )}
 
-      <div>
+      {isSalesRep && (
+        <div>
+          <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+              <Network className="h-4 w-4" />
+              Financial Accounts ({salespersonAccounts.length})
+            </h2>
+            <Select value={period} onValueChange={(v) => setPeriod(v as PeriodOption)}>
+              <SelectTrigger className="h-8 w-40 text-xs" data-testid="select-period-sales">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="current">This Month</SelectItem>
+                <SelectItem value="last">Last Month</SelectItem>
+                <SelectItem value="ytd">Year to Date</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {salespersonAccounts.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <Building2 className="h-10 w-10 mx-auto mb-3 opacity-40" />
+              <p className="text-sm font-medium">No financial data for this period</p>
+              <p className="text-xs mt-1">Check that Financial Rep ID matches the Salesperson column in the Excel upload</p>
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              {salespersonAccounts.map((acct) => {
+                const marginPct = acct.totalRevenue && acct.totalRevenue > 0
+                  ? (acct.totalMargin / acct.totalRevenue) * 100
+                  : null;
+                return (
+                  <div
+                    key={acct.customerName}
+                    className="flex flex-col p-4 rounded-lg border border-border bg-muted/20 gap-2"
+                    data-testid={`card-salesperson-acct-${acct.customerName}`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-semibold text-sm">
+                        {acct.customerName.charAt(0)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-sm truncate">{acct.customerName}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap pl-[48px]">
+                      <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 dark:bg-blue-900/20 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300">
+                        <Package className="h-3 w-3" />
+                        {acct.totalLoads.toLocaleString()} loads
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-md bg-green-50 dark:bg-green-900/20 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">
+                        <DollarSign className="h-3 w-3" />
+                        {fmtMoney(acct.totalMargin)} margin
+                      </span>
+                      {marginPct !== null && (
+                        <span className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ${marginPct < 0 ? "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300" : "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300"}`}>
+                          <Percent className="h-3 w-3" />
+                          {marginPct.toFixed(1)}%
+                        </span>
+                      )}
+                      {acct.spotLoads > 0 && (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-purple-50 dark:bg-purple-900/20 px-2 py-0.5 text-xs font-medium text-purple-700 dark:text-purple-300">
+                          {acct.spotLoads} spot
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!isSalesRep && <div>
         <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
             <Network className="h-4 w-4" />
@@ -346,7 +441,7 @@ export default function RepCustomers() {
             })}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
