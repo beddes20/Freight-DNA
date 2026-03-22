@@ -2745,6 +2745,43 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/1on1/session/:id/meeting-link", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { meetingLink } = req.body;
+      if (meetingLink !== undefined && meetingLink !== null && meetingLink !== "" && typeof meetingLink !== "string") {
+        return res.status(400).json({ error: "meetingLink must be a string or null" });
+      }
+      let normalizedLink: string | null = null;
+      if (meetingLink && typeof meetingLink === "string" && meetingLink.trim()) {
+        const trimmed = meetingLink.trim();
+        try {
+          const url = new URL(trimmed);
+          if (url.protocol !== "https:" && url.protocol !== "http:") {
+            return res.status(400).json({ error: "Meeting link must use http or https" });
+          }
+        } catch {
+          return res.status(400).json({ error: "Invalid URL format" });
+        }
+        if (trimmed.length > 2048) {
+          return res.status(400).json({ error: "Meeting link is too long" });
+        }
+        normalizedLink = trimmed;
+      }
+      const session = await storage.getSession(req.params.id);
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === session.namId || user.id === session.amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const updated = await storage.updateSessionMeetingLink(req.params.id, normalizedLink);
+      if (!updated) return res.status(404).json({ error: "Session not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update meeting link" });
+    }
+  });
+
   app.patch("/api/1on1/session/:id/notes", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

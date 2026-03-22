@@ -11,6 +11,7 @@ import {
   Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle,
   StickyNote, ClipboardList, CornerDownRight, CalendarClock, Pencil, X,
   BarChart2, Phone, Mail, MessageCircle, MapPin, Target, CheckCheck, Clock,
+  Video, ExternalLink, Link,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -340,6 +341,9 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const [topicPendingFiles, setTopicPendingFiles] = useState<PendingFile[]>([]);
   const [editingDate, setEditingDate] = useState(false);
   const [dateInput, setDateInput] = useState("");
+  const [editingLink, setEditingLink] = useState(false);
+  const [linkInput, setLinkInput] = useState("");
+  const linkCancelledRef = useRef(false);
   const [showReport, setShowReport] = useState(false);
   const [reportPeriod, setReportPeriod] = useState<"weekly" | "monthly" | "both">("weekly");
 
@@ -468,6 +472,19 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
     },
     onError: () => toast({ title: "Failed to save meeting date", variant: "destructive" }),
   });
+
+  const meetingLinkMutation = useMutation({
+    mutationFn: async ({ sessionId, meetingLink }: { sessionId: string; meetingLink: string | null }) => {
+      const res = await apiRequest("PATCH", `/api/1on1/session/${sessionId}/meeting-link`, { meetingLink });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: sessionKey });
+      setEditingLink(false);
+      toast({ title: "Meeting link saved" });
+    },
+    onError: () => toast({ title: "Failed to save meeting link", variant: "destructive" }),
+  });
   const { data: actionItemData = [] } = useQuery<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>({
     queryKey: actionItemsKey,
     queryFn: async () => {
@@ -543,14 +560,14 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
                 <X className="h-3.5 w-3.5" />
               </Button>
             </>
-          ) : (session as any).meetingDate ? (
+          ) : session.meetingDate ? (
             <button
               className="flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:underline"
-              onClick={() => { setDateInput((session as any).meetingDate || ""); setEditingDate(true); }}
+              onClick={() => { setDateInput(session.meetingDate || ""); setEditingDate(true); }}
               data-testid="btn-edit-meeting-date"
             >
               <CalendarClock className="h-4 w-4" />
-              <span>Next Meeting: {formatDate((session as any).meetingDate)}</span>
+              <span>Next Meeting: {formatDate(session.meetingDate)}</span>
               <Pencil className="h-3 w-3 opacity-60" />
             </button>
           ) : (
@@ -561,6 +578,80 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
             >
               <CalendarClock className="h-4 w-4" />
               <span>Set meeting date</span>
+            </button>
+          )}
+        </div>
+
+        {/* Meeting link */}
+        <div className="flex items-center gap-1.5">
+          {editingLink ? (
+            <>
+              <input
+                type="url"
+                className="h-7 px-2 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-56"
+                placeholder="Paste meeting URL..."
+                value={linkInput}
+                onChange={(e) => setLinkInput(e.target.value)}
+                onBlur={() => {
+                  if (linkCancelledRef.current) {
+                    linkCancelledRef.current = false;
+                    return;
+                  }
+                  if (!meetingLinkMutation.isPending) {
+                    meetingLinkMutation.mutate({ sessionId: session.id, meetingLink: linkInput || null });
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    (e.target as HTMLInputElement).blur();
+                  }
+                  if (e.key === "Escape") {
+                    linkCancelledRef.current = true;
+                    setEditingLink(false);
+                  }
+                }}
+                data-testid="input-meeting-link"
+                autoFocus
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-1.5"
+                onMouseDown={() => { linkCancelledRef.current = true; }}
+                onClick={() => setEditingLink(false)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          ) : session.meetingLink ? (
+            <div className="flex items-center gap-1.5">
+              <a
+                href={session.meetingLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400 hover:underline"
+                data-testid="link-join-meeting"
+              >
+                <Video className="h-4 w-4" />
+                <span>Join Meeting</span>
+                <ExternalLink className="h-3 w-3 opacity-60" />
+              </a>
+              <button
+                className="text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => { setLinkInput(session.meetingLink || ""); setEditingLink(true); }}
+                data-testid="btn-edit-meeting-link"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            </div>
+          ) : (
+            <button
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => { setLinkInput(""); setEditingLink(true); }}
+              data-testid="btn-set-meeting-link"
+            >
+              <Link className="h-4 w-4" />
+              <span>Add meeting link</span>
             </button>
           )}
         </div>

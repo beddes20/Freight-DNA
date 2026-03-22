@@ -253,6 +253,7 @@ export const oneOnOneSessions = pgTable("one_on_one_sessions", {
   startDate: text("start_date").notNull(),
   notes: text("notes").default(""),
   meetingDate: text("meeting_date"),
+  meetingLink: text("meeting_link"),
 });
 
 export const insertOneOnOneSessionSchema = createInsertSchema(oneOnOneSessions).omit({

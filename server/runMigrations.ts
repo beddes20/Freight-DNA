@@ -240,6 +240,10 @@ export async function runMigrations() {
     await client.query(`SELECT setval('chat_conversations_id_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM chat_conversations), 1))`);
     console.log("[migrations] chat_conversations sequence synced");
 
+    // Add meeting_link column to one_on_one_sessions for video meeting URLs
+    await client.query(`ALTER TABLE one_on_one_sessions ADD COLUMN IF NOT EXISTS meeting_link text`);
+    console.log("[migrations] meeting_link added to one_on_one_sessions");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

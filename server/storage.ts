@@ -208,6 +208,7 @@ export interface IStorage {
   getArchivedSessions(namId: string, amId: string): Promise<OneOnOneSession[]>;
   updateSessionNotes(sessionId: string, notes: string): Promise<OneOnOneSession | undefined>;
   updateSessionMeetingDate(sessionId: string, meetingDate: string | null): Promise<OneOnOneSession | undefined>;
+  updateSessionMeetingLink(sessionId: string, meetingLink: string | null): Promise<OneOnOneSession | undefined>;
   getActiveSessionsWithMeetingDate(): Promise<OneOnOneSession[]>;
   getActionItemsByPairing(namId: string, amId: string): Promise<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>;
 
@@ -923,6 +924,14 @@ export class DatabaseStorage implements IStorage {
   async updateSessionMeetingDate(sessionId: string, meetingDate: string | null): Promise<OneOnOneSession | undefined> {
     const [updated] = await db.update(oneOnOneSessions)
       .set({ meetingDate })
+      .where(eq(oneOnOneSessions.id, sessionId))
+      .returning();
+    return updated;
+  }
+
+  async updateSessionMeetingLink(sessionId: string, meetingLink: string | null): Promise<OneOnOneSession | undefined> {
+    const [updated] = await db.update(oneOnOneSessions)
+      .set({ meetingLink })
       .where(eq(oneOnOneSessions.id, sessionId))
       .returning();
     return updated;
