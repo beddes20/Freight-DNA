@@ -3,6 +3,7 @@ import type * as L from "leaflet";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
+import { fmtMoney } from "@/lib/rep-utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -861,11 +862,11 @@ export default function HistoricalData() {
                           <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                           <YAxis yAxisId="loads" tick={{ fontSize: 11 }} width={35} />
                           <YAxis yAxisId="margin" orientation="right" tick={{ fontSize: 11 }} width={60}
-                            tickFormatter={v => v >= 1000 ? `$${(v/1000).toFixed(0)}K` : `$${v}`} />
+                            tickFormatter={v => fmtMoney(v)} />
                           <RechartTooltip
                             contentStyle={{ fontSize: 12 }}
                             formatter={(value: number, name: string) => {
-                              if (name === "margin") return [`$${value.toLocaleString()}`, "Margin"];
+                              if (name === "margin") return [fmtMoney(value), "Margin"];
                               return [value, name === "loads" ? "Total Loads" : "Spot Loads"];
                             }}
                           />

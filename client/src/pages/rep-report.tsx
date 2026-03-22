@@ -13,7 +13,7 @@ import {
   Package, DollarSign,
 } from "lucide-react";
 
-import { matchRepName } from "@/lib/rep-utils";
+import { matchRepName, fmtMoney } from "@/lib/rep-utils";
 
 interface AccountSummaryRow {
   customerName: string;
@@ -179,7 +179,7 @@ function SnapshotCard({ snapshot }: { snapshot: ReportCardSnapshot }) {
                 {p.goals.map((g) => {
                   const pc = pct(g.current, g.target);
                   const isMoney = g.metric === "margin" || g.metric === "revenue";
-                  const fmt = (v: number) => isMoney ? `$${v.toLocaleString()}` : String(Math.round(v));
+                  const fmt = (v: number) => isMoney ? fmtMoney(v) : String(Math.round(v));
                   const color = pc >= 80 ? "text-green-600 dark:text-green-400" : pc >= 50 ? "text-amber-600" : "text-red-500";
                   return (
                     <div key={g.id} className="flex items-center gap-3">
@@ -348,9 +348,7 @@ export default function RepReportPage() {
     .filter(row => row.repName && matchRepName(row.repName, rep.name))
     .reduce((acc, row) => ({ loads: acc.loads + row.totalLoads, margin: acc.margin + row.totalMargin }), { loads: 0, margin: 0 });
   const hasFinancials = accountSummary.length > 0;
-  const marginDisplay = repFinancials.margin >= 1000
-    ? `$${(repFinancials.margin / 1000).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}K`
-    : `$${repFinancials.margin.toLocaleString()}`;
+  const marginDisplay = fmtMoney(repFinancials.margin);
   const initials = rep.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
   const roleLabel = rep.role.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
 
@@ -494,7 +492,7 @@ export default function RepReportPage() {
                   ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
                   : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400";
                 const isMoney = g.metric === "margin" || g.metric === "revenue";
-                const fmt = (v: number) => isMoney ? `$${v.toLocaleString()}` : String(Math.round(v));
+                const fmt = (v: number) => isMoney ? fmtMoney(v) : String(Math.round(v));
                 return (
                   <div key={g.id} className="rounded-xl border bg-card p-4 space-y-3" data-testid={`goal-card-${g.id}`}>
                     <div className="flex items-center justify-between">

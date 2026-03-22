@@ -32,6 +32,7 @@ import { CompanyDialog } from "@/components/company-dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { fmtMoney } from "@/lib/rep-utils";
 import type { Company, Contact, User } from "@shared/schema";
 
 type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number };
@@ -595,9 +596,7 @@ export default function Customers() {
                                   <div className="flex items-center gap-1.5 text-xs" title={m ? "This month's margin" : "Total margin (financial data)"}>
                                     <DollarSign className="h-3.5 w-3.5 text-green-500" />
                                     <span className={`font-medium ${margin < 0 ? "text-red-500 dark:text-red-400" : "text-foreground"}`}>
-                                      {margin >= 1000 || margin <= -1000
-                                        ? `$${(margin / 1000).toFixed(1)}k`
-                                        : `$${margin.toFixed(0)}`}
+                                      {fmtMoney(margin)}
                                     </span>
                                     <span className="text-muted-foreground">margin{label ? ` ${label}` : ""}</span>
                                   </div>

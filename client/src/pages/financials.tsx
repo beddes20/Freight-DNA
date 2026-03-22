@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { fmtMoney } from "@/lib/rep-utils";
 import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -851,17 +852,13 @@ export default function Financials() {
             {[
               {
                 label: "Total Revenue",
-                value: dashboardMetrics.totalRevenueAll >= 1_000_000
-                  ? `$${(dashboardMetrics.totalRevenueAll / 1_000_000).toFixed(2)}M`
-                  : `$${(dashboardMetrics.totalRevenueAll / 1_000).toFixed(1)}K`,
+                value: fmtMoney(dashboardMetrics.totalRevenueAll),
                 sub: `${dashboardMetrics.totalLoadsAll.toLocaleString()} total loads`,
                 icon: DollarSign, color: "text-green-600 dark:text-green-400", bg: "bg-green-100 dark:bg-green-900/30",
               },
               {
                 label: "Gross Margin",
-                value: dashboardMetrics.totalMarginAll >= 1_000_000
-                  ? `$${(dashboardMetrics.totalMarginAll / 1_000_000).toFixed(2)}M`
-                  : `$${(dashboardMetrics.totalMarginAll / 1_000).toFixed(1)}K`,
+                value: fmtMoney(dashboardMetrics.totalMarginAll),
                 sub: dashboardMetrics.totalLoadsAll > 0
                   ? `$${Math.round(dashboardMetrics.totalMarginAll / dashboardMetrics.totalLoadsAll).toLocaleString()} avg/load`
                   : "Revenue minus freight",
@@ -924,10 +921,10 @@ export default function Financials() {
                           <span className="text-xs text-muted-foreground truncate">{m.label}</span>
                           <span className="text-xs tabular-nums text-right">{m.loads.toLocaleString()}</span>
                           <span className="text-xs tabular-nums text-right text-blue-600 dark:text-blue-400">
-                            {m.revenue >= 1_000_000 ? `$${(m.revenue / 1_000_000).toFixed(1)}M` : `$${(m.revenue / 1_000).toFixed(0)}K`}
+                            {fmtMoney(m.revenue)}
                           </span>
                           <span className="text-xs tabular-nums text-right text-emerald-600 dark:text-emerald-400">
-                            {m.margin >= 1_000_000 ? `$${(m.margin / 1_000_000).toFixed(1)}M` : `$${(m.margin / 1_000).toFixed(0)}K`}
+                            {fmtMoney(m.margin)}
                           </span>
                           <span className={`text-xs tabular-nums text-right ${m.marginPct >= 15 ? "text-emerald-600 dark:text-emerald-400" : m.marginPct >= 10 ? "text-amber-600 dark:text-amber-400" : "text-red-500"}`}>
                             {m.marginPct.toFixed(1)}%
@@ -995,7 +992,7 @@ export default function Financials() {
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs font-medium truncate">{cust}</span>
                             <span className="text-xs tabular-nums text-green-600 dark:text-green-400 ml-2 shrink-0">
-                              {d.revenue >= 1_000_000 ? `$${(d.revenue / 1_000_000).toFixed(1)}M` : `$${(d.revenue / 1_000).toFixed(0)}K`}
+                              {fmtMoney(d.revenue)}
                             </span>
                           </div>
                           <div className="h-1 rounded-full bg-muted overflow-hidden">
@@ -1077,8 +1074,8 @@ export default function Financials() {
                 <p className="text-xs text-muted-foreground mt-1">
                   {filtered.length.toLocaleString()} record{filtered.length !== 1 ? "s" : ""}
                   {hasFilters ? " matching filters" : " total"}
-                  {" · "}Revenue {totalRevenue >= 1_000_000 ? `$${(totalRevenue / 1_000_000).toFixed(2)}M` : `$${(totalRevenue / 1_000).toFixed(1)}K`}
-                  {" · "}Margin ${Math.round(totalRevenue - totalFreight).toLocaleString()}
+                  {" · "}Revenue {fmtMoney(totalRevenue)}
+                  {" · "}Margin {fmtMoney(Math.round(totalRevenue - totalFreight))}
                 </p>
               )}
             </CardHeader>

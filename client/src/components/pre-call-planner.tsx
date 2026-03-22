@@ -27,6 +27,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { fmtMoney } from "@/lib/rep-utils";
 import type { Company, Contact, Touchpoint, Rfp, Award } from "@shared/schema";
 
 type TaskLike = { id: string | number; title: string; status: string; dueDate?: string | null };
@@ -232,12 +233,12 @@ export function PreCallPlanner({
                   <div className="text-xs text-muted-foreground">YTD Loads</div>
                 </div>
                 <div className="bg-muted/40 rounded-md px-3 py-2 text-center">
-                  <div className="font-bold text-base">${financialSummary.totalMargin.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                  <div className="font-bold text-base">{fmtMoney(financialSummary.totalMargin)}</div>
                   <div className="text-xs text-muted-foreground">YTD Margin</div>
                 </div>
                 {financialSummary.totalRevenue != null && (
                   <div className="bg-muted/40 rounded-md px-3 py-2 text-center">
-                    <div className="font-bold text-base">${financialSummary.totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                    <div className="font-bold text-base">{fmtMoney(financialSummary.totalRevenue)}</div>
                     <div className="text-xs text-muted-foreground">YTD Revenue</div>
                   </div>
                 )}

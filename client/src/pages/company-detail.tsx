@@ -102,6 +102,7 @@ import { ContactList } from "@/components/contact-list";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { fmtMoney } from "@/lib/rep-utils";
 import { TaskDialog } from "@/components/task-dialog";
 import { CalloutDialog } from "@/components/callout-dialog";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
@@ -1103,7 +1104,7 @@ export default function CompanyDetail() {
 
       {/* Account Performance (from uploaded summary data) */}
       {accountPerf && (() => {
-        const fmtMargin = (m: number) => m >= 1000 ? `$${(m / 1000).toFixed(1)}K` : `$${m.toLocaleString()}`;
+        const fmtMargin = (m: number) => fmtMoney(m);
         const fmtMonth = (key: string) => {
           const [y, mo] = key.split("-");
           return new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });

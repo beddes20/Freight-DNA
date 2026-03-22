@@ -11,7 +11,7 @@ import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
   Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart, ArrowUpDown
 } from "lucide-react";
-import { matchRepName } from "@/lib/rep-utils";
+import { matchRepName, fmtMoney } from "@/lib/rep-utils";
 
 type PeriodOption = "current" | "last" | "ytd";
 
@@ -84,9 +84,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf;
   const totalRepTouchpoints = rep.callTouchpoints + rep.textTouchpoints + rep.emailTouchpoints;
   const meaningfulPct = totalRepTouchpoints > 0 ? Math.round(((rep.meaningfulTouchpoints ?? 0) / totalRepTouchpoints) * 100) : 0;
   const meaningfulNote = totalRepTouchpoints > 0 ? `of ${totalRepTouchpoints} (${meaningfulPct}%)` : undefined;
-  const marginDisplay = totalMargin != null && totalMargin >= 1000
-    ? `$${(totalMargin / 1000).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}K`
-    : totalMargin != null ? `$${totalMargin.toLocaleString()}` : null;
+  const marginDisplay = totalMargin != null ? fmtMoney(totalMargin) : null;
   const marginPct = totalRevenue != null && totalRevenue > 0 && totalMargin != null
     ? (totalMargin / totalRevenue) * 100
     : null;
@@ -394,7 +392,7 @@ export default function TeamPerformancePage() {
                       <span className="text-xs text-muted-foreground">Total Margin (all reps)</span>
                     </div>
                     <p className="text-2xl font-bold text-green-600">
-                      {totalMarginAll >= 1000 ? `$${(totalMarginAll / 1000).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}K` : `$${totalMarginAll.toLocaleString()}`}
+                      {fmtMoney(totalMarginAll)}
                     </p>
                   </CardContent>
                 </Card>
