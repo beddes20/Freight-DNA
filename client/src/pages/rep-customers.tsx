@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams, useLocation, useSearch } from "wouter";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
@@ -33,7 +32,7 @@ interface AccountSummaryRow {
   spotLoads: number;
   totalMargin: number;
   totalRevenue?: number;
-  repName: string;
+  repName?: string;
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -195,9 +194,9 @@ export default function RepCustomers() {
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <div className="flex items-center gap-3">
         <button
-          onClick={() => navigate(`/?period=${period}`)}
+          onClick={() => navigate(`/team-performance?period=${period}`)}
           className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          data-testid="button-back-dashboard"
+          data-testid="button-back-team-performance"
         >
           <ArrowLeft className="h-4 w-4" />
           Team Performance
@@ -223,7 +222,7 @@ export default function RepCustomers() {
               </span>
               <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-medium text-white">
                 <Building2 className="h-3 w-3" />
-                {repCompanies.length} {repCompanies.length === 1 ? "account" : "accounts"}
+                {isSalesRep ? salespersonAccounts.length : repCompanies.length} {(isSalesRep ? salespersonAccounts.length : repCompanies.length) === 1 ? "account" : "accounts"}
               </span>
             </div>
           </div>
@@ -243,7 +242,7 @@ export default function RepCustomers() {
               return (
                 <Link
                   key={report.id}
-                  href={`/reps/${report.id}`}
+                  href={`/reps/${report.id}?period=${period}`}
                   className="flex items-center gap-3 p-3 rounded-lg border border-border hover:border-primary/40 hover:bg-muted/50 hover:shadow-sm transition-all group cursor-pointer"
                   data-testid={`card-report-${report.id}`}
                 >

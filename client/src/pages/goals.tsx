@@ -552,7 +552,7 @@ export default function GoalsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {isNam && uniqueAms.length > 1 && (
+          {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager") && uniqueAms.length > 1 && (
             <Button variant="outline" onClick={() => setBulkOpen(true)} data-testid="button-bulk-goals">
               <Users className="h-4 w-4 mr-2" />
               Set for All AMs

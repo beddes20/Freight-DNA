@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -433,8 +433,16 @@ type BulkSendResult = { sent: number; failed: number; total: number; results: { 
 export default function TeamPerformancePage() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [period, setPeriod] = useState<PeriodOption>("current");
+  const search = useSearch();
+  const urlPeriod = new URLSearchParams(search).get("period") as PeriodOption | null;
+  const [period, setPeriod] = useState<PeriodOption>(urlPeriod || "current");
   const [sortBy, setSortBy] = useState<SortOption>("alpha");
+
+  useEffect(() => {
+    const p = new URLSearchParams(search).get("period") as PeriodOption | null;
+    if (p && p !== period) setPeriod(p);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
   const [showBulkSend, setShowBulkSend] = useState(false);
   const [bulkPeriod, setBulkPeriod] = useState<"weekly" | "monthly">("monthly");
   const [bulkResult, setBulkResult] = useState<BulkSendResult | null>(null);
