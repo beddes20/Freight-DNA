@@ -442,6 +442,16 @@ export default function TeamPerformancePage() {
     },
   });
 
+  type SalespersonSummaryRow = { salespersonName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+  const { data: salespersonSummary = [] } = useQuery<SalespersonSummaryRow[]>({
+    queryKey: ["/api/financials/salesperson-summary", period],
+    queryFn: async () => {
+      const res = await fetch(`/api/financials/salesperson-summary?period=${period}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
   const { data: bulkPreview, isLoading: previewLoading } = useQuery<{ recipients: { id: string; name: string; role: string; email: string }[]; total: number }>({
     queryKey: ["/api/report/bulk-preview"],
     enabled: showBulkSend && !bulkResult,
@@ -519,7 +529,26 @@ export default function TeamPerformancePage() {
     }
   }
 
-  const hasSummaryData = accountSummary.length > 0 || dispatcherSummary.length > 0;
+  // Build financial map for sales roles — keyed by the Salesperson column (not opsUser).
+  const spReps = reps.filter(r => r.role === "sales_director" || r.role === "sales");
+  const salesLoadsMap: Record<string, { loads: number; margin: number; revenue: number; spotLoads: number }> = {};
+  for (const row of salespersonSummary) {
+    if (!row.salespersonName) continue;
+    const spLower = row.salespersonName.toLowerCase().trim();
+    const match = spReps.find(r =>
+      (r.financialRepId && r.financialRepId.toLowerCase() === spLower) ||
+      matchRepName(row.salespersonName, r.name)
+    );
+    if (match) {
+      if (!salesLoadsMap[match.userId]) salesLoadsMap[match.userId] = { loads: 0, margin: 0, revenue: 0, spotLoads: 0 };
+      salesLoadsMap[match.userId].loads += row.totalLoads;
+      salesLoadsMap[match.userId].margin += row.totalMargin;
+      salesLoadsMap[match.userId].revenue += row.totalRevenue ?? 0;
+      salesLoadsMap[match.userId].spotLoads += row.spotLoads;
+    }
+  }
+
+  const hasSummaryData = accountSummary.length > 0 || dispatcherSummary.length > 0 || salespersonSummary.length > 0;
   const totalLoadsAll = Object.values(repLoadsMap).reduce((s, v) => s + v.loads, 0);
   const totalMarginAll = Object.values(repLoadsMap).reduce((s, v) => s + v.margin, 0);
   const totalRevenueAll = Object.values(repLoadsMap).reduce((s, v) => s + v.revenue, 0);
@@ -773,19 +802,65 @@ export default function TeamPerformancePage() {
                 <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Sales</h2>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {salesReps.map(rep => (
-                  <RepCard
-                    key={rep.userId}
-                    rep={rep}
-                    totalLoads={repLoadsMap[rep.userId]?.loads}
-                    totalMargin={repLoadsMap[rep.userId]?.margin}
-                    totalRevenue={repLoadsMap[rep.userId]?.revenue}
-                    criteria={promotionCriteria}
-                    nominations={nominations}
-                    canNominate={canNominate}
-                    onNominate={setNominationTarget}
-                  />
-                ))}
+                {salesReps.map(rep => {
+                  const fin = salesLoadsMap[rep.userId];
+                  const marginPct = fin && fin.revenue > 0 ? (fin.margin / fin.revenue) * 100 : null;
+                  const initials = rep.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+                  return (
+                    <Card
+                      key={rep.userId}
+                      className="hover:shadow-md transition-shadow cursor-pointer"
+                      onClick={() => navigate(`/reps/${rep.userId}`)}
+                      data-testid={`card-sales-rep-${rep.userId}`}
+                    >
+                      <CardContent className="pt-4 pb-4">
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-green-100 dark:from-blue-900/40 dark:to-green-900/40 text-blue-700 dark:text-blue-300 font-bold text-sm">
+                            {initials}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-sm truncate">{rep.name}</p>
+                            <p className="text-xs text-muted-foreground capitalize">{rep.role.replace(/_/g, " ")}</p>
+                          </div>
+                        </div>
+
+                        {fin ? (
+                          <div className="grid gap-2">
+                            <div className={`grid gap-2 ${marginPct !== null ? "grid-cols-3" : "grid-cols-2"}`}>
+                              <div className="flex flex-col items-center justify-center rounded-lg bg-blue-50 dark:bg-blue-900/20 px-2 py-3">
+                                <Package className="h-4 w-4 text-blue-500 mb-1" />
+                                <p className="text-lg font-bold text-blue-600 dark:text-blue-400 leading-none">{fin.loads.toLocaleString()}</p>
+                                <p className="text-[10px] text-muted-foreground mt-0.5">Loads</p>
+                              </div>
+                              <div className="flex flex-col items-center justify-center rounded-lg bg-green-50 dark:bg-green-900/20 px-2 py-3">
+                                <DollarSign className="h-4 w-4 text-green-500 mb-1" />
+                                <p className="text-lg font-bold text-green-600 dark:text-green-400 leading-none">{fmtMoney(fin.margin)}</p>
+                                <p className="text-[10px] text-muted-foreground mt-0.5">Margin</p>
+                              </div>
+                              {marginPct !== null && (
+                                <div className={`flex flex-col items-center justify-center rounded-lg px-2 py-3 ${marginPct < 0 ? "bg-red-50 dark:bg-red-900/20" : "bg-emerald-50 dark:bg-emerald-900/20"}`}>
+                                  <Percent className={`h-4 w-4 mb-1 ${marginPct < 0 ? "text-red-500" : "text-emerald-500"}`} />
+                                  <p className={`text-lg font-bold leading-none ${marginPct < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>{marginPct.toFixed(1)}%</p>
+                                  <p className="text-[10px] text-muted-foreground mt-0.5">Margin %</p>
+                                </div>
+                              )}
+                            </div>
+                            {fin.spotLoads > 0 && (
+                              <div className="flex items-center justify-center gap-1.5 rounded-lg bg-purple-50 dark:bg-purple-900/20 px-2 py-1.5 text-xs font-medium text-purple-700 dark:text-purple-300">
+                                <Package className="h-3 w-3" />
+                                {fin.spotLoads} spot {fin.spotLoads === 1 ? "load" : "loads"}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-center py-4 text-muted-foreground text-xs">
+                            No financial data for this period
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </div>
             </div>
           )}

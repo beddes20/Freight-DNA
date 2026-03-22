@@ -3501,6 +3501,60 @@ export async function registerRoutes(
     }
   });
 
+  // ── Salesperson summary (for Sales roles) ──────────────────────────────────
+  app.get("/api/financials/salesperson-summary", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploads();
+      if (!uploads.length) return res.json([]);
+      const latest = uploads[uploads.length - 1];
+
+      const period = String(req.query.period || "current");
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth();
+      function mk(y: number, m: number) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+      let allowedMonths: Set<string> | null = null;
+      if (period === "current") {
+        allowedMonths = new Set([mk(curYear, curMonth)]);
+      } else if (period === "last") {
+        const lm = curMonth === 0 ? 11 : curMonth - 1;
+        const ly = curMonth === 0 ? curYear - 1 : curYear;
+        allowedMonths = new Set([mk(ly, lm)]);
+      } else if (period === "ytd") {
+        const keys = new Set<string>();
+        for (let m = 0; m <= curMonth; m++) keys.add(mk(curYear, m));
+        allowedMonths = keys;
+      }
+
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const cols = resolveColumns(txRows);
+
+      type SpEntry = { salespersonName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+      const bySalesperson: Record<string, SpEntry> = {};
+
+      for (const row of txRows) {
+        const salesperson = getSalespersonFromRow(row, cols);
+        if (!salesperson) continue;
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || row["Total charges"] || 0);
+        if (revenue === 0) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, cols);
+        if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
+        const orderType = String(row[cols.orderType] || "").toLowerCase();
+        const isSpot = orderType.includes("spot");
+        const key = salesperson.toLowerCase().trim();
+        if (!bySalesperson[key]) bySalesperson[key] = { salespersonName: salesperson, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
+        bySalesperson[key].totalLoads++;
+        bySalesperson[key].totalMargin += margin;
+        bySalesperson[key].totalRevenue += revenue;
+        if (isSpot) bySalesperson[key].spotLoads++;
+      }
+
+      return res.json(Object.values(bySalesperson));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch salesperson summary" });
+    }
+  });
+
   // ── OneDrive Sync & Settings ────────────────────────────────────────────────
 
   app.get("/api/settings/onedrive-url", requireAuth, async (req, res) => {
