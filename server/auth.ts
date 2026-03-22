@@ -163,15 +163,42 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
 export async function getVisibleCompanyIds(user: User): Promise<string[] | null> {
   if (user.role === "admin") return null;
 
-  if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales_director") {
+  const allCompanies = await storage.getCompanies();
+
+  // Directors and NAMs: see their whole team's accounts (assignedTo)
+  if (user.role === "director" || user.role === "national_account_manager") {
     const teamIds = await storage.getTeamMemberIds(user.id);
-    const allCompanies = await storage.getCompanies();
     return allCompanies
-      .filter(c => c.assignedTo && teamIds.includes(c.assignedTo))
+      .filter(c => c.assignedTo && (teamIds.includes(c.assignedTo) || c.assignedTo === user.id))
       .map(c => c.id);
   }
 
-  const allCompanies = await storage.getCompanies();
+  // Sales reps: see accounts where they are the linked salesperson
+  if (user.role === "sales") {
+    return allCompanies
+      .filter(c => (c as any).salesPersonId === user.id)
+      .map(c => c.id);
+  }
+
+  // Sales directors: see all accounts linked to anyone on their team as salesperson
+  if (user.role === "sales_director") {
+    const teamIds = await storage.getTeamMemberIds(user.id);
+    const allIds = new Set([user.id, ...teamIds]);
+    return allCompanies
+      .filter(c => (c as any).salesPersonId && allIds.has((c as any).salesPersonId))
+      .map(c => c.id);
+  }
+
+  // Logistics managers: see the same accounts their manager's team manages
+  if (user.role === "logistics_manager") {
+    if (!user.managerId) return [];
+    const manager = await storage.getUser(user.managerId);
+    if (!manager) return [];
+    // Delegate to the manager's visibility
+    return getVisibleCompanyIds(manager);
+  }
+
+  // Account managers and other roles: see only accounts assigned to them
   return allCompanies
     .filter(c => c.assignedTo === user.id)
     .map(c => c.id);

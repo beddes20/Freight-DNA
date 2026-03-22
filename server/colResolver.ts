@@ -17,6 +17,7 @@ export interface FinancialCols {
   freightCharge: string;
   customer: string;
   opsUser: string;
+  dispatcher: string;
   salesperson: string;
   orderType: string;
   status: string;
@@ -46,6 +47,7 @@ export function resolveColumns(rows: any[]): FinancialCols {
     freightCharge:    find(/freight.?charge|carrier.?cost|linehaul|^freight$/i,         "Freight charge"),
     customer:         find(/customer/i,                                                 "Customer"),
     opsUser:          find(/operations?.?user|ops?.?user/i,                             "Operations user"),
+    dispatcher:       find(/^dispatcher$/i,                                             "Dispatcher"),
     salesperson:      find(/^salesperson$|^sales.?person$|^sales.?rep$|^salesman$/i,   "Salesperson"),
     orderType:        find(/order.?type|load.?type|movement.?type/i,                   "Order type"),
     status:           find(/^status$/i,                                                 "Status"),
@@ -71,6 +73,11 @@ export function resolveColumns(rows: any[]): FinancialCols {
 /** Extract the ops rep value from a row using resolved cols. */
 export function getRepFromRow(row: any, cols: FinancialCols): string {
   return String(row[cols.opsUser] || "").trim().toLowerCase();
+}
+
+/** Extract the dispatcher name from a row using resolved cols. */
+export function getDispatcherFromRow(row: any, cols: FinancialCols): string {
+  return String(row[cols.dispatcher] || row["Dispatcher"] || "").trim();
 }
 
 /** Extract the salesperson name from a row using resolved cols. */

@@ -11,7 +11,7 @@ import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } f
 import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
-import { resolveColumns, getRepFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
+import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -4729,6 +4729,12 @@ export async function registerRoutes(
         goalsList = await storage.getGoals({});
       } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         goalsList = await storage.getGoals({ namId: user.id });
+      } else if (user.role === "account_manager") {
+        // AMs see their own goals AND any goals they've set for LM reports
+        const ownGoals = await storage.getGoals({ amId: user.id });
+        const setGoals = await storage.getGoals({ namId: user.id });
+        const seen = new Set<string>();
+        goalsList = [...ownGoals, ...setGoals].filter(g => { if (seen.has(g.id)) return false; seen.add(g.id); return true; });
       } else {
         goalsList = await storage.getGoals({ amId: user.id });
       }
@@ -4899,7 +4905,15 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.status(403).json({ error: "Only NAMs can create goals" });
+      if (user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.status(403).json({ error: "Only managers can create goals" });
+      // AMs can only set goals for users who report directly to them
+      if (user.role === "account_manager") {
+        const allUsers = await storage.getUsers();
+        const targetUser = allUsers.find(u => u.id === req.body.amId);
+        if (!targetUser || targetUser.managerId !== user.id) {
+          return res.status(403).json({ error: "You can only set goals for your direct reports" });
+        }
+      }
       const goal = await storage.createGoal({
         ...req.body,
         namId: user.role === "admin" ? (req.body.namId || user.id) : user.id,
@@ -5045,15 +5059,47 @@ export async function registerRoutes(
       const goal = await storage.getGoal(req.params.id);
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       let autoValue: number | null = null;
+      const allUsers = await storage.getUsers();
+      const targetUser = allUsers.find(u => u.id === goal.amId);
+      const isLMGoal = targetUser?.role === "logistics_manager";
+
       if (goal.metric === "contacts_added") {
         autoValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
       } else if (goal.metric === "touchpoints") {
         autoValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+      } else if (goal.metric === "loads_booked" || goal.metric === "margin_pct" || (goal.metric === "margin" && isLMGoal)) {
+        // LM metrics — computed from the Dispatcher column in transaction rows
+        const repKey = targetUser ? (targetUser as any).financialRepId as string | null : null;
+        if (repKey) {
+          const uploads = await storage.getFinancialUploads();
+          if (uploads.length) {
+            const latest = uploads[uploads.length - 1];
+            const txRows: any[] = (latest.rows as any[]) || [];
+            const cols = resolveColumns(txRows);
+            const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+            const repKeyLower = repKey.toLowerCase();
+            let count = 0;
+            let totalMargin = 0;
+            let totalCharges = 0;
+            for (const row of txRows) {
+              const disp = getDispatcherFromRow(row, cols).toLowerCase();
+              if (disp !== repKeyLower) continue;
+              if (goalMonthKey) {
+                const { monthKey } = parseHistoricalRow(row, cols);
+                if (monthKey !== goalMonthKey) continue;
+              }
+              count++;
+              totalMargin += Number(row[cols.marginDollar] || row["Margin $"] || 0);
+              totalCharges += Number(row[cols.totalCharges] || row["Total charges"] || 0);
+            }
+            if (goal.metric === "loads_booked") autoValue = count;
+            else if (goal.metric === "margin_pct") autoValue = totalCharges > 0 ? Math.round((totalMargin / totalCharges) * 1000) / 10 : 0;
+            else autoValue = Math.round(totalMargin); // margin for LM
+          }
+        }
       } else if (goal.metric === "margin") {
-        const allUsers = await storage.getUsers();
-        const amUser = allUsers.find(u => u.id === goal.amId);
-        if (amUser) {
-          const repKey = (amUser as any).financialRepId as string | null;
+        if (targetUser) {
+          const repKey = (targetUser as any).financialRepId as string | null;
           if (repKey) {
             const uploads = await storage.getFinancialUploads();
             if (uploads.length) {
@@ -5062,28 +5108,20 @@ export async function registerRoutes(
               const repKeyLower = repKey.toLowerCase();
               let total = 0;
               if (isBadSummaryData(raw)) {
-                // Transaction rows (ReplistNumbers) — group directly by rep, not customer
                 const txRows: any[] = (latest.rows as any[]) || [];
                 const progTxCols = resolveColumns(txRows);
-                // Derive the target month key from startDate (e.g. "2026-03-01" → "2026-03")
                 const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
-                // byRep: repCode → monthKey → totalMargin
                 const byRep: Record<string, Record<string, number>> = {};
                 for (const row of txRows) {
                   const { monthKey, margin } = parseHistoricalRow(row, progTxCols);
                   const rep = getRepFromRow(row, progTxCols);
                   if (!rep) continue;
                   if (!byRep[rep]) byRep[rep] = {};
-                  if (monthKey) {
-                    byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
-                  }
+                  if (monthKey) byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
                 }
                 const repMonths = byRep[repKeyLower] || {};
-                if (goalMonthKey) {
-                  total = repMonths[goalMonthKey] || 0;
-                }
+                if (goalMonthKey) total = repMonths[goalMonthKey] || 0;
               } else {
-                // Summary rows (account-summary sheet format)
                 const firstRow = raw[0] || {};
                 const usesEmptyKeys = "__EMPTY" in firstRow;
                 let rows = raw;

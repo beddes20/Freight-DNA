@@ -22,13 +22,14 @@ import {
 import type { Goal, GoalComment } from "@shared/schema";
 
 const METRICS = [
-  { value: "contacts_added",        label: "New Contacts",         icon: Users,       color: "bg-blue-500",    unit: "contacts" },
-  { value: "touchpoints",           label: "Touchpoints",          icon: TrendingUp,  color: "bg-cyan-500",    unit: "touches" },
-  { value: "meaningful_touchpoints",label: "Meaningful Conversations (auto-tracked)",icon: Heart,  color: "bg-rose-500",  unit: "convos" },
-  { value: "load_count",            label: "Load Count",           icon: Truck,       color: "bg-green-500",   unit: "loads" },
-  { value: "margin",                label: "Margin ($)",           icon: DollarSign,  color: "bg-violet-500",  unit: "$" },
-  { value: "margin_pct",           label: "Margin %",             icon: Percent,     color: "bg-emerald-500", unit: "%" },
-  { value: "custom",                label: "Custom",               icon: Sliders,     color: "bg-orange-500",  unit: "units" },
+  { value: "contacts_added",        label: "New Contacts",                        icon: Users,       color: "bg-blue-500",    unit: "contacts" },
+  { value: "touchpoints",           label: "Touchpoints",                         icon: TrendingUp,  color: "bg-cyan-500",    unit: "touches" },
+  { value: "meaningful_touchpoints",label: "Meaningful Conversations (auto-tracked)", icon: Heart, color: "bg-rose-500",    unit: "convos" },
+  { value: "load_count",            label: "Load Count",                          icon: Truck,       color: "bg-green-500",   unit: "loads" },
+  { value: "loads_booked",          label: "Loads Booked (auto-tracked)",         icon: Truck,       color: "bg-teal-500",    unit: "loads" },
+  { value: "margin",                label: "Margin ($)",                          icon: DollarSign,  color: "bg-violet-500",  unit: "$" },
+  { value: "margin_pct",            label: "Margin %",                            icon: Percent,     color: "bg-emerald-500", unit: "%" },
+  { value: "custom",                label: "Custom",                              icon: Sliders,     color: "bg-orange-500",  unit: "units" },
 ];
 
 const PERIODS = [
@@ -79,7 +80,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
   const current = parseFloat(goal.currentValue || "0");
   const target = parseFloat(goal.target || "0");
   const pct = progressPct(current, target);
-  const isAutoTracked = goal.metric === "contacts_added" || goal.metric === "touchpoints" || goal.metric === "meaningful_touchpoints" || goal.metric === "margin";
+  const isAutoTracked = goal.metric === "contacts_added" || goal.metric === "touchpoints" || goal.metric === "meaningful_touchpoints" || goal.metric === "margin" || goal.metric === "loads_booked" || goal.metric === "margin_pct";
   const isFinancialTracked = goal.metric === "margin";
 
   const { data: autoProgress } = useQuery<{ autoValue: number | null; currentValue: number }>({
@@ -366,6 +367,7 @@ export default function GoalsPage() {
 
   const isNam = user?.role === "national_account_manager" || user?.role === "director" || user?.role === "sales" || user?.role === "admin" || user?.role === "sales_director";
   const isAm = user?.role === "account_manager" || user?.role === "logistics_manager" || user?.role === "logistics_coordinator";
+  const isAmRole = user?.role === "account_manager";
 
   const { data: goals = [], isLoading } = useQuery<Goal[]>({
     queryKey: ["/api/goals"],
@@ -418,6 +420,14 @@ export default function GoalsPage() {
     },
   });
 
+  // LM direct reports of this AM (AMs can set goals for their LM reports)
+  const amLmReports = isAmRole
+    ? allUsers.filter(u => u.managerId === user?.id && u.role === "logistics_manager")
+        .map(u => ({ amId: u.id, amName: u.name }))
+        .sort((a, b) => a.amName.localeCompare(b.amName))
+    : [];
+  const amCanSetGoals = isAmRole && amLmReports.length > 0;
+
   const uniqueAms: { amId: string; amName: string }[] = isNam
     ? user?.role === "admin"
       // Admins: derive from pairings (full cross-team view)
@@ -433,7 +443,7 @@ export default function GoalsPage() {
           )
           .map(u => ({ amId: u.id, amName: u.name }))
           .sort((a, b) => a.amName.localeCompare(b.amName))
-    : [];
+    : amLmReports;
 
   const filteredGoals = activeTab === "all"
     ? goals
@@ -441,7 +451,9 @@ export default function GoalsPage() {
 
   function openCreate(amId?: string) {
     setEditingGoal(null);
-    setForm({ ...defaultForm, ...getMonthDefaults(), amId: amId || (uniqueAms[0]?.amId ?? "") });
+    const defaultAmId = amId || (isNam ? uniqueAms[0]?.amId : amLmReports[0]?.amId) || "";
+    const defaultMetric = amCanSetGoals && !isNam ? "loads_booked" : "contacts_added";
+    setForm({ ...defaultForm, ...getMonthDefaults(), amId: defaultAmId, metric: defaultMetric });
     setDialogOpen(true);
   }
 
@@ -510,7 +522,7 @@ export default function GoalsPage() {
             {isAm ? "Track your performance goals and progress" : "Set and track goals for your team"}
           </p>
         </div>
-        {isNam && (
+        {(isNam || amCanSetGoals) && (
           <Button onClick={() => openCreate()} data-testid="button-create-goal">
             <Plus className="h-4 w-4 mr-2" />
             New Goal
@@ -646,7 +658,7 @@ export default function GoalsPage() {
             <DialogTitle>{editingGoal ? "Edit Goal" : "Create Goal"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {isNam && !isAm && (
+            {((isNam && !isAm) || amCanSetGoals) && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Team Member</label>
                 <Select value={form.amId} onValueChange={v => setForm(f => ({ ...f, amId: v }))}>
@@ -762,6 +774,22 @@ export default function GoalsPage() {
                 <p className="text-xs text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
                   <TrendingUp className="h-3.5 w-3.5 shrink-0" />
                   Margin $ is automatically pulled from the latest financial data upload — no manual updates needed.
+                </p>
+              </div>
+            )}
+            {form.metric === "loads_booked" && (
+              <div className="rounded-md bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 p-3">
+                <p className="text-xs text-teal-700 dark:text-teal-300 flex items-center gap-1.5">
+                  <TrendingUp className="h-3.5 w-3.5 shrink-0" />
+                  Loads Booked is automatically counted from the financial upload using the Dispatcher column — no manual updates needed.
+                </p>
+              </div>
+            )}
+            {form.metric === "margin_pct" && (
+              <div className="rounded-md bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 p-3">
+                <p className="text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
+                  <TrendingUp className="h-3.5 w-3.5 shrink-0" />
+                  Margin % is automatically calculated from the financial upload (Margin ÷ Total Charges) — no manual updates needed. Set target as a whole number (e.g. 15 for 15%).
                 </p>
               </div>
             )}
