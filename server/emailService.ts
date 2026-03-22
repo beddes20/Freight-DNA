@@ -286,3 +286,101 @@ export function buildRepReportEmail(data: {
 </div>
 </body></html>`;
 }
+
+export function buildFeedbackEmail(data: {
+  submitterName: string;
+  submitterEmail: string;
+  type: "bug" | "improvement" | "feature";
+  content: string;
+  portalUrl: string;
+}): string {
+  const { submitterName, submitterEmail, type, content, portalUrl } = data;
+  const initials = submitterName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+
+  const typeConfig = {
+    bug:         { label: "Bug Report",           emoji: "🐛", accent: "#ef4444", badge: "#fee2e2", badgeText: "#991b1b", tagline: "Something isn't working as expected" },
+    improvement: { label: "Improvement Request",  emoji: "🔧", accent: "#3b82f6", badge: "#dbeafe", badgeText: "#1e40af", tagline: "A suggestion to make something work better" },
+    feature:     { label: "Feature Request",      emoji: "✨", accent: "#8b5cf6", badge: "#ede9fe", badgeText: "#5b21b6", tagline: "A new capability that would help the team" },
+  }[type];
+
+  const lines = content
+    .split("\n")
+    .slice(1)
+    .filter(Boolean)
+    .map(l => l.trim())
+    .filter(Boolean);
+
+  const bodyHtml = lines.map(line => {
+    const colonIdx = line.indexOf(":");
+    if (colonIdx > 0 && colonIdx < 40) {
+      const label = line.slice(0, colonIdx).trim();
+      const val   = line.slice(colonIdx + 1).trim();
+      return `
+        <div style="margin-bottom:12px;">
+          <p style="color:#64748b;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 4px;">${label}</p>
+          <p style="color:#1e293b;font-size:14px;margin:0;line-height:1.6;">${val}</p>
+        </div>`;
+    }
+    return `<p style="color:#1e293b;font-size:14px;margin:0 0 12px;line-height:1.6;">${line}</p>`;
+  }).join("");
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<div style="max-width:580px;margin:32px auto;padding:0 16px;">
+
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#001AB3 0%,#0a2fd4 60%,#0d4a8f 100%);border-radius:16px 16px 0 0;padding:28px 32px;display:flex;align-items:center;gap:16px;">
+    <div style="width:44px;height:44px;background:rgba(255,255,255,0.15);border-radius:12px;display:flex;align-items:center;justify-content:center;">
+      <span style="font-size:22px;">${typeConfig.emoji}</span>
+    </div>
+    <div>
+      <p style="color:rgba(255,255,255,0.7);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 3px;">DNA Guru · User Feedback</p>
+      <p style="color:#ffffff;font-size:20px;font-weight:700;margin:0;">${typeConfig.label}</p>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div style="background:#ffffff;border:1px solid #e2e8f0;border-top:none;padding:28px 32px;">
+
+    <!-- Submitted by -->
+    <div style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:#f8fafc;border-radius:10px;margin-bottom:24px;">
+      <div style="width:36px;height:36px;background:#001AB3;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <span style="color:#fff;font-size:13px;font-weight:700;">${initials}</span>
+      </div>
+      <div>
+        <p style="color:#1e293b;font-size:14px;font-weight:600;margin:0;">${submitterName}</p>
+        <p style="color:#64748b;font-size:12px;margin:2px 0 0;">${submitterEmail}</p>
+      </div>
+      <div style="margin-left:auto;">
+        <span style="background:${typeConfig.badge};color:${typeConfig.badgeText};font-size:11px;font-weight:600;padding:3px 10px;border-radius:50px;">${typeConfig.label}</span>
+      </div>
+    </div>
+
+    <!-- Tagline -->
+    <p style="color:#64748b;font-size:13px;margin:0 0 20px;font-style:italic;">${typeConfig.tagline}</p>
+
+    <!-- Divider -->
+    <div style="border-top:1px solid #f1f5f9;margin-bottom:20px;"></div>
+
+    <!-- Feedback content -->
+    <div style="border-left:3px solid ${typeConfig.accent};padding-left:16px;margin-bottom:24px;">
+      ${bodyHtml}
+    </div>
+
+    <!-- CTA -->
+    <div style="text-align:center;margin-top:8px;">
+      <a href="${portalUrl}/tasks" style="display:inline-block;background:#001AB3;color:#fff;font-size:14px;font-weight:600;padding:13px 28px;border-radius:50px;text-decoration:none;letter-spacing:0.01em;">
+        View Task in Growth Chart →
+      </a>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <div style="background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 16px 16px;padding:16px 32px;text-align:center;">
+    <p style="color:#94a3b8;font-size:11px;margin:0;">Submitted via DNA Guru feedback panel · Value Truck Growth Chart</p>
+  </div>
+
+</div>
+</body></html>`;
+}

@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
+import { sendEmail, buildFeedbackEmail } from "./emailService";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
@@ -395,6 +396,9 @@ Keep it short and casual — reps are busy. No fluff, no filler.
       const now = new Date().toISOString();
 
       const admins = await db.select().from(users).where(eq(users.role, "admin"));
+      const feedbackType: "bug" | "improvement" | "feature" = isBug ? "bug" : isImprovement ? "improvement" : "feature";
+      const portalUrl = process.env.APP_URL || "https://sales-org-builder.replit.app";
+
       for (const admin of admins) {
         await db.insert(notifications).values({
           userId: admin.id,
@@ -414,6 +418,22 @@ Keep it short and casual — reps are busy. No fluff, no filler.
           assignedBy: req.session.userId,
           createdAt: now,
         });
+
+        // Send branded email notification to admin
+        if (admin.username) {
+          const html = buildFeedbackEmail({
+            submitterName: submitter.name,
+            submitterEmail: submitter.username,
+            type: feedbackType,
+            content: trimmed,
+            portalUrl,
+          });
+          sendEmail({
+            to: admin.username,
+            subject: `[Growth Chart] ${taskTitle}`,
+            html,
+          }).catch((e) => console.error("Feedback email error:", e));
+        }
       }
 
       res.json({ ok: true, suggestionId: suggestion.id });
