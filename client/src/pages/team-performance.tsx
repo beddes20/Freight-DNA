@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
@@ -7,11 +7,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
-  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart, ArrowUpDown
+  Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart, ArrowUpDown,
+  Send, Loader2, XCircle
 } from "lucide-react";
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 type PeriodOption = "current" | "last" | "ytd";
 
@@ -206,10 +210,16 @@ function sortReps(arr: RepPerf[], by: SortOption): RepPerf[] {
   });
 }
 
+type BulkSendResult = { sent: number; failed: number; total: number; results: { name: string; email: string | null; ok: boolean }[] };
+
 export default function TeamPerformancePage() {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [period, setPeriod] = useState<PeriodOption>("current");
   const [sortBy, setSortBy] = useState<SortOption>("alpha");
+  const [showBulkSend, setShowBulkSend] = useState(false);
+  const [bulkPeriod, setBulkPeriod] = useState<"weekly" | "monthly">("monthly");
+  const [bulkResult, setBulkResult] = useState<BulkSendResult | null>(null);
 
   const { data: reps = [], isLoading } = useQuery<RepPerf[]>({
     queryKey: ["/api/team/performance", period],
@@ -226,6 +236,25 @@ export default function TeamPerformancePage() {
       const res = await fetch(`/api/financials/account-summary?period=${period}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch account summary");
       return res.json();
+    },
+  });
+
+  const { data: bulkPreview, isLoading: previewLoading } = useQuery<{ recipients: { id: string; name: string; role: string; email: string }[]; total: number }>({
+    queryKey: ["/api/report/bulk-preview"],
+    enabled: showBulkSend && !bulkResult,
+  });
+
+  const bulkSendMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/report/bulk-send", { period: bulkPeriod });
+      return res.json() as Promise<BulkSendResult>;
+    },
+    onSuccess: (data) => {
+      setBulkResult(data);
+      toast({ title: `Reports sent`, description: `${data.sent} of ${data.total} emails delivered successfully.` });
+    },
+    onError: () => {
+      toast({ title: "Send failed", description: "Could not send bulk reports. Check email configuration.", variant: "destructive" });
     },
   });
 
@@ -291,6 +320,16 @@ export default function TeamPerformancePage() {
         </div>
         <div className="flex flex-col items-start sm:items-end gap-2">
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs gap-1.5 border-blue-200 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-950/30"
+              onClick={() => { setBulkResult(null); setShowBulkSend(true); }}
+              data-testid="button-send-all-reports"
+            >
+              <Send className="h-3 w-3" />
+              Email All Reports
+            </Button>
             <Select value={sortBy} onValueChange={v => setSortBy(v as SortOption)}>
               <SelectTrigger className="h-8 w-44 text-xs" data-testid="select-sort-by">
                 <ArrowUpDown className="h-3 w-3 mr-1 text-muted-foreground shrink-0" />
@@ -486,6 +525,123 @@ export default function TeamPerformancePage() {
           )}
         </>
       )}
+
+      {/* Bulk Send Dialog */}
+      <Dialog open={showBulkSend} onOpenChange={(open) => { setShowBulkSend(open); if (!open) setBulkResult(null); }}>
+        <DialogContent className="sm:max-w-md" data-testid="dialog-bulk-send">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-4 w-4 text-blue-600" />
+              Email All Report Cards
+            </DialogTitle>
+            <DialogDescription>
+              {bulkResult
+                ? "Send complete. Here's a summary of what was delivered."
+                : "Select a period and send report card emails to your entire team at once."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {bulkResult ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="rounded-lg bg-green-50 dark:bg-green-900/20 p-3">
+                  <p className="text-2xl font-bold text-green-700 dark:text-green-400">{bulkResult.sent}</p>
+                  <p className="text-xs text-green-600 dark:text-green-500 mt-0.5">Sent</p>
+                </div>
+                <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-3">
+                  <p className="text-2xl font-bold text-red-700 dark:text-red-400">{bulkResult.failed}</p>
+                  <p className="text-xs text-red-600 dark:text-red-500 mt-0.5">Failed</p>
+                </div>
+                <div className="rounded-lg bg-muted/50 p-3">
+                  <p className="text-2xl font-bold">{bulkResult.total}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Total</p>
+                </div>
+              </div>
+              <div className="max-h-52 overflow-y-auto space-y-1 rounded-lg border p-2">
+                {bulkResult.results.map((r, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs py-1 px-1.5 rounded hover:bg-muted/40">
+                    <div className="flex items-center gap-2">
+                      {r.ok
+                        ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                        : <XCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />}
+                      <span className="font-medium">{r.name}</span>
+                    </div>
+                    <span className="text-muted-foreground truncate ml-2">{r.email ?? "—"}</span>
+                  </div>
+                ))}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" size="sm" onClick={() => setShowBulkSend(false)} data-testid="button-bulk-send-close">Done</Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Report Period</p>
+                <div className="flex gap-2">
+                  {(["monthly", "weekly"] as const).map(opt => (
+                    <button
+                      key={opt}
+                      onClick={() => setBulkPeriod(opt)}
+                      data-testid={`button-bulk-period-${opt}`}
+                      className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                        bulkPeriod === opt
+                          ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-700"
+                          : "border-border hover:bg-muted/50"
+                      }`}
+                    >
+                      {opt === "monthly" ? "Monthly" : "Weekly"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium">Recipients</p>
+                {previewLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading recipient list…
+                  </div>
+                ) : bulkPreview && bulkPreview.recipients.length > 0 ? (
+                  <div className="rounded-lg border overflow-hidden">
+                    <div className="max-h-44 overflow-y-auto divide-y divide-border/60">
+                      {bulkPreview.recipients.map(r => (
+                        <div key={r.id} className="flex items-center justify-between px-3 py-2 text-xs hover:bg-muted/30">
+                          <span className="font-medium">{r.name}</span>
+                          <Badge variant="outline" className="text-[10px] h-4 capitalize">
+                            {r.role.replace(/_/g, " ")}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="px-3 py-1.5 text-xs text-muted-foreground bg-muted/30 border-t">
+                      {bulkPreview.total} recipient{bulkPreview.total !== 1 ? "s" : ""} will receive an email
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground py-1">No team members found to email.</p>
+                )}
+              </div>
+
+              <DialogFooter className="gap-2">
+                <Button variant="outline" size="sm" onClick={() => setShowBulkSend(false)} data-testid="button-bulk-send-cancel">Cancel</Button>
+                <Button
+                  size="sm"
+                  onClick={() => bulkSendMutation.mutate()}
+                  disabled={bulkSendMutation.isPending || !bulkPreview || bulkPreview.total === 0}
+                  className="gap-1.5"
+                  data-testid="button-bulk-send-confirm"
+                >
+                  {bulkSendMutation.isPending
+                    ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Sending…</>
+                    : <><Send className="h-3.5 w-3.5" /> Send {bulkPreview?.total ?? 0} Emails</>}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

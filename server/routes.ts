@@ -4567,6 +4567,82 @@ export async function registerRoutes(
     }
   });
 
+  // ── Bulk Report Send ────────────────────────────────────────────────────────
+  // GET preview: who would receive emails for the current viewer's role scope
+  app.get("/api/report/bulk-preview", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Not authenticated" });
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (!managerRoles.includes(viewer.role)) return res.status(403).json({ error: "Access denied" });
+
+      const allUsers = await storage.getUsers();
+      const salesRoles = ["account_manager", "national_account_manager", "sales", "logistics_manager", "sales_director", "director"];
+
+      let targetIds: string[];
+      if (viewer.role === "admin") {
+        targetIds = allUsers.filter(u => salesRoles.includes(u.role)).map(u => u.id);
+      } else {
+        const teamIds = await storage.getTeamMemberIds(viewer.id);
+        targetIds = teamIds.filter(id => {
+          if (id === viewer.id) return false;
+          const u = allUsers.find(u => u.id === id);
+          return u && salesRoles.includes(u.role);
+        });
+      }
+
+      const recipients = targetIds.map(id => {
+        const u = allUsers.find(u => u.id === id)!;
+        return { id: u.id, name: u.name, role: u.role, email: (u as any).email || u.username };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+
+      res.json({ recipients, total: recipients.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST: actually send bulk reports
+  app.post("/api/report/bulk-send", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Not authenticated" });
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (!managerRoles.includes(viewer.role)) return res.status(403).json({ error: "Access denied" });
+
+      const period: "weekly" | "monthly" = req.body?.period === "weekly" ? "weekly" : "monthly";
+      const allUsers = await storage.getUsers();
+      const salesRoles = ["account_manager", "national_account_manager", "sales", "logistics_manager", "sales_director", "director"];
+
+      let targetIds: string[];
+      if (viewer.role === "admin") {
+        targetIds = allUsers.filter(u => salesRoles.includes(u.role)).map(u => u.id);
+      } else {
+        const teamIds = await storage.getTeamMemberIds(viewer.id);
+        targetIds = teamIds.filter(id => {
+          if (id === viewer.id) return false;
+          const u = allUsers.find(u => u.id === id);
+          return u && salesRoles.includes(u.role);
+        });
+      }
+
+      const { sendRepReportEmail } = await import("./repReportScheduler");
+      const results: { name: string; email: string | null; ok: boolean }[] = [];
+
+      for (const id of targetIds) {
+        const u = allUsers.find(u => u.id === id)!;
+        const { ok, email } = await sendRepReportEmail(id, period);
+        results.push({ name: u.name, email, ok });
+      }
+
+      const sent = results.filter(r => r.ok).length;
+      const failed = results.filter(r => !r.ok).length;
+      res.json({ sent, failed, total: targetIds.length, results });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/report/rep/:userId", requireAuth, async (req, res) => {
     try {
       const viewer = await getCurrentUser(req);
