@@ -3314,10 +3314,8 @@ export async function registerRoutes(
           const { monthKey, margin } = parseHistoricalRow(row, sumCols);
           // Filter by period if applicable
           if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
-          // Prefer Salesperson column (account owner) over opsUser (ops coordinator)
-          // This ensures accounts like Johnson Controls credit the right account executive
-          const salesperson = String(row[sumCols.salesperson] || row["Salesperson"] || "").trim();
-          const rep = salesperson || getRepFromRow(row, sumCols);
+          // Use opsUser as the rep identifier (account executives appear here)
+          const rep = getRepFromRow(row, sumCols);
           const orderType = String(row[sumCols.orderType] || "").toLowerCase();
           const isSpot = orderType.includes("spot");
           if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0, repName: rep, repVotes: {}, byMonth: {} };
