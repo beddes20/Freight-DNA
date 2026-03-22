@@ -498,7 +498,8 @@ export default function TeamPerformancePage() {
 
   const ams = sortReps(reps.filter(r => r.role === "account_manager"), sortBy);
   const logistics = sortReps(reps.filter(r => r.role === "logistics_manager" || r.role === "logistics_coordinator"), sortBy);
-  const nams = sortReps(reps.filter(r => r.role === "national_account_manager" || r.role === "director" || r.role === "sales_director"), sortBy);
+  const nams = sortReps(reps.filter(r => r.role === "national_account_manager" || r.role === "director"), sortBy);
+  const salesReps = sortReps(reps.filter(r => r.role === "sales_director" || r.role === "sales"), sortBy);
 
   const totalOpenTasks = reps.reduce((sum, r) => sum + r.openTasks, 0);
   const totalOverdue = reps.reduce((sum, r) => sum + r.overdueTasks, 0);
@@ -720,6 +721,30 @@ export default function TeamPerformancePage() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {logistics.map(rep => (
+                  <RepCard
+                    key={rep.userId}
+                    rep={rep}
+                    totalLoads={repLoadsMap[rep.userId]?.loads}
+                    totalMargin={repLoadsMap[rep.userId]?.margin}
+                    totalRevenue={repLoadsMap[rep.userId]?.revenue}
+                    criteria={promotionCriteria}
+                    nominations={nominations}
+                    canNominate={canNominate}
+                    onNominate={setNominationTarget}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {salesReps.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Sales</h2>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {salesReps.map(rep => (
                   <RepCard
                     key={rep.userId}
                     rep={rep}

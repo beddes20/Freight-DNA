@@ -4545,7 +4545,7 @@ export async function registerRoutes(
       let teamIds: string[];
       if (user.role === "admin") {
         const allUsers = await storage.getUsers();
-        teamIds = allUsers.filter(u => u.role === "account_manager" || u.role === "national_account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator" || u.role === "director" || u.role === "sales_director").map(u => u.id);
+        teamIds = allUsers.filter(u => u.role === "account_manager" || u.role === "national_account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator" || u.role === "director" || u.role === "sales_director" || u.role === "sales").map(u => u.id);
       } else {
         teamIds = await storage.getTeamMemberIds(user.id);
       }
