@@ -43,6 +43,7 @@ const TAG_OPTIONS: { value: string; label: string }[] = [
   { value: "follow_up",    label: "Follow-up" },
   { value: "shoutout",     label: "Shoutout" },
   { value: "lets_work_on", label: "Let's Work On" },
+  { value: "career",       label: "Career" },
 ];
 
 // Resolves any stored tag value (snake_case or legacy human-readable) to display config
@@ -54,6 +55,7 @@ function resolveTag(tag: string | null | undefined): { label: string; color: str
     follow_up:     { label: "Follow-up",     color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
     shoutout:      { label: "Shoutout",      color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
     lets_work_on:  { label: "Let's Work On", color: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400" },
+    career:        { label: "Career",        color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400" },
     // Legacy human-readable aliases
     "Action Item":   { label: "Action Item",   color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
     "Question":      { label: "Question",      color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
@@ -61,6 +63,7 @@ function resolveTag(tag: string | null | undefined): { label: string; color: str
     "Follow-up":     { label: "Follow-up",     color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
     "Shoutout":      { label: "Shoutout",      color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
     "Let's Work On": { label: "Let's Work On", color: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400" },
+    "Career":        { label: "Career",        color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400" },
   };
   return tag ? (MAP[tag] ?? { label: tag, color: "bg-muted text-muted-foreground" }) : { label: "", color: "" };
 }

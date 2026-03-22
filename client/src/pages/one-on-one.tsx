@@ -29,6 +29,7 @@ const TAG_CONFIG: Record<string, { label: string; color: string }> = {
   follow_up:     { label: "Follow-up",     color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
   shoutout:      { label: "Shoutout",      color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
   lets_work_on:  { label: "Let's Work On", color: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400" },
+  career:        { label: "Career",        color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400" },
   // Legacy human-readable aliases (from dashboard portlet)
   "Action Item":   { label: "Action Item",   color: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" },
   "Question":      { label: "Question",      color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
@@ -36,6 +37,7 @@ const TAG_CONFIG: Record<string, { label: string; color: string }> = {
   "Follow-up":     { label: "Follow-up",     color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
   "Shoutout":      { label: "Shoutout",      color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
   "Let's Work On": { label: "Let's Work On", color: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400" },
+  "Career":        { label: "Career",        color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400" },
 };
 
 function formatDate(iso: string) {
@@ -209,6 +211,95 @@ function SessionNotesArea({ sessionId, initialNotes, sessionQueryKey }: { sessio
   );
 }
 
+// ─── Development Goals Panel ─────────────────────────────────────────────────
+
+function DevelopmentGoalsPanel({ managerId, repId }: { managerId: string; repId: string }) {
+  const devGoalsKey = ["/api/1on1/dev-goals", managerId, repId];
+  const { data, isLoading } = useQuery<{ content: string; updatedAt: string | null }>({
+    queryKey: devGoalsKey,
+    queryFn: async () => {
+      const res = await fetch(`/api/1on1/dev-goals?namId=${managerId}&amId=${repId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const [content, setContent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestRef = useRef("");
+
+  useEffect(() => {
+    if (data?.content !== undefined) {
+      setContent(data.content);
+      latestRef.current = data.content;
+    }
+  }, [data?.content]);
+
+  const save = useCallback(async (value: string) => {
+    setSaving(true);
+    setSaveError(false);
+    try {
+      await apiRequest("PATCH", `/api/1on1/dev-goals?namId=${managerId}&amId=${repId}`, { content: value });
+      queryClient.invalidateQueries({ queryKey: devGoalsKey });
+    } catch {
+      setSaveError(true);
+    } finally {
+      setSaving(false);
+    }
+  }, [managerId, repId, devGoalsKey]);
+
+  const handleChange = (value: string) => {
+    setContent(value);
+    latestRef.current = value;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => save(value), 800);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        save(latestRef.current);
+      }
+    };
+  }, [save]);
+
+  if (isLoading) {
+    return (
+      <div className="p-6 space-y-3">
+        <Skeleton className="h-6 w-40" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3" data-testid="panel-dev-goals">
+      <div className="flex items-center gap-2 mb-1">
+        <Target className="h-4 w-4 text-indigo-500" />
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Development Goals</span>
+        {saving && <span className="text-xs text-muted-foreground italic">Saving...</span>}
+        {saveError && <span className="text-xs text-destructive">Failed to save</span>}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Long-term development goals for this pairing. These persist across sessions and are only visible in the 1:1 context.
+      </p>
+      <Textarea
+        placeholder="Document long-term career and development goals here — areas of growth, skills to develop, milestones to track..."
+        value={content}
+        onChange={e => handleChange(e.target.value)}
+        className="min-h-[200px] resize-y text-sm"
+        data-testid="textarea-dev-goals"
+      />
+      {data?.updatedAt && (
+        <p className="text-xs text-muted-foreground">Last updated {new Date(data.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</p>
+      )}
+    </div>
+  );
+}
+
 // ─── Action Items Panel ───────────────────────────────────────────────────────
 
 interface ActionItemsPanelProps {
@@ -337,7 +428,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const [newText, setNewText] = useState("");
   const [newTag, setNewTag] = useState("fyi");
   const [showArchived, setShowArchived] = useState(false);
-  const [activeTab, setActiveTab] = useState<"topics" | "action-items">("topics");
+  const [activeTab, setActiveTab] = useState<"topics" | "action-items" | "dev-goals">("topics");
   const [topicPendingFiles, setTopicPendingFiles] = useState<PendingFile[]>([]);
   const [editingDate, setEditingDate] = useState(false);
   const [dateInput, setDateInput] = useState("");
@@ -753,9 +844,21 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
             )}
           </span>
         </button>
+        <button
+          onClick={() => setActiveTab("dev-goals")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "dev-goals" ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          data-testid="tab-dev-goals"
+        >
+          <span className="flex items-center gap-1.5">
+            <Target className="h-4 w-4" />
+            Development Goals
+          </span>
+        </button>
       </div>
 
-      {activeTab === "topics" ? (
+      {activeTab === "dev-goals" ? (
+        <DevelopmentGoalsPanel managerId={managerId} repId={repId} />
+      ) : activeTab === "topics" ? (
         <>
           {/* Add topic */}
           <div className="px-6 py-4 border-b space-y-2">
@@ -780,6 +883,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
                 <option value="follow_up">Follow-up</option>
                 <option value="shoutout">Shoutout</option>
                 <option value="lets_work_on">Let's Work On</option>
+                <option value="career">Career</option>
               </select>
               <Button
                 size="sm"

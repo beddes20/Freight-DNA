@@ -2847,6 +2847,42 @@ export async function registerRoutes(
     }
   });
 
+  // ── Development Goals ──────────────────────────────────────────────────────
+
+  app.get("/api/1on1/dev-goals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { namId, amId } = req.query as { namId?: string; amId?: string };
+      if (!namId || !amId) return res.status(400).json({ error: "namId and amId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === namId || user.id === amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const record = await storage.getDevelopmentGoals(namId, amId);
+      res.json({ content: record?.content ?? "", updatedAt: record?.updatedAt ?? null });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get development goals" });
+    }
+  });
+
+  app.patch("/api/1on1/dev-goals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { namId, amId } = req.query as { namId?: string; amId?: string };
+      if (!namId || !amId) return res.status(400).json({ error: "namId and amId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === namId || user.id === amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const { content } = req.body;
+      if (typeof content !== "string") return res.status(400).json({ error: "Content must be a string" });
+      const record = await storage.upsertDevelopmentGoals(namId, amId, content, user.id);
+      res.json({ content: record.content, updatedAt: record.updatedAt });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save development goals" });
+    }
+  });
+
   // ── Financial Data ─────────────────────────────────────────────────────────
 
   app.get("/api/historical-data", requireAuth, async (req, res) => {

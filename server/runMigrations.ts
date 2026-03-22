@@ -279,6 +279,19 @@ export async function runMigrations() {
     `);
     console.log("[migrations] promotion_nominations table ensured");
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS development_goals (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        nam_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        am_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        content TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL,
+        updated_by_id VARCHAR NOT NULL REFERENCES users(id)
+      )
+    `);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS dev_goals_nam_am_uniq ON development_goals(nam_id, am_id)`);
+    console.log("[migrations] development_goals table ensured");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

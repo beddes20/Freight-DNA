@@ -508,6 +508,19 @@ export const insertAppSuggestionSchema = createInsertSchema(appSuggestions).omit
 export type InsertAppSuggestion = z.infer<typeof insertAppSuggestionSchema>;
 export type AppSuggestion = typeof appSuggestions.$inferSelect;
 
+export const developmentGoals = pgTable("development_goals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  namId: varchar("nam_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  amId: varchar("am_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  content: text("content").notNull().default(""),
+  updatedAt: text("updated_at").notNull(),
+  updatedById: varchar("updated_by_id").notNull().references(() => users.id),
+});
+
+export const insertDevelopmentGoalSchema = createInsertSchema(developmentGoals).omit({ id: true });
+export type InsertDevelopmentGoal = z.infer<typeof insertDevelopmentGoalSchema>;
+export type DevelopmentGoal = typeof developmentGoals.$inferSelect;
+
 export const reportCardSnapshots = pgTable("report_card_snapshots", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),

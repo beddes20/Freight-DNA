@@ -157,6 +157,99 @@ function LoadingSkeleton() {
   );
 }
 
+function PerformanceTimeline({ snapshots }: { snapshots: ReportCardSnapshot[] }) {
+  const sorted = [...snapshots].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+  if (sorted.length === 0) return null;
+
+  const getTouchpoints = (s: ReportCardSnapshot) => s.payload.touchpoints?.total ?? 0;
+  const getGoalCompletion = (s: ReportCardSnapshot) => {
+    const goals = s.payload.goals ?? [];
+    if (goals.length === 0) return null;
+    const avg = goals.reduce((sum, g) => sum + Math.min(100, pct(g.current, g.target)), 0) / goals.length;
+    return Math.round(avg);
+  };
+
+  const getDelta = (current: number, prev: number | null) => {
+    if (prev === null) return null;
+    return current - prev;
+  };
+
+  return (
+    <div className="rounded-xl border bg-card overflow-hidden" data-testid="performance-timeline">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b bg-muted/30">
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Period</th>
+              <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Type</th>
+              <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Touchpoints</th>
+              <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Goals</th>
+              <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Tasks Done</th>
+              <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">New Contacts</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/40">
+            {sorted.map((s, i) => {
+              const prev = i > 0 ? sorted[i - 1] : null;
+              const tp = getTouchpoints(s);
+              const prevTp = prev ? getTouchpoints(prev) : null;
+              const goalPct = getGoalCompletion(s);
+              const prevGoalPct = prev ? getGoalCompletion(prev) : null;
+              const tpDelta = getDelta(tp, prevTp);
+              const goalDelta = goalPct !== null && prevGoalPct !== null ? getDelta(goalPct, prevGoalPct) : null;
+              const goalColor = goalPct === null ? "text-muted-foreground" : goalPct >= 80 ? "text-green-600 dark:text-green-400" : goalPct >= 50 ? "text-amber-600 dark:text-amber-400" : "text-red-500";
+
+              return (
+                <tr key={s.id} className="hover:bg-muted/20 transition-colors" data-testid={`timeline-row-${s.id}`}>
+                  <td className="px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{s.periodLabel}</p>
+                      <p className="text-xs text-muted-foreground">{formatDateTime(s.snapshotDate)}</p>
+                    </div>
+                  </td>
+                  <td className="px-3 py-3 text-center">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary capitalize">{s.periodType}</span>
+                  </td>
+                  <td className="px-3 py-3 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <span className="text-sm font-semibold text-foreground">{tp}</span>
+                      {tpDelta !== null && tpDelta !== 0 && (
+                        <span className={`text-xs font-medium ${tpDelta > 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
+                          {tpDelta > 0 ? "+" : ""}{tpDelta}
+                        </span>
+                      )}
+                      {tpDelta !== null && <TrendIcon v={tpDelta} />}
+                    </div>
+                  </td>
+                  <td className="px-3 py-3 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <span className={`text-sm font-semibold ${goalColor}`}>
+                        {goalPct !== null ? `${goalPct}%` : "—"}
+                      </span>
+                      {goalDelta !== null && goalDelta !== 0 && (
+                        <span className={`text-xs font-medium ${goalDelta > 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
+                          {goalDelta > 0 ? "+" : ""}{goalDelta}%
+                        </span>
+                      )}
+                      {goalDelta !== null && <TrendIcon v={goalDelta} />}
+                    </div>
+                  </td>
+                  <td className="px-3 py-3 text-center">
+                    <span className="text-sm font-semibold text-foreground">{s.payload.tasks?.completed ?? "—"}</span>
+                  </td>
+                  <td className="px-3 py-3 text-center">
+                    <span className="text-sm font-semibold text-foreground">{s.payload.contacts?.newThisPeriod ?? "—"}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function SnapshotCard({ snapshot }: { snapshot: ReportCardSnapshot }) {
   const [expanded, setExpanded] = useState(false);
   const p = snapshot.payload;
@@ -875,6 +968,28 @@ export default function RepReportPage() {
             </div>
           </section>
         )}
+
+        {/* ── Performance Timeline ── */}
+        <section data-testid="section-performance-timeline">
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingUp className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold">Performance Timeline</h2>
+            {snapshots && snapshots.length > 0 && (
+              <span className="text-xs text-muted-foreground ml-auto">{snapshots.length} period{snapshots.length !== 1 ? "s" : ""}</span>
+            )}
+          </div>
+          {!snapshots ? (
+            <Skeleton className="h-24 rounded-xl" />
+          ) : snapshots.length === 0 ? (
+            <div className="rounded-xl border bg-card px-4 py-8 text-center">
+              <TrendingUp className="h-8 w-8 mx-auto text-muted-foreground/30 mb-2" />
+              <p className="text-sm text-muted-foreground">No performance history yet.</p>
+              <p className="text-xs text-muted-foreground/70 mt-1">Save report card snapshots to track growth over time.</p>
+            </div>
+          ) : (
+            <PerformanceTimeline snapshots={snapshots} />
+          )}
+        </section>
 
         {/* ── Report Card History ── */}
         <section data-testid="section-history">

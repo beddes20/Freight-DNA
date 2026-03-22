@@ -85,6 +85,9 @@ import {
   promotionNominations,
   type PromotionNomination,
   type InsertPromotionNomination,
+  developmentGoals,
+  type DevelopmentGoal,
+  type InsertDevelopmentGoal,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -300,6 +303,9 @@ export interface IStorage {
   createPromotionNomination(data: InsertPromotionNomination): Promise<PromotionNomination>;
   updatePromotionNomination(id: string, data: Partial<InsertPromotionNomination>): Promise<PromotionNomination | undefined>;
   deletePromotionNomination(id: string): Promise<boolean>;
+
+  getDevelopmentGoals(namId: string, amId: string): Promise<DevelopmentGoal | undefined>;
+  upsertDevelopmentGoals(namId: string, amId: string, content: string, updatedById: string): Promise<DevelopmentGoal>;
 }
 
 const pool = new Pool({
@@ -1795,6 +1801,24 @@ export class DatabaseStorage implements IStorage {
   async deletePromotionNomination(id: string): Promise<boolean> {
     const result = await db.delete(promotionNominations).where(eq(promotionNominations.id, id)).returning();
     return result.length > 0;
+  }
+
+  async getDevelopmentGoals(namId: string, amId: string): Promise<DevelopmentGoal | undefined> {
+    const [row] = await db.select().from(developmentGoals)
+      .where(and(eq(developmentGoals.namId, namId), eq(developmentGoals.amId, amId)));
+    return row;
+  }
+
+  async upsertDevelopmentGoals(namId: string, amId: string, content: string, updatedById: string): Promise<DevelopmentGoal> {
+    const now = new Date().toISOString();
+    const [result] = await db.insert(developmentGoals)
+      .values({ namId, amId, content, updatedAt: now, updatedById })
+      .onConflictDoUpdate({
+        target: [developmentGoals.namId, developmentGoals.amId],
+        set: { content, updatedAt: now, updatedById },
+      })
+      .returning();
+    return result;
   }
 }
 
