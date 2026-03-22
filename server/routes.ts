@@ -3304,45 +3304,37 @@ export async function registerRoutes(
         const txRows: any[] = (latest.rows as any[]) || [];
         const sumCols = resolveColumns(txRows);
         type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
-        type CustomerEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number; repName: string; repVotes: Record<string, number>; byMonth: Record<string, MonthBucket> };
-        const byCustomer: Record<string, CustomerEntry> = {};
+        type CustomerRepEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number; repName: string; byMonth: Record<string, MonthBucket> };
+        // Key by "customerName|repName" so each (customer, opsUser) pair is independent.
+        // This lets two reps (e.g. Jason Allen + Alex Shumway) both get full credit for
+        // their own loads on a shared account like CTSIMIGA, with no winner-takes-all logic.
+        const byCustomerRep: Record<string, CustomerRepEntry> = {};
         for (const row of txRows) {
           const customerName = getCustomerFromRow(row, sumCols);
           if (!customerName) continue;
           const revenue = Number(row[sumCols.revenue] || row[sumCols.totalCharges] || 0);
           if (revenue === 0) continue;
           const { monthKey, margin } = parseHistoricalRow(row, sumCols);
-          // Filter by period if applicable
           if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
-          // Use opsUser as the rep identifier (account executives appear here)
           const rep = getRepFromRow(row, sumCols);
+          if (!rep) continue; // skip rows with no opsUser — can't attribute them
           const orderType = String(row[sumCols.orderType] || "").toLowerCase();
           const isSpot = orderType.includes("spot");
-          if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0, repName: rep, repVotes: {}, byMonth: {} };
-          byCustomer[customerName].totalLoads++;
-          byCustomer[customerName].totalMargin += margin;
-          byCustomer[customerName].totalRevenue += revenue;
-          if (isSpot) byCustomer[customerName].spotLoads++;
-          // Vote for this rep — most-voted rep wins (avoids "first row wins" bug)
-          if (rep) {
-            byCustomer[customerName].repVotes[rep] = (byCustomer[customerName].repVotes[rep] || 0) + 1;
-          }
+          const key = `${customerName}|${rep}`;
+          if (!byCustomerRep[key]) byCustomerRep[key] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0, repName: rep, byMonth: {} };
+          byCustomerRep[key].totalLoads++;
+          byCustomerRep[key].totalMargin += margin;
+          byCustomerRep[key].totalRevenue += revenue;
+          if (isSpot) byCustomerRep[key].spotLoads++;
           if (monthKey) {
-            if (!byCustomer[customerName].byMonth[monthKey]) byCustomer[customerName].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
-            byCustomer[customerName].byMonth[monthKey].totalLoads++;
-            byCustomer[customerName].byMonth[monthKey].totalMargin += margin;
-            byCustomer[customerName].byMonth[monthKey].totalRevenue += revenue;
-            if (isSpot) byCustomer[customerName].byMonth[monthKey].spotLoads++;
+            if (!byCustomerRep[key].byMonth[monthKey]) byCustomerRep[key].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
+            byCustomerRep[key].byMonth[monthKey].totalLoads++;
+            byCustomerRep[key].byMonth[monthKey].totalMargin += margin;
+            byCustomerRep[key].byMonth[monthKey].totalRevenue += revenue;
+            if (isSpot) byCustomerRep[key].byMonth[monthKey].spotLoads++;
           }
         }
-        // Resolve the winning rep for each customer (most votes wins)
-        const result = Object.values(byCustomer)
-          .filter(r => r.customerName)
-          .map(({ repVotes, ...entry }) => {
-            const topRep = Object.entries(repVotes).sort((a, b) => b[1] - a[1])[0]?.[0] ?? entry.repName;
-            return { ...entry, repName: topRep };
-          });
-        return res.json(result);
+        return res.json(Object.values(byCustomerRep));
       }
 
       // Detect whether rows use named headers or __EMPTY keys (non-standard header layout)
