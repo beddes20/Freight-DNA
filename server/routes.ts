@@ -3304,7 +3304,7 @@ export async function registerRoutes(
         const txRows: any[] = (latest.rows as any[]) || [];
         const sumCols = resolveColumns(txRows);
         type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
-        type CustomerEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number; repName: string; byMonth: Record<string, MonthBucket> };
+        type CustomerEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number; repName: string; repVotes: Record<string, number>; byMonth: Record<string, MonthBucket> };
         const byCustomer: Record<string, CustomerEntry> = {};
         for (const row of txRows) {
           const customerName = getCustomerFromRow(row, sumCols);
@@ -3314,15 +3314,21 @@ export async function registerRoutes(
           const { monthKey, margin } = parseHistoricalRow(row, sumCols);
           // Filter by period if applicable
           if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
-          const rep = getRepFromRow(row, sumCols) || String(row["Salesperson"] || "").trim();
+          // Prefer Salesperson column (account owner) over opsUser (ops coordinator)
+          // This ensures accounts like Johnson Controls credit the right account executive
+          const salesperson = String(row[sumCols.salesperson] || row["Salesperson"] || "").trim();
+          const rep = salesperson || getRepFromRow(row, sumCols);
           const orderType = String(row[sumCols.orderType] || "").toLowerCase();
           const isSpot = orderType.includes("spot");
-          if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0, repName: rep, byMonth: {} };
+          if (!byCustomer[customerName]) byCustomer[customerName] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0, repName: rep, repVotes: {}, byMonth: {} };
           byCustomer[customerName].totalLoads++;
           byCustomer[customerName].totalMargin += margin;
           byCustomer[customerName].totalRevenue += revenue;
           if (isSpot) byCustomer[customerName].spotLoads++;
-          if (!byCustomer[customerName].repName && rep) byCustomer[customerName].repName = rep;
+          // Vote for this rep — most-voted rep wins (avoids "first row wins" bug)
+          if (rep) {
+            byCustomer[customerName].repVotes[rep] = (byCustomer[customerName].repVotes[rep] || 0) + 1;
+          }
           if (monthKey) {
             if (!byCustomer[customerName].byMonth[monthKey]) byCustomer[customerName].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
             byCustomer[customerName].byMonth[monthKey].totalLoads++;
@@ -3331,7 +3337,14 @@ export async function registerRoutes(
             if (isSpot) byCustomer[customerName].byMonth[monthKey].spotLoads++;
           }
         }
-        return res.json(Object.values(byCustomer).filter(r => r.customerName));
+        // Resolve the winning rep for each customer (most votes wins)
+        const result = Object.values(byCustomer)
+          .filter(r => r.customerName)
+          .map(({ repVotes, ...entry }) => {
+            const topRep = Object.entries(repVotes).sort((a, b) => b[1] - a[1])[0]?.[0] ?? entry.repName;
+            return { ...entry, repName: topRep };
+          });
+        return res.json(result);
       }
 
       // Detect whether rows use named headers or __EMPTY keys (non-standard header layout)
