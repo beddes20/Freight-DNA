@@ -244,6 +244,41 @@ export async function runMigrations() {
     await client.query(`ALTER TABLE one_on_one_sessions ADD COLUMN IF NOT EXISTS meeting_link text`);
     console.log("[migrations] meeting_link added to one_on_one_sessions");
 
+    // Add created_at to users for tenure tracking
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at text`);
+    console.log("[migrations] users created_at column ensured");
+
+    // Create promotion_criteria table for career progression benchmarks
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS promotion_criteria (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        from_role text NOT NULL,
+        to_role text NOT NULL,
+        min_load_count integer,
+        min_margin_pct numeric(8,2),
+        min_touchpoints integer,
+        min_tenure_months integer,
+        notes text,
+        updated_at text,
+        updated_by_id varchar
+      )
+    `);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_promotion_criteria_roles ON promotion_criteria(from_role, to_role)`);
+    console.log("[migrations] promotion_criteria table ensured");
+
+    // Create promotion_nominations table for nomination tracking
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS promotion_nominations (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        nominee_id varchar NOT NULL,
+        nominated_by_id varchar NOT NULL,
+        notes text,
+        status text NOT NULL DEFAULT 'active',
+        nominated_at text NOT NULL
+      )
+    `);
+    console.log("[migrations] promotion_nominations table ensured");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

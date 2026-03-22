@@ -79,6 +79,12 @@ import {
   reportCardSnapshots,
   type ReportCardSnapshot,
   type InsertReportCardSnapshot,
+  promotionCriteria,
+  type PromotionCriteria,
+  type InsertPromotionCriteria,
+  promotionNominations,
+  type PromotionNomination,
+  type InsertPromotionNomination,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -96,7 +102,7 @@ export interface TeamMemberSummary {
 }
 
 export interface RepReportData {
-  rep: { id: string; name: string; role: string; manager: string | null; director: string | null };
+  rep: { id: string; name: string; role: string; manager: string | null; director: string | null; createdAt: string | null };
   period: { type: string; label: string; start: string; end: string };
   goals: Array<{ id: string; label: string; metric: string; period: string; current: number; target: number; pct: number }>;
   touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; meaningful: number; weeklyTrend: number[] };
@@ -284,6 +290,16 @@ export interface IStorage {
 
   getReportCardSnapshots(userId: string): Promise<ReportCardSnapshot[]>;
   createReportCardSnapshot(data: InsertReportCardSnapshot): Promise<ReportCardSnapshot>;
+
+  getPromotionCriteria(): Promise<PromotionCriteria[]>;
+  upsertPromotionCriteria(fromRole: string, toRole: string, data: Partial<InsertPromotionCriteria>): Promise<PromotionCriteria>;
+  deletePromotionCriteria(id: string): Promise<boolean>;
+
+  getPromotionNominations(): Promise<PromotionNomination[]>;
+  getNominationsByNominee(nomineeId: string): Promise<PromotionNomination[]>;
+  createPromotionNomination(data: InsertPromotionNomination): Promise<PromotionNomination>;
+  updatePromotionNomination(id: string, data: Partial<InsertPromotionNomination>): Promise<PromotionNomination | undefined>;
+  deletePromotionNomination(id: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -308,7 +324,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const [user] = await db.insert(users).values(insertUser).returning();
+    const [user] = await db.insert(users).values({ ...insertUser, createdAt: insertUser.createdAt || new Date().toISOString() }).returning();
     return user;
   }
 
@@ -1503,6 +1519,7 @@ export class DatabaseStorage implements IStorage {
         role: repUser?.role || "account_manager",
         manager: manager?.name || null,
         director: director?.name || null,
+        createdAt: repUser?.createdAt || null,
       },
       period: { type: period, label: periodLabel, start: periodStart, end: periodEnd },
       goals: enrichedGoals,
@@ -1727,6 +1744,57 @@ export class DatabaseStorage implements IStorage {
   async createReportCardSnapshot(data: InsertReportCardSnapshot): Promise<ReportCardSnapshot> {
     const [created] = await db.insert(reportCardSnapshots).values(data).returning();
     return created;
+  }
+
+  async getPromotionCriteria(): Promise<PromotionCriteria[]> {
+    return db.select().from(promotionCriteria);
+  }
+
+  async upsertPromotionCriteria(fromRole: string, toRole: string, data: Partial<InsertPromotionCriteria>): Promise<PromotionCriteria> {
+    const existing = await db.select().from(promotionCriteria)
+      .where(and(eq(promotionCriteria.fromRole, fromRole), eq(promotionCriteria.toRole, toRole)));
+    if (existing.length > 0) {
+      const [updated] = await db.update(promotionCriteria)
+        .set({ ...data, fromRole, toRole })
+        .where(eq(promotionCriteria.id, existing[0].id))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(promotionCriteria)
+        .values({ fromRole, toRole, ...data } as InsertPromotionCriteria)
+        .returning();
+      return created;
+    }
+  }
+
+  async deletePromotionCriteria(id: string): Promise<boolean> {
+    const result = await db.delete(promotionCriteria).where(eq(promotionCriteria.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getPromotionNominations(): Promise<PromotionNomination[]> {
+    return db.select().from(promotionNominations).orderBy(desc(promotionNominations.nominatedAt));
+  }
+
+  async getNominationsByNominee(nomineeId: string): Promise<PromotionNomination[]> {
+    return db.select().from(promotionNominations)
+      .where(eq(promotionNominations.nomineeId, nomineeId))
+      .orderBy(desc(promotionNominations.nominatedAt));
+  }
+
+  async createPromotionNomination(data: InsertPromotionNomination): Promise<PromotionNomination> {
+    const [created] = await db.insert(promotionNominations).values(data).returning();
+    return created;
+  }
+
+  async updatePromotionNomination(id: string, data: Partial<InsertPromotionNomination>): Promise<PromotionNomination | undefined> {
+    const [updated] = await db.update(promotionNominations).set(data).where(eq(promotionNominations.id, id)).returning();
+    return updated;
+  }
+
+  async deletePromotionNomination(id: string): Promise<boolean> {
+    const result = await db.delete(promotionNominations).where(eq(promotionNominations.id, id)).returning();
+    return result.length > 0;
   }
 }
 

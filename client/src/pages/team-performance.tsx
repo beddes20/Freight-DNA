@@ -8,13 +8,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, BarChart3,
   Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart, ArrowUpDown,
-  Send, Loader2, XCircle
+  Send, Loader2, XCircle, Star, Award
 } from "lucide-react";
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 type PeriodOption = "current" | "last" | "ytd";
@@ -45,6 +46,7 @@ interface RepPerf {
   role: string;
   managerId?: string;
   financialRepId?: string | null;
+  createdAt?: string | null;
   openTasks: number;
   overdueTasks: number;
   completedTasks: number;
@@ -67,6 +69,162 @@ interface AccountSummaryRow {
   repName: string;
 }
 
+interface PromotionCriteria {
+  id: string;
+  fromRole: string;
+  toRole: string;
+  minLoadCount: number | null;
+  minMarginPct: string | null;
+  minTouchpoints: number | null;
+  minTenureMonths: number | null;
+  notes: string | null;
+}
+
+interface PromotionNomination {
+  id: string;
+  nomineeId: string;
+  nominatedById: string;
+  notes: string | null;
+  nominatedAt: string;
+  status: string;
+  nominee?: { id: string; name: string; role: string } | null;
+  nominatedBy?: { id: string; name: string } | null;
+}
+
+function nextLevelRole(role: string): { fromRole: string; toRole: string; label: string } | null {
+  if (role === "logistics_manager") return { fromRole: "logistics_manager", toRole: "account_manager", label: "Account Manager" };
+  if (role === "account_manager") return { fromRole: "account_manager", toRole: "national_account_manager", label: "National Account Manager" };
+  return null;
+}
+
+function PromotionReadinessCard({ rep, criteria, totalLoads, totalMargin, totalRevenue, nominations }: {
+  rep: RepPerf;
+  criteria: PromotionCriteria[];
+  totalLoads?: number;
+  totalMargin?: number;
+  totalRevenue?: number;
+  nominations: PromotionNomination[];
+}) {
+  const next = nextLevelRole(rep.role);
+  if (!next) return null;
+  const c = criteria.find(cr => cr.fromRole === next.fromRole && cr.toRole === next.toRole);
+  if (!c) return null;
+
+  const hasAnyCriteria = c.minLoadCount != null || c.minMarginPct != null || c.minTouchpoints != null || c.minTenureMonths != null;
+  if (!hasAnyCriteria) return null;
+
+  const marginPct = totalRevenue && totalRevenue > 0 && totalMargin != null ? (totalMargin / totalRevenue) * 100 : null;
+  const totalTouchpoints = rep.callTouchpoints + rep.textTouchpoints + rep.emailTouchpoints;
+  const isNominated = nominations.some(n => n.nomineeId === rep.userId && n.status === "active");
+
+  const checks: { label: string; current: string; required: string; pass: boolean }[] = [];
+  if (c.minLoadCount != null) checks.push({
+    label: "Load Count",
+    current: (totalLoads ?? 0).toString(),
+    required: c.minLoadCount.toString(),
+    pass: (totalLoads ?? 0) >= c.minLoadCount,
+  });
+  if (c.minMarginPct != null) checks.push({
+    label: "Margin %",
+    current: marginPct != null ? `${marginPct.toFixed(1)}%` : "N/A",
+    required: `${c.minMarginPct}%`,
+    pass: marginPct != null && marginPct >= parseFloat(c.minMarginPct),
+  });
+  if (c.minTouchpoints != null) checks.push({
+    label: "Touchpoints",
+    current: totalTouchpoints.toString(),
+    required: c.minTouchpoints.toString(),
+    pass: totalTouchpoints >= c.minTouchpoints,
+  });
+  if (c.minTenureMonths != null) {
+    const tenureMonths = rep.createdAt ? Math.floor((Date.now() - new Date(rep.createdAt).getTime()) / (1000 * 60 * 60 * 24 * 30.44)) : null;
+    checks.push({
+      label: "Tenure",
+      current: tenureMonths != null ? `${tenureMonths} mo` : "N/A",
+      required: `${c.minTenureMonths} mo`,
+      pass: tenureMonths != null && tenureMonths >= c.minTenureMonths,
+    });
+  }
+
+  const passCount = checks.filter(ch => ch.pass).length;
+
+  return (
+    <div className={`mt-3 rounded-lg border p-3 ${isNominated ? "border-amber-400 bg-amber-50 dark:bg-amber-950/20" : "border-border bg-muted/30"}`} data-testid={`promotion-readiness-${rep.userId}`}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5">
+          <TrendingUp className="h-3.5 w-3.5 text-blue-500" />
+          <span className="text-xs font-semibold">Next Level: {next.label}</span>
+          {isNominated && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 text-[10px] px-1.5 py-0">Nominated</Badge>}
+        </div>
+        <span className="text-[10px] text-muted-foreground">{passCount}/{checks.length} met</span>
+      </div>
+      <div className="space-y-1">
+        {checks.map(ch => (
+          <div key={ch.label} className="flex items-center justify-between text-[11px]">
+            <div className="flex items-center gap-1">
+              {ch.pass
+                ? <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
+                : <XCircle className="h-3 w-3 text-muted-foreground shrink-0" />}
+              <span className={ch.pass ? "text-foreground" : "text-muted-foreground"}>{ch.label}</span>
+            </div>
+            <span className={ch.pass ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}>
+              {ch.current} / {ch.required}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NominateDialog({ rep, onClose }: { rep: RepPerf; onClose: () => void }) {
+  const [notes, setNotes] = useState("");
+  const { toast } = useToast();
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/promotion/nominations", { nomineeId: rep.userId, notes: notes || null });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/promotion/nominations"] });
+      toast({ title: "Nomination submitted!", description: `${rep.name} has been marked as promotion ready.` });
+      onClose();
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        You are marking <strong>{rep.name}</strong> as promotion ready. Optionally add a note explaining your recommendation.
+      </p>
+      <div className="space-y-2">
+        <Textarea
+          placeholder="Add a note (optional)..."
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          data-testid="textarea-nomination-notes"
+          className="min-h-[80px]"
+        />
+      </div>
+      <div className="flex gap-2 justify-end">
+        <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+        <Button
+          size="sm"
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending}
+          data-testid="button-confirm-nominate"
+          className="gap-1.5"
+        >
+          {mutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Star className="h-3.5 w-3.5" />}
+          Mark as Promotion Ready
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function StatPill({ value, label, color, icon, note }: { value: number; label: string; color: string; icon?: React.ReactNode; note?: string }) {
   return (
     <div className="flex flex-col items-center px-2 py-2 rounded-lg bg-muted/50 min-w-[58px]">
@@ -78,7 +236,16 @@ function StatPill({ value, label, color, icon, note }: { value: number; label: s
   );
 }
 
-function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf; totalLoads?: number; totalMargin?: number; totalRevenue?: number }) {
+function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominations, canNominate, onNominate }: {
+  rep: RepPerf;
+  totalLoads?: number;
+  totalMargin?: number;
+  totalRevenue?: number;
+  criteria?: PromotionCriteria[];
+  nominations?: PromotionNomination[];
+  canNominate?: boolean;
+  onNominate?: (rep: RepPerf) => void;
+}) {
   const [, navigate] = useLocation();
   const initials = rep.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
   const colors = ["bg-blue-500", "bg-green-500", "bg-purple-500", "bg-amber-500", "bg-red-500", "bg-cyan-500", "bg-pink-500", "bg-indigo-500"];
@@ -180,16 +347,41 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue }: { rep: RepPerf;
           </div>
         </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full mt-3 text-xs h-7"
-          data-testid={`button-view-report-${rep.userId}`}
-          onClick={(e) => { e.stopPropagation(); navigate(`/report/${rep.userId}`); }}
-        >
-          <FileBarChart2 className="h-3 w-3 mr-1.5" />
-          View Progress Report
-        </Button>
+        <div className="flex gap-1.5 mt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1 text-xs h-7"
+            data-testid={`button-view-report-${rep.userId}`}
+            onClick={(e) => { e.stopPropagation(); navigate(`/report/${rep.userId}`); }}
+          >
+            <FileBarChart2 className="h-3 w-3 mr-1.5" />
+            View Report
+          </Button>
+          {canNominate && nextLevelRole(rep.role) && onNominate && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7 gap-1 text-amber-600 border-amber-300 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-700 dark:hover:bg-amber-950/30"
+              data-testid={`button-nominate-${rep.userId}`}
+              onClick={(e) => { e.stopPropagation(); onNominate(rep); }}
+            >
+              <Star className="h-3 w-3" />
+              Nominate
+            </Button>
+          )}
+        </div>
+
+        {criteria && nominations && (
+          <PromotionReadinessCard
+            rep={rep}
+            criteria={criteria}
+            totalLoads={totalLoads}
+            totalMargin={totalMargin}
+            totalRevenue={totalRevenue}
+            nominations={nominations}
+          />
+        )}
       </CardContent>
     </Card>
   );
@@ -220,6 +412,7 @@ export default function TeamPerformancePage() {
   const [showBulkSend, setShowBulkSend] = useState(false);
   const [bulkPeriod, setBulkPeriod] = useState<"weekly" | "monthly">("monthly");
   const [bulkResult, setBulkResult] = useState<BulkSendResult | null>(null);
+  const [nominationTarget, setNominationTarget] = useState<RepPerf | null>(null);
 
   const { data: reps = [], isLoading } = useQuery<RepPerf[]>({
     queryKey: ["/api/team/performance", period],
@@ -244,6 +437,16 @@ export default function TeamPerformancePage() {
     enabled: showBulkSend && !bulkResult,
   });
 
+  const { data: promotionCriteria = [] } = useQuery<PromotionCriteria[]>({
+    queryKey: ["/api/promotion/criteria"],
+  });
+
+  const canNominateRole = ["national_account_manager", "director", "admin", "sales_director"].includes(user?.role || "");
+  const { data: nominations = [] } = useQuery<PromotionNomination[]>({
+    queryKey: ["/api/promotion/nominations"],
+    enabled: canNominateRole,
+  });
+
   const bulkSendMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/report/bulk-send", { period: bulkPeriod });
@@ -265,6 +468,10 @@ export default function TeamPerformancePage() {
       </div>
     );
   }
+
+  const canNominate = ["national_account_manager", "director", "admin", "sales_director"].includes(user.role);
+  const isDirector = user.role === "director" || user.role === "admin";
+  const activeNominations = nominations.filter(n => n.status === "active");
 
   const repLoadsMap: Record<string, { loads: number; margin: number; revenue: number }> = {};
   for (const row of accountSummary) {
@@ -471,6 +678,10 @@ export default function TeamPerformancePage() {
                     totalLoads={repLoadsMap[rep.userId]?.loads}
                     totalMargin={repLoadsMap[rep.userId]?.margin}
                     totalRevenue={repLoadsMap[rep.userId]?.revenue}
+                    criteria={promotionCriteria}
+                    nominations={nominations}
+                    canNominate={canNominate}
+                    onNominate={setNominationTarget}
                   />
                 ))}
               </div>
@@ -491,6 +702,10 @@ export default function TeamPerformancePage() {
                     totalLoads={repLoadsMap[rep.userId]?.loads}
                     totalMargin={repLoadsMap[rep.userId]?.margin}
                     totalRevenue={repLoadsMap[rep.userId]?.revenue}
+                    criteria={promotionCriteria}
+                    nominations={nominations}
+                    canNominate={canNominate}
+                    onNominate={setNominationTarget}
                   />
                 ))}
               </div>
@@ -511,6 +726,10 @@ export default function TeamPerformancePage() {
                     totalLoads={repLoadsMap[rep.userId]?.loads}
                     totalMargin={repLoadsMap[rep.userId]?.margin}
                     totalRevenue={repLoadsMap[rep.userId]?.revenue}
+                    criteria={promotionCriteria}
+                    nominations={nominations}
+                    canNominate={canNominate}
+                    onNominate={setNominationTarget}
                   />
                 ))}
               </div>
@@ -525,6 +744,72 @@ export default function TeamPerformancePage() {
           )}
         </>
       )}
+
+      {/* Promotion Nominations Panel (Directors & Admins) */}
+      {isDirector && activeNominations.length > 0 && (
+        <div className="border rounded-xl p-5 space-y-4 bg-amber-50/50 dark:bg-amber-950/10 border-amber-200 dark:border-amber-800" data-testid="section-nominations">
+          <div className="flex items-center gap-2">
+            <Award className="w-4 h-4 text-amber-600" />
+            <h2 className="font-semibold text-sm">Promotion Nominations</h2>
+            <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 text-[10px] px-1.5 py-0">{activeNominations.length}</Badge>
+          </div>
+          <div className="space-y-3">
+            {activeNominations.map(n => {
+              const repData = reps.find(r => r.userId === n.nomineeId);
+              const loadsData = n.nomineeId ? repLoadsMap[n.nomineeId] : null;
+              const marginPct = loadsData && loadsData.revenue > 0 ? (loadsData.margin / loadsData.revenue) * 100 : null;
+              return (
+                <div key={n.id} className="rounded-lg border bg-card p-4" data-testid={`nomination-card-${n.id}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-sm">{n.nominee?.name ?? "Unknown"}</p>
+                        <Badge variant="outline" className="text-[10px] capitalize">{n.nominee?.role?.replace(/_/g, " ")}</Badge>
+                        <span className="text-xs text-muted-foreground">→ {n.nominee?.role ? nextLevelRole(n.nominee.role)?.label ?? "" : ""}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Nominated by {n.nominatedBy?.name ?? "Unknown"} · {new Date(n.nominatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      </p>
+                      {n.notes && <p className="text-xs text-foreground mt-1.5 italic">"{n.notes}"</p>}
+                    </div>
+                    <div className="shrink-0 flex flex-col items-end gap-1">
+                      {loadsData && loadsData.loads > 0 && (
+                        <div className="flex items-center gap-3 text-xs text-right">
+                          <span className="text-muted-foreground">{loadsData.loads} loads</span>
+                          {marginPct !== null && <span className={marginPct >= 0 ? "text-green-600" : "text-red-500"}>{marginPct.toFixed(1)}% margin</span>}
+                        </div>
+                      )}
+                      {repData && (
+                        <div className="text-xs text-muted-foreground">
+                          {repData.callTouchpoints + repData.textTouchpoints + repData.emailTouchpoints} touchpoints this period
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Nominate Dialog */}
+      <Dialog open={!!nominationTarget} onOpenChange={(open) => { if (!open) setNominationTarget(null); }}>
+        <DialogContent data-testid="dialog-nominate">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Star className="h-4 w-4 text-amber-500" />
+              Mark as Promotion Ready
+            </DialogTitle>
+            <DialogDescription>
+              Formally nominate this rep for their next level. Directors will be able to see this nomination.
+            </DialogDescription>
+          </DialogHeader>
+          {nominationTarget && (
+            <NominateDialog rep={nominationTarget} onClose={() => setNominationTarget(null)} />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Bulk Send Dialog */}
       <Dialog open={showBulkSend} onOpenChange={(open) => { setShowBulkSend(open); if (!open) setBulkResult(null); }}>

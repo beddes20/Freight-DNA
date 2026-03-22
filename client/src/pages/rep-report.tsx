@@ -10,8 +10,34 @@ import {
   TrendingUp, TrendingDown, Minus, Phone, Mail, MessageSquare, Building2,
   Users, CheckSquare, AlertCircle, Target, ChevronRight, Zap, Trophy, Flame,
   Clock, ArrowLeft, Send, Loader2, ExternalLink, BookOpen, ChevronDown, ChevronUp, Save,
-  Package, DollarSign,
+  Package, DollarSign, Star, XCircle,
 } from "lucide-react";
+
+interface PromotionCriteria {
+  id: string;
+  fromRole: string;
+  toRole: string;
+  minLoadCount: number | null;
+  minMarginPct: string | null;
+  minTouchpoints: number | null;
+  minTenureMonths: number | null;
+  notes: string | null;
+}
+
+interface PromotionNomination {
+  id: string;
+  nomineeId: string;
+  nominatedById: string;
+  notes: string | null;
+  nominatedAt: string;
+  status: string;
+}
+
+function nextLevelRole(role: string): { fromRole: string; toRole: string; label: string } | null {
+  if (role === "logistics_manager") return { fromRole: "logistics_manager", toRole: "account_manager", label: "Account Manager" };
+  if (role === "account_manager") return { fromRole: "account_manager", toRole: "national_account_manager", label: "National Account Manager" };
+  return null;
+}
 
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
 
@@ -36,7 +62,7 @@ interface TeamMemberSummary {
 }
 
 interface RepReportData {
-  rep: { id: string; name: string; role: string; manager: string | null; director: string | null };
+  rep: { id: string; name: string; role: string; manager: string | null; director: string | null; createdAt?: string | null };
   period: { type: string; label: string; start: string; end: string };
   goals: Array<{ id: string; label: string; metric: string; period: string; current: number; target: number; pct: number }>;
   touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; weeklyTrend: number[] };
@@ -328,6 +354,20 @@ export default function RepReportPage() {
     },
   });
 
+  const { data: promotionCriteria = [] } = useQuery<PromotionCriteria[]>({
+    queryKey: ["/api/promotion/criteria"],
+  });
+
+  const { data: repNominations = [] } = useQuery<PromotionNomination[]>({
+    queryKey: ["/api/promotion/nominations/nominee", targetId],
+    queryFn: async () => {
+      const res = await fetch(`/api/promotion/nominations/nominee/${targetId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch nominations");
+      return res.json();
+    },
+    enabled: !!targetId,
+  });
+
   if (isLoading) return <LoadingSkeleton />;
 
   if (error || !data) {
@@ -519,6 +559,106 @@ export default function RepReportPage() {
             </div>
           </section>
         )}
+
+        {/* Next Level / Promotion Readiness */}
+        {(() => {
+          const next = nextLevelRole(rep.role);
+          if (!next) return null;
+          const c = promotionCriteria.find((cr: PromotionCriteria) => cr.fromRole === next.fromRole && cr.toRole === next.toRole);
+          if (!c) return null;
+          const hasAnyCriteria = c.minLoadCount != null || c.minMarginPct != null || c.minTouchpoints != null || c.minTenureMonths != null;
+          if (!hasAnyCriteria) return null;
+
+          const repRevenue = accountSummary.filter((row: AccountSummaryRow) => row.repName && matchRepName(row.repName, rep.name)).reduce((acc: number, row: AccountSummaryRow) => acc + (row.totalRevenue ?? 0), 0);
+          const marginPct = repRevenue > 0 && repFinancials.margin != null
+            ? (repFinancials.margin / repRevenue) * 100
+            : null;
+          const totalTouchpoints = tp.call + tp.email + tp.text + tp.site_visit;
+
+          const checks: { label: string; current: string; required: string; pass: boolean }[] = [];
+          if (c.minLoadCount != null) checks.push({
+            label: "Load Count",
+            current: repFinancials.loads.toString(),
+            required: c.minLoadCount.toString(),
+            pass: repFinancials.loads >= c.minLoadCount,
+          });
+          if (c.minMarginPct != null) checks.push({
+            label: "Margin %",
+            current: marginPct != null ? `${marginPct.toFixed(1)}%` : "N/A",
+            required: `${c.minMarginPct}%`,
+            pass: marginPct != null && marginPct >= parseFloat(c.minMarginPct),
+          });
+          if (c.minTouchpoints != null) checks.push({
+            label: "Touchpoints",
+            current: totalTouchpoints.toString(),
+            required: c.minTouchpoints.toString(),
+            pass: totalTouchpoints >= c.minTouchpoints,
+          });
+          if (c.minTenureMonths != null) {
+            const tenureMonths = rep.createdAt ? Math.floor((Date.now() - new Date(rep.createdAt).getTime()) / (1000 * 60 * 60 * 24 * 30.44)) : null;
+            checks.push({
+              label: "Tenure",
+              current: tenureMonths != null ? `${tenureMonths} mo` : "N/A",
+              required: `${c.minTenureMonths} mo`,
+              pass: tenureMonths != null && tenureMonths >= c.minTenureMonths,
+            });
+          }
+
+          const passCount = checks.filter(ch => ch.pass).length;
+          const isNominated = repNominations.some((n: PromotionNomination) => n.status === "active");
+          const latestNomination = repNominations.find((n: PromotionNomination) => n.status === "active");
+
+          return (
+            <section data-testid="section-next-level">
+              <div className="flex items-center gap-2 mb-3">
+                <TrendingUp className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-semibold">Next Level: {next.label}</h2>
+                {isNominated && (
+                  <span className="ml-auto flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 font-medium">
+                    <Star className="h-3 w-3 fill-amber-500 text-amber-500" />
+                    Nominated by manager
+                  </span>
+                )}
+              </div>
+              <div className="rounded-xl border bg-card p-4 space-y-3">
+                {isNominated && latestNomination?.notes && (
+                  <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-700 px-3 py-2">
+                    <p className="text-xs text-amber-700 dark:text-amber-300 italic">"{latestNomination.notes}"</p>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Promotion criteria checklist</span>
+                  <span className={passCount === checks.length ? "text-green-600 font-medium" : ""}>{passCount} of {checks.length} met</span>
+                </div>
+                <div className="space-y-2">
+                  {checks.map(ch => (
+                    <div key={ch.label} className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {ch.pass
+                          ? <div className="h-4 w-4 rounded-full bg-green-100 dark:bg-green-900/40 flex items-center justify-center shrink-0">
+                              <svg className="h-2.5 w-2.5 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}><path d="M2 6l3 3 5-5"/></svg>
+                            </div>
+                          : <div className="h-4 w-4 rounded-full bg-muted flex items-center justify-center shrink-0">
+                              <XCircle className="h-3 w-3 text-muted-foreground" />
+                            </div>}
+                        <span className="text-sm">{ch.label}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className={`text-sm font-medium ${ch.pass ? "text-green-600 dark:text-green-400" : "text-foreground"}`}>{ch.current}</span>
+                        <span className="text-xs text-muted-foreground ml-1">/ {ch.required}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {c.notes && (
+                  <div className="border-t pt-2">
+                    <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Additional criteria: </span>{c.notes}</p>
+                  </div>
+                )}
+              </div>
+            </section>
+          );
+        })()}
 
         {/* 2-col layout */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

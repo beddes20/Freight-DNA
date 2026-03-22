@@ -139,6 +139,7 @@ export const users = pgTable("users", {
   managerId: varchar("manager_id"),
   lastLoginAt: text("last_login_at"),
   financialRepId: text("financial_rep_id"),
+  createdAt: text("created_at"),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -520,6 +521,36 @@ export const reportCardSnapshots = pgTable("report_card_snapshots", {
 export const insertReportCardSnapshotSchema = createInsertSchema(reportCardSnapshots).omit({ id: true });
 export type InsertReportCardSnapshot = z.infer<typeof insertReportCardSnapshotSchema>;
 export type ReportCardSnapshot = typeof reportCardSnapshots.$inferSelect;
+
+export const promotionCriteria = pgTable("promotion_criteria", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  fromRole: text("from_role").notNull(),
+  toRole: text("to_role").notNull(),
+  minLoadCount: integer("min_load_count"),
+  minMarginPct: decimal("min_margin_pct", { precision: 8, scale: 2 }),
+  minTouchpoints: integer("min_touchpoints"),
+  minTenureMonths: integer("min_tenure_months"),
+  notes: text("notes"),
+  updatedAt: text("updated_at"),
+  updatedById: varchar("updated_by_id").references(() => users.id),
+});
+
+export const insertPromotionCriteriaSchema = createInsertSchema(promotionCriteria).omit({ id: true });
+export type InsertPromotionCriteria = z.infer<typeof insertPromotionCriteriaSchema>;
+export type PromotionCriteria = typeof promotionCriteria.$inferSelect;
+
+export const promotionNominations = pgTable("promotion_nominations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  nomineeId: varchar("nominee_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  nominatedById: varchar("nominated_by_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  notes: text("notes"),
+  nominatedAt: text("nominated_at").notNull(),
+  status: text("status").notNull().default("active"),
+});
+
+export const insertPromotionNominationSchema = createInsertSchema(promotionNominations).omit({ id: true });
+export type InsertPromotionNomination = z.infer<typeof insertPromotionNominationSchema>;
+export type PromotionNomination = typeof promotionNominations.$inferSelect;
 
 export const internalPosts = pgTable("internal_posts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

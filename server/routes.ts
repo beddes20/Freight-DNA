@@ -4574,7 +4574,7 @@ export async function registerRoutes(
       ]);
       const result = perf.map(p => {
         const u = allUsers.find(u => u.id === p.userId);
-        return { ...p, name: u?.name || "Unknown", role: u?.role || "account_manager", managerId: u?.managerId, financialRepId: (u as any)?.financialRepId || null };
+        return { ...p, name: u?.name || "Unknown", role: u?.role || "account_manager", managerId: u?.managerId, financialRepId: (u as any)?.financialRepId || null, createdAt: u?.createdAt || null };
       });
       res.json(result);
     } catch (error) {
@@ -6067,6 +6067,169 @@ export async function registerRoutes(
       });
     } catch (err) {
       res.status(500).json({ error: "Failed to load briefing data" });
+    }
+  });
+
+  // ─── Promotion Criteria ──────────────────────────────────────────────────────
+
+  app.get("/api/promotion/criteria", requireAuth, async (req, res) => {
+    try {
+      const criteria = await storage.getPromotionCriteria();
+      res.json(criteria);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load promotion criteria" });
+    }
+  });
+
+  app.put("/api/promotion/criteria/:fromRole/:toRole", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const { fromRole, toRole } = req.params;
+      const validRoles = ["logistics_manager", "account_manager", "national_account_manager"];
+      if (!validRoles.includes(fromRole) || !validRoles.includes(toRole)) {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+      const { minLoadCount, minMarginPct, minTouchpoints, minTenureMonths, notes } = req.body;
+      const safeNum = (v: any) => (v != null && v !== "" ? Number(v) : null);
+      const data = {
+        minLoadCount: safeNum(minLoadCount),
+        minMarginPct: safeNum(minMarginPct),
+        minTouchpoints: safeNum(minTouchpoints),
+        minTenureMonths: safeNum(minTenureMonths),
+        notes: typeof notes === "string" ? notes : null,
+        updatedAt: new Date().toISOString(),
+        updatedById: user.id,
+      };
+      const criteria = await storage.upsertPromotionCriteria(fromRole, toRole, data);
+      res.json(criteria);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to save promotion criteria" });
+    }
+  });
+
+  app.delete("/api/promotion/criteria/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const deleted = await storage.deletePromotionCriteria(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Criteria not found" });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to delete promotion criteria" });
+    }
+  });
+
+  // ─── Promotion Nominations ────────────────────────────────────────────────────
+
+  const nominationAllowedRoles = ["national_account_manager", "director", "admin", "sales_director"];
+
+  app.get("/api/promotion/nominations", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!nominationAllowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+      let nominations = await storage.getPromotionNominations();
+      const allUsers = await storage.getUsers();
+      const usersById = Object.fromEntries(allUsers.map(u => [u.id, u]));
+      if (user.role === "national_account_manager") {
+        const directReportIds = new Set(allUsers.filter(u => u.managerId === user.id).map(u => u.id));
+        nominations = nominations.filter(n => directReportIds.has(n.nomineeId) || n.nominatedById === user.id);
+      }
+      const nomineeIds = [...new Set(nominations.map(n => n.nomineeId))];
+      const now = new Date();
+      const startDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+      const endDate = now.toISOString().split("T")[0];
+      const perfData = nomineeIds.length > 0 ? await storage.getTeamPerformance(nomineeIds, startDate, endDate) : [];
+      const perfByUser = Object.fromEntries(perfData.map(p => [p.userId, p]));
+      const enriched = nominations.map(n => ({
+        ...n,
+        nominee: usersById[n.nomineeId] ? { id: usersById[n.nomineeId].id, name: usersById[n.nomineeId].name, role: usersById[n.nomineeId].role } : null,
+        nominatedBy: usersById[n.nominatedById] ? { id: usersById[n.nominatedById].id, name: usersById[n.nominatedById].name } : null,
+        performance: perfByUser[n.nomineeId] ? {
+          companyCount: perfByUser[n.nomineeId].companyCount,
+          touchpoints: perfByUser[n.nomineeId].callTouchpoints + perfByUser[n.nomineeId].textTouchpoints + perfByUser[n.nomineeId].emailTouchpoints,
+          completedTasks: perfByUser[n.nomineeId].completedTasks,
+        } : null,
+      }));
+      res.json(enriched);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load nominations" });
+    }
+  });
+
+  app.get("/api/promotion/nominations/nominee/:nomineeId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (user.id !== req.params.nomineeId && !nominationAllowedRoles.includes(user.role)) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+      const nominations = await storage.getNominationsByNominee(req.params.nomineeId);
+      res.json(nominations);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load nominations" });
+    }
+  });
+
+  app.post("/api/promotion/nominations", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!nominationAllowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized to nominate" });
+      const { nomineeId, notes } = req.body;
+      if (!nomineeId || typeof nomineeId !== "string") return res.status(400).json({ error: "nomineeId required" });
+      if (user.role === "national_account_manager") {
+        const nominee = await storage.getUser(nomineeId);
+        if (!nominee || nominee.managerId !== user.id) {
+          return res.status(403).json({ error: "You can only nominate your direct reports" });
+        }
+      }
+      const existing = await storage.getNominationsByNominee(nomineeId);
+      if (existing.some(n => n.status === "active")) {
+        return res.status(409).json({ error: "An active nomination already exists for this user" });
+      }
+      const nomination = await storage.createPromotionNomination({
+        nomineeId,
+        nominatedById: user.id,
+        notes: typeof notes === "string" ? notes : null,
+        nominatedAt: new Date().toISOString(),
+        status: "active",
+      });
+      res.json(nomination);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to create nomination" });
+    }
+  });
+
+  app.patch("/api/promotion/nominations/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!nominationAllowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+      const { status, notes } = req.body;
+      const allowedFields: Record<string, any> = {};
+      if (status && ["active", "approved", "declined"].includes(status)) allowedFields.status = status;
+      if (typeof notes === "string") allowedFields.notes = notes;
+      if (Object.keys(allowedFields).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+      const updated = await storage.updatePromotionNomination(req.params.id, allowedFields);
+      if (!updated) return res.status(404).json({ error: "Nomination not found" });
+      res.json(updated);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to update nomination" });
+    }
+  });
+
+  app.delete("/api/promotion/nominations/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!nominationAllowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+      const deleted = await storage.deletePromotionNomination(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Nomination not found" });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to delete nomination" });
     }
   });
 

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -11,8 +11,171 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save } from "lucide-react";
 import type { User } from "@shared/schema";
+
+interface PromotionCriteria {
+  id: string;
+  fromRole: string;
+  toRole: string;
+  minLoadCount: number | null;
+  minMarginPct: string | null;
+  minTouchpoints: number | null;
+  minTenureMonths: number | null;
+  notes: string | null;
+}
+
+function CriteriaForm({ fromRole, toRole, label, existing }: { fromRole: string; toRole: string; label: string; existing?: PromotionCriteria }) {
+  const { toast } = useToast();
+  const [minLoadCount, setMinLoadCount] = useState(existing?.minLoadCount?.toString() || "");
+  const [minMarginPct, setMinMarginPct] = useState(existing?.minMarginPct?.toString() || "");
+  const [minTouchpoints, setMinTouchpoints] = useState(existing?.minTouchpoints?.toString() || "");
+  const [minTenureMonths, setMinTenureMonths] = useState(existing?.minTenureMonths?.toString() || "");
+  const [notes, setNotes] = useState(existing?.notes || "");
+  const [synced, setSynced] = useState(false);
+
+  useEffect(() => {
+    if (existing && !synced) {
+      setMinLoadCount(existing.minLoadCount?.toString() || "");
+      setMinMarginPct(existing.minMarginPct?.toString() || "");
+      setMinTouchpoints(existing.minTouchpoints?.toString() || "");
+      setMinTenureMonths(existing.minTenureMonths?.toString() || "");
+      setNotes(existing.notes || "");
+      setSynced(true);
+    }
+  }, [existing, synced]);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PUT", `/api/promotion/criteria/${encodeURIComponent(fromRole)}/${encodeURIComponent(toRole)}`, {
+        minLoadCount: minLoadCount ? parseInt(minLoadCount) : null,
+        minMarginPct: minMarginPct ? parseFloat(minMarginPct) : null,
+        minTouchpoints: minTouchpoints ? parseInt(minTouchpoints) : null,
+        minTenureMonths: minTenureMonths ? parseInt(minTenureMonths) : null,
+        notes: notes || null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/promotion/criteria"] });
+      toast({ title: "Criteria saved" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <div className="rounded-xl border bg-card p-4 space-y-3">
+      <div className="flex items-center gap-2 mb-1">
+        <TrendingUp className="w-4 h-4 text-blue-600" />
+        <h3 className="font-semibold text-sm">{label}</h3>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label className="text-xs">Min Load Count</Label>
+          <Input
+            type="number"
+            min="0"
+            placeholder="e.g. 50"
+            value={minLoadCount}
+            onChange={e => setMinLoadCount(e.target.value)}
+            data-testid={`input-criteria-loads-${fromRole}`}
+            className="h-8 text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Min Margin %</Label>
+          <Input
+            type="number"
+            min="0"
+            step="0.1"
+            placeholder="e.g. 12.5"
+            value={minMarginPct}
+            onChange={e => setMinMarginPct(e.target.value)}
+            data-testid={`input-criteria-margin-${fromRole}`}
+            className="h-8 text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Min Touchpoints / Month</Label>
+          <Input
+            type="number"
+            min="0"
+            placeholder="e.g. 30"
+            value={minTouchpoints}
+            onChange={e => setMinTouchpoints(e.target.value)}
+            data-testid={`input-criteria-touchpoints-${fromRole}`}
+            className="h-8 text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Min Tenure (months)</Label>
+          <Input
+            type="number"
+            min="0"
+            placeholder="e.g. 12"
+            value={minTenureMonths}
+            onChange={e => setMinTenureMonths(e.target.value)}
+            data-testid={`input-criteria-tenure-${fromRole}`}
+            className="h-8 text-sm"
+          />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Additional Notes / Custom Criteria</Label>
+        <Textarea
+          placeholder="Any additional qualitative criteria..."
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          data-testid={`textarea-criteria-notes-${fromRole}`}
+          className="text-sm min-h-[60px]"
+        />
+      </div>
+      <Button
+        size="sm"
+        onClick={() => mutation.mutate()}
+        disabled={mutation.isPending}
+        data-testid={`button-save-criteria-${fromRole}`}
+        className="gap-1.5"
+      >
+        {mutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+        Save Criteria
+      </Button>
+    </div>
+  );
+}
+
+function CareerProgressionSection() {
+  const { data: criteria = [] } = useQuery<PromotionCriteria[]>({ queryKey: ["/api/promotion/criteria"] });
+
+  const lmToAm = criteria.find(c => c.fromRole === "logistics_manager" && c.toRole === "account_manager");
+  const amToNam = criteria.find(c => c.fromRole === "account_manager" && c.toRole === "national_account_manager");
+
+  return (
+    <div className="border rounded-xl p-5 space-y-4 bg-muted/30" data-testid="section-career-progression">
+      <div className="flex items-center gap-2">
+        <TrendingUp className="w-4 h-4 text-blue-600" />
+        <h2 className="font-semibold text-sm">Career Progression Criteria</h2>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Define the minimum benchmarks reps must meet to be considered for promotion. These are shown to reps on their profile as a readiness checklist.
+      </p>
+      <div className="grid gap-4 md:grid-cols-2">
+        <CriteriaForm
+          fromRole="logistics_manager"
+          toRole="account_manager"
+          label="LM → Account Manager"
+          existing={lmToAm}
+        />
+        <CriteriaForm
+          fromRole="account_manager"
+          toRole="national_account_manager"
+          label="AM → National Account Manager"
+          existing={amToNam}
+        />
+      </div>
+    </div>
+  );
+}
 
 type SafeUser = Omit<User, "password">;
 
@@ -693,6 +856,8 @@ export default function AdminUsers() {
           })}
         </div>
       )}
+
+      {currentUser?.role === "admin" && <CareerProgressionSection />}
 
       {currentUser?.role === "admin" && (
         <div className="border rounded-xl p-5 space-y-4 bg-muted/30">
