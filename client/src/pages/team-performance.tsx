@@ -432,6 +432,16 @@ export default function TeamPerformancePage() {
     },
   });
 
+  type DispatcherSummaryRow = { dispatcherName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+  const { data: dispatcherSummary = [] } = useQuery<DispatcherSummaryRow[]>({
+    queryKey: ["/api/financials/dispatcher-summary", period],
+    queryFn: async () => {
+      const res = await fetch(`/api/financials/dispatcher-summary?period=${period}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
   const { data: bulkPreview, isLoading: previewLoading } = useQuery<{ recipients: { id: string; name: string; role: string; email: string }[]; total: number }>({
     queryKey: ["/api/report/bulk-preview"],
     enabled: showBulkSend && !bulkResult,
@@ -490,7 +500,26 @@ export default function TeamPerformancePage() {
     }
   }
 
-  const hasSummaryData = accountSummary.length > 0;
+  // Build a separate map for logistics managers — keyed by their financialRepId or name,
+  // matched against the Dispatcher column (not opsUser).
+  const lmLoadsMap: Record<string, { loads: number; margin: number; revenue: number }> = {};
+  const lmReps = reps.filter(r => r.role === "logistics_manager" || r.role === "logistics_coordinator");
+  for (const row of dispatcherSummary) {
+    if (!row.dispatcherName) continue;
+    const dispLower = row.dispatcherName.toLowerCase().trim();
+    const match = lmReps.find(r =>
+      (r.financialRepId && r.financialRepId.toLowerCase() === dispLower) ||
+      matchRepName(row.dispatcherName, r.name)
+    );
+    if (match) {
+      if (!lmLoadsMap[match.userId]) lmLoadsMap[match.userId] = { loads: 0, margin: 0, revenue: 0 };
+      lmLoadsMap[match.userId].loads += row.totalLoads;
+      lmLoadsMap[match.userId].margin += row.totalMargin;
+      lmLoadsMap[match.userId].revenue += row.totalRevenue ?? 0;
+    }
+  }
+
+  const hasSummaryData = accountSummary.length > 0 || dispatcherSummary.length > 0;
   const totalLoadsAll = Object.values(repLoadsMap).reduce((s, v) => s + v.loads, 0);
   const totalMarginAll = Object.values(repLoadsMap).reduce((s, v) => s + v.margin, 0);
   const totalRevenueAll = Object.values(repLoadsMap).reduce((s, v) => s + v.revenue, 0);
@@ -724,9 +753,9 @@ export default function TeamPerformancePage() {
                   <RepCard
                     key={rep.userId}
                     rep={rep}
-                    totalLoads={repLoadsMap[rep.userId]?.loads}
-                    totalMargin={repLoadsMap[rep.userId]?.margin}
-                    totalRevenue={repLoadsMap[rep.userId]?.revenue}
+                    totalLoads={lmLoadsMap[rep.userId]?.loads}
+                    totalMargin={lmLoadsMap[rep.userId]?.margin}
+                    totalRevenue={lmLoadsMap[rep.userId]?.revenue}
                     criteria={promotionCriteria}
                     nominations={nominations}
                     canNominate={canNominate}
