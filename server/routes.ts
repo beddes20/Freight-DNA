@@ -2080,13 +2080,27 @@ export async function registerRoutes(
         }).catch((e) => console.error("Notification error:", e));
       }
       // Notify creator when assignee marks task completed
-      if (data.status === "completed" && existing.status !== "completed" &&
-          existing.assignedBy && existing.assignedBy !== user.id) {
+      const justCompleted = data.status === "completed" && existing.status !== "completed";
+      const completionNote = typeof req.body.completionNote === "string" ? req.body.completionNote.trim() : "";
+      if (justCompleted && existing.assignedBy && existing.assignedBy !== user.id) {
+        // Post the completion note as a task comment so it's visible in the thread
+        if (completionNote) {
+          await storage.createTaskComment({
+            taskId: existing.id,
+            authorId: user.id,
+            content: completionNote,
+            createdAt: new Date().toISOString(),
+            parentId: null,
+          }).catch((e) => console.error("Completion note comment error:", e));
+        }
+        const notifyBody = completionNote
+          ? `${task?.title ?? existing.title} — "${completionNote}"`
+          : task?.title ?? existing.title;
         storage.createNotification({
           userId: existing.assignedBy,
           type: "task_completed",
           title: `${user.name} completed a task`,
-          body: task?.title ?? existing.title,
+          body: notifyBody,
           link: "/tasks",
           relatedId: existing.id,
           read: false,

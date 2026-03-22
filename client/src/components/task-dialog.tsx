@@ -74,6 +74,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [commentText, setCommentText] = useState("");
   const [replyToComment, setReplyToComment] = useState<TaskComment | null>(null);
+  const [completionNote, setCompletionNote] = useState("");
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
@@ -128,6 +129,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
   useEffect(() => {
     if (open) {
       setPendingFiles([]);
+      setCompletionNote("");
       if (prefillData) {
         setTitle(prefillData.title);
         setNotes(prefillData.notes || "");
@@ -310,6 +312,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
         notes: notes || null,
         dueDate: dueDate || null,
         status,
+        ...(completionNote.trim() ? { completionNote: completionNote.trim() } : {}),
       });
       if (pendingFiles.length > 0) {
         try {
@@ -391,32 +394,50 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
           </div>
 
           {!forwardingTask && (
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="task-due">Due Date</Label>
-                <Input
-                  id="task-due"
-                  type="date"
-                  value={dueDate}
-                  onChange={e => setDueDate(e.target.value)}
-                  data-testid="input-task-due-date"
-                />
-              </div>
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="task-due">Due Date</Label>
+                  <Input
+                    id="task-due"
+                    type="date"
+                    value={dueDate}
+                    onChange={e => setDueDate(e.target.value)}
+                    data-testid="input-task-due-date"
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <Label>Status</Label>
-                <Select value={status} onValueChange={setStatus}>
-                  <SelectTrigger data-testid="select-task-status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="open">Open</SelectItem>
-                    <SelectItem value="in_progress">In Progress</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  <Select value={status} onValueChange={(v) => { setStatus(v); if (v !== "completed") setCompletionNote(""); }}>
+                    <SelectTrigger data-testid="select-task-status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="open">Open</SelectItem>
+                      <SelectItem value="in_progress">In Progress</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-            </div>
+              {status === "completed" && editingTask && editingTask.status !== "completed" && editingTask.assignedBy !== user?.id && (
+                <div className="space-y-2 rounded-md border border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/30 p-3">
+                  <Label htmlFor="completion-note" className="text-green-800 dark:text-green-300 text-sm font-medium">
+                    Reply to requester <span className="font-normal text-muted-foreground">(optional)</span>
+                  </Label>
+                  <Textarea
+                    id="completion-note"
+                    value={completionNote}
+                    onChange={e => setCompletionNote(e.target.value)}
+                    placeholder="Let them know what you did, any notes, or next steps..."
+                    rows={2}
+                    data-testid="input-completion-note"
+                  />
+                  <p className="text-xs text-muted-foreground">This will be posted as a comment and included in the completion notification.</p>
+                </div>
+              )}
+            </>
           )}
 
           {(!editingTask || forwardingTask) && (
