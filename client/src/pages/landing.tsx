@@ -63,20 +63,6 @@ export default function LandingPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setDemoOpen(true)}
-            className="text-sm font-bold px-4 py-2 rounded transition-all duration-150"
-            style={{ background: "#ffc333", color: "#0a0a0a" }}
-            data-testid="button-nav-schedule-demo"
-            onMouseEnter={e => {
-              (e.currentTarget as HTMLElement).style.background = "#ffb400";
-            }}
-            onMouseLeave={e => {
-              (e.currentTarget as HTMLElement).style.background = "#ffc333";
-            }}
-          >
-            Schedule Demo
-          </button>
           <a
             href="/login"
             onClick={e => { e.preventDefault(); navigate("/login"); }}
@@ -239,21 +225,39 @@ export default function LandingPage() {
         <p className="text-base mb-10 max-w-md" style={{ color: "rgba(255,255,255,0.4)" }}>
           DNA · Down Not Across. Your competitive advantage starts with knowing your customer better than anyone else.
         </p>
-        <a
-          href="/login"
-          onClick={e => { e.preventDefault(); navigate("/login"); }}
-          className="text-sm font-bold px-8 py-3 rounded transition-all duration-150"
-          style={{ background: "#ffc333", color: "#0a0a0a" }}
-          data-testid="button-footer-cta"
-          onMouseEnter={e => {
-            (e.currentTarget as HTMLElement).style.background = "#ffb400";
-          }}
-          onMouseLeave={e => {
-            (e.currentTarget as HTMLElement).style.background = "#ffc333";
-          }}
-        >
-          Access the Platform
-        </a>
+        <div className="flex flex-col sm:flex-row items-center gap-4">
+          <a
+            href="/login"
+            onClick={e => { e.preventDefault(); navigate("/login"); }}
+            className="text-sm font-bold px-8 py-3 rounded transition-all duration-150"
+            style={{ background: "#ffc333", color: "#0a0a0a" }}
+            data-testid="button-footer-cta"
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.background = "#ffb400";
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.background = "#ffc333";
+            }}
+          >
+            Access the Platform
+          </a>
+          <button
+            onClick={() => setDemoOpen(true)}
+            className="text-sm font-semibold px-8 py-3 rounded transition-all duration-150"
+            style={{ border: "1px solid rgba(255,180,0,0.5)", color: "#ffb400", background: "transparent" }}
+            data-testid="button-footer-schedule-demo"
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.background = "rgba(255,180,0,0.08)";
+              (e.currentTarget as HTMLElement).style.borderColor = "#ffb400";
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.background = "transparent";
+              (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,180,0,0.5)";
+            }}
+          >
+            Schedule Demo
+          </button>
+        </div>
       </section>
 
       {/* Footer bar */}
