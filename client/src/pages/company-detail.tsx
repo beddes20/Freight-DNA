@@ -378,7 +378,12 @@ export default function CompanyDetail() {
 
   type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number };
   const { data: accountSummaryAll = [] } = useQuery<Array<{ customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number; repName: string; byMonth?: Record<string, MonthBucket> }>>({
-    queryKey: ["/api/financials/account-summary"],
+    queryKey: ["/api/financials/account-summary", "ytd"],
+    queryFn: async () => {
+      const res = await fetch("/api/financials/account-summary?period=ytd", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch account summary");
+      return res.json();
+    },
   });
 
   type HealthFactor = { name: string; score: number; max: number; label: string };
