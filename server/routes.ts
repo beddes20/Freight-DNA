@@ -7086,11 +7086,16 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       // Match to company names — optionally scoped
       const allCompanies = await storage.getCompanies(req.session.organizationId!);
       const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
-      const allUsers = isDirectorOnlyRole || isNamRole || isAmRole ? await storage.getUsers(req.session.organizationId!) : [];
+      const allUsers = isDirectorOnlyRole || isNamRole || isAmRole || (isDirectorRole && req.query.directorId) ? await storage.getUsers(req.session.organizationId!) : [];
 
       // Build scoped alias filter for Director (non-admin) / NAM / AM
+      // Admins can also filter by a specific director via ?directorId=<userId>
       let scopedAliases: Set<string> | null = null;
-      if (isDirectorOnlyRole) {
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+      if (directorIdParam) {
+        const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, allCompanies);
+        scopedAliases = buildAliasSet(teamCompanies);
+      } else if (isDirectorOnlyRole) {
         const teamCompanies = getDirectorTeamCompanies(user.id, allUsers, allCompanies);
         scopedAliases = buildAliasSet(teamCompanies);
       } else if (isNamRole) {
@@ -7157,11 +7162,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const orgCompanies = await storage.getCompanies(orgId);
 
       // For Director (non-admin)/NAM: scope to their team's companies
+      // Admins can filter by a specific director via ?directorId=<userId>
       const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
       let scopedCompanyIds: Set<string>;
       if (isNamRole) {
         const allUsers = await storage.getUsers(orgId);
         const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else if (directorIdParam) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, orgCompanies);
         scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
       } else if (isDirectorOnlyRole) {
         const allUsers = await storage.getUsers(orgId);
@@ -7207,11 +7218,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
       const orgCompanies = await storage.getCompanies(orgId);
 
+      // Admins can filter by a specific director via ?directorId=<userId>
       const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
       let scopedCompanyIds: Set<string>;
       if (isNamRole) {
         const allUsers = await storage.getUsers(orgId);
         const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else if (directorIdParam) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, orgCompanies);
         scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
       } else if (isDirectorOnlyRole) {
         const allUsers = await storage.getUsers(orgId);
@@ -7297,10 +7314,20 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
       // For NAM role: only show their direct reports as AMs, not all AMs
       // For Director (non-admin) role: only show users within their vertical (direct reports + their direct reports)
+      // Admins can filter by a specific director via ?directorId=<userId>
       const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
       let scopedUserIds: Set<string> | null = null;
       if (isNamRole) {
         scopedUserIds = new Set(allUsers.filter(u => u.managerId === user.id).map(u => u.id));
+      } else if (directorIdParam) {
+        const directReportIds = new Set(allUsers.filter(u => u.managerId === directorIdParam).map(u => u.id));
+        scopedUserIds = new Set<string>(directReportIds);
+        for (const namId of directReportIds) {
+          for (const u of allUsers) {
+            if (u.managerId === namId) scopedUserIds.add(u.id);
+          }
+        }
       } else if (isDirectorOnlyRole) {
         const directReportIds = new Set(allUsers.filter(u => u.managerId === user.id).map(u => u.id));
         scopedUserIds = new Set<string>(directReportIds);

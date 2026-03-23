@@ -152,6 +152,7 @@ export default function Dashboard() {
   const [feedPendingFiles, setFeedPendingFiles] = useState<PendingFile[]>([]);
   const feedTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [feedSearch, setFeedSearch] = useState("");
+  const [selectedDirectorId, setSelectedDirectorId] = useState<string | null>(null);
   const [feedAuthorFilter, setFeedAuthorFilter] = useState("all");
   const [ptoBannerDismissed, setPtoBannerDismissed] = useState(false);
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
@@ -256,9 +257,13 @@ export default function Dashboard() {
   const [amTrendingUpCollapsed, setAmTrendingUpCollapsed] = useState(false);
   const [amTrendingDownCollapsed, setAmTrendingDownCollapsed] = useState(false);
 
+  const isAdmin = currentUser?.role === "admin";
+  const directorFilterParam = isAdmin && selectedDirectorId ? `?directorId=${encodeURIComponent(selectedDirectorId)}` : "";
+
   type TrendingAccount = { name: string; delta: number };
   const { data: trendingAccounts, isLoading: trendingLoading } = useQuery<{ up: TrendingAccount[]; down: TrendingAccount[] }>({
-    queryKey: ["/api/dashboard/trending-accounts"],
+    queryKey: ["/api/dashboard/trending-accounts", selectedDirectorId],
+    queryFn: () => fetch(`/api/dashboard/trending-accounts${directorFilterParam}`).then(r => r.json()),
     enabled: isDirector,
     refetchOnWindowFocus: false,
   });
@@ -278,7 +283,8 @@ export default function Dashboard() {
 
   type TeamActivity = { touches: number; meaningful: number; newContacts: number };
   const { data: teamActivity, isLoading: teamActivityLoading } = useQuery<TeamActivity>({
-    queryKey: ["/api/dashboard/team-activity"],
+    queryKey: ["/api/dashboard/team-activity", selectedDirectorId],
+    queryFn: () => fetch(`/api/dashboard/team-activity${directorFilterParam}`).then(r => r.json()),
     enabled: isDirector,
     refetchInterval: 120000,
   });
@@ -291,7 +297,8 @@ export default function Dashboard() {
 
   type RelationshipsMovedData = { count: number };
   const { data: relationshipsMoved, isLoading: relationshipsMovedLoading } = useQuery<RelationshipsMovedData>({
-    queryKey: ["/api/dashboard/relationships-moved"],
+    queryKey: ["/api/dashboard/relationships-moved", selectedDirectorId],
+    queryFn: () => fetch(`/api/dashboard/relationships-moved${directorFilterParam}`).then(r => r.json()),
     enabled: isDirector,
     refetchInterval: 120000,
   });
@@ -308,7 +315,8 @@ export default function Dashboard() {
   };
   type MarginMetrics = { nams: MarginUserMetric[]; ams: MarginUserMetric[] };
   const { data: marginMetrics, isLoading: marginMetricsLoading } = useQuery<MarginMetrics>({
-    queryKey: ["/api/dashboard/margin-metrics"],
+    queryKey: ["/api/dashboard/margin-metrics", selectedDirectorId],
+    queryFn: () => fetch(`/api/dashboard/margin-metrics${directorFilterParam}`).then(r => r.json()),
     enabled: isDirector,
     refetchInterval: 120000,
   });
@@ -965,6 +973,36 @@ export default function Dashboard() {
       {/* ── Director/Admin Portlets ─────────────────────────────────────────── */}
       {isDirector && (
         <>
+          {/* Director filter toggle — admin only */}
+          {isAdmin && (() => {
+            const directors = allUsers.filter(u => u.role === "director" || u.role === "sales_director");
+            if (directors.length === 0) return null;
+            return (
+              <div className="flex items-center gap-2" data-testid="director-filter-toggle">
+                <span className="text-sm text-muted-foreground font-medium">View:</span>
+                <div className="inline-flex rounded-lg border border-border bg-muted p-1 gap-1">
+                  <button
+                    onClick={() => setSelectedDirectorId(null)}
+                    className={`px-3 py-1 text-sm rounded-md font-medium transition-colors ${selectedDirectorId === null ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    data-testid="director-filter-both"
+                  >
+                    Both
+                  </button>
+                  {directors.map(d => (
+                    <button
+                      key={d.id}
+                      onClick={() => setSelectedDirectorId(d.id)}
+                      className={`px-3 py-1 text-sm rounded-md font-medium transition-colors ${selectedDirectorId === d.id ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                      data-testid={`director-filter-${d.id}`}
+                    >
+                      {d.name.split(" ")[0]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Row 1: Small activity count portlets */}
           <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="director-activity-row">
 
