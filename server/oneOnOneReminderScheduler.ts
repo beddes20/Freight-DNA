@@ -69,7 +69,7 @@ async function getUpcomingSessionReminders(): Promise<SessionReminder[]> {
   const sessions = await storage.getActiveSessionsWithMeetingDate();
   if (sessions.length === 0) return [];
 
-  const allUsers = await storage.getUsers();
+  const defaultOrg = await storage.getDefaultOrganization(); const allUsers = defaultOrg ? await storage.getUsers(defaultOrg.id) : [];
   const reminders: SessionReminder[] = [];
 
   for (const session of sessions) {

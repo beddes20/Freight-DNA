@@ -10,7 +10,8 @@ function logMessage(msg: string) {
 const PORTAL_BASE = process.env.APP_URL || "https://sales-org-builder.replit.app";
 
 async function sendReportToUser(userId: string, period: "weekly" | "monthly"): Promise<{ ok: boolean; email: string | null }> {
-  const allUsers = await storage.getUsers();
+  const defaultOrg = await storage.getDefaultOrganization();
+  const allUsers = defaultOrg ? await storage.getUsers(defaultOrg.id) : [];
   const user = allUsers.find(u => u.id === userId);
   if (!user) return { ok: false, email: null };
 
@@ -41,7 +42,7 @@ async function sendWeeklyReports(): Promise<void> {
     return;
   }
   logMessage("Sending weekly progress reports...");
-  const allUsers = await storage.getUsers();
+  const defaultOrg = await storage.getDefaultOrganization(); const allUsers = defaultOrg ? await storage.getUsers(defaultOrg.id) : [];
   const reps = allUsers.filter(u =>
     u.role === "account_manager" || u.role === "national_account_manager" ||
     u.role === "sales" || u.role === "logistics_manager"
@@ -60,7 +61,7 @@ async function sendMonthlyReports(): Promise<void> {
     return;
   }
   logMessage("Sending monthly progress reports...");
-  const allUsers = await storage.getUsers();
+  const defaultOrg = await storage.getDefaultOrganization(); const allUsers = defaultOrg ? await storage.getUsers(defaultOrg.id) : [];
   const reps = allUsers.filter(u =>
     u.role === "account_manager" || u.role === "national_account_manager" ||
     u.role === "sales" || u.role === "logistics_manager"

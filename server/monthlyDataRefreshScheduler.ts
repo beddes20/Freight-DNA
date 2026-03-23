@@ -214,7 +214,7 @@ async function runMonthlyDataRefresh(): Promise<void> {
     await storage.setSetting("monthly_sync_failed_error", "");
     await storage.setSetting(settingKey, monthKey);
 
-    const allUsers = await storage.getUsers();
+    const defaultOrg = await storage.getDefaultOrganization(); const allUsers = defaultOrg ? await storage.getUsers(defaultOrg.id) : [];
     const admins = allUsers.filter(u => u.role === "admin");
     for (const admin of admins) {
       await storage.createNotification({
@@ -234,7 +234,7 @@ async function runMonthlyDataRefresh(): Promise<void> {
     await storage.setSetting("monthly_sync_failed_error", errorMessage);
     await storage.setSetting(settingKey, monthKey);
 
-    const allUsers = await storage.getUsers();
+    const defaultOrg = await storage.getDefaultOrganization(); const allUsers = defaultOrg ? await storage.getUsers(defaultOrg.id) : [];
     const admins = allUsers.filter(u => u.role === "admin");
     for (const admin of admins) {
       await storage.createNotification({

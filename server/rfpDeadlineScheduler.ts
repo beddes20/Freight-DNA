@@ -28,9 +28,12 @@ const THRESHOLDS = [7, 3, 1];
 async function checkRfpDeadlines(): Promise<void> {
   logMessage("Running RFP deadline check...");
 
+  const org = await storage.getDefaultOrganization();
+  if (!org) { logMessage("No default organization found, skipping."); return; }
+
   const allRfps = await storage.getRfps();
-  const allCompanies = await storage.getCompanies();
-  const allUsers = await storage.getUsers();
+  const allCompanies = await storage.getCompanies(org.id);
+  const allUsers = await storage.getUsers(org.id);
 
   const companyMap = Object.fromEntries(allCompanies.map(c => [c.id, c]));
   const userMap = Object.fromEntries(allUsers.map(u => [u.id, u]));

@@ -292,6 +292,42 @@ export async function runMigrations() {
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS dev_goals_nam_am_uniq ON development_goals(nam_id, am_id)`);
     console.log("[migrations] development_goals table ensured");
 
+    // Multi-tenant organization foundation
+    // Step 1: Create organizations table if it doesn't exist
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS organizations (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        name text NOT NULL,
+        slug text NOT NULL UNIQUE,
+        created_at timestamp DEFAULT now() NOT NULL
+      )
+    `);
+
+    // Step 2: Seed the default Value Truck organization
+    await client.query(`
+      INSERT INTO organizations (name, slug)
+      VALUES ('Value Truck', 'valuetruck')
+      ON CONFLICT (slug) DO NOTHING
+    `);
+
+    // Step 3: Get the org ID for backfilling
+    const orgResult = await client.query(`SELECT id FROM organizations WHERE slug = 'valuetruck'`);
+    const orgId = orgResult.rows[0]?.id;
+
+    if (orgId) {
+      // Step 4: Add organization_id to companies (nullable first, then NOT NULL)
+      await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS organization_id varchar REFERENCES organizations(id)`);
+      await client.query(`UPDATE companies SET organization_id = $1 WHERE organization_id IS NULL`, [orgId]);
+      await client.query(`ALTER TABLE companies ALTER COLUMN organization_id SET NOT NULL`);
+
+      // Step 5: Add organization_id to users (nullable first, then NOT NULL)
+      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS organization_id varchar REFERENCES organizations(id)`);
+      await client.query(`UPDATE users SET organization_id = $1 WHERE organization_id IS NULL`, [orgId]);
+      await client.query(`ALTER TABLE users ALTER COLUMN organization_id SET NOT NULL`);
+    }
+
+    console.log("[migrations] organizations table and org-scoping columns ensured");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

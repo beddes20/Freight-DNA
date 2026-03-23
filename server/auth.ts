@@ -10,6 +10,7 @@ const PgStore = connectPgSimple(session);
 declare module "express-session" {
   interface SessionData {
     userId: string;
+    organizationId: string;
     impersonatingAdminId?: string;
   }
 }
@@ -46,10 +47,13 @@ export function setupAuth(app: any) {
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const allUsers = await storage.getUsers();
+      const org = await storage.getDefaultOrganization();
+      if (!org) return res.status(500).json({ error: "No organization configured" });
+      const allUsers = await storage.getUsers(org.id);
       const role = allUsers.length === 0 ? "admin" : "account_manager";
 
       const user = await storage.createUser({
+        organizationId: org.id,
         username,
         password: hashedPassword,
         name,
@@ -58,6 +62,7 @@ export function setupAuth(app: any) {
       });
 
       req.session.userId = user.id;
+      req.session.organizationId = user.organizationId;
       const { password: _, ...safeUser } = user;
       res.json(safeUser);
     } catch (error) {
@@ -84,8 +89,9 @@ export function setupAuth(app: any) {
       }
 
       req.session.userId = user.id;
+      req.session.organizationId = user.organizationId;
       const now = new Date().toISOString();
-      await storage.updateUser(user.id, { lastLoginAt: now });
+      await storage.updateUser(user.id, user.organizationId, { lastLoginAt: now });
       const { password: _, ...safeUser } = user;
       res.json({ ...safeUser, lastLoginAt: now });
     } catch (error) {
@@ -127,9 +133,11 @@ export function setupAuth(app: any) {
     const target = await storage.getUser(req.params.userId);
     if (!target) return res.status(404).json({ error: "User not found" });
     if (target.role === "admin") return res.status(400).json({ error: "Cannot impersonate another admin" });
+    if (target.organizationId !== admin.organizationId) return res.status(403).json({ error: "Cannot impersonate user from a different organization" });
 
     req.session.impersonatingAdminId = adminId;
     req.session.userId = target.id;
+    req.session.organizationId = target.organizationId;
 
     const { password: _, ...safeTarget } = target;
     res.json({ ...safeTarget, isImpersonating: true, impersonatingAdminName: admin.name });
@@ -142,14 +150,21 @@ export function setupAuth(app: any) {
 
     const admin = await storage.getUser(req.session.userId);
     if (!admin) return res.status(404).json({ error: "Admin not found" });
+    req.session.organizationId = admin.organizationId;
     const { password: _, ...safeAdmin } = admin;
     res.json({ ...safeAdmin, isImpersonating: false, impersonatingAdminName: null });
   });
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) {
     return res.status(401).json({ error: "Authentication required" });
+  }
+  if (!req.session.organizationId) {
+    const user = await storage.getUser(req.session.userId);
+    if (user) {
+      req.session.organizationId = user.organizationId;
+    }
   }
   next();
 }
@@ -163,11 +178,11 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
 export async function getVisibleCompanyIds(user: User): Promise<string[] | null> {
   if (user.role === "admin") return null;
 
-  const allCompanies = await storage.getCompanies();
+  const allCompanies = await storage.getCompanies(user.organizationId);
 
   // Directors and NAMs: see their whole team's accounts (assignedTo)
   if (user.role === "director" || user.role === "national_account_manager") {
-    const teamIds = await storage.getTeamMemberIds(user.id);
+    const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
     return allCompanies
       .filter(c => c.assignedTo && (teamIds.includes(c.assignedTo) || c.assignedTo === user.id))
       .map(c => c.id);
@@ -182,7 +197,7 @@ export async function getVisibleCompanyIds(user: User): Promise<string[] | null>
 
   // Sales directors: see all accounts linked to anyone on their team as salesperson
   if (user.role === "sales_director") {
-    const teamIds = await storage.getTeamMemberIds(user.id);
+    const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
     const allIds = new Set([user.id, ...teamIds]);
     return allCompanies
       .filter(c => (c as any).salesPersonId && allIds.has((c as any).salesPersonId))

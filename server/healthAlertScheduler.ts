@@ -67,9 +67,11 @@ async function checkHealthDrops() {
     const prevSetting = await storage.getSetting("health_grades_yesterday");
     const prevGrades: Record<string, string> = prevSetting ? JSON.parse(prevSetting) : {};
 
+    const defaultOrg = await storage.getDefaultOrganization();
+    if (!defaultOrg) { log("No default organization found, skipping."); return; }
     const [allCompanies, allUsers, allRfps, allAwards, allUploads] = await Promise.all([
-      storage.getCompanies(),
-      storage.getUsers(),
+      storage.getCompanies(defaultOrg.id),
+      storage.getUsers(defaultOrg.id),
       storage.getRfps(),
       storage.getAwards(),
       storage.getFinancialUploads(),

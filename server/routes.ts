@@ -154,13 +154,13 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
   };
 }
 
-async function getVisibleFeedAuthorIds(user: { id: string; role: string; managerId: string | null }): Promise<string[] | undefined> {
+async function getVisibleFeedAuthorIds(user: { id: string; role: string; managerId: string | null; organizationId: string }): Promise<string[] | undefined> {
   if (user.role === "admin") return undefined;
   if (user.role === "director" || user.role === "sales_director") {
-    return storage.getTeamMemberIds(user.id);
+    return storage.getTeamMemberIds(user.id, user.organizationId);
   }
   if (user.role === "national_account_manager" || user.role === "sales") {
-    const ids = await storage.getTeamMemberIds(user.id);
+    const ids = await storage.getTeamMemberIds(user.id, user.organizationId);
     if (user.managerId) ids.push(user.managerId);
     return ids;
   }
@@ -512,11 +512,11 @@ export async function registerRoutes(
       const q = (req.query.q as string || "").trim();
       if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [] });
       const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, allCompanies] = await Promise.all([
-        storage.searchCompanies(q),
-        storage.searchUsers(q, ["account_manager", "national_account_manager", "director", "sales"]),
+        storage.searchCompanies(q, req.session.organizationId!),
+        storage.searchUsers(q, ["account_manager", "national_account_manager", "director", "sales"], req.session.organizationId!),
         storage.searchContacts(q),
         storage.searchRfps(q),
-        storage.getCompanies(),
+        storage.getCompanies(req.session.organizationId!),
       ]);
       const companyNameMap = new Map(allCompanies.map(c => [c.id, c.name]));
       const accounts = matchedCompanies.map(c => ({ id: c.id, name: c.name }));
@@ -532,7 +532,7 @@ export async function registerRoutes(
 
   app.get("/api/users/sales", requireAuth, async (req, res) => {
     try {
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const salesUsers = allUsers
         .filter(u => u.role === "sales" || u.role === "sales_director")
         .map(({ password, ...u }) => u);
@@ -549,10 +549,10 @@ export async function registerRoutes(
       if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
         return res.status(403).json({ error: "Access required" });
       }
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const safeUsers = allUsers.map(({ password, ...u }) => u);
       if (currentUser.role === "admin") return res.json(safeUsers);
-      const teamIds = await storage.getTeamMemberIds(currentUser.id);
+      const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
       return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch users" });
@@ -583,6 +583,7 @@ export async function registerRoutes(
       const assignedRole = isNamOrDirector ? "account_manager" : requestedRole;
       const assignedManagerId = isNamOrDirector ? currentUser.id : (managerId || null);
       const user = await storage.createUser({
+        organizationId: req.session.organizationId!,
         username,
         password: hashedPassword,
         name,
@@ -639,7 +640,7 @@ export async function registerRoutes(
           skipped.push(name);
           continue;
         }
-        await storage.createUser({ username: email, password: hashedPassword, name, role, managerId: null });
+        await storage.createUser({ organizationId: req.session.organizationId!, username: email, password: hashedPassword, name, role, managerId: null });
         created.push(name);
       }
 
@@ -658,7 +659,7 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access required" });
       }
       if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
-        const teamIds = await storage.getTeamMemberIds(currentUser.id);
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
         if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
           return res.status(403).json({ error: "Cannot edit this user" });
         }
@@ -678,7 +679,7 @@ export async function registerRoutes(
         if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
         if (req.body.financialRepId !== undefined) data.financialRepId = req.body.financialRepId || null;
       }
-      const user = await storage.updateUser(req.params.id, data);
+      const user = await storage.updateUser(req.params.id, currentUser.organizationId, data);
       if (!user) return res.status(404).json({ error: "User not found" });
       const { password: _, ...safeUser } = user;
       res.json(safeUser);
@@ -695,7 +696,7 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access required" });
       }
       if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
-        const teamIds = await storage.getTeamMemberIds(currentUser.id);
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
         if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
           return res.status(403).json({ error: "Cannot delete this user" });
         }
@@ -703,7 +704,7 @@ export async function registerRoutes(
       if (req.params.id === currentUser.id) {
         return res.status(400).json({ error: "Cannot delete yourself" });
       }
-      const deleted = await storage.deleteUser(req.params.id);
+      const deleted = await storage.deleteUser(req.params.id, currentUser.organizationId);
       if (!deleted) return res.status(404).json({ error: "User not found" });
       res.status(204).send();
     } catch (error) {
@@ -716,7 +717,7 @@ export async function registerRoutes(
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
 
-      let allCompanies = await storage.getCompanies();
+      let allCompanies = await storage.getCompanies(req.session.organizationId!);
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         allCompanies = allCompanies.filter(c => visibleIds.includes(c.id));
@@ -736,7 +737,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompany(req.params.id);
+      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
       if (!company) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -754,13 +755,13 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const safeUsers = allUsers.map(({ password, ...u }) => u);
       if (currentUser.role === "admin") {
         return res.json(safeUsers);
       }
       if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
-        const teamIds = await storage.getTeamMemberIds(currentUser.id);
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
         const visibleIds = new Set([...teamIds, currentUser.id]);
         // Always include manager (they can post replies to this user's sessions)
         if (currentUser.managerId) visibleIds.add(currentUser.managerId);
@@ -793,9 +794,9 @@ export async function registerRoutes(
     return 0;
   }
 
-  async function fanOutCelebration(type: "new_account" | "new_contact" | "base_advanced", title: string, body: string, link: string, relatedId: string, actorId: string) {
+  async function fanOutCelebration(type: "new_account" | "new_contact" | "base_advanced", title: string, body: string, link: string, relatedId: string, actorId: string, organizationId: string) {
     try {
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(organizationId);
       const actor = allUsers.find(u => u.id === actorId);
       const notifyIds = new Set<string>();
       // Walk up the manager chain from the actor
@@ -825,12 +826,12 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      const data = { ...parsed.data };
+      const data: typeof parsed.data & { organizationId: string } = { ...parsed.data, organizationId: req.session.organizationId! };
       if (currentUser.role === "admin") {
         // admin can assign to anyone — leave assignedTo as-is
       } else if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         if (data.assignedTo) {
-          const teamIds = await storage.getTeamMemberIds(currentUser.id);
+          const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
           if (!teamIds.includes(data.assignedTo)) {
             data.assignedTo = currentUser.id;
           }
@@ -847,7 +848,8 @@ export async function registerRoutes(
         `${currentUser.name} just added a new account to the CRM.`,
         `/companies/${company.id}`,
         company.id,
-        currentUser.id
+        currentUser.id,
+        req.session.organizationId!
       );
       res.status(201).json(company);
     } catch (error) {
@@ -871,7 +873,7 @@ export async function registerRoutes(
       if (currentUser.role !== "admin") {
         delete (data as any).assignedTo;
       }
-      const company = await storage.updateCompany(req.params.id, data);
+      const company = await storage.updateCompany(req.params.id, currentUser.organizationId, data);
       if (!company) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -890,7 +892,7 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
       const { financialAlias } = req.body;
-      const company = await storage.updateCompany(req.params.id, { financialAlias: financialAlias || null } as any);
+      const company = await storage.updateCompany(req.params.id, currentUser.organizationId, { financialAlias: financialAlias || null } as any);
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);
     } catch (error) {
@@ -906,7 +908,7 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
       const { salesPersonId } = req.body;
-      const company = await storage.updateCompany(req.params.id, { salesPersonId: salesPersonId || null } as any);
+      const company = await storage.updateCompany(req.params.id, currentUser.organizationId, { salesPersonId: salesPersonId || null } as any);
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);
     } catch (error) {
@@ -927,14 +929,14 @@ export async function registerRoutes(
       const { assignedTo } = req.body;
       if (!assignedTo) return res.status(400).json({ error: "assignedTo is required" });
       if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
-        const teamIds = await storage.getTeamMemberIds(currentUser.id);
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
         if (!teamIds.includes(assignedTo)) {
           return res.status(403).json({ error: "Can only assign to team members" });
         }
       }
-      const existing = await storage.getCompany(req.params.id);
+      const existing = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
       if (!existing) return res.status(404).json({ error: "Company not found" });
-      const company = await storage.updateCompany(req.params.id, { ...existing, assignedTo });
+      const company = await storage.updateCompany(req.params.id, currentUser.organizationId, { ...existing, assignedTo });
       if (!company) return res.status(404).json({ error: "Company not found" });
       // Notify the new assignee if they're different from the actor
       if (assignedTo !== currentUser.id && assignedTo !== existing.assignedTo) {
@@ -961,7 +963,7 @@ export async function registerRoutes(
       if (!(await canAccessCompany(currentUser, req.params.id))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteCompany(req.params.id);
+      const deleted = await storage.deleteCompany(req.params.id, currentUser.organizationId);
       if (!deleted) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -979,7 +981,7 @@ export async function registerRoutes(
       if (!(await canAccessCompany(currentUser, req.params.id))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.archiveCompany(req.params.id);
+      const updated = await storage.archiveCompany(req.params.id, currentUser.organizationId);
       if (!updated) return res.status(404).json({ error: "Company not found" });
       res.json(updated);
     } catch (error) {
@@ -994,7 +996,7 @@ export async function registerRoutes(
       if (!(await canAccessCompany(currentUser, req.params.id))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.unarchiveCompany(req.params.id);
+      const updated = await storage.unarchiveCompany(req.params.id, currentUser.organizationId);
       if (!updated) return res.status(404).json({ error: "Company not found" });
       res.json(updated);
     } catch (error) {
@@ -1051,14 +1053,16 @@ export async function registerRoutes(
         return res.status(400).json({ error: parsed.error.message });
       }
       const contact = await storage.createContact(parsed.data);
-      storage.getCompany(req.params.companyId).then(co => {
+      const _orgIdForFanOut1 = req.session.organizationId!;
+      storage.getCompanyInOrg(req.params.companyId, _orgIdForFanOut1).then(co => {
         fanOutCelebration(
           "new_contact",
           `🎉 New contact: ${contact.name}`,
           `${currentUser.name} added ${contact.name}${contact.title ? ` (${contact.title})` : ""} at ${co?.name ?? "an account"}.`,
           `/companies/${req.params.companyId}`,
           contact.id,
-          currentUser.id
+          currentUser.id,
+          _orgIdForFanOut1
         );
       }).catch(() => {});
       res.status(201).json(contact);
@@ -1124,14 +1128,16 @@ export async function registerRoutes(
         const oldRank = getBaseRank(existing.relationshipBase);
         const newRank = getBaseRank(parsed.data.relationshipBase);
         if (newRank > oldRank && newRank > 0) {
-          storage.getCompany(existing.companyId).then(co => {
+          const _orgIdForFanOut2 = req.session.organizationId!;
+          storage.getCompanyInOrg(existing.companyId, _orgIdForFanOut2).then(co => {
             fanOutCelebration(
               "base_advanced",
               `🎉 Relationship advanced: ${parsed.data.name ?? existing.name}`,
               `${currentUser.name} moved ${parsed.data.name ?? existing.name} at ${co?.name ?? "an account"} from ${existing.relationshipBase ?? "no base"} → ${parsed.data.relationshipBase}.`,
               `/companies/${existing.companyId}`,
               req.params.id,
-              currentUser.id
+              currentUser.id,
+              _orgIdForFanOut2
             );
           }).catch(() => {});
         }
@@ -1213,7 +1219,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Company ID is required" });
       }
 
-      const company = await storage.getCompany(companyId);
+      const company = await storage.getCompanyInOrg(companyId, req.session.organizationId!);
       if (!company) {
         return res.status(400).json({ error: "Company not found" });
       }
@@ -1697,7 +1703,7 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompany(req.params.id);
+      const company = await storage.getCompanyInOrg(req.params.id, user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const customerName = (company.financialAlias || company.name).toLowerCase().trim();
@@ -1861,16 +1867,16 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       // Determine visible companies based on role
-      let companies = await storage.getCompanies();
+      let companies = await storage.getCompanies(req.session.organizationId!);
       if (user.role !== "admin") {
-        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         teamIds.push(user.id);
         companies = companies.filter(c => c.assignedTo && teamIds.includes(c.assignedTo));
       }
 
       const companyIds = new Set(companies.map(c => c.id));
       const allEntries = await storage.getAllMarketShareEntries();
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
 
       // Group entries by company, sorted by periodStart asc (already ordered)
       const byCompany: Record<string, typeof allEntries> = {};
@@ -1936,7 +1942,7 @@ export async function registerRoutes(
       if (user.role === "admin") {
         filtered = allTasks;
       } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
-        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         filtered = allTasks.filter(t => teamIds.includes(t.assignedTo) || teamIds.includes(t.assignedBy));
       } else {
         filtered = allTasks.filter(t => t.assignedTo === user.id || t.assignedBy === user.id);
@@ -1979,12 +1985,12 @@ export async function registerRoutes(
       if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
         return res.status(400).json({ error: "Invalid date format" });
       }
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       let assignableIds: Set<string>;
       if (user.role === "admin") {
         assignableIds = new Set(allUsers.map(u => u.id));
       } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
-        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         assignableIds = new Set(teamIds);
         // Also allow assigning upward to their manager and all admins
         if (user.managerId) assignableIds.add(user.managerId);
@@ -2408,7 +2414,7 @@ export async function registerRoutes(
       // Fan out notification to team members who can see this post
       (async () => {
         try {
-          const allUsers = await storage.getUsers();
+          const allUsers = await storage.getUsers(req.session.organizationId!);
           const directReports = allUsers.filter(u => u.managerId === user.id).map(u => u.id);
           const grandReports = allUsers.filter(u => directReports.includes(u.managerId ?? "")).map(u => u.id);
           let recipientIds: string[];
@@ -2544,7 +2550,7 @@ export async function registerRoutes(
         visibleCallouts = await storage.getCallouts();
       } else {
         visibleCallouts = await storage.getCallouts();
-        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         const teamSet = new Set(teamIds);
         visibleCallouts = visibleCallouts.filter(c => teamSet.has(c.authorId));
       }
@@ -2904,8 +2910,8 @@ export async function registerRoutes(
       allRows = allRows.filter((r: any) => getStatusFromRow(r, histCols) !== "void");
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
-        const teamIds = await storage.getTeamMemberIds(user.id);
-        const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
         allRows = allRows.filter((r: any) => {
           const op = getRepFromRow(r, histCols);
@@ -2964,8 +2970,8 @@ export async function registerRoutes(
       allRows = allRows.filter((r: any) => getStatusFromRow(r, oppCols) !== "void");
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
-        const teamIds = await storage.getTeamMemberIds(user.id);
-        const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
         allRows = allRows.filter((r: any) => {
           const op = getRepFromRow(r, oppCols);
@@ -3017,7 +3023,7 @@ export async function registerRoutes(
       if (visibleIds !== null) {
         allRfps = allRfps.filter(r => visibleIds.includes(r.companyId));
       }
-      const allCompanies = await storage.getCompanies();
+      const allCompanies = await storage.getCompanies(req.session.organizationId!);
       const companyMap = new Map(allCompanies.map(c => [c.id, c]));
 
       const hotLocationSet = new Map<string, { peakWeekly: number; avgWeekly: number }>();
@@ -3110,8 +3116,8 @@ export async function registerRoutes(
       let rows = rawRows.filter((r: any) => getStatusFromRow(r, finCols) !== "void");
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
-        const teamIds = await storage.getTeamMemberIds(user.id);
-        const teamUsers = (await storage.getUsers()).filter(u => teamIds.includes(u.id));
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
         const teamNames = teamUsers.map(u => u.name.toLowerCase());
         rows = rows.filter((r: any) => {
           const op = getRepFromRow(r, finCols);
@@ -3198,7 +3204,7 @@ export async function registerRoutes(
     if (customerSalesMap.size === 0) return;
 
     // Load sales users
-    const allUsers = await storage.getUsers();
+    const allUsers = await storage.getUsers(req.session.organizationId!);
     const salesUsers = allUsers.filter(u => u.role === "sales" || u.role === "sales_director");
     if (salesUsers.length === 0) return;
 
@@ -3218,7 +3224,7 @@ export async function registerRoutes(
     }
 
     // Load companies
-    const allCompanies = await storage.getCompanies();
+    const allCompanies = await storage.getCompanies(req.session.organizationId!);
 
     for (const company of allCompanies) {
       const alias = (company.financialAlias || "").toLowerCase().trim();
@@ -3237,7 +3243,7 @@ export async function registerRoutes(
       if (!matched) continue;
       // Update only if changed
       if (company.salesPersonId !== matched.id) {
-        await storage.updateCompany(company.id, { salesPersonId: matched.id });
+        await storage.updateCompany(company.id, req.session.organizationId!, { salesPersonId: matched.id });
         console.log(`[salesperson-link] ${company.name} → ${matched.name} (${bestSp})`);
       }
     }
@@ -3580,7 +3586,7 @@ export async function registerRoutes(
 
       const txRows: any[] = (latest.rows as any[]) || [];
       const cols = resolveColumns(txRows);
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
 
       function backendMatchRep(excelName: string, userName: string): boolean {
         const a = excelName.toLowerCase().trim();
@@ -3885,7 +3891,7 @@ export async function registerRoutes(
       const allRfps = await storage.getRfps();
       const visibleIds = await getVisibleCompanyIds(currentUser);
       const visibleRfps = visibleIds === null ? allRfps : allRfps.filter(r => r.companyId && visibleIds.includes(r.companyId));
-      const allCompanies = await storage.getCompanies();
+      const allCompanies = await storage.getCompanies(req.session.organizationId!);
       const visibleCompanies = visibleIds === null ? allCompanies : allCompanies.filter(c => visibleIds.includes(c.id));
       const companyMap = new Map(visibleCompanies.map(c => [c.id, c.name]));
       const opportunities: any[] = [];
@@ -4007,7 +4013,7 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const company = await storage.getCompany(req.params.id);
+      const company = await storage.getCompanyInOrg(req.params.id, user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const uploads = await storage.getFinancialUploads();
@@ -4098,8 +4104,8 @@ export async function registerRoutes(
     try {
       const uploads = await storage.getFinancialUploads();
       const rfps = await storage.getRfps();
-      const companies = await storage.getCompanies();
-      const users = await storage.getUsers();
+      const companies = await storage.getCompanies(req.session.organizationId!);
+      const users = await storage.getUsers(req.session.organizationId!);
 
       const companyMap = Object.fromEntries(companies.map((c: any) => [c.id, c]));
       const userMap = Object.fromEntries(users.map((u: any) => [u.id, u.name]));
@@ -4346,7 +4352,7 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       let pairs: Array<{ namId: string; amId: string }> = [];
 
       const amLikeRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
@@ -4387,7 +4393,7 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const safeUsers = allUsers.map(({ password, ...u }) => u);
       let pairs: Array<{ namId: string; amId: string }> = [];
 
@@ -4447,7 +4453,7 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       let pairs: Array<{ namId: string; amId: string }> = [];
 
       const amLikeRoles2 = ["account_manager", "logistics_manager", "logistics_coordinator"];
@@ -4500,7 +4506,7 @@ export async function registerRoutes(
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
 
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const safeUsers = allUsers.map(({ password, ...u }) => u);
 
       if (currentUser.role === "account_manager" || currentUser.role === "logistics_manager" || currentUser.role === "logistics_coordinator") {
@@ -4851,10 +4857,10 @@ export async function registerRoutes(
       if (amEquivRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
       let teamIds: string[];
       if (user.role === "admin") {
-        const allUsers = await storage.getUsers();
+        const allUsers = await storage.getUsers(req.session.organizationId!);
         teamIds = allUsers.filter(u => u.role === "account_manager" || u.role === "national_account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator" || u.role === "director" || u.role === "sales_director" || u.role === "sales").map(u => u.id);
       } else {
-        teamIds = await storage.getTeamMemberIds(user.id);
+        teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
       }
 
       const now = new Date();
@@ -4896,7 +4902,7 @@ export async function registerRoutes(
       const [perf, prevPerf, allUsers] = await Promise.all([
         storage.getTeamPerformance(teamIds, startDate, endDate),
         storage.getTeamPerformance(teamIds, prevStartDate, prevEndDate),
-        storage.getUsers(),
+        storage.getUsers(req.session.organizationId!),
       ]);
       const prevPerfMap: Record<string, typeof prevPerf[0]> = {};
       for (const p of prevPerf) prevPerfMap[p.userId] = p;
@@ -4972,14 +4978,14 @@ export async function registerRoutes(
       const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
       if (!managerRoles.includes(viewer.role)) return res.status(403).json({ error: "Access denied" });
 
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const salesRoles = ["account_manager", "national_account_manager", "sales", "logistics_manager", "sales_director", "director"];
 
       let targetIds: string[];
       if (viewer.role === "admin") {
         targetIds = allUsers.filter(u => salesRoles.includes(u.role)).map(u => u.id);
       } else {
-        const teamIds = await storage.getTeamMemberIds(viewer.id);
+        const teamIds = await storage.getTeamMemberIds(viewer.id, viewer.organizationId);
         targetIds = teamIds.filter(id => {
           if (id === viewer.id) return false;
           const u = allUsers.find(u => u.id === id);
@@ -5007,14 +5013,14 @@ export async function registerRoutes(
       if (!managerRoles.includes(viewer.role)) return res.status(403).json({ error: "Access denied" });
 
       const period: "weekly" | "monthly" = req.body?.period === "weekly" ? "weekly" : "monthly";
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const salesRoles = ["account_manager", "national_account_manager", "sales", "logistics_manager", "sales_director", "director"];
 
       let targetIds: string[];
       if (viewer.role === "admin") {
         targetIds = allUsers.filter(u => salesRoles.includes(u.role)).map(u => u.id);
       } else {
-        const teamIds = await storage.getTeamMemberIds(viewer.id);
+        const teamIds = await storage.getTeamMemberIds(viewer.id, viewer.organizationId);
         targetIds = teamIds.filter(id => {
           if (id === viewer.id) return false;
           const u = allUsers.find(u => u.id === id);
@@ -5121,7 +5127,7 @@ export async function registerRoutes(
       }
 
       // Enrich goals with auto-computed values so dashboard alerts use accurate data
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const uploads = await storage.getFinancialUploads();
       const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
 
@@ -5197,7 +5203,7 @@ export async function registerRoutes(
 
       // All goals across the org (NAMs see company-wide leaderboard)
       const allGoals = await storage.getGoals({});
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
 
       const todayStr = new Date().toISOString().slice(0, 10);
       const activeGoals = allGoals.filter(g => g.startDate <= todayStr && g.endDate >= todayStr);
@@ -5289,7 +5295,7 @@ export async function registerRoutes(
       if (user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.status(403).json({ error: "Only managers can create goals" });
       // AMs can only set goals for users who report directly to them
       if (user.role === "account_manager") {
-        const allUsers = await storage.getUsers();
+        const allUsers = await storage.getUsers(req.session.organizationId!);
         const targetUser = allUsers.find(u => u.id === req.body.amId);
         if (!targetUser || targetUser.managerId !== user.id) {
           return res.status(403).json({ error: "You can only set goals for your direct reports" });
@@ -5522,7 +5528,7 @@ export async function registerRoutes(
       const goal = await storage.getGoal(req.params.id);
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       let autoValue: number | null = null;
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const targetUser = allUsers.find(u => u.id === goal.amId);
       const isLMGoal = targetUser?.role === "logistics_manager";
 
@@ -5622,7 +5628,7 @@ export async function registerRoutes(
     try {
       const goal = await storage.getGoal(req.params.id);
       if (!goal) return res.status(404).json({ error: "Goal not found" });
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const amUser = allUsers.find(u => u.id === goal.amId);
       const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
       if (!repKey) return res.json({ months: [] });
@@ -5707,7 +5713,7 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const [company, touchpoints, contacts, allRfps, allAwards, uploads] = await Promise.all([
-        storage.getCompany(req.params.id),
+        storage.getCompanyInOrg(req.params.id, user.organizationId),
         storage.getTouchpointsByCompany(req.params.id),
         storage.getContactsByCompany(req.params.id),
         storage.getRfps(),
@@ -5828,7 +5834,7 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (!(await canAccessCompany(user, req.params.id))) return res.status(403).json({ error: "Access denied" });
       const tps = await storage.getTouchpointsByCompany(req.params.id);
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const contactsList = await storage.getContactsByCompany(req.params.id);
       const enriched = tps.map(tp => ({
         ...tp,
@@ -5875,7 +5881,7 @@ export async function registerRoutes(
         return res.json(results);
       }
       if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
-        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         const results = await storage.getColdContacts(null, days, teamIds);
         return res.json(results);
       }
@@ -5896,7 +5902,7 @@ export async function registerRoutes(
         return res.json(results);
       }
       if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
-        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         const results = await storage.getMeaningfulOverdueContacts(null, days, teamIds);
         return res.json(results);
       }
@@ -5912,7 +5918,7 @@ export async function registerRoutes(
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const companies = await storage.getCompanies();
+      const companies = await storage.getCompanies(req.session.organizationId!);
       const uploads = await storage.getFinancialUploads();
       const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
       const msCols = resolveColumns(allRows);
@@ -6011,7 +6017,7 @@ export async function registerRoutes(
         if (!task) return false;
         if (user.role === "admin") return true;
         if (task.assignedTo === user.id || task.assignedBy === user.id) return true;
-        const teamIds = await storage.getTeamMemberIds(user.id);
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         return teamIds.includes(task.assignedTo) || teamIds.includes(task.assignedBy);
       }
       if (entityType === "touchpoint") {
@@ -6192,7 +6198,7 @@ export async function registerRoutes(
       const allItems = await Promise.all(passoffs.map(p => storage.getPtoPassoffItems(p.id)));
       // Collect all unique companyIds across all items to batch-fetch names
       const allCompanyIds = [...new Set(allItems.flat().map(i => i.companyId).filter(Boolean) as string[])];
-      const allCompanies = allCompanyIds.length > 0 ? await storage.getCompaniesByIds(allCompanyIds) : [];
+      const allCompanies = allCompanyIds.length > 0 ? await storage.getCompaniesByIds(allCompanyIds, req.session.organizationId!) : [];
       const companyNameMap = new Map(allCompanies.map(c => [c.id, c.name]));
       res.json(passoffs.map((p, i) => ({
         ...p,
@@ -6346,7 +6352,7 @@ export async function registerRoutes(
           const item = items.find(i => i.id === req.params.itemId);
           let body = "Account acknowledged in your passoff";
           if (item?.companyId) {
-            const company = await storage.getCompany(item.companyId);
+            const company = await storage.getCompanyInOrg(item.companyId, currentUser.organizationId);
             if (company) body = `Acknowledged: ${company.name}`;
           }
           storage.createNotification({
@@ -6475,7 +6481,7 @@ export async function registerRoutes(
       const today = new Date().toISOString().slice(0, 10);
       const [allTasks, allCompanies, tps, streak] = await Promise.all([
         storage.getTasks(),
-        storage.getCompanies(),
+        storage.getCompanies(req.session.organizationId!),
         storage.getTouchpointsByUser(user.id, today),
         (async () => {
           const goalSetting = await storage.getSetting("streak_goal");
@@ -6573,7 +6579,7 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       if (!nominationAllowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
       let nominations = await storage.getPromotionNominations();
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(req.session.organizationId!);
       const usersById = Object.fromEntries(allUsers.map(u => [u.id, u]));
       if (user.role === "national_account_manager") {
         const directReportIds = new Set(allUsers.filter(u => u.managerId === user.id).map(u => u.id));
@@ -6738,7 +6744,7 @@ export async function registerRoutes(
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompany(req.params.id);
+      const company = await storage.getCompanyInOrg(req.params.id, user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const now = new Date();
       const tp = await storage.createTouchpoint({
@@ -6769,7 +6775,7 @@ export async function registerRoutes(
       if (type && !validTypes.includes(type)) return res.status(400).json({ error: "Invalid touch type" });
       if (sentiment && !validVibes.includes(sentiment)) return res.status(400).json({ error: "Invalid sentiment" });
       if (!(await canAccessCompany(user, companyId))) return res.status(403).json({ error: "Access denied" });
-      const company = await storage.getCompany(companyId);
+      const company = await storage.getCompanyInOrg(companyId, user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const now = new Date();
       const tp = await storage.createTouchpoint({

@@ -29,11 +29,13 @@ async function sendDailyDigests(): Promise<void> {
 
   logMessage("Running daily digest...");
 
-  const allUsers = await storage.getUsers();
+  const defaultOrg = await storage.getDefaultOrganization();
+  if (!defaultOrg) { logMessage("No default organization found, skipping."); return; }
+  const allUsers = await storage.getUsers(defaultOrg.id);
   const allTasks = await storage.getTasks();
   const allContacts = await storage.getContacts();
   const allTouchpoints = await storage.getTouchpoints ? await storage.getTouchpoints() : [];
-  const allCompanies = await storage.getCompanies();
+  const allCompanies = await storage.getCompanies(defaultOrg.id);
   const companyMap = Object.fromEntries(allCompanies.map(c => [c.id, c]));
   const todayStr = today.toISOString().split("T")[0];
 

@@ -4,6 +4,7 @@ import pg from "pg";
 import {
   users,
   companies,
+  organizations,
   contacts,
   rfps,
   awards,
@@ -22,6 +23,7 @@ import {
   goalComments,
   touchpoints,
   internalPosts,
+  type Organization,
   type User,
   type InsertUser,
   type Company,
@@ -121,22 +123,32 @@ export interface RepReportData {
 }
 
 export interface IStorage {
+  getDefaultOrganization(): Promise<Organization | undefined>;
+
+  /** Auth-only lookup by PK — trusted IDs only (session, FK chains). No org filter. */
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
-  getUsers(): Promise<User[]>;
+  getUsers(organizationId: string): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
-  updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined>;
-  deleteUser(id: string): Promise<boolean>;
-  getTeamMemberIds(userId: string): Promise<string[]>;
+  /** Route-level update — scoped to org to prevent cross-tenant writes. */
+  updateUser(id: string, organizationId: string, data: Partial<InsertUser>): Promise<User | undefined>;
+  /** Route-level delete — scoped to org to prevent cross-tenant deletes. */
+  deleteUser(id: string, organizationId: string): Promise<boolean>;
+  /** Org-scoped team traversal — organizationId is mandatory. */
+  getTeamMemberIds(userId: string, organizationId: string): Promise<string[]>;
   
-  getCompanies(): Promise<Company[]>;
-  getCompaniesByIds(ids: string[]): Promise<Company[]>;
+  getCompanies(organizationId: string): Promise<Company[]>;
+  getCompaniesByIds(ids: string[], organizationId: string): Promise<Company[]>;
+  /** Auth-only / FK-chain lookup by PK — trusted IDs only. No org filter. */
   getCompany(id: string): Promise<Company | undefined>;
+  /** Route-level company lookup — scoped to org, returns undefined if not in org. */
+  getCompanyInOrg(id: string, organizationId: string): Promise<Company | undefined>;
   createCompany(company: InsertCompany): Promise<Company>;
-  updateCompany(id: string, company: InsertCompany): Promise<Company | undefined>;
-  deleteCompany(id: string): Promise<boolean>;
-  archiveCompany(id: string): Promise<Company | undefined>;
-  unarchiveCompany(id: string): Promise<Company | undefined>;
+  /** Route-level update — scoped to org to prevent cross-tenant writes. */
+  updateCompany(id: string, organizationId: string, company: Partial<InsertCompany>): Promise<Company | undefined>;
+  deleteCompany(id: string, organizationId: string): Promise<boolean>;
+  archiveCompany(id: string, organizationId: string): Promise<Company | undefined>;
+  unarchiveCompany(id: string, organizationId: string): Promise<Company | undefined>;
   
   getContacts(): Promise<Contact[]>;
   getContactsByCompany(companyId: string): Promise<Contact[]>;
@@ -165,8 +177,8 @@ export interface IStorage {
   deleteAllFinancialUploads(): Promise<void>;
   deleteEmptyFinancialUploads(): Promise<number>;
 
-  searchCompanies(query: string): Promise<Company[]>;
-  searchUsers(query: string, roles: string[]): Promise<Omit<User, 'password'>[]>;
+  searchCompanies(query: string, organizationId: string): Promise<Company[]>;
+  searchUsers(query: string, roles: string[], organizationId: string): Promise<Omit<User, 'password'>[]>;
 
   getTasks(): Promise<Task[]>;
   getTasksByCompany(companyId: string): Promise<Task[]>;
@@ -323,6 +335,11 @@ const pool = new Pool({
 const db = drizzle(pool);
 
 export class DatabaseStorage implements IStorage {
+  async getDefaultOrganization(): Promise<Organization | undefined> {
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, "valuetruck"));
+    return org;
+  }
+
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
@@ -333,8 +350,8 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async getUsers(): Promise<User[]> {
-    return db.select().from(users);
+  async getUsers(organizationId: string): Promise<User[]> {
+    return db.select().from(users).where(eq(users.organizationId, organizationId));
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
@@ -342,22 +359,24 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined> {
-    const [updated] = await db.update(users).set(data).where(eq(users.id, id)).returning();
+  async updateUser(id: string, organizationId: string, data: Partial<InsertUser>): Promise<User | undefined> {
+    const [updated] = await db.update(users).set(data).where(and(eq(users.id, id), eq(users.organizationId, organizationId))).returning();
     return updated;
   }
 
-  async deleteUser(id: string): Promise<boolean> {
-    const result = await db.delete(users).where(eq(users.id, id)).returning();
+  async deleteUser(id: string, organizationId: string): Promise<boolean> {
+    const result = await db.delete(users).where(and(eq(users.id, id), eq(users.organizationId, organizationId))).returning();
     return result.length > 0;
   }
 
-  async getTeamMemberIds(userId: string): Promise<string[]> {
+  async getTeamMemberIds(userId: string, organizationId: string): Promise<string[]> {
     const ids = [userId];
     const queue = [userId];
     while (queue.length > 0) {
       const currentId = queue.shift()!;
-      const directReports = await db.select().from(users).where(eq(users.managerId, currentId));
+      const directReports = await db.select().from(users).where(
+        and(eq(users.managerId, currentId), eq(users.organizationId, organizationId))
+      );
       for (const report of directReports) {
         if (!ids.includes(report.id)) {
           ids.push(report.id);
@@ -368,17 +387,22 @@ export class DatabaseStorage implements IStorage {
     return ids;
   }
 
-  async getCompanies(): Promise<Company[]> {
-    return db.select().from(companies);
+  async getCompanies(organizationId: string): Promise<Company[]> {
+    return db.select().from(companies).where(eq(companies.organizationId, organizationId));
   }
 
-  async getCompaniesByIds(ids: string[]): Promise<Company[]> {
+  async getCompaniesByIds(ids: string[], organizationId: string): Promise<Company[]> {
     if (ids.length === 0) return [];
-    return db.select().from(companies).where(inArray(companies.id, ids));
+    return db.select().from(companies).where(and(inArray(companies.id, ids), eq(companies.organizationId, organizationId)));
   }
 
   async getCompany(id: string): Promise<Company | undefined> {
     const [company] = await db.select().from(companies).where(eq(companies.id, id));
+    return company;
+  }
+
+  async getCompanyInOrg(id: string, organizationId: string): Promise<Company | undefined> {
+    const [company] = await db.select().from(companies).where(and(eq(companies.id, id), eq(companies.organizationId, organizationId)));
     return company;
   }
 
@@ -387,34 +411,34 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updateCompany(id: string, company: InsertCompany): Promise<Company | undefined> {
+  async updateCompany(id: string, organizationId: string, company: Partial<InsertCompany>): Promise<Company | undefined> {
     const [updated] = await db
       .update(companies)
       .set(company)
-      .where(eq(companies.id, id))
+      .where(and(eq(companies.id, id), eq(companies.organizationId, organizationId)))
       .returning();
     return updated;
   }
 
-  async deleteCompany(id: string): Promise<boolean> {
-    const result = await db.delete(companies).where(eq(companies.id, id)).returning();
+  async deleteCompany(id: string, organizationId: string): Promise<boolean> {
+    const result = await db.delete(companies).where(and(eq(companies.id, id), eq(companies.organizationId, organizationId))).returning();
     return result.length > 0;
   }
 
-  async archiveCompany(id: string): Promise<Company | undefined> {
+  async archiveCompany(id: string, organizationId: string): Promise<Company | undefined> {
     const [updated] = await db
       .update(companies)
       .set({ archivedAt: new Date().toISOString() })
-      .where(eq(companies.id, id))
+      .where(and(eq(companies.id, id), eq(companies.organizationId, organizationId)))
       .returning();
     return updated;
   }
 
-  async unarchiveCompany(id: string): Promise<Company | undefined> {
+  async unarchiveCompany(id: string, organizationId: string): Promise<Company | undefined> {
     const [updated] = await db
       .update(companies)
       .set({ archivedAt: null })
-      .where(eq(companies.id, id))
+      .where(and(eq(companies.id, id), eq(companies.organizationId, organizationId)))
       .returning();
     return updated;
   }
@@ -586,13 +610,14 @@ export class DatabaseStorage implements IStorage {
     return deleted;
   }
 
-  async searchCompanies(query: string): Promise<Company[]> {
-    return db.select().from(companies).where(ilike(companies.name, `%${query}%`)).limit(10);
+  async searchCompanies(query: string, organizationId: string): Promise<Company[]> {
+    return db.select().from(companies).where(and(eq(companies.organizationId, organizationId), ilike(companies.name, `%${query}%`))).limit(10);
   }
 
-  async searchUsers(query: string, roles: string[]): Promise<Omit<User, 'password'>[]> {
+  async searchUsers(query: string, roles: string[], organizationId: string): Promise<Omit<User, 'password'>[]> {
     return db.select({
       id: users.id,
+      organizationId: users.organizationId,
       username: users.username,
       name: users.name,
       role: users.role,
@@ -601,6 +626,7 @@ export class DatabaseStorage implements IStorage {
       financialRepId: users.financialRepId,
     }).from(users).where(
       and(
+        eq(users.organizationId, organizationId),
         inArray(users.role, roles),
         or(
           ilike(users.name, `%${query}%`),

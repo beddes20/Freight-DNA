@@ -109,7 +109,7 @@ async function createMonthlyGoalAlerts(): Promise<void> {
 
   logMessage("First business day of the month — creating goal-setting alerts for NAMs");
 
-  const allUsers = await storage.getUsers();
+  const defaultOrg = await storage.getDefaultOrganization(); const allUsers = defaultOrg ? await storage.getUsers(defaultOrg.id) : [];
   const nams = allUsers.filter(u => u.role === "national_account_manager");
 
   if (nams.length === 0) {
