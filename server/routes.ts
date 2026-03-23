@@ -676,6 +676,7 @@ export async function registerRoutes(
           data.role = req.body.role;
         }
         if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
+        if (req.body.financialRepId !== undefined) data.financialRepId = req.body.financialRepId || null;
       }
       const user = await storage.updateUser(req.params.id, data);
       if (!user) return res.status(404).json({ error: "User not found" });

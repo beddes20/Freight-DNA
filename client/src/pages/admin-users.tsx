@@ -398,6 +398,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
   const [password, setPassword] = useState("");
   const [role, setRole] = useState(user?.role || "account_manager");
   const [managerId, setManagerId] = useState(user?.managerId || "none");
+  const [financialRepId, setFinancialRepId] = useState((user as any)?.financialRepId || "");
   const { toast } = useToast();
 
   const mutation = useMutation({
@@ -421,7 +422,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const data: any = { name, username, email: email.trim() || null, role, managerId: managerId === "none" ? null : managerId };
+    const data: any = { name, username, email: email.trim() || null, role, managerId: managerId === "none" ? null : managerId, financialRepId: financialRepId.trim() || null };
     if (password) data.password = password;
     if (!user && !password) {
       toast({ title: "Error", description: "Password is required", variant: "destructive" });
@@ -481,6 +482,15 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
                 ))}
               </SelectContent>
             </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Financial Rep ID <span className="text-muted-foreground font-normal text-xs">(matches rep code in Excel uploads)</span></Label>
+            <Input
+              data-testid="input-user-financial-rep-id"
+              value={financialRepId}
+              onChange={(e) => setFinancialRepId(e.target.value)}
+              placeholder="e.g. baagard, zsatteson"
+            />
           </div>
         </>
       )}
