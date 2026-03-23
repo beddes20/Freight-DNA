@@ -13,6 +13,19 @@ import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardS
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 
+// Customer/ops-user codes that must never appear in any financial report, summary, or aggregation.
+const EXCLUDED_FINANCIAL_CODES = new Set(["valubuaz"]);
+
+/** Returns true if a financial row should be excluded from all processing. */
+function isExcludedRow(row: any, cols: FinancialCols): boolean {
+  const customer = getCustomerFromRow(row, cols).toLowerCase();
+  const rep = getRepFromRow(row, cols).toLowerCase();
+  for (const code of EXCLUDED_FINANCIAL_CODES) {
+    if (customer.includes(code) || rep.includes(code)) return true;
+  }
+  return false;
+}
+
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 const zipCodeMap: Record<string, string> = JSON.parse(
@@ -3003,7 +3016,7 @@ export async function registerRoutes(
       const latestHistUpload = uploads[uploads.length - 1];
       let allRows: any[] = Array.isArray(latestHistUpload.rows) ? latestHistUpload.rows as any[] : [];
       const histCols = resolveColumns(allRows);
-      allRows = allRows.filter((r: any) => getStatusFromRow(r, histCols) !== "void");
+      allRows = allRows.filter((r: any) => getStatusFromRow(r, histCols) !== "void" && !isExcludedRow(r, histCols));
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
@@ -3063,7 +3076,7 @@ export async function registerRoutes(
       const latestOppUpload = uploads[uploads.length - 1];
       let allRows: any[] = Array.isArray(latestOppUpload.rows) ? latestOppUpload.rows as any[] : [];
       const oppCols = resolveColumns(allRows);
-      allRows = allRows.filter((r: any) => getStatusFromRow(r, oppCols) !== "void");
+      allRows = allRows.filter((r: any) => getStatusFromRow(r, oppCols) !== "void" && !isExcludedRow(r, oppCols));
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
@@ -3209,7 +3222,7 @@ export async function registerRoutes(
 
       const rawRows: any[] = (upload.rows as any[]) || [];
       const finCols = resolveColumns(rawRows);
-      let rows = rawRows.filter((r: any) => getStatusFromRow(r, finCols) !== "void");
+      let rows = rawRows.filter((r: any) => getStatusFromRow(r, finCols) !== "void" && !isExcludedRow(r, finCols));
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
@@ -3289,6 +3302,7 @@ export async function registerRoutes(
     // Build map: normalized customer name → tally of salesperson strings
     const customerSalesMap = new Map<string, Map<string, number>>();
     for (const row of rows) {
+      if (isExcludedRow(row, cols)) continue;
       const customer = getCustomerFromRow(row, cols);
       const salesperson = getSalespersonFromRow(row, cols);
       if (!customer || !salesperson) continue;
@@ -3450,7 +3464,9 @@ export async function registerRoutes(
       const names = new Set<string>();
       for (const upload of uploads) {
         const rows: any[] = Array.isArray(upload.rows) ? upload.rows as any[] : [];
+        const rowsCols = resolveColumns(rows);
         for (const row of rows) {
+          if (isExcludedRow(row, rowsCols)) continue;
           const name = String(row["Customer"] || "").trim();
           if (name) names.add(name);
         }
@@ -3498,6 +3514,7 @@ export async function registerRoutes(
         // their own loads on a shared account like CTSIMIGA, with no winner-takes-all logic.
         const byCustomerRep: Record<string, CustomerRepEntry> = {};
         for (const row of txRows) {
+          if (isExcludedRow(row, sumCols)) continue;
           const customerName = getCustomerFromRow(row, sumCols);
           if (!customerName) continue;
           const revenue = Number(row[sumCols.revenue] || row[sumCols.totalCharges] || 0);
@@ -3594,6 +3611,7 @@ export async function registerRoutes(
       const byDispatcher: Record<string, DispEntry> = {};
 
       for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
         const dispatcher = getDispatcherFromRow(row, cols);
         if (!dispatcher) continue;
         const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || row["Total charges"] || 0);
@@ -3648,6 +3666,7 @@ export async function registerRoutes(
       const bySalesperson: Record<string, SpEntry> = {};
 
       for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
         const salesperson = getSalespersonFromRow(row, cols);
         if (!salesperson) continue;
         const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || row["Total charges"] || 0);
@@ -3722,6 +3741,7 @@ export async function registerRoutes(
       const salespersonCounts: Record<string, number> = {};
 
       for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
         const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || 0);
         if (revenue === 0) continue;
         const opsUser = getRepFromRow(row, cols);
@@ -3804,6 +3824,7 @@ export async function registerRoutes(
       const byCustomer: Record<string, AcctEntry> = {};
 
       for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
         const salesperson = getSalespersonFromRow(row, cols);
         if (!salesperson) continue;
         const spLower = salesperson.toLowerCase().trim();
@@ -3952,7 +3973,7 @@ export async function registerRoutes(
       const uploads = await storage.getFinancialUploads();
       const rawHdsSrc = uploads.flatMap(u => (u.rows as any[]) || []);
       const hdsCols = resolveColumns(rawHdsSrc);
-      const allRows = rawHdsSrc.filter((r: any) => getStatusFromRow(r, hdsCols) !== "void");
+      const allRows = rawHdsSrc.filter((r: any) => getStatusFromRow(r, hdsCols) !== "void" && !isExcludedRow(r, hdsCols));
       const destWeekly: Record<string, Record<string, number>> = {};
       const destMeta: Record<string, { city: string; state: string }> = {};
       for (const row of allRows) {
@@ -5272,6 +5293,7 @@ export async function registerRoutes(
               const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
               const byRep: Record<string, Record<string, number>> = {};
               for (const row of txRows) {
+                if (isExcludedRow(row, goalTxCols)) continue;
                 const { monthKey, margin } = parseHistoricalRow(row, goalTxCols);
                 const rep = getRepFromRow(row, goalTxCols);
                 if (!rep) continue;
@@ -5358,6 +5380,7 @@ export async function registerRoutes(
               const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
               const byRep: Record<string, Record<string, number>> = {};
               for (const row of txRows) {
+                if (isExcludedRow(row, lbTxCols)) continue;
                 const { monthKey, margin } = parseHistoricalRow(row, lbTxCols);
                 const rep = getRepFromRow(row, lbTxCols);
                 if (!rep) continue;
@@ -5683,6 +5706,7 @@ export async function registerRoutes(
             let totalMargin = 0;
             let totalCharges = 0;
             for (const row of txRows) {
+              if (isExcludedRow(row, cols)) continue;
               const disp = getDispatcherFromRow(row, cols).toLowerCase();
               if (disp !== repKeyLower) continue;
               if (goalMonthKey) {
@@ -5714,6 +5738,7 @@ export async function registerRoutes(
                 const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
                 const byRep: Record<string, Record<string, number>> = {};
                 for (const row of txRows) {
+                  if (isExcludedRow(row, progTxCols)) continue;
                   const { monthKey, margin } = parseHistoricalRow(row, progTxCols);
                   const rep = getRepFromRow(row, progTxCols);
                   if (!rep) continue;
@@ -5772,6 +5797,7 @@ export async function registerRoutes(
       const repKeyLower = repKey.toLowerCase();
       const byMonth: Record<string, number> = {};
       for (const row of txRows) {
+        if (isExcludedRow(row, trendCols)) continue;
         const { monthKey, margin } = parseHistoricalRow(row, trendCols);
         if (!monthKey) continue;
         const rep = getRepFromRow(row, trendCols);
@@ -6062,6 +6088,7 @@ export async function registerRoutes(
       const now = new Date();
       const ytdStart = `${now.getFullYear()}-01-01`;
       for (const row of allRows) {
+        if (isExcludedRow(row, msCols)) continue;
         const cust = getCustomerFromRow(row, msCols);
         if (!cust) continue;
         const { monthKey, margin } = parseHistoricalRow(row, msCols);
@@ -6675,6 +6702,7 @@ export async function registerRoutes(
       const byCustomerMonth: Record<string, Record<string, number>> = {};
       const allMonthKeys = new Set<string>();
       for (const row of rows) {
+        if (isExcludedRow(row, cols)) continue;
         const cust = getCustomerFromRow(row, cols);
         if (!cust) continue;
         const { monthKey, margin } = parseHistoricalRow(row, cols);
@@ -6837,6 +6865,7 @@ export async function registerRoutes(
       // Margin by financialRepId / customer — map by user's financialRepId
       const byRepId: Record<string, number> = {};
       for (const row of rows) {
+        if (isExcludedRow(row, cols)) continue;
         const { monthKey, margin } = parseHistoricalRow(row, cols);
         if (monthKey !== curMonthKey) continue;
         // Use the rep field in the financial data
