@@ -156,21 +156,17 @@ export function BlackGold() {
         {/* Hero Banner */}
         <div className="px-5 pt-4 pb-4 flex-shrink-0" style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
           <div className="flex items-center gap-4">
-            {/* VT Circle Emblem */}
-            <div className="flex flex-col items-center justify-center flex-shrink-0"
-              style={{ width: "68px", height: "68px", borderRadius: "50%", border: `2px solid ${GOLD}`, background: "#111", boxShadow: `0 0 20px rgba(255,180,0,0.25)` }}>
-              <svg width="22" height="11" viewBox="0 0 32 16" fill="none">
-                <path d="M4 14 L16 2 L28 14" stroke={GOLD} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M10 14 L16 6 L22 14" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-              <div style={{ color: "#fff", fontSize: "18px", fontWeight: 900, letterSpacing: "-0.04em", lineHeight: 1 }}>VT</div>
-            </div>
-            {/* Text */}
+            {/* Text — left */}
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-0.5">
                 <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: GOLD }}>Good morning, Ben</span>
               </div>
               <h2 className="text-lg font-bold" style={{ color: "#fff" }}>Your sales pulse for today</h2>
+            </div>
+            {/* VT Logo in circle — right, just left of streak */}
+            <div className="flex-shrink-0 flex items-center justify-center"
+              style={{ width: "68px", height: "68px", borderRadius: "50%", border: `2px solid ${GOLD}`, background: "#111", boxShadow: `0 0 20px rgba(255,180,0,0.25)`, overflow: "hidden", padding: "10px" }}>
+              <img src="/__mockup/images/vt-logo-white.png" alt="VT" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
             </div>
             {/* Streak */}
             <div className="flex items-center gap-2 text-xs flex-shrink-0" style={{ color: "#666" }}>
