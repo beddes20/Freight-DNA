@@ -20,6 +20,7 @@ import RfpAwards from "@/pages/rfp-awards";
 import ResearchTasks from "@/pages/research-tasks";
 import Customers from "@/pages/customers";
 import LoginPage from "@/pages/login";
+import LandingPage from "@/pages/landing";
 import AdminUsers from "@/pages/admin-users";
 import RepCustomers from "@/pages/rep-customers";
 import Financials from "@/pages/financials";
@@ -86,7 +87,12 @@ function AuthenticatedApp() {
   }
 
   if (!user) {
-    return <LoginPage />;
+    return (
+      <Switch>
+        <Route path="/login" component={LoginPage} />
+        <Route component={LandingPage} />
+      </Switch>
+    );
   }
 
   const style = {
