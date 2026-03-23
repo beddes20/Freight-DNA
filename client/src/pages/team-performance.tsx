@@ -608,7 +608,8 @@ export default function TeamPerformancePage() {
   const totalMarginPctAll = totalRevenueAll > 0 ? (totalMarginAll / totalRevenueAll) * 100 : null;
 
   const ams = sortReps(reps.filter(r => r.role === "account_manager"), sortBy);
-  const logistics = sortReps(reps.filter(r => r.role === "logistics_manager" || r.role === "logistics_coordinator"), sortBy);
+  const logisticsManagers = sortReps(reps.filter(r => r.role === "logistics_manager"), sortBy);
+  const logisticsCoords = sortReps(reps.filter(r => r.role === "logistics_coordinator"), sortBy);
   const nams = sortReps(reps.filter(r => r.role === "national_account_manager" || r.role === "director"), sortBy);
   const salesReps = sortReps(reps.filter(r => r.role === "sales_director" || r.role === "sales"), sortBy);
 
@@ -627,7 +628,7 @@ export default function TeamPerformancePage() {
 
   const handleExportCsv = () => {
     const headers = ["Name", "Role", "Accounts", "Calls", "Texts", "Emails", "Meaningful", "New Contacts", "Touched", "Loads", "Margin ($)"];
-    const allReps = [...ams, ...nams, ...logistics, ...salesReps];
+    const allReps = [...ams, ...nams, ...logisticsManagers, ...logisticsCoords, ...salesReps];
     const rows = allReps.map(r => {
       const isLm = r.role === "logistics_manager" || r.role === "logistics_coordinator";
       const isSales = r.role === "sales_director" || r.role === "sales";
@@ -875,14 +876,39 @@ export default function TeamPerformancePage() {
             </div>
           )}
 
-          {logistics.length > 0 && (
+          {logisticsManagers.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Truck className="h-4 w-4 text-muted-foreground" />
                 <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Logistics Managers</h2>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {logistics.map(rep => (
+                {logisticsManagers.map(rep => (
+                  <RepCard
+                    key={rep.userId}
+                    rep={rep}
+                    totalLoads={lmLoadsMap[rep.userId]?.loads}
+                    totalMargin={lmLoadsMap[rep.userId]?.margin}
+                    totalRevenue={lmLoadsMap[rep.userId]?.revenue}
+                    criteria={promotionCriteria}
+                    nominations={nominations}
+                    canNominate={canNominate}
+                    onNominate={setNominationTarget}
+                    period={period}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {logisticsCoords.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Truck className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Logistics Coordinators</h2>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {logisticsCoords.map(rep => (
                   <RepCard
                     key={rep.userId}
                     rep={rep}
