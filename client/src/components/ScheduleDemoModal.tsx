@@ -7,8 +7,10 @@ import { X, CheckCircle } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 const interestOptions = [
-  "Freight Tracking",
-  "Dispatch Workflow",
+  "Accountability",
+  "Sustainable Growth",
+  "Macro to Micro Visibility",
+  "CRM",
   "Shipment Visibility",
   "Reporting",
   "Pricing",
