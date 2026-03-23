@@ -6,8 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2 } from "lucide-react";
-import vtLogoWhite from "@assets/value-truck-logo-white.png";
+import { Loader2, TrendingUp } from "lucide-react";
 
 export default function LoginPage() {
   const [isRegister, setIsRegister] = useState(false);
@@ -55,24 +54,31 @@ export default function LoginPage() {
         />
 
         <div className="relative flex flex-col items-center text-center gap-6">
-          {/* VT logo in gold-bordered circle */}
+          {/* Icon mark in gold-bordered circle */}
           <div
-            className="flex items-center justify-center w-36 h-36 rounded-full p-5 mb-2"
+            className="flex items-center justify-center w-36 h-36 rounded-full mb-2"
             style={{ border: "2px solid #ffb400", background: "#111", boxShadow: "0 0 40px rgba(255,180,0,0.18)" }}
           >
-            <img src={vtLogoWhite} alt="Value Truck" className="w-full h-full object-contain" />
+            <TrendingUp className="w-16 h-16" style={{ color: "#ffb400" }} />
           </div>
 
           <div>
             <p
-              className="text-sm tracking-widest uppercase font-semibold"
+              className="text-2xl font-bold tracking-tight"
               style={{ color: "#ffb400" }}
+              data-testid="text-brand-name-login"
+            >
+              freight · dna
+            </p>
+            <p
+              className="mt-1 text-sm tracking-widest uppercase font-medium"
+              style={{ color: "rgba(255,180,0,0.55)" }}
               data-testid="text-dna-tagline-login"
             >
               DNA · Down Not Across
             </p>
-            <p className="mt-2 text-sm" style={{ color: "rgba(255,180,0,0.7)" }}>
-              From farmer to hunter.
+            <p className="mt-2 text-sm" style={{ color: "rgba(255,255,255,0.35)" }}>
+              Sales intelligence for freight brokers.
             </p>
           </div>
 
@@ -107,12 +113,15 @@ export default function LoginPage() {
           {/* Mobile-only logo */}
           <div className="flex flex-col items-center mb-8 lg:hidden">
             <div
-              className="flex items-center justify-center w-20 h-20 rounded-full p-3 mb-3"
+              className="flex items-center justify-center w-20 h-20 rounded-full mb-3"
               style={{ border: "2px solid #ffb400", background: "#111", boxShadow: "0 0 24px rgba(255,180,0,0.18)" }}
             >
-              <img src={vtLogoWhite} alt="Value Truck" className="w-full h-full object-contain" />
+              <TrendingUp className="w-9 h-9" style={{ color: "#ffb400" }} />
             </div>
-            <p className="text-sm font-semibold tracking-widest" style={{ color: "#ffb400" }}>
+            <p className="text-lg font-bold tracking-tight" style={{ color: "#ffb400" }}>
+              freight · dna
+            </p>
+            <p className="text-xs tracking-widest uppercase mt-1" style={{ color: "rgba(255,180,0,0.55)" }}>
               DNA · Down Not Across
             </p>
           </div>
@@ -127,7 +136,7 @@ export default function LoginPage() {
                 {isRegister ? "Create your account" : "Welcome back"}
               </h1>
               <CardDescription style={{ color: "rgba(255,255,255,0.45)" }}>
-                {isRegister ? "Fill in your details to get started" : "Sign in to Growth Chart VT"}
+                {isRegister ? "Fill in your details to get started" : "Sign in to your workspace"}
               </CardDescription>
             </CardHeader>
             <CardContent className="pb-8">
@@ -155,7 +164,7 @@ export default function LoginPage() {
                     type="email"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="john@valuetruck.com"
+                    placeholder="you@company.com"
                     required
                     style={{ background: "#1e1e1e", borderColor: "rgba(255,255,255,0.1)", color: "#fff" }}
                     className="placeholder:text-white/25"
@@ -200,6 +209,10 @@ export default function LoginPage() {
               </div>
             </CardContent>
           </Card>
+
+          <p className="text-center text-xs mt-6" style={{ color: "rgba(255,255,255,0.2)" }}>
+            freight-dna.com · sales intelligence platform
+          </p>
         </div>
       </div>
     </div>
