@@ -12,6 +12,7 @@ import { NotificationToasts } from "@/components/notification-toasts";
 import { CrmChatbot } from "@/components/crm-chatbot";
 import { Button } from "@/components/ui/button";
 import { Loader2, UserX } from "lucide-react";
+import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import CompanyDetail from "@/pages/company-detail";
@@ -135,6 +136,7 @@ function AuthenticatedApp() {
                   ))}
                 </p>
               </div>
+              <GlobalLogTouchButton />
               <GlobalSearch navBar />
               <NotificationBell navBar />
             </header>

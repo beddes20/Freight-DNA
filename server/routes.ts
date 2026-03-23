@@ -5822,6 +5822,26 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/companies/:id/touch-logs", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(user, req.params.id))) return res.status(403).json({ error: "Access denied" });
+      const tps = await storage.getTouchpointsByCompany(req.params.id);
+      const allUsers = await storage.getUsers();
+      const contactsList = await storage.getContactsByCompany(req.params.id);
+      const enriched = tps.map(tp => ({
+        ...tp,
+        loggedByName: allUsers.find(u => u.id === tp.loggedById)?.name || "Unknown",
+        contactName: tp.contactId ? contactsList.find(c => c.id === tp.contactId)?.name || null : null,
+      }));
+      enriched.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      res.json(enriched);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch touch logs" });
+    }
+  });
+
   app.get("/api/touchpoints/company-summary", requireAuth, async (req, res) => {
     try {
       const now = new Date();
@@ -6735,6 +6755,37 @@ export async function registerRoutes(
       res.json(tp);
     } catch (error) {
       res.status(500).json({ error: "Failed to log touchpoint" });
+    }
+  });
+
+  app.post("/api/touch-logs", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { companyId, contactId, type, isMeaningful, sentiment, notes } = req.body;
+      if (!companyId) return res.status(400).json({ error: "companyId is required" });
+      const validTypes = ["call", "email", "text", "site_visit"];
+      const validVibes = ["great", "neutral", "cold"];
+      if (type && !validTypes.includes(type)) return res.status(400).json({ error: "Invalid touch type" });
+      if (sentiment && !validVibes.includes(sentiment)) return res.status(400).json({ error: "Invalid sentiment" });
+      if (!(await canAccessCompany(user, companyId))) return res.status(403).json({ error: "Access denied" });
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const now = new Date();
+      const tp = await storage.createTouchpoint({
+        contactId: contactId || null,
+        companyId,
+        type: type || "call",
+        date: now.toISOString().split("T")[0],
+        notes: typeof notes === "string" ? notes.slice(0, 2000) || null : null,
+        sentiment: sentiment || null,
+        isMeaningful: isMeaningful === true || isMeaningful === "true" ? true : false,
+        loggedById: user.id,
+        createdAt: now.toISOString(),
+      });
+      res.json(tp);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to log touch" });
     }
   });
 

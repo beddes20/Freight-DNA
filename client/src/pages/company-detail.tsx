@@ -266,6 +266,7 @@ export default function CompanyDetail() {
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [preCallOpen, setPreCallOpen] = useState(false);
+  const [touchLogCollapsed, setTouchLogCollapsed] = useState(false);
   const [importRows, setImportRows] = useState<any[]>([]);
   const [importFileName, setImportFileName] = useState("");
   const [detailTab, setDetailTab] = useState<string>(() => {
@@ -318,6 +319,12 @@ export default function CompanyDetail() {
 
   const { data: companyTouchpoints = [] } = useQuery<Touchpoint[]>({
     queryKey: ["/api/companies", companyId, "touchpoints"],
+    enabled: !!companyId,
+  });
+
+  type TouchLogEntry = Touchpoint & { loggedByName: string; contactName: string | null };
+  const { data: touchLogEntries = [] } = useQuery<TouchLogEntry[]>({
+    queryKey: ["/api/companies", companyId, "touch-logs"],
     enabled: !!companyId,
   });
 
@@ -586,6 +593,7 @@ export default function CompanyDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "touchpoints"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "touch-logs"] });
       toast({ title: "Touch logged!" });
       setQuickTouchOpen(false);
       setQuickTouchContactId("");
@@ -2086,6 +2094,101 @@ export default function CompanyDetail() {
           )}
         </CardContent>
       </Card>
+
+      {/* ── Touch Log portlet ─────────────────────────────────────────────── */}
+      {(() => {
+        const VIBE_COLORS: Record<string, string> = {
+          great:   "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+          neutral: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+          cold:    "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+        };
+        const TYPE_ICONS: Record<string, typeof PhoneCall> = { call: PhoneCall, email: Mail, text: MessageSquare, site_visit: Building2 };
+        const TYPE_LABELS: Record<string, string> = { call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" };
+        const TYPE_COLORS: Record<string, string> = {
+          call:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+          email:      "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+          text:       "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+          site_visit: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+        };
+        const timeAgo = (iso: string) => {
+          try {
+            const diff = Date.now() - new Date(iso).getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 60) return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return `${hrs}h ago`;
+            const days = Math.floor(hrs / 24);
+            if (days < 30) return `${days}d ago`;
+            return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          } catch { return ""; }
+        };
+        return (
+          <Card data-testid="card-touch-log">
+            <CardHeader className="pb-3">
+              <button
+                onClick={() => setTouchLogCollapsed(c => !c)}
+                className="w-full flex items-center justify-between group"
+                data-testid="btn-toggle-touch-log"
+              >
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-cyan-500" />
+                  Touch Log
+                  <Badge variant="secondary" className="ml-1 font-normal">{touchLogEntries.length}</Badge>
+                </CardTitle>
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${touchLogCollapsed ? "-rotate-90" : ""}`} />
+              </button>
+            </CardHeader>
+            {!touchLogCollapsed && (
+            <CardContent className="pt-0">
+              {touchLogEntries.length === 0 ? (
+                <div className="py-6 text-center space-y-2">
+                  <PhoneCall className="h-8 w-8 mx-auto text-muted-foreground/30" />
+                  <p className="text-sm text-muted-foreground">No touches logged yet</p>
+                  <p className="text-xs text-muted-foreground">Use the "Log Touch" button in the header to record touchpoints.</p>
+                </div>
+              ) : (
+                <div className="space-y-0">
+                  {touchLogEntries.map((tp) => {
+                    const TypeIcon = TYPE_ICONS[tp.type] ?? PhoneCall;
+                    return (
+                      <div key={tp.id} className="flex items-start gap-3 py-2 border-b last:border-0" data-testid={`touch-log-row-${tp.id}`}>
+                        <div className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium shrink-0 mt-0.5 ${TYPE_COLORS[tp.type] ?? "bg-muted text-muted-foreground"}`}>
+                          <TypeIcon className="h-3 w-3" />
+                          {TYPE_LABELS[tp.type] ?? tp.type}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {tp.contactName && (
+                              <span className="text-xs font-medium text-foreground">{tp.contactName}</span>
+                            )}
+                            {tp.sentiment && (
+                              <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${VIBE_COLORS[tp.sentiment] ?? "bg-muted text-muted-foreground"}`} data-testid={`touch-log-vibe-${tp.id}`}>
+                                {tp.sentiment.charAt(0).toUpperCase() + tp.sentiment.slice(1)}
+                              </span>
+                            )}
+                            {tp.isMeaningful && (
+                              <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300" data-testid={`touch-log-meaningful-${tp.id}`}>
+                                Meaningful
+                              </span>
+                            )}
+                          </div>
+                          {tp.notes && (
+                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`touch-log-notes-${tp.id}`}>{tp.notes}</p>
+                          )}
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {tp.loggedByName} · {timeAgo(tp.createdAt || tp.date)}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+            )}
+          </Card>
+        );
+      })()}
 
         </TabsContent>
 
