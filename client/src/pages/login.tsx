@@ -71,10 +71,7 @@ export default function LoginPage() {
             >
               DNA · Down Not Across
             </p>
-            <p className="mt-3 text-2xl font-bold text-white">
-              Growth Chart VT
-            </p>
-            <p className="mt-1 text-sm" style={{ color: "rgba(255,180,0,0.7)" }}>
+            <p className="mt-2 text-sm" style={{ color: "rgba(255,180,0,0.7)" }}>
               From farmer to hunter.
             </p>
           </div>
