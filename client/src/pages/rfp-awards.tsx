@@ -1803,7 +1803,7 @@ export default function RfpAwards() {
           {/* RFP Deadline Timeline */}
           {(() => {
             const now = Date.now();
-            const upcomingRfps = [...rfps]
+            const upcomingRfps = [...(rfps ?? [])]
               .filter(r => r.dueDate && (r.status === "open" || r.status === "pending"))
               .map(r => {
                 const daysLeft = Math.ceil((new Date(r.dueDate!).getTime() - now) / 86400000);

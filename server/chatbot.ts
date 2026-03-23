@@ -102,8 +102,10 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
     allGoals.slice(0, 60).forEach(g => {
       const nam = allUsers.find(u => u.id === g.namId);
       const am = allUsers.find(u => u.id === g.amId);
-      const pct = g.targetValue > 0 ? Math.round(((g.currentValue || 0) / g.targetValue) * 100) : 0;
-      ctx += `- ${am?.name || "?"} | ${g.metricType}${g.customLabel ? ` (${g.customLabel})` : ""}: ${g.currentValue || 0}/${g.targetValue} (${pct}%) | Set by: ${nam?.name || "?"}\n`;
+      const tgt = parseFloat(g.target) || 0;
+      const cur = parseFloat(g.currentValue || "0") || 0;
+      const pct = tgt > 0 ? Math.round((cur / tgt) * 100) : 0;
+      ctx += `- ${am?.name || "?"} | ${g.metric}${g.customLabel ? ` (${g.customLabel})` : ""}: ${cur}/${tgt} (${pct}%) | Set by: ${nam?.name || "?"}\n`;
     });
 
     return ctx;
@@ -191,7 +193,7 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
     ctx += `\n=== OPEN RFPs (${openRfps.length}) ===\n`;
     openRfps.forEach((r) => {
       const company = visibleCompanies.find((co) => co.id === r.companyId);
-      ctx += `- ${r.name} @ ${company?.name || "Unknown"} | Due: ${r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "No due date"}\n`;
+      ctx += `- ${r.title} @ ${company?.name || "Unknown"} | Due: ${r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "No due date"}\n`;
     });
 
     ctx += `\n=== OPEN TASKS (${openTasks.length}) ===\n`;
@@ -201,8 +203,10 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
 
     ctx += `\n=== GOALS (${activeGoals.length}) ===\n`;
     activeGoals.forEach((g) => {
-      const pct = g.targetValue > 0 ? Math.round(((g.currentValue || 0) / g.targetValue) * 100) : 0;
-      ctx += `- ${g.metricType}${g.customLabel ? ` (${g.customLabel})` : ""}: ${g.currentValue || 0}/${g.targetValue} (${pct}%)\n`;
+      const tgt = parseFloat(g.target) || 0;
+      const cur = parseFloat(g.currentValue || "0") || 0;
+      const pct = tgt > 0 ? Math.round((cur / tgt) * 100) : 0;
+      ctx += `- ${g.metric}${g.customLabel ? ` (${g.customLabel})` : ""}: ${cur}/${tgt} (${pct}%)\n`;
     });
 
     return ctx;

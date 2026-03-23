@@ -986,7 +986,7 @@ export default function Dashboard() {
                     className={`px-3 py-1 text-sm rounded-md font-medium transition-colors ${selectedDirectorId === null ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                     data-testid="director-filter-both"
                   >
-                    Both
+                    All
                   </button>
                   {directors.map(d => (
                     <button
