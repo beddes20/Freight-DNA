@@ -31,6 +31,7 @@ import MarketSharePortlet from "@/components/market-share-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
+import { LmCareerPanel } from "@/components/lm-career-panel";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -783,6 +784,9 @@ export default function Dashboard() {
           </Card>
         ))}
       </div>
+
+      {/* LM Career Panel — operational stats + path-to-AM progress */}
+      {currentUser?.role === "logistics_manager" && <LmCareerPanel />}
 
       {/* PTO Coverage Portlet — only shown to users who are assigned as covering someone */}
       {currentUser && passoffs.filter((p: any) => p.coveringUserId === currentUser.id).map((passoff: any) => {

@@ -2913,6 +2913,62 @@ export async function registerRoutes(
     }
   });
 
+  // ── LM Development Milestones ──────────────────────────────────────────────
+  // Stored in developmentGoals table as JSON { milestones: [...] }
+
+  app.get("/api/lm-milestones/:lmId", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Not authenticated" });
+      const { lmId } = req.params;
+      const lm = await storage.getUser(lmId);
+      if (!lm) return res.status(404).json({ error: "User not found" });
+      const managerId = lm.managerId;
+      const canAccess =
+        viewer.id === lmId ||
+        viewer.id === managerId ||
+        viewer.role === "admin" ||
+        viewer.role === "director";
+      if (!canAccess) return res.status(403).json({ error: "Access denied" });
+      if (!managerId) return res.json({ milestones: [] });
+      const row = await storage.getDevelopmentGoals(managerId, lmId);
+      if (!row) return res.json({ milestones: [] });
+      try {
+        const parsed = JSON.parse(row.content || "{}");
+        return res.json({ milestones: parsed.milestones || [] });
+      } catch {
+        return res.json({ milestones: [] });
+      }
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get milestones" });
+    }
+  });
+
+  app.put("/api/lm-milestones/:lmId", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Not authenticated" });
+      const { lmId } = req.params;
+      const lm = await storage.getUser(lmId);
+      if (!lm) return res.status(404).json({ error: "User not found" });
+      const managerId = lm.managerId;
+      const canUpdate =
+        viewer.id === managerId ||
+        viewer.role === "admin" ||
+        viewer.id === lmId ||
+        viewer.role === "director";
+      if (!canUpdate) return res.status(403).json({ error: "Access denied" });
+      if (!managerId) return res.status(400).json({ error: "LM has no manager assigned" });
+      const { milestones } = req.body;
+      const content = JSON.stringify({ milestones: milestones || [] });
+      const row = await storage.upsertDevelopmentGoals(managerId, lmId, content, viewer.id);
+      const parsed = JSON.parse(row.content || "{}");
+      return res.json({ milestones: parsed.milestones || [] });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save milestones" });
+    }
+  });
+
   // ── Financial Data ─────────────────────────────────────────────────────────
 
   app.get("/api/historical-data", requireAuth, async (req, res) => {

@@ -17,10 +17,12 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
+const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
+
 const navItems = [
   { title: "Dashboard",         url: "/",                 icon: LayoutGrid    },
-  { title: "Customers",         url: "/customers",        icon: Network       },
-  { title: "Top Opportunities", url: "/top-opportunities",icon: Zap           },
+  { title: "Customers",         url: "/customers",        icon: Network,       roles: SALES_ROLES },
+  { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
   { title: "1:1 Meetings",      url: "/one-on-one",       icon: MessagesSquare },
   { title: "Tasks",             url: "/tasks",            icon: ListTodo      },
   {
@@ -110,15 +112,17 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* ── Pipeline ── */}
-        <SidebarGroup>
-          <SidebarGroupLabel>Pipeline</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {pipelineItems.map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {/* ── Pipeline (hidden for LM/LC roles) ── */}
+        {SALES_ROLES.includes(user?.role ?? "") && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Pipeline</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {pipelineItems.map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
 
         {/* ── Tools ── */}
         <SidebarGroup>

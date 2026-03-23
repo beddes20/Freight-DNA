@@ -405,6 +405,8 @@ export default function GoalsPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkForm, setBulkForm] = useState(defaultBulkForm);
 
+  const [newMilestoneText, setNewMilestoneText] = useState("");
+
   const isNam = user?.role === "national_account_manager" || user?.role === "director" || user?.role === "sales" || user?.role === "admin" || user?.role === "sales_director";
   const isAm = user?.role === "account_manager" || user?.role === "logistics_manager" || user?.role === "logistics_coordinator";
   const isAmRole = user?.role === "account_manager";
@@ -429,6 +431,49 @@ export default function GoalsPage() {
     enabled: isNam,
     refetchOnWindowFocus: false,
   });
+
+  // LM milestone management
+  const activeTabUser = allUsers.find(u => u.id === activeTab);
+  const isLmTab = activeTabUser?.role === "logistics_manager";
+  const canManageMilestones = isLmTab && (isNam || isAmRole || user?.role === "admin" || user?.role === "director");
+  const isOwnLmGoals = user?.role === "logistics_manager";
+  // For LMs viewing their own goals page, use their own id; for managers, use the activeTab LM id
+  const milestoneTargetId = isOwnLmGoals ? user?.id : (isLmTab ? activeTab : null);
+
+  const { data: milestonesData } = useQuery<{ milestones: Array<{ id: string; text: string; completed: boolean }> }>({
+    queryKey: ["/api/lm-milestones", milestoneTargetId],
+    queryFn: async () => {
+      const res = await fetch(`/api/lm-milestones/${milestoneTargetId}`, { credentials: "include" });
+      if (!res.ok) return { milestones: [] };
+      return res.json();
+    },
+    enabled: !!milestoneTargetId,
+  });
+  const currentMilestones = milestonesData?.milestones || [];
+
+  const saveMilestonesMutation = useMutation({
+    mutationFn: (milestones: Array<{ id: string; text: string; completed: boolean }>) =>
+      apiRequest("PUT", `/api/lm-milestones/${milestoneTargetId}`, { milestones }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/lm-milestones", milestoneTargetId] }),
+    onError: () => toast({ variant: "destructive", description: "Failed to save milestones." }),
+  });
+
+  function addMilestone() {
+    const text = newMilestoneText.trim();
+    if (!text) return;
+    const newM = { id: Math.random().toString(36).slice(2), text, completed: false };
+    saveMilestonesMutation.mutate([...currentMilestones, newM]);
+    setNewMilestoneText("");
+  }
+
+  function toggleMilestone(id: string) {
+    const updated = currentMilestones.map(m => m.id === id ? { ...m, completed: !m.completed } : m);
+    saveMilestonesMutation.mutate(updated);
+  }
+
+  function deleteMilestone(id: string) {
+    saveMilestonesMutation.mutate(currentMilestones.filter(m => m.id !== id));
+  }
 
   const createGoal = useMutation({
     mutationFn: (data: object) => apiRequest("POST", "/api/goals", data),
@@ -710,6 +755,85 @@ export default function GoalsPage() {
             </Button>
           )}
         </div>
+      )}
+
+      {/* Development Milestones — shown for manager viewing LM tab, or LM viewing their own goals */}
+      {(canManageMilestones || user?.role === "logistics_manager") && (
+        <Card className="border-blue-200 dark:border-blue-800">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Target className="h-4 w-4 text-blue-500" />
+                Development Milestones
+                {canManageMilestones && (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    — for {activeTabUser?.name}
+                  </span>
+                )}
+              </CardTitle>
+              {currentMilestones.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {currentMilestones.filter(m => m.completed).length}/{currentMilestones.length} complete
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {canManageMilestones
+                ? "Qualitative milestones for this LM's path to Account Manager."
+                : "Qualitative milestones set by your manager for your development path."}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {currentMilestones.length === 0 && !canManageMilestones && (
+              <p className="text-xs text-muted-foreground py-2">Your manager hasn't set any milestones yet.</p>
+            )}
+            {currentMilestones.map(m => (
+              <div key={m.id} className="flex items-start gap-2 group">
+                <button
+                  onClick={() => toggleMilestone(m.id)}
+                  className={`shrink-0 mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center transition-colors ${m.completed ? "border-green-500 bg-green-500" : "border-muted-foreground/40 hover:border-primary"}`}
+                  data-testid={`button-milestone-toggle-${m.id}`}
+                  disabled={saveMilestonesMutation.isPending}
+                >
+                  {m.completed && <CheckCircle2 className="h-3 w-3 text-white" />}
+                </button>
+                <span className={`flex-1 text-sm leading-relaxed ${m.completed ? "line-through text-muted-foreground" : ""}`}>
+                  {m.text}
+                </span>
+                {canManageMilestones && (
+                  <button
+                    onClick={() => deleteMilestone(m.id)}
+                    className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                    data-testid={`button-milestone-delete-${m.id}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            ))}
+            {canManageMilestones && (
+              <div className="flex gap-2 pt-1">
+                <Input
+                  placeholder="Add a milestone… (e.g. Complete TMS training, Shadow AM call)"
+                  value={newMilestoneText}
+                  onChange={e => setNewMilestoneText(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addMilestone(); } }}
+                  className="text-sm h-8"
+                  data-testid="input-new-milestone"
+                />
+                <Button
+                  size="sm"
+                  onClick={addMilestone}
+                  disabled={!newMilestoneText.trim() || saveMilestonesMutation.isPending}
+                  className="h-8 shrink-0"
+                  data-testid="button-add-milestone"
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Add
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       <Dialog open={dialogOpen} onOpenChange={v => { if (!v) { setDialogOpen(false); setEditingGoal(null); } }}>
