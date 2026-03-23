@@ -125,7 +125,7 @@ async function sendEmailReminders(): Promise<void> {
         continue;
       }
       const html = buildReminderEmail({ recipientName: user.name, partnerName, meetingDate: friendlyDate, pendingCount, portalUrl, daysUntil });
-      const subject = `[Growth Chart] 1:1 with ${partnerName} — ${friendlyDate}`;
+      const subject = `[Freight DNA] 1:1 with ${partnerName} — ${friendlyDate}`;
       const ok = await sendEmail({ to: email, subject, html });
       if (ok) { logMessage(`Email sent to ${user.name} — meeting with ${partnerName} on ${friendlyDate}`); sent++; }
     }

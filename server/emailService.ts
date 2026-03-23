@@ -39,7 +39,7 @@ export interface EmailOptions {
 
 export async function sendEmail(opts: EmailOptions): Promise<boolean> {
   const fromAddr = process.env.SMTP_FROM || "noreply@freight-dna.com";
-  const fromName = process.env.SMTP_FROM_NAME || "Value Truck · Growth Chart";
+  const fromName = process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
   const from = `${fromName} <${fromAddr}>`;
 
   const resend = getResend();
@@ -125,11 +125,11 @@ export function baseEmailTemplate(title: string, bodyHtml: string): string {
 <body>
 <div class="wrapper">
   <div class="header">
-    <h1>Growth Chart VT</h1>
+    <h1>Freight DNA</h1>
     <p>${title}</p>
   </div>
   <div class="body">${bodyHtml}</div>
-  <div class="footer">Value Truck Transportation Brokerage &bull; This is an automated message from Growth Chart VT.</div>
+  <div class="footer">Value Truck Transportation Brokerage &bull; This is an automated message from Freight DNA.</div>
 </div>
 </body></html>`;
 }
@@ -203,7 +203,7 @@ export function buildRepReportEmail(data: {
   <div style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 55%,#334155 100%);border-radius:16px 16px 0 0;padding:32px;text-align:center;">
     <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:16px;">
       <div style="width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#001AB3);"></div>
-      <span style="color:#94a3b8;font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;">Value Truck · Growth Chart</span>
+      <span style="color:#94a3b8;font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;">Value Truck · Freight DNA</span>
     </div>
     <h1 style="color:#fff;font-size:24px;font-weight:700;margin:0;">${title}</h1>
     <p style="color:#94a3b8;font-size:13px;margin-top:6px;">${period.label}</p>
@@ -370,7 +370,7 @@ export function buildFeedbackEmail(data: {
     <!-- CTA -->
     <div style="text-align:center;margin-top:8px;">
       <a href="${portalUrl}/tasks" style="display:inline-block;background:#001AB3;color:#fff;font-size:14px;font-weight:600;padding:13px 28px;border-radius:50px;text-decoration:none;letter-spacing:0.01em;">
-        View Task in Growth Chart →
+        View Task in Freight DNA →
       </a>
     </div>
 
@@ -378,7 +378,7 @@ export function buildFeedbackEmail(data: {
 
   <!-- Footer -->
   <div style="background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 16px 16px;padding:16px 32px;text-align:center;">
-    <p style="color:#94a3b8;font-size:11px;margin:0;">Submitted via DNA Guru feedback panel · Value Truck Growth Chart</p>
+    <p style="color:#94a3b8;font-size:11px;margin:0;">Submitted via DNA Guru feedback panel · Value Truck Freight DNA</p>
   </div>
 
 </div>

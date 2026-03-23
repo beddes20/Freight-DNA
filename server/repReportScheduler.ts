@@ -29,8 +29,8 @@ async function sendReportToUser(userId: string, period: "weekly" | "monthly"): P
 
   const isWeekly = period === "weekly";
   const subject = isWeekly
-    ? `[Growth Chart] Weekly Report — ${data.rep.name} — ${data.period.label}`
-    : `[Growth Chart] Monthly Report — ${data.rep.name} — ${data.period.label}`;
+    ? `[Freight DNA] Weekly Report — ${data.rep.name} — ${data.period.label}`
+    : `[Freight DNA] Monthly Report — ${data.rep.name} — ${data.period.label}`;
 
   const ok = await sendEmail({ to: email, subject, html });
   return { ok, email };

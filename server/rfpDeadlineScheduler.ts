@@ -105,11 +105,11 @@ async function checkRfpDeadlines(): Promise<void> {
               &nbsp; Due: <strong>${dueDateFmt}</strong>
             </div>
           </div>
-          <p>Log in to Growth Chart VT to review the RFP details and ensure your team is on track.</p>
+          <p>Log in to Freight DNA to review the RFP details and ensure your team is on track.</p>
           <a class="cta" href="https://sales-org-builder.replit.app${notifLink}">View RFP →</a>
           `
         );
-        await sendEmail({ to: user.username, subject: `[GrowthChart] ${urgencyLabel}: "${rfp.title}"`, html });
+        await sendEmail({ to: user.username, subject: `[Freight DNA] ${urgencyLabel}: "${rfp.title}"`, html });
       }
 
       notificationsCreated++;

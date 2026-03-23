@@ -43,7 +43,7 @@ const MODULES: TrainingModule[] = [
     title: "Platform Overview",
     icon: GraduationCap,
     description:
-      "Growth Chart VT is Value Truck's internal CRM built specifically for transportation brokerage sales. It centralizes account management, contact org charts, RFP tracking, lane analysis, team performance, and daily collaboration tools in one place.",
+      "Freight DNA is Value Truck's internal CRM built specifically for transportation brokerage sales. It centralizes account management, contact org charts, RFP tracking, lane analysis, team performance, and daily collaboration tools in one place.",
     capabilities: [
       "Replace scattered spreadsheets with a single source of truth",
       "Build and visualize org charts for every customer account",
@@ -1067,7 +1067,7 @@ export default function TrainingPage() {
             <div>
               <h1 className="text-xl font-bold">Training Center</h1>
               <p className="text-sm text-muted-foreground">
-                A guided walkthrough of every feature in Growth Chart VT. Mark sections as read to track your progress.
+                A guided walkthrough of every feature in Freight DNA. Mark sections as read to track your progress.
               </p>
             </div>
           </div>

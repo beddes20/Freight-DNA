@@ -126,7 +126,7 @@ async function sendDailyDigests(): Promise<void> {
 
       await sendEmail({
         to: user.username,
-        subject: `[GrowthChart] Daily digest — ${notifParts.join(", ")}`,
+        subject: `[Freight DNA] Daily digest — ${notifParts.join(", ")}`,
         html,
       });
     }

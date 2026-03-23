@@ -428,7 +428,7 @@ Keep it short and casual — reps are busy. No fluff, no filler.
             content: trimmed,
             portalUrl,
           });
-          const subject = `[Growth Chart] ${taskTitle}`;
+          const subject = `[Freight DNA] ${taskTitle}`;
           sendEmail({ to: admin.username, subject, html })
             .catch((e) => console.error("Feedback email error:", e));
           sendEmail({ to: "info@freight-dna.com", subject, html })

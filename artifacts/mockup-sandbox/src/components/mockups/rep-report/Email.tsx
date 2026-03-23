@@ -35,7 +35,7 @@ export function Email() {
               background: "linear-gradient(135deg, #3b82f6, #001AB3)",
             }} />
             <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-              Value Truck · Growth Chart
+              Value Truck · Freight DNA
             </span>
           </div>
           <h1 style={{ color: "#fff", fontSize: 24, fontWeight: 700, margin: 0 }}>Weekly Progress Report</h1>
