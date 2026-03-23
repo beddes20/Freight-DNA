@@ -6989,13 +6989,42 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ─── Director/Admin Dashboard Portlet Endpoints ───────────────────────────
 
   const DIRECTOR_ROLES = ["admin", "director", "sales_director"] as const;
+  const NAM_ROLES = ["national_account_manager", "sales"] as const;
+
+  // Helper: normalize string for fuzzy matching
+  const normAlias = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  // Helper: get set of normalized company aliases for a list of companies
+  function buildAliasSet(companies: any[]): Set<string> {
+    const s = new Set<string>();
+    for (const c of companies) {
+      s.add(normAlias(c.name));
+      if (c.financialAlias) s.add(normAlias(c.financialAlias));
+    }
+    return s;
+  }
+
+  // Helper: get companies owned by a NAM's direct reports
+  function getNamTeamCompanies(namId: string, allUsers: any[], allCompanies: any[]): any[] {
+    const directReportIds = new Set(allUsers.filter((u: any) => u.managerId === namId).map((u: any) => u.id));
+    return allCompanies.filter((c: any) => c.salesPersonId && directReportIds.has(c.salesPersonId));
+  }
+
+  // Helper: get companies owned by a specific AM
+  function getAmCompanies(amId: string, allCompanies: any[]): any[] {
+    return allCompanies.filter((c: any) => c.salesPersonId === amId);
+  }
 
   // Trending accounts — top 5 up, top 5 down by margin delta vs prior month
+  // Roles: director/admin (org-wide), NAM (team-scoped), AM (own accounts)
   app.get("/api/dashboard/trending-accounts", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(DIRECTOR_ROLES as readonly string[]).includes(user.role)) {
+      const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      const isAmRole = user.role === "account_manager";
+      if (!isDirectorRole && !isNamRole && !isAmRole) {
         return res.status(403).json({ error: "Access denied" });
       }
 
@@ -7005,8 +7034,6 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
       const rows: any[] = upload.rows as any[];
       const cols = resolveColumns(rows);
-
-      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
       // Compute margin by company alias, grouped by month
       const byCustomerMonth: Record<string, Record<string, number>> = {};
@@ -7018,13 +7045,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         const { monthKey, margin } = parseHistoricalRow(row, cols);
         if (!monthKey) continue;
         allMonthKeys.add(monthKey);
-        const key = normalize(cust);
+        const key = normAlias(cust);
         if (!byCustomerMonth[key]) byCustomerMonth[key] = {};
         byCustomerMonth[key][monthKey] = (byCustomerMonth[key][monthKey] || 0) + margin;
       }
 
       // Determine current and prior month from the data, not calendar month
-      // This ensures we use the latest data present in the upload (not necessarily today's month)
       const sortedMonthKeys = Array.from(allMonthKeys).sort();
       const curMonthKey = sortedMonthKeys.length > 0 ? sortedMonthKeys[sortedMonthKeys.length - 1] : toMonthKey(new Date());
       const priorIdx = sortedMonthKeys.indexOf(curMonthKey) - 1;
@@ -7043,23 +7069,47 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         deltas.push({ alias, delta: cur - prior, curMargin: cur, priorMargin: prior });
       }
 
-      // Match to company names
+      // Match to company names — optionally scoped
       const allCompanies = await storage.getCompanies(req.session.organizationId!);
+      const allUsers = isNamRole || isAmRole ? await storage.getUsers(req.session.organizationId!) : [];
+
+      // Build scoped alias filter for NAM / AM
+      let scopedAliases: Set<string> | null = null;
+      if (isNamRole) {
+        const teamCompanies = getNamTeamCompanies(user.id, allUsers, allCompanies);
+        scopedAliases = buildAliasSet(teamCompanies);
+      } else if (isAmRole) {
+        const myCompanies = getAmCompanies(user.id, allCompanies);
+        scopedAliases = buildAliasSet(myCompanies);
+      }
+
       const resolveCompanyName = (alias: string): string => {
-        const norm = normalize(alias);
+        const norm = normAlias(alias);
         const match = allCompanies.find(c => {
-          const cn = normalize(c.financialAlias || c.name);
+          const cn = normAlias(c.financialAlias || c.name);
           return cn === norm || cn.includes(norm) || norm.includes(cn);
         });
         return match?.name || alias;
       };
 
-      deltas.sort((a, b) => b.delta - a.delta);
-      const up = deltas.slice(0, 5).filter(d => d.delta > 0).map(d => ({
+      // Filter deltas by scope if applicable
+      const filteredDeltas = scopedAliases
+        ? deltas.filter(d => {
+            if (scopedAliases!.has(d.alias)) return true;
+            // fuzzy: check if any scoped alias contains or is contained by this alias
+            for (const sa of scopedAliases!) {
+              if (sa.includes(d.alias) || d.alias.includes(sa)) return true;
+            }
+            return false;
+          })
+        : deltas;
+
+      filteredDeltas.sort((a, b) => b.delta - a.delta);
+      const up = filteredDeltas.slice(0, 5).filter(d => d.delta > 0).map(d => ({
         name: resolveCompanyName(d.alias),
         delta: d.delta,
       }));
-      const down = [...deltas].sort((a, b) => a.delta - b.delta).slice(0, 5).filter(d => d.delta < 0).map(d => ({
+      const down = [...filteredDeltas].sort((a, b) => a.delta - b.delta).slice(0, 5).filter(d => d.delta < 0).map(d => ({
         name: resolveCompanyName(d.alias),
         delta: d.delta,
       }));
@@ -7071,33 +7121,43 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  // Team activity metrics — today's touches, meaningful touches, new contacts (org-scoped)
+  // Team activity metrics — today's touches, meaningful touches, new contacts
+  // Directors: org-wide; NAMs: scoped to their team
   app.get("/api/dashboard/team-activity", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(DIRECTOR_ROLES as readonly string[]).includes(user.role)) {
+      const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      if (!isDirectorRole && !isNamRole) {
         return res.status(403).json({ error: "Access denied" });
       }
 
       const orgId = req.session.organizationId!;
       const today = new Date().toISOString().slice(0, 10);
 
-      // Scope via org companies — touchpoints are attached to companies which belong to orgs
       const orgCompanies = await storage.getCompanies(orgId);
-      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+
+      // For NAM: scope to their team's companies
+      let scopedCompanyIds: Set<string>;
+      if (isNamRole) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else {
+        scopedCompanyIds = new Set(orgCompanies.map(c => c.id));
+      }
 
       const allTouchpoints = await storage.getTouchpoints();
-      const todayTouchpoints = allTouchpoints.filter(t => t.date === today && orgCompanyIds.has(t.companyId));
+      const todayTouchpoints = allTouchpoints.filter(t => t.date === today && scopedCompanyIds.has(t.companyId));
       const touches = todayTouchpoints.length;
       const meaningful = todayTouchpoints.filter(t => t.isMeaningful).length;
 
-      // Count new contacts in this org (contacts belong to companies which belong to orgs)
       const allContacts = await storage.getContacts();
       const newContacts = allContacts.filter(c =>
         c.createdAt &&
         c.createdAt.slice(0, 10) === today &&
-        orgCompanyIds.has(c.companyId)
+        scopedCompanyIds.has(c.companyId)
       ).length;
 
       res.json({ touches, meaningful, newContacts });
@@ -7106,12 +7166,15 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  // Relationships moved up a base — accounts (companies) with contacts that advanced this month
+  // Relationships moved up — accounts with contacts that advanced this month
+  // Directors: org-wide; NAMs: their team's accounts
   app.get("/api/dashboard/relationships-moved", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(DIRECTOR_ROLES as readonly string[]).includes(user.role)) {
+      const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      if (!isDirectorRole && !isNamRole) {
         return res.status(403).json({ error: "Access denied" });
       }
 
@@ -7119,15 +7182,21 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const now = new Date();
       const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 
-      // Scope to org companies, then count unique companies that have at least one contact
-      // with baseAdvancedAt in current month (contact-level proxy for account relationship advancement)
       const orgCompanies = await storage.getCompanies(orgId);
-      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+
+      let scopedCompanyIds: Set<string>;
+      if (isNamRole) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else {
+        scopedCompanyIds = new Set(orgCompanies.map(c => c.id));
+      }
 
       const allContacts = await storage.getContacts();
       const advancedCompanyIds = new Set(
         allContacts
-          .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && orgCompanyIds.has(c.companyId))
+          .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && scopedCompanyIds.has(c.companyId))
           .map(c => c.companyId)
       );
       const count = advancedCompanyIds.size;
@@ -7139,11 +7208,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   // NAM/AM Margin Metrics — current month margin vs goal for each user by role
+  // Directors: org-wide; NAMs: scoped to their direct reports
   app.get("/api/dashboard/margin-metrics", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(DIRECTOR_ROLES as readonly string[]).includes(user.role)) {
+      const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      if (!isDirectorRole && !isNamRole) {
         return res.status(403).json({ error: "Access denied" });
       }
 
@@ -7192,16 +7264,26 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         (g.namId && orgUserIds.has(g.namId)) || (g.amId && orgUserIds.has(g.amId))
       );
 
+      const namRoles = ["national_account_manager"];
+      const amRoles = ["account_manager"];
+
+      // For NAM role: only show their direct reports as AMs, not all AMs
+      const directReportIds: Set<string> | null = isNamRole
+        ? new Set(allUsers.filter(u => u.managerId === user.id).map(u => u.id))
+        : null;
+
+      const filterByScope = (users: any[]) => directReportIds
+        ? users.filter(u => directReportIds.has(u.id))
+        : users;
+
       const buildMetrics = (roleFilter: string[]) => {
-        return allUsers
-          .filter(u => roleFilter.includes(u.role))
+        return filterByScope(allUsers.filter(u => roleFilter.includes(u.role)))
           .map(u => {
             // Match by financialRepId or by name normalization
             let margin = 0;
             if (u.financialRepId) {
               const repKey = u.financialRepId.toLowerCase().trim();
               margin = byRepId[repKey] || 0;
-              // Also try full name lookup if nothing found
               if (!margin) {
                 const nameNorm = normalize(u.name);
                 for (const [k, v] of Object.entries(byRepId)) {
@@ -7221,7 +7303,6 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
               }
             }
 
-            // Find their margin goal for this month
             const marginGoal = allGoals.find(g =>
               g.metric === "margin" &&
               g.amId === u.id &&
@@ -7239,16 +7320,60 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           });
       };
 
-      const namRoles = ["national_account_manager"];
-      const amRoles = ["account_manager"];
-
       res.json({
-        nams: buildMetrics(namRoles),
+        nams: isNamRole ? [] : buildMetrics(namRoles),
         ams: buildMetrics(amRoles),
       });
     } catch (err) {
       console.error("Error loading margin metrics:", err);
       res.status(500).json({ error: "Failed to load margin metrics" });
+    }
+  });
+
+  // Personal metrics — for NAM and AM: their own individual activity stats
+  // relationshipsMovedThisMonth: accounts they personally own with contacts that advanced this month
+  // meaningfulToday: meaningful touchpoints they personally logged today
+  // contactsAddedToday: contacts added today in their personally owned accounts
+  // touchesToday: all touchpoints they personally logged today
+  app.get("/api/dashboard/personal-metrics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const today = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
+      const orgId = req.session.organizationId!;
+      const allCompanies = await storage.getCompanies(orgId);
+      // Own accounts = companies where salesPersonId === current user
+      const myCompanies = allCompanies.filter(c => c.salesPersonId === user.id);
+      const myCompanyIds = new Set(myCompanies.map(c => c.id));
+
+      // Relationships moved up this month in my accounts
+      const allContacts = await storage.getContacts();
+      const advancedCompanyIds = new Set(
+        allContacts
+          .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && myCompanyIds.has(c.companyId))
+          .map(c => c.companyId)
+      );
+      const relationshipsMovedThisMonth = advancedCompanyIds.size;
+
+      // My own touchpoints today
+      const myTouchpointsToday = await storage.getTouchpointsByUser(user.id, today);
+      const touchesToday = myTouchpointsToday.length;
+      const meaningfulToday = myTouchpointsToday.filter(t => t.isMeaningful).length;
+
+      // New contacts added today in my accounts
+      const contactsAddedToday = allContacts.filter(c =>
+        c.createdAt &&
+        c.createdAt.slice(0, 10) === today &&
+        myCompanyIds.has(c.companyId)
+      ).length;
+
+      res.json({ relationshipsMovedThisMonth, meaningfulToday, contactsAddedToday, touchesToday });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load personal metrics" });
     }
   });
 

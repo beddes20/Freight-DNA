@@ -243,17 +243,36 @@ export default function Dashboard() {
   });
 
   const isDirector = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director";
+  const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
+  const isAm = currentUser?.role === "account_manager";
 
-  // Collapsible state for director portlets
+  // Collapsible state for director/NAM portlets
   const [trendingUpCollapsed, setTrendingUpCollapsed] = useState(false);
   const [trendingDownCollapsed, setTrendingDownCollapsed] = useState(false);
   const [namMarginCollapsed, setNamMarginCollapsed] = useState(false);
   const [amMarginCollapsed, setAmMarginCollapsed] = useState(false);
+  const [namTrendingUpCollapsed, setNamTrendingUpCollapsed] = useState(false);
+  const [namTrendingDownCollapsed, setNamTrendingDownCollapsed] = useState(false);
+  const [amTrendingUpCollapsed, setAmTrendingUpCollapsed] = useState(false);
+  const [amTrendingDownCollapsed, setAmTrendingDownCollapsed] = useState(false);
 
   type TrendingAccount = { name: string; delta: number };
   const { data: trendingAccounts, isLoading: trendingLoading } = useQuery<{ up: TrendingAccount[]; down: TrendingAccount[] }>({
     queryKey: ["/api/dashboard/trending-accounts"],
     enabled: isDirector,
+    refetchOnWindowFocus: false,
+  });
+
+  // NAM and AM each get their own scoped trending accounts query
+  const { data: namTrendingAccounts, isLoading: namTrendingLoading } = useQuery<{ up: TrendingAccount[]; down: TrendingAccount[] }>({
+    queryKey: ["/api/dashboard/trending-accounts"],
+    enabled: isNam,
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: amTrendingAccounts, isLoading: amTrendingLoading } = useQuery<{ up: TrendingAccount[]; down: TrendingAccount[] }>({
+    queryKey: ["/api/dashboard/trending-accounts"],
+    enabled: isAm,
     refetchOnWindowFocus: false,
   });
 
@@ -264,10 +283,22 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
+  const { data: namTeamActivity, isLoading: namTeamActivityLoading } = useQuery<TeamActivity>({
+    queryKey: ["/api/dashboard/team-activity"],
+    enabled: isNam,
+    refetchInterval: 120000,
+  });
+
   type RelationshipsMovedData = { count: number };
   const { data: relationshipsMoved, isLoading: relationshipsMovedLoading } = useQuery<RelationshipsMovedData>({
     queryKey: ["/api/dashboard/relationships-moved"],
     enabled: isDirector,
+    refetchInterval: 120000,
+  });
+
+  const { data: namRelationshipsMoved, isLoading: namRelationshipsMovedLoading } = useQuery<RelationshipsMovedData>({
+    queryKey: ["/api/dashboard/relationships-moved"],
+    enabled: isNam,
     refetchInterval: 120000,
   });
 
@@ -279,6 +310,19 @@ export default function Dashboard() {
   const { data: marginMetrics, isLoading: marginMetricsLoading } = useQuery<MarginMetrics>({
     queryKey: ["/api/dashboard/margin-metrics"],
     enabled: isDirector,
+    refetchInterval: 120000,
+  });
+
+  const { data: namMarginMetrics, isLoading: namMarginMetricsLoading } = useQuery<MarginMetrics>({
+    queryKey: ["/api/dashboard/margin-metrics"],
+    enabled: isNam,
+    refetchInterval: 120000,
+  });
+
+  type PersonalMetrics = { relationshipsMovedThisMonth: number; meaningfulToday: number; contactsAddedToday: number; touchesToday: number };
+  const { data: personalMetrics, isLoading: personalMetricsLoading } = useQuery<PersonalMetrics>({
+    queryKey: ["/api/dashboard/personal-metrics"],
+    enabled: isNam || isAm,
     refetchInterval: 120000,
   });
 
@@ -1164,6 +1208,390 @@ export default function Dashboard() {
                 </Card>
               );
             })}
+          </div>
+        </>
+      )}
+
+      {/* ── NAM Dashboard Portlets ──────────────────────────────────────────── */}
+      {isNam && (
+        <>
+          {/* Row 1: Team activity metrics */}
+          <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-activity-row">
+            <Card className="overflow-hidden" data-testid="nam-portlet-relationships-moved">
+              <CardContent className="p-4">
+                {namRelationshipsMovedLoading ? <Skeleton className="h-16 w-full" /> : (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
+                      <Repeat2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" data-testid="nam-stat-relationships-moved">{namRelationshipsMoved?.count ?? 0}</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Team relationships moved up this month</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            <Card className="overflow-hidden" data-testid="nam-portlet-meaningful">
+              <CardContent className="p-4">
+                {namTeamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
+                      <MessageSquare className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" data-testid="nam-stat-meaningful">{namTeamActivity?.meaningful ?? 0}</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Team meaningful conversations today</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            <Card className="overflow-hidden" data-testid="nam-portlet-contacts">
+              <CardContent className="p-4">
+                {namTeamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                      <UserPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" data-testid="nam-stat-contacts">{namTeamActivity?.newContacts ?? 0}</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Team new contacts added today</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            <Card className="overflow-hidden" data-testid="nam-portlet-touches">
+              <CardContent className="p-4">
+                {namTeamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
+                      <Activity className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" data-testid="nam-stat-touches">{namTeamActivity?.touches ?? 0}</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Team touches today (all types)</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Row 2: Trending accounts */}
+          <div className="grid gap-4 md:grid-cols-2" data-testid="nam-trending-row">
+            <Card data-testid="nam-portlet-trending-up">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <button onClick={() => setNamTrendingUpCollapsed(!namTrendingUpCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-nam-trending-up">
+                    {namTrendingUpCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
+                      Trending Accounts Up
+                    </CardTitle>
+                  </button>
+                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                </div>
+              </CardHeader>
+              {!namTrendingUpCollapsed && (
+                <CardContent className="pt-0">
+                  {namTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+                  : (namTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
+                  : <div className="space-y-2">{namTrendingAccounts!.up.map((acct, idx) => (
+                    <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-up-${idx}`}>
+                      <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                      <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                      <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
+                        <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}</div>}
+                </CardContent>
+              )}
+            </Card>
+            <Card data-testid="nam-portlet-trending-down">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <button onClick={() => setNamTrendingDownCollapsed(!namTrendingDownCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-nam-trending-down">
+                    {namTrendingDownCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <TrendingDown className="h-4 w-4 text-red-500 dark:text-red-400" />
+                      Trending Accounts Down
+                    </CardTitle>
+                  </button>
+                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                </div>
+              </CardHeader>
+              {!namTrendingDownCollapsed && (
+                <CardContent className="pt-0">
+                  {namTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+                  : (namTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
+                  : <div className="space-y-2">{namTrendingAccounts!.down.map((acct, idx) => (
+                    <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-down-${idx}`}>
+                      <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                      <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                      <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
+                        <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}</div>}
+                </CardContent>
+              )}
+            </Card>
+          </div>
+
+          {/* Row 3: AM Margin Metrics (NAM's team) */}
+          <Card data-testid="nam-portlet-margin-ams">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <button onClick={() => setAmMarginCollapsed(!amMarginCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-nam-am-margin">
+                  {amMarginCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <UserCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+                    My Team — AM Margin Metrics
+                  </CardTitle>
+                </button>
+                <span className="text-xs font-normal text-muted-foreground">{new Date().toLocaleString("default", { month: "long", year: "numeric" })}</span>
+              </div>
+            </CardHeader>
+            {!amMarginCollapsed && (
+              <CardContent className="pt-0">
+                {namMarginMetricsLoading ? (
+                  <div className="space-y-3">{[1,2,3].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
+                ) : (namMarginMetrics?.ams?.length ?? 0) === 0 ? (
+                  <p className="text-sm text-muted-foreground py-3">No AMs found on your team.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {(namMarginMetrics?.ams ?? []).map(m => {
+                      const target = m.goal?.target ?? 0;
+                      const pct = target > 0 ? Math.min(Math.round((m.margin / target) * 100), 100) : 0;
+                      return (
+                        <div key={m.userId} className="space-y-1" data-testid={`nam-margin-metric-${m.userId}`}>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium flex-1 truncate">{m.name}</span>
+                            <span className="text-sm font-bold tabular-nums text-green-700 dark:text-green-400">${Math.round(m.margin).toLocaleString()}</span>
+                            {target > 0 && <span className="text-xs text-muted-foreground">/ ${Math.round(target).toLocaleString()}</span>}
+                            <MarginGoalEditButton
+                              userId={m.userId}
+                              goalId={m.goal?.id ?? null}
+                              currentTarget={target}
+                              onSave={(t) => setMarginGoalMutation.mutate({ userId: m.userId, goalId: m.goal?.id ?? null, target: t })}
+                            />
+                          </div>
+                          {target > 0 && (
+                            <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                              <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            )}
+          </Card>
+
+          {/* Row 4: My Personal Metrics */}
+          <div className="space-y-1">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide px-0.5">My Activity</h3>
+            <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-personal-metrics-row">
+              <Card className="overflow-hidden" data-testid="nam-personal-relationships">
+                <CardContent className="p-4">
+                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
+                        <Repeat2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold" data-testid="nam-personal-stat-relationships">{personalMetrics?.relationshipsMovedThisMonth ?? 0}</div>
+                        <p className="text-xs text-muted-foreground mt-0.5">My relationships moved up this month</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+              <Card className="overflow-hidden" data-testid="nam-personal-meaningful">
+                <CardContent className="p-4">
+                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
+                        <MessageSquare className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold" data-testid="nam-personal-stat-meaningful">{personalMetrics?.meaningfulToday ?? 0}</div>
+                        <p className="text-xs text-muted-foreground mt-0.5">My meaningful conversations today</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+              <Card className="overflow-hidden" data-testid="nam-personal-contacts">
+                <CardContent className="p-4">
+                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                        <UserPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold" data-testid="nam-personal-stat-contacts">{personalMetrics?.contactsAddedToday ?? 0}</div>
+                        <p className="text-xs text-muted-foreground mt-0.5">My new contacts added today</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+              <Card className="overflow-hidden" data-testid="nam-personal-touches">
+                <CardContent className="p-4">
+                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
+                        <Activity className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold" data-testid="nam-personal-stat-touches">{personalMetrics?.touchesToday ?? 0}</div>
+                        <p className="text-xs text-muted-foreground mt-0.5">My touches today (all types)</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── AM Dashboard Portlets ────────────────────────────────────────────── */}
+      {isAm && (
+        <>
+          {/* Row 1: Trending accounts */}
+          <div className="grid gap-4 md:grid-cols-2" data-testid="am-trending-row">
+            <Card data-testid="am-portlet-trending-up">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <button onClick={() => setAmTrendingUpCollapsed(!amTrendingUpCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-am-trending-up">
+                    {amTrendingUpCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
+                      My Trending Accounts Up
+                    </CardTitle>
+                  </button>
+                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                </div>
+              </CardHeader>
+              {!amTrendingUpCollapsed && (
+                <CardContent className="pt-0">
+                  {amTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+                  : (amTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
+                  : <div className="space-y-2">{amTrendingAccounts!.up.map((acct, idx) => (
+                    <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-up-${idx}`}>
+                      <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                      <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                      <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
+                        <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}</div>}
+                </CardContent>
+              )}
+            </Card>
+            <Card data-testid="am-portlet-trending-down">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <button onClick={() => setAmTrendingDownCollapsed(!amTrendingDownCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-am-trending-down">
+                    {amTrendingDownCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <TrendingDown className="h-4 w-4 text-red-500 dark:text-red-400" />
+                      My Trending Accounts Down
+                    </CardTitle>
+                  </button>
+                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                </div>
+              </CardHeader>
+              {!amTrendingDownCollapsed && (
+                <CardContent className="pt-0">
+                  {amTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+                  : (amTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
+                  : <div className="space-y-2">{amTrendingAccounts!.down.map((acct, idx) => (
+                    <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-down-${idx}`}>
+                      <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                      <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                      <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
+                        <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}</div>}
+                </CardContent>
+              )}
+            </Card>
+          </div>
+
+          {/* Row 2: Personal metrics */}
+          <div className="space-y-1">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide px-0.5">My Activity</h3>
+            <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="am-personal-metrics-row">
+              <Card className="overflow-hidden" data-testid="am-personal-relationships">
+                <CardContent className="p-4">
+                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
+                        <Repeat2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold" data-testid="am-personal-stat-relationships">{personalMetrics?.relationshipsMovedThisMonth ?? 0}</div>
+                        <p className="text-xs text-muted-foreground mt-0.5">Relationships moved up this month</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+              <Card className="overflow-hidden" data-testid="am-personal-meaningful">
+                <CardContent className="p-4">
+                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
+                        <MessageSquare className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold" data-testid="am-personal-stat-meaningful">{personalMetrics?.meaningfulToday ?? 0}</div>
+                        <p className="text-xs text-muted-foreground mt-0.5">Meaningful conversations today</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+              <Card className="overflow-hidden" data-testid="am-personal-contacts">
+                <CardContent className="p-4">
+                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                        <UserPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold" data-testid="am-personal-stat-contacts">{personalMetrics?.contactsAddedToday ?? 0}</div>
+                        <p className="text-xs text-muted-foreground mt-0.5">New contacts added today</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+              <Card className="overflow-hidden" data-testid="am-personal-touches">
+                <CardContent className="p-4">
+                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
+                        <Activity className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold" data-testid="am-personal-stat-touches">{personalMetrics?.touchesToday ?? 0}</div>
+                        <p className="text-xs text-muted-foreground mt-0.5">Touches today (all types)</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </div>
         </>
       )}
