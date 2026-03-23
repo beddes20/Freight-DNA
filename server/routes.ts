@@ -439,16 +439,38 @@ function parseHistoricalRow(row: any, cols?: FinancialCols): {
     const weekRaw   = String(row[weekK]     || "").trim();
     let weekKey  = weekRaw || "";
     let monthKey = "";
-    const serial = Number(row[delivK]);
-    if (!isNaN(serial) && serial > 40000) {
-      const d = new Date(new Date(1899, 11, 30).getTime() + serial * 86400000);
-      monthKey = toMonthKey(d);
-      if (!weekKey) {
-        const y = d.getFullYear();
-        const wn = Math.ceil(((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000 + new Date(y, 0, 1).getDay() + 1) / 7);
-        weekKey = `${y}-W${wn}`;
+
+    // 1. Best source: "Month" field directly (e.g. "2026 M02")
+    const monthFieldRaw = String(row["Month"] || row["month"] || "").trim();
+    const mfMatch = monthFieldRaw.match(/^(\d{4})\s+M(\d+)$/i);
+    if (mfMatch) {
+      monthKey = `${mfMatch[1]}-${String(parseInt(mfMatch[2])).padStart(2, "0")}`;
+    }
+
+    // 2. Excel serial delivery date
+    if (!monthKey) {
+      const serial = Number(row[delivK]);
+      if (!isNaN(serial) && serial > 40000) {
+        const d = new Date(new Date(1899, 11, 30).getTime() + serial * 86400000);
+        monthKey = toMonthKey(d);
+        if (!weekKey) {
+          const y = d.getFullYear();
+          const wn = Math.ceil(((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000 + new Date(y, 0, 1).getDay() + 1) / 7);
+          weekKey = `${y}-W${wn}`;
+        }
       }
     }
+
+    // 3. ISO/string delivery date (stored after cellDates:true serialization)
+    if (!monthKey && row[delivK]) {
+      const dStr = String(row[delivK]).trim();
+      if (dStr && isNaN(Number(dStr))) {
+        const d = new Date(dStr);
+        if (!isNaN(d.getTime())) monthKey = toMonthKey(d);
+      }
+    }
+
+    // 4. Week key fallback
     if (!monthKey && weekKey) {
       const m = weekKey.match(/^(\d{4})\s*W(\d+)$/);
       if (m) {
