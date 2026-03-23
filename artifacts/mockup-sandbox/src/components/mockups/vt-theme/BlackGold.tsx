@@ -116,21 +116,32 @@ export function BlackGold() {
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Header */}
-        <div className="flex items-center justify-between px-5 py-3 flex-shrink-0" style={{ background: HEADER_BG, borderBottom: "1px solid #222", height: "52px" }}>
-          <div>
+        <div className="flex items-center justify-between px-5 flex-shrink-0" style={{ background: HEADER_BG, borderBottom: "1px solid #222", height: "52px" }}>
+          {/* Left: page title */}
+          <div className="flex-shrink-0">
             <h1 className="text-sm font-semibold" style={{ color: "#fff" }}>Dashboard</h1>
             <p className="text-xs" style={{ color: "#555" }}>Monday, March 23, 2026</p>
           </div>
-          <div className="flex items-center gap-3">
-            {/* Quick Log Touch CTA */}
+
+          {/* Center: mantras */}
+          <div className="flex items-center gap-2 mx-6 overflow-hidden">
+            {["Service Exceptionally", "Move Fast", "Build Relationships", "Hunt Opportunities", "Grow Relentlessly"].map((m, i, arr) => (
+              <span key={m} className="flex items-center gap-2 flex-shrink-0">
+                <span className="text-xs font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: GOLD_LIGHT }}>{m}</span>
+                {i < arr.length - 1 && <span className="text-xs" style={{ color: "#333" }}>•</span>}
+              </span>
+            ))}
+          </div>
+
+          {/* Right: actions */}
+          <div className="flex items-center gap-3 flex-shrink-0">
             <button
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold transition-all"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold"
               style={{ background: GOLD, color: BLACK, border: "none" }}
             >
               <Zap className="w-3 h-3" />
               Log Touch
             </button>
-            {/* Notifications */}
             <div className="relative">
               <Bell className="w-4 h-4" style={{ color: "#666" }} />
               <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center text-white" style={{ background: "#ef4444", fontSize: "8px" }}>3</span>
@@ -154,15 +165,6 @@ export function BlackGold() {
               <Activity className="w-3.5 h-3.5" style={{ color: GOLD }} />
               <span>Streak: <span style={{ color: GOLD, fontWeight: 700 }}>5 days</span></span>
             </div>
-          </div>
-          {/* Mantras strip */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {["Service Exceptionally", "Move Fast", "Build Relationships", "Hunt Opportunities", "Grow Relentlessly"].map((m, i, arr) => (
-              <span key={m} className="flex items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: GOLD_LIGHT }}>{m}</span>
-                {i < arr.length - 1 && <span className="text-xs" style={{ color: "#333" }}>•</span>}
-              </span>
-            ))}
           </div>
         </div>
 
