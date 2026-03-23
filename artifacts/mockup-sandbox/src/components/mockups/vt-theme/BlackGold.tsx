@@ -55,13 +55,23 @@ export function BlackGold() {
       {/* Sidebar */}
       <div className="flex flex-col w-56 flex-shrink-0" style={{ background: SIDEBAR_BG, borderRight: "1px solid #222" }}>
         {/* Logo */}
-        <div className="flex items-center px-3 py-3" style={{ borderBottom: "1px solid #222" }}>
-          <img
-            src="/__mockup/images/vt-logo-full.png"
-            alt="Value Truck — DNA Down Not Across"
-            className="w-full"
-            style={{ maxHeight: "56px", objectFit: "contain", objectPosition: "left center" }}
-          />
+        <div className="flex items-center justify-center px-4 py-4" style={{ borderBottom: "1px solid #222" }}>
+          <div className="flex flex-col items-center">
+            {/* Truck mark SVG */}
+            <svg width="32" height="16" viewBox="0 0 32 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 14 L16 2 L28 14" stroke={GOLD} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+              <path d="M10 14 L16 6 L22 14" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+            </svg>
+            {/* VT Lettermark */}
+            <div className="flex items-baseline gap-0.5 leading-none mt-0.5">
+              <span style={{ color: "#fff", fontSize: "22px", fontWeight: 900, letterSpacing: "-0.03em", fontFamily: "Inter, sans-serif" }}>V</span>
+              <span style={{ color: "#fff", fontSize: "22px", fontWeight: 900, letterSpacing: "-0.03em", fontFamily: "Inter, sans-serif" }}>T</span>
+            </div>
+            {/* Value Truck */}
+            <div style={{ color: "#fff", fontSize: "8.5px", fontWeight: 600, letterSpacing: "0.18em", marginTop: "1px" }}>VALUE TRUCK</div>
+            {/* DNA tagline */}
+            <div style={{ color: GOLD, fontSize: "7px", fontWeight: 500, letterSpacing: "0.08em", marginTop: "2px" }}>DNA · DOWN NOT ACROSS</div>
+          </div>
         </div>
 
         {/* Search */}
@@ -155,8 +165,13 @@ export function BlackGold() {
         <div className="px-5 pt-4 pb-4 flex-shrink-0" style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
           <div className="flex items-center gap-4">
             {/* VT Circle Emblem */}
-            <div className="flex-shrink-0" style={{ width: "60px", height: "60px", borderRadius: "50%", overflow: "hidden", boxShadow: `0 0 20px rgba(255,180,0,0.3)` }}>
-              <img src="/__mockup/images/vt-logo-circle.png" alt="VT" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            <div className="flex flex-col items-center justify-center flex-shrink-0"
+              style={{ width: "68px", height: "68px", borderRadius: "50%", border: `2px solid ${GOLD}`, background: "#111", boxShadow: `0 0 20px rgba(255,180,0,0.25)` }}>
+              <svg width="22" height="11" viewBox="0 0 32 16" fill="none">
+                <path d="M4 14 L16 2 L28 14" stroke={GOLD} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M10 14 L16 6 L22 14" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              <div style={{ color: "#fff", fontSize: "18px", fontWeight: 900, letterSpacing: "-0.04em", lineHeight: 1 }}>VT</div>
             </div>
             {/* Text */}
             <div className="flex-1">
