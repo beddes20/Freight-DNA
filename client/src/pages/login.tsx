@@ -75,7 +75,7 @@ export default function LoginPage() {
               style={{ color: "rgba(255,180,0,0.55)" }}
               data-testid="text-dna-tagline-login"
             >
-              DNA · Down Not Across
+              DNA · Down, Not Across
             </p>
             <p className="mt-2 text-sm" style={{ color: "rgba(255,255,255,0.35)" }}>
               Sales intelligence for freight brokers.
@@ -122,7 +122,7 @@ export default function LoginPage() {
               freight · dna
             </p>
             <p className="text-xs tracking-widest uppercase mt-1" style={{ color: "rgba(255,180,0,0.55)" }}>
-              DNA · Down Not Across
+              DNA · Down, Not Across
             </p>
           </div>
 

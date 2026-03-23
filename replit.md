@@ -76,7 +76,7 @@ The application uses React, TypeScript, and Tailwind CSS with `shadcn/ui` for a 
 
 ### UI Theme
 - **Color scheme**: Black sidebar/header (#111 dark) with Value Truck amber gold (#ffb400) accents
-- **Sidebar**: Pure black background, white nav text, gold active indicator (left border + warm bg), real VT white logo from valuetruck.com, gold "DNA · Down Not Across" tagline
+- **Sidebar**: Pure black background, white nav text, gold active indicator (left border + warm bg), real VT white logo from valuetruck.com, gold "DNA · Down, Not Across" tagline
 - **Top header**: Black, gold mantras centered ("Service Exceptionally · Move Fast · Build Relationships · Hunt Opportunities · Grow Relentlessly")
 - **Dashboard hero banner**: Black background, gold date/DNA text, VT logo in gold-outlined circle with glow
 - **Primary color**: `43 100% 50%` (HSL for #ffb400); primary-foreground dark (0 0% 5%) for dark text on gold buttons
