@@ -42,7 +42,7 @@ type AccountSummaryRow = {
   spotLoads: number;
   totalMargin: number;
   totalRevenue?: number;
-  repName: string;
+  repName?: string;
   byMonth?: Record<string, MonthBucket>;
 };
 
