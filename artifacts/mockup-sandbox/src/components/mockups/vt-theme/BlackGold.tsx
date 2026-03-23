@@ -84,7 +84,7 @@ export function BlackGold() {
                 className="flex items-center gap-2.5 w-full px-2.5 py-2 rounded text-left transition-all"
                 style={{
                   background: isActive ? SIDEBAR_ACTIVE_BG : "transparent",
-                  color: isActive ? GOLD : "#999",
+                  color: isActive ? GOLD : "#f0f0f0",
                   borderLeft: isActive ? `3px solid ${GOLD}` : "3px solid transparent",
                   paddingLeft: isActive ? "9px" : "10px",
                 }}
@@ -143,7 +143,7 @@ export function BlackGold() {
 
         {/* Hero Banner */}
         <div className="px-5 pt-4 pb-3 flex-shrink-0" style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mb-2">
             <div>
               <div className="flex items-center gap-2 mb-0.5">
                 <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: GOLD }}>Good morning, Ben</span>
@@ -154,6 +154,15 @@ export function BlackGold() {
               <Activity className="w-3.5 h-3.5" style={{ color: GOLD }} />
               <span>Streak: <span style={{ color: GOLD, fontWeight: 700 }}>5 days</span></span>
             </div>
+          </div>
+          {/* Mantras strip */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {["Service Exceptionally", "Move Fast", "Build Relationships", "Hunt Opportunities", "Grow Relentlessly"].map((m, i, arr) => (
+              <span key={m} className="flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: GOLD_LIGHT }}>{m}</span>
+                {i < arr.length - 1 && <span className="text-xs" style={{ color: "#333" }}>•</span>}
+              </span>
+            ))}
           </div>
         </div>
 
