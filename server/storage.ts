@@ -1,4 +1,4 @@
-import { eq, inArray, ilike, or, and, desc, isNull, isNotNull, gte, lte, sql } from "drizzle-orm";
+import { eq, inArray, ilike, or, and, asc, desc, isNull, isNotNull, gte, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -171,6 +171,7 @@ export interface IStorage {
   deleteAward(id: string): Promise<boolean>;
 
   getFinancialUploads(): Promise<FinancialUpload[]>;
+  getFinancialUploadsForOrg(organizationId: string): Promise<FinancialUpload[]>;
   getLatestFinancialUpload(): Promise<FinancialUpload | undefined>;
   getLatestFinancialUploadForOrg(organizationId: string): Promise<FinancialUpload | undefined>;
   createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload>;
@@ -542,6 +543,13 @@ export class DatabaseStorage implements IStorage {
 
   async getFinancialUploads(): Promise<FinancialUpload[]> {
     return db.select().from(financialUploads);
+  }
+
+  async getFinancialUploadsForOrg(organizationId: string): Promise<FinancialUpload[]> {
+    const orgUsers = await this.getUsers(organizationId);
+    const orgUserIds = new Set(orgUsers.map(u => u.id));
+    const all = await db.select().from(financialUploads).orderBy(asc(financialUploads.uploadedAt));
+    return all.filter(u => orgUserIds.has(u.uploadedBy));
   }
 
   async getLatestFinancialUpload(): Promise<FinancialUpload | undefined> {

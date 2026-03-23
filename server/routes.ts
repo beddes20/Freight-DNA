@@ -2070,7 +2070,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const customerName = (company.financialAlias || company.name).toLowerCase().trim();
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
 
       const msCols = resolveColumns(allRows);
@@ -3319,7 +3319,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         return res.status(403).json({ error: "Forbidden" });
       }
 
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (uploads.length === 0) return res.json([]);
 
       // Use only the latest upload — it already contains merged historical + current month rows
@@ -3379,7 +3379,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (uploads.length === 0) return res.json([]);
 
       // Use only the latest upload — it already contains merged historical + current month rows
@@ -3527,7 +3527,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user || (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales" && user.role !== "sales_director")) {
         return res.status(403).json({ error: "Forbidden" });
       }
-      const upload = await storage.getLatestFinancialUpload();
+      const upload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
       if (!upload) return res.json(null);
 
       const rawRows: any[] = (upload.rows as any[]) || [];
@@ -3557,7 +3557,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user || user.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       res.json(uploads.map(u => ({ id: u.id, fileName: u.fileName, uploadedAt: u.uploadedAt, rowCount: u.rowCount })));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch uploads" });
@@ -3568,7 +3568,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const upload = uploads.find(u => u.id === req.params.id);
       if (!upload) return res.status(404).json({ error: "Upload not found" });
 
@@ -3754,7 +3754,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/financials/sheets", requireAuth, async (req, res) => {
     try {
-      const latest = await storage.getLatestFinancialUpload();
+      const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
       if (!latest) return res.json({ bestDealDaysSpot: [], bestDealDaysAll: [], trendAnalysis: [], averagesData: [], dailyAcquisition: [] });
       res.json({
         bestDealDaysSpot: (latest.bestDealDaysSpot as any[]) || [],
@@ -3770,7 +3770,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/financials/customer-names", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const names = new Set<string>();
       for (const upload of uploads) {
         const rows: any[] = Array.isArray(upload.rows) ? upload.rows as any[] : [];
@@ -3789,7 +3789,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/financials/account-summary", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json([]);
       const latest = uploads[uploads.length - 1];
       const raw = (latest.summaryRows as any[]) || [];
@@ -3892,7 +3892,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Dispatcher summary (for Logistics Managers) ────────────────────────────
   app.get("/api/financials/dispatcher-summary", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json([]);
       const latest = uploads[uploads.length - 1];
 
@@ -3947,7 +3947,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Salesperson summary (for Sales roles) ──────────────────────────────────
   app.get("/api/financials/salesperson-summary", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json([]);
       const latest = uploads[uploads.length - 1];
 
@@ -4002,7 +4002,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Last Upload Info ─────────────────────────────────────────────────────────
   app.get("/api/financials/last-upload-info", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json({ uploadedAt: null, fileName: null });
       const latest = uploads[uploads.length - 1];
       res.json({ uploadedAt: latest.uploadedAt, fileName: (latest as any).fileName || null });
@@ -4017,7 +4017,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
 
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json({ opsUserGaps: [], dispatcherGaps: [], salespersonGaps: [], usersMissingId: [] });
       const latest = uploads[uploads.length - 1];
 
@@ -4090,7 +4090,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Salesperson Accounts ──────────────────────────────────────────────────────
   app.get("/api/financials/salesperson-accounts", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json([]);
       const latest = uploads[uploads.length - 1];
 
@@ -4220,7 +4220,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       await storage.setSetting("monthly_sync_failed_error", "");
 
       // Auto-link companies to salesperson users from synced data
-      storage.getFinancialUploads().then(uploads => {
+      storage.getFinancialUploadsForOrg(req.session.organizationId!).then(uploads => {
         if (uploads.length === 0) return;
         const latest = uploads[uploads.length - 1];
         linkSalespersonsFromRows((latest.rows as any[]) || []).catch(err =>
@@ -4280,7 +4280,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/historical-data-summary", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const rawHdsSrc = uploads.flatMap(u => (u.rows as any[]) || []);
       const hdsCols = resolveColumns(rawHdsSrc);
       const allRows = rawHdsSrc.filter((r: any) => getStatusFromRow(r, hdsCols) !== "void" && !isExcludedRow(r, hdsCols));
@@ -4320,7 +4320,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const rawOppSrc2 = uploads.flatMap(u => (u.rows as any[]) || []);
       const opp2Cols = resolveColumns(rawOppSrc2);
       const allRows = rawOppSrc2.filter((r: any) => getStatusFromRow(r, opp2Cols) !== "void");
@@ -4399,7 +4399,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Lane Corridors ────────────────────────────────────────────────────────────
   app.get("/api/historical-lane-corridors", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const corridorMap: Record<string, { origin: string; destination: string; originCity: string; originState: string; destCity: string; destState: string; loads: number }> = {};
       if (uploads.length > 0) {
         const latestCorr = uploads[uploads.length - 1];
@@ -4427,7 +4427,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Heatmap Data ─────────────────────────────────────────────────────────────
   app.get("/api/historical-heatmap", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       console.log(`[heatmap] ${uploads.length} upload(s) found`);
       const deliveries: Record<string, { city: string; state: string; count: number }> = {};
       const pickups: Record<string, { city: string; state: string; count: number }> = {};
@@ -4469,7 +4469,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const company = await storage.getCompanyInOrg(req.params.id, user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json({ months: [], topDestinations: [], topCorridors: [], totalLoads: 0, spotLoads: 0, totalMargin: 0 });
 
       // Same normalize + nameMatches logic as the frontend
@@ -4555,7 +4555,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Proximity Matches (75-mile delivery zones vs RFP pickup origins) ────────
   app.get("/api/proximity-matches", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const rfps = await storage.getRfps();
       const companies = await storage.getCompanies(req.session.organizationId!);
       const users = await storage.getUsers(req.session.organizationId!);
@@ -4639,7 +4639,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   app.get("/api/companies/:id/lane-matching", requireAuth, async (req, res) => {
     try {
       const companyId = req.params.id;
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const allRfps = await storage.getRfps();
 
       // Build geocoded frequency maps for our deliveries (consignee) and pickups (shipper)
@@ -5581,7 +5581,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
       // Enrich goals with auto-computed values so dashboard alerts use accurate data
       const allUsers = await storage.getUsers(req.session.organizationId!);
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
 
       const enriched = await Promise.all(goalsList.map(async (goal) => {
@@ -5662,7 +5662,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const todayStr = new Date().toISOString().slice(0, 10);
       const activeGoals = allGoals.filter(g => g.startDate <= todayStr && g.endDate >= todayStr);
 
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
 
       type GoalEntry = { metric: string; customLabel: string | null; amId: string; amName: string; currentValue: number; target: number; pct: number };
@@ -6005,7 +6005,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         // LM metrics — computed from the Dispatcher column in transaction rows
         const repKey = targetUser ? (targetUser as any).financialRepId as string | null : null;
         if (repKey) {
-          const uploads = await storage.getFinancialUploads();
+          const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
           if (uploads.length) {
             const latest = uploads[uploads.length - 1];
             const txRows: any[] = (latest.rows as any[]) || [];
@@ -6036,7 +6036,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         if (targetUser) {
           const repKey = (targetUser as any).financialRepId as string | null;
           if (repKey) {
-            const uploads = await storage.getFinancialUploads();
+            const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
             if (uploads.length) {
               const latest = uploads[uploads.length - 1];
               const raw = (latest.summaryRows as any[]) || [];
@@ -6099,7 +6099,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const amUser = allUsers.find(u => u.id === goal.amId);
       const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
       if (!repKey) return res.json({ months: [] });
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json({ months: [] });
       const latest = uploads[uploads.length - 1];
       const txRows: any[] = (latest.rows as any[]) || [];
@@ -6186,7 +6186,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         storage.getContactsByCompany(req.params.id),
         storage.getRfps(),
         storage.getAwards(),
-        storage.getFinancialUploads(),
+        storage.getFinancialUploadsForOrg(req.session.organizationId!),
       ]);
 
       if (!company) return res.status(404).json({ error: "Company not found" });
@@ -6387,7 +6387,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const companies = await storage.getCompanies(req.session.organizationId!);
-      const uploads = await storage.getFinancialUploads();
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
       const msCols = resolveColumns(allRows);
 
