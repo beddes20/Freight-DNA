@@ -179,7 +179,7 @@ function zipToCity(value: string): string {
 }
 
 function selectBestRfpSheet(workbook: XLSX.WorkBook): string {
-  const laneKeywords = ["origin", "dest", "volume", "load", "ship", "from", "to", "lane", "state", "city", "zip", "rate", "qty", "pickup", "delivery", "equipment", "trailer", "mode", "annual", "corridor"];
+  const laneKeywords = ["origin", "dest", "volume", "load", "ship", "from", "to", "lane", "state", "city", "zip", "rate", "qty", "pickup", "delivery", "equipment", "trailer", "mode", "annual", "corridor", "sf", "st", "freq", "temp"];
   const skipPatterns = [/^(cover|summary|index|instructions?|notes?|legend|glossary|overview|readme|terms|conditions|contacts?|intro)/i];
 
   let bestSheet = workbook.SheetNames[0];
@@ -227,7 +227,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     return { rows: [], headers: [], highVolumeLanes: [], analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0 } };
   }
 
-  const headerKeywords = ["origin", "dest", "volume", "load", "ship", "from", "to", "lane", "state", "city", "zip", "rate", "qty", "pickup", "delivery"];
+  const headerKeywords = ["origin", "dest", "volume", "load", "ship", "from", "to", "lane", "state", "city", "zip", "rate", "qty", "pickup", "delivery", "sf", "st", "freq", "temp"];
   let headerRowIdx = 0;
   let bestScore = 0;
 
@@ -274,46 +274,62 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
 
   let originCol = findCol(["origin city", "orig city", "from city", "o_city", "origin_city"]);
   if (!originCol) originCol = findCol(["origin zip", "orig zip", "from zip", "o_zip", "origin_zip", "from_zip"]);
-  if (!originCol) originCol = findCol(["origin", "orig", "pickup", "ship from", "from"]);
+  if (!originCol) originCol = findCol(["origin", "orig", "pickup", "ship from", "sf location", "sf loc", "ship from location", "from"]);
 
   let destCol = findCol(["destination city", "dest city", "to city", "d_city", "destination_city"]);
   if (!destCol) destCol = findCol(["destination zip", "dest zip", "to zip", "d_zip", "destination_zip", "to_zip"]);
-  if (!destCol) destCol = findCol(["destination", "dest", "delivery", "ship to", "to"]);
+  if (!destCol) destCol = findCol(["destination", "dest", "delivery", "ship to", "st location", "st loc", "ship to location", "to"]);
 
   const originStateCol = findCol(["origin_state", "origin state", "o_state", "from_state", "from state", "orig state", "orig_state"]);
   const destStateCol = findCol(["destination state", "destination_state", "dest_state", "dest state", "to_state", "to state", "d_state"]);
   let volumeCol = findCol(["annual volume", "annual loads", "annual shipments", "yearly volume", "yearly loads"]);
   if (!volumeCol) volumeCol = findCol(["volume", "loads", "shipments", "qty", "quantity"]);
   if (!volumeCol) volumeCol = findCol(["weekly volume", "weekly loads", "weekly shipments", "wkly"]);
+  if (!volumeCol) volumeCol = findCol(["monthly frequency", "monthly freq", "frequency", "freq"]);
   const rateCol = findCol(["rate", "price", "cost", "target", "rpm"]);
   let laneCol = findCol(["lane_id", "lane id", "lane name", "lane_name", "lane #", "lane#", "lane"]);
-  const equipmentCol = findCol(["equipment name", "equipment type", "equipment code", "equip name", "equip type", "equipment", "equip", "trailer type", "trailer", "mode"]);
+  const equipmentCol = findCol(["equipment name", "equipment type", "equipment code", "equip name", "equip type", "equipment", "equip", "trailer type", "trailer", "mode", "temp"]);
 
   // Fallback: if no volume column found by keyword, auto-detect from column content
   let isWeeklyVolume = false;
+  let isMonthlyVolume = false;
   if (!volumeCol) {
+    // Exclude already-mapped columns so address strings (with embedded ZIP codes) aren't mistaken for volume
+    const mappedCols = new Set([originCol, destCol, originStateCol, destStateCol, rateCol, laneCol, equipmentCol].filter(Boolean) as string[]);
+
     // Find the column with the most numeric values (potential volume)
     let bestNumericCol: string | null = null;
     let bestNumericCount = 0;
     for (const h of headers) {
+      if (mappedCols.has(h)) continue;
       const numericValues = rows.map(r => parseFloat(String(r[h] || "").replace(/[^0-9.]/g, ""))).filter(v => !isNaN(v) && v > 0);
       if (numericValues.length > bestNumericCount) {
+        // Skip columns where most values look like ZIP codes (5-digit integers 10000-99999)
+        const zipLikeCount = numericValues.filter(v => Number.isInteger(v) && v >= 10000 && v <= 99999).length;
+        if (zipLikeCount > numericValues.length * 0.5) continue;
         bestNumericCount = numericValues.length;
         bestNumericCol = h;
       }
     }
     if (bestNumericCol && bestNumericCount > rows.length * 0.3) {
       volumeCol = bestNumericCol;
-      // If max value is small (< 52), it's likely weekly loads
+      // If max value is small (<= 31), it's likely monthly loads
+      // If max value is small (<= 52), it's likely weekly loads
       const numericVals = rows.map(r => parseFloat(String(r[bestNumericCol!] || "").replace(/[^0-9.]/g, ""))).filter(v => !isNaN(v));
       const maxVal = numericVals.length > 0 ? Math.max(...numericVals) : 0;
-      if (numericVals.length > 0 && maxVal <= 52) isWeeklyVolume = true;
+      if (numericVals.length > 0 && maxVal <= 31) {
+        isMonthlyVolume = true;
+      } else if (numericVals.length > 0 && maxVal <= 52) {
+        isWeeklyVolume = true;
+      }
     }
   } else {
-    // Check if the detected volume column has small values suggesting weekly cadence
+    // Check if the detected volume column has small values suggesting weekly or monthly cadence
     const colHeader = volumeCol.toLowerCase();
     if (colHeader.includes("week") || colHeader.includes("wkly")) {
       isWeeklyVolume = true;
+    } else if (colHeader.includes("month") || colHeader.includes("freq")) {
+      isMonthlyVolume = true;
     }
   }
 
@@ -349,7 +365,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
     if (volumeCol && row[volumeCol] !== "" && row[volumeCol] !== null) {
       const v = parseFloat(String(row[volumeCol]).replace(/[^0-9.]/g, ""));
       if (!isNaN(v) && v > 0) {
-        const annualV = isWeeklyVolume ? v * 52 : v;
+        const annualV = isWeeklyVolume ? v * 52 : isMonthlyVolume ? v * 12 : v;
         totalVolume += annualV;
         rowVolume = annualV;
       }
@@ -403,6 +419,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
       destinationColumn: destCol || destStateCol,
       highVolumeLaneCount: highVolumeLanes.length,
       isWeeklyVolume,
+      isMonthlyVolume,
     },
   };
 }
