@@ -52,13 +52,41 @@ type TouchpointSummary = Record<string, { week: number; month: number }>;
 function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummaryRow | null {
   if (!rows.length) return null;
   const lower = name.toLowerCase();
-  const exact = rows.find(r => r.customerName.toLowerCase() === lower);
-  if (exact) return exact;
-  const sub = name.length >= 5 ? rows.find(r =>
-    r.customerName.toLowerCase().includes(lower) ||
-    lower.includes(r.customerName.toLowerCase())
-  ) : null;
-  return sub || null;
+
+  const matches = rows.filter(r => {
+    const rName = r.customerName.toLowerCase();
+    return rName === lower ||
+      (name.length >= 5 && (rName.includes(lower) || lower.includes(rName)));
+  });
+
+  if (!matches.length) return null;
+  if (matches.length === 1) return matches[0];
+
+  // Aggregate all matching rows (e.g. same customer split across multiple reps)
+  const agg: AccountSummaryRow = {
+    customerName: matches[0].customerName,
+    totalLoads: 0,
+    spotLoads: 0,
+    totalMargin: 0,
+    totalRevenue: 0,
+    byMonth: {},
+  };
+  for (const m of matches) {
+    agg.totalLoads += m.totalLoads;
+    agg.spotLoads += m.spotLoads;
+    agg.totalMargin += m.totalMargin;
+    agg.totalRevenue = (agg.totalRevenue ?? 0) + (m.totalRevenue ?? 0);
+    if (m.byMonth) {
+      for (const [mo, bucket] of Object.entries(m.byMonth)) {
+        if (!agg.byMonth![mo]) agg.byMonth![mo] = { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
+        agg.byMonth![mo].totalLoads += bucket.totalLoads;
+        agg.byMonth![mo].spotLoads += bucket.spotLoads;
+        agg.byMonth![mo].totalMargin += bucket.totalMargin;
+        agg.byMonth![mo].totalRevenue = (agg.byMonth![mo].totalRevenue ?? 0) + (bucket.totalRevenue ?? 0);
+      }
+    }
+  }
+  return agg;
 }
 
 export default function Customers() {

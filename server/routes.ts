@@ -3308,8 +3308,20 @@ export async function registerRoutes(
     for (const company of allCompanies) {
       const alias = (company.financialAlias || "").toLowerCase().trim();
       const cname = company.name.toLowerCase().trim();
-      // Try alias first, then name
-      const tally = customerSalesMap.get(alias) || customerSalesMap.get(cname);
+
+      // Try exact match first, then substring match (handles cases like
+      // financial data key "gmccpomi - gmcca..." vs alias "gmccpomi")
+      let tally = customerSalesMap.get(alias) || customerSalesMap.get(cname);
+      if (!tally && alias.length >= 5) {
+        for (const [mapKey, mapVal] of customerSalesMap) {
+          if (mapKey.includes(alias) || alias.includes(mapKey)) { tally = mapVal; break; }
+        }
+      }
+      if (!tally && cname.length >= 5) {
+        for (const [mapKey, mapVal] of customerSalesMap) {
+          if (mapKey.includes(cname) || cname.includes(mapKey)) { tally = mapVal; break; }
+        }
+      }
       if (!tally) continue;
       // Pick most-common salesperson for this customer
       let bestSp = "";
