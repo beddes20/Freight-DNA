@@ -192,7 +192,7 @@ export function LmDailyCheckInPortlets({ lmUserId, canEdit }: Props) {
   return (
     <div className="grid gap-4 md:grid-cols-2" data-testid="lm-daily-checkin-portlets">
       <CheckInPortlet
-        title="Calls Before 07:30"
+        title="Check calls Done Before 07:30"
         icon={Phone}
         field="callsBeforeSevenThirty"
         lmUserId={lmUserId}

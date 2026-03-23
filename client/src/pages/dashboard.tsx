@@ -1648,9 +1648,9 @@ export default function Dashboard() {
         <LmDailyCheckInPortlets lmUserId={currentUser.id} canEdit={false} />
       )}
 
-      {/* LM Daily Check-In Portlets for managers */}
+      {/* LM Daily Check-In Portlets for managers — hidden for directors */}
       {(() => {
-        if (!currentUser || currentUser.role === "logistics_manager") return null;
+        if (!currentUser || currentUser.role === "logistics_manager" || currentUser.role === "director" || currentUser.role === "sales_director") return null;
         const directReportIds = new Set(lmDirectReports.map(lm => lm.id));
         // All LMs in management chain (from teamMembers for directors/NAMs/admins)
         const chainLms = teamMembers.filter(m => m.role === "logistics_manager" && !directReportIds.has(m.id));
