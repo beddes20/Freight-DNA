@@ -5330,8 +5330,15 @@ export async function registerRoutes(
       if (!metric || !period || !target || !startDate || !endDate || !Array.isArray(amIds) || !amIds.length) {
         return res.status(400).json({ error: "Missing required fields" });
       }
+      const existingGoals = await storage.getGoals({ namId: user.id });
       const created = [];
+      let skipped = 0;
       for (const amId of amIds) {
+        const isDuplicate = existingGoals.some(g =>
+          g.amId === amId && g.metric === metric &&
+          g.startDate === startDate && g.endDate === endDate
+        );
+        if (isDuplicate) { skipped++; continue; }
         const goal = await storage.createGoal({
           namId: user.id,
           amId,
@@ -5357,7 +5364,7 @@ export async function registerRoutes(
         }).catch(() => {});
         created.push(goal);
       }
-      res.status(201).json({ created: created.length });
+      res.status(201).json({ created: created.length, skipped });
     } catch (error) {
       res.status(500).json({ error: "Failed to bulk create goals" });
     }
@@ -5396,6 +5403,37 @@ export async function registerRoutes(
           relatedId: existing.id,
           read: false,
         }).catch(() => {});
+      }
+      // Goal completion: auto-complete and notify when value crosses target
+      if (isProgressUpdate && existing.status !== "completed") {
+        const newVal = parseFloat(req.body.currentValue || "0");
+        const tgt = parseFloat(existing.target || "0");
+        if (tgt > 0 && newVal >= tgt) {
+          await storage.updateGoal(req.params.id, { status: "completed" }).catch(() => {});
+          const goalTitle = existing.title || `${existing.metric.replace(/_/g, " ")} goal`;
+          if (existing.namId !== user.id) {
+            storage.createNotification({
+              userId: existing.namId,
+              type: "goal_updated",
+              title: `🎉 ${user.name} hit their goal!`,
+              body: goalTitle,
+              link: "/goals",
+              relatedId: existing.id,
+              read: false,
+            }).catch(() => {});
+          }
+          if (existing.amId && existing.amId === user.id) {
+            storage.createNotification({
+              userId: user.id,
+              type: "goal_updated",
+              title: "🎉 Goal achieved!",
+              body: goalTitle,
+              link: "/goals",
+              relatedId: existing.id,
+              read: false,
+            }).catch(() => {});
+          }
+        }
       }
       res.json(updated);
     } catch (error) {
@@ -6614,6 +6652,88 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: "Failed to delete nomination" });
+    }
+  });
+
+  // ── Tool Links (admin-configurable) ────────────────────────────────────────
+  app.get("/api/tool-links", requireAuth, async (req, res) => {
+    try {
+      const links = await storage.getToolLinks();
+      res.json(links);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tool links" });
+    }
+  });
+
+  app.post("/api/tool-links", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Forbidden" });
+      const now = new Date().toISOString();
+      const link = await storage.createToolLink({
+        title: req.body.title,
+        url: req.body.url,
+        description: req.body.description || null,
+        iconName: req.body.iconName || "Link",
+        color: req.body.color || "from-blue-500 to-blue-600",
+        sortOrder: req.body.sortOrder ?? 0,
+        createdById: user.id,
+        createdAt: now,
+      });
+      res.json(link);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create tool link" });
+    }
+  });
+
+  app.patch("/api/tool-links/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Forbidden" });
+      const link = await storage.updateToolLink(req.params.id, req.body);
+      if (!link) return res.status(404).json({ error: "Not found" });
+      res.json(link);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update tool link" });
+    }
+  });
+
+  app.delete("/api/tool-links/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Forbidden" });
+      await storage.deleteToolLink(req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete tool link" });
+    }
+  });
+
+  // ── Company-level walk-up touchpoint (no specific contact required) ─────────
+  app.post("/api/companies/:id/touchpoints", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const company = await storage.getCompany(req.params.id);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const now = new Date();
+      const tp = await storage.createTouchpoint({
+        contactId: req.body.contactId || null,
+        companyId: req.params.id,
+        type: req.body.type || "call",
+        date: req.body.date || now.toISOString().split("T")[0],
+        notes: req.body.notes || null,
+        sentiment: req.body.sentiment || null,
+        isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true" ? true : false,
+        loggedById: user.id,
+        createdAt: now.toISOString(),
+      });
+      res.json(tp);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to log touchpoint" });
     }
   });
 

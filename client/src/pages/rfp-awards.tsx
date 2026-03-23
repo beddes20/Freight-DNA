@@ -76,8 +76,12 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Rfp, Award, Company, Contact } from "@shared/schema";
 
 const rfpStatusConfig = {
-  pending: { label: "Pending", icon: Clock, color: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400" },
-  submitted: { label: "Submitted", icon: Send, color: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
+  pending:           { label: "Pending",            icon: Clock,      color: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400" },
+  submitted:         { label: "Submitted",          icon: Send,       color: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
+  awarded:           { label: "Awarded",            icon: Trophy,     color: "bg-green-500/10 text-green-600 dark:text-green-400" },
+  partially_awarded: { label: "Partially Awarded",  icon: Trophy,     color: "bg-teal-500/10 text-teal-600 dark:text-teal-400" },
+  lost:              { label: "Lost",               icon: XCircle,    color: "bg-red-500/10 text-red-600 dark:text-red-400" },
+  declined:          { label: "Declined / No Bid",  icon: XCircle,    color: "bg-gray-500/10 text-gray-600 dark:text-gray-400" },
 };
 
 interface RfpCardProps {
@@ -1350,7 +1354,8 @@ export default function RfpAwards() {
     pendingRfps: rfps?.filter(r => r.status === "pending").length || 0,
     submittedRfps: rfps?.filter(r => r.status === "submitted").length || 0,
   };
-  const winOpportunities = stats.submittedRfps + stats.totalAwards;
+  const lostOrDeclinedRfps = rfps?.filter(r => r.status === "lost" || r.status === "declined").length || 0;
+  const winOpportunities = stats.totalAwards + lostOrDeclinedRfps;
   const winRate = winOpportunities > 0 ? Math.round((stats.totalAwards / winOpportunities) * 100) : null;
 
   return (

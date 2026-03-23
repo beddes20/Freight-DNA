@@ -251,6 +251,7 @@ export default function Customers() {
         const tps = tpSummary[company.id] || { week: 0, month: 0 };
         if (touchFilter === "not_this_month" && tps.month > 0) return false;
         if (touchFilter === "not_this_week" && tps.week > 0) return false;
+        if (touchFilter === "needs_attention" && tps.month > 0) return false;
       }
       if (modeFilter !== "all") {
         const modes: string[] = (company as any).shippingModes || [];
@@ -420,6 +421,7 @@ export default function Customers() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Any activity</SelectItem>
+                <SelectItem value="needs_attention">Needs attention (30+ days)</SelectItem>
                 <SelectItem value="not_this_week">Not touched this week</SelectItem>
                 <SelectItem value="not_this_month">Not touched this month</SelectItem>
               </SelectContent>

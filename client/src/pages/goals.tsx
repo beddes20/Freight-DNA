@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -17,8 +17,9 @@ import {
 import {
   Target, Plus, MessageSquare, Trash2, ChevronDown, ChevronUp,
   TrendingUp, Users, Truck, DollarSign, CalendarDays, Pencil, Send,
-  CheckCircle2, BarChart3, BellRing, X, Sliders, Percent, Heart,
+  CheckCircle2, BarChart3, BellRing, X, Sliders, Percent, Heart, RefreshCw,
 } from "lucide-react";
+import { useConfetti } from "@/components/confetti";
 import type { Goal, GoalComment } from "@shared/schema";
 
 const METRICS = [
@@ -74,6 +75,8 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
   const [commentBody, setCommentBody] = useState("");
   const [updatingValue, setUpdatingValue] = useState(false);
   const [newValue, setNewValue] = useState("");
+  const [confettiFired, setConfettiFired] = useState(false);
+  const { fire: fireConfetti, ConfettiOverlay } = useConfetti();
 
   const metric = getMetric(goal.metric);
   const MetricIcon = metric.icon;
@@ -133,7 +136,16 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
   const canDelete = userRole === "admin" || goal.namId === currentUserId;
   const canUpdateProgress = userRole !== "admin" ? (goal.namId === currentUserId || goal.amId === currentUserId) : true;
 
+  useEffect(() => {
+    if (displayPct >= 100 && !confettiFired) {
+      fireConfetti();
+      setConfettiFired(true);
+    }
+  }, [displayPct, confettiFired, fireConfetti]);
+
   return (
+    <>
+    {ConfettiOverlay && <ConfettiOverlay />}
     <Card className="border border-border" data-testid={`goal-card-${goal.id}`}>
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3 mb-3">
@@ -146,6 +158,13 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
               <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                 <Badge variant="secondary" className="text-xs font-normal capitalize">{goal.metric === "custom" ? (goal.customLabel || "Custom") : metric.label}</Badge>
                 <Badge variant="outline" className="text-xs font-normal capitalize">{goal.period}</Badge>
+                {isAutoTracked ? (
+                  <Badge className="text-[10px] font-normal gap-0.5 px-1.5 py-0 h-4 bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400 border border-sky-200 dark:border-sky-800">
+                    <RefreshCw className="h-2 w-2" /> Auto
+                  </Badge>
+                ) : goal.metric !== "custom" ? (
+                  <Badge variant="outline" className="text-[10px] font-normal px-1.5 py-0 h-4 text-muted-foreground">Manual</Badge>
+                ) : null}
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <CalendarDays className="h-3 w-3" />
                   {fmtDate(goal.startDate)} – {fmtDate(goal.endDate)}
@@ -313,6 +332,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
         </div>
       </CardContent>
     </Card>
+    </>
   );
 }
 

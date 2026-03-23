@@ -372,7 +372,7 @@ export type GoalComment = typeof goalComments.$inferSelect;
 
 export const touchpoints = pgTable("touchpoints", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  contactId: varchar("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+  contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "cascade" }),
   companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
   type: text("type").notNull(),
   date: text("date").notNull(),
@@ -576,4 +576,19 @@ export const internalPosts = pgTable("internal_posts", {
 export const insertInternalPostSchema = createInsertSchema(internalPosts).omit({ id: true });
 export type InsertInternalPost = z.infer<typeof insertInternalPostSchema>;
 export type InternalPost = typeof internalPosts.$inferSelect;
+
+export const toolLinks = pgTable("tool_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  url: text("url").notNull(),
+  description: text("description"),
+  iconName: text("icon_name").default("Link"),
+  color: text("color").default("from-blue-500 to-blue-600"),
+  sortOrder: integer("sort_order").default(0),
+  createdById: varchar("created_by_id").notNull().references(() => users.id),
+  createdAt: text("created_at").notNull(),
+});
+export const insertToolLinkSchema = createInsertSchema(toolLinks).omit({ id: true });
+export type InsertToolLink = z.infer<typeof insertToolLinkSchema>;
+export type ToolLink = typeof toolLinks.$inferSelect;
 

@@ -88,6 +88,9 @@ import {
   developmentGoals,
   type DevelopmentGoal,
   type InsertDevelopmentGoal,
+  toolLinks,
+  type ToolLink,
+  type InsertToolLink,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -306,6 +309,11 @@ export interface IStorage {
 
   getDevelopmentGoals(namId: string, amId: string): Promise<DevelopmentGoal | undefined>;
   upsertDevelopmentGoals(namId: string, amId: string, content: string, updatedById: string): Promise<DevelopmentGoal>;
+
+  getToolLinks(): Promise<ToolLink[]>;
+  createToolLink(data: InsertToolLink): Promise<ToolLink>;
+  updateToolLink(id: string, data: Partial<InsertToolLink>): Promise<ToolLink | undefined>;
+  deleteToolLink(id: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -1819,6 +1827,25 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return result;
+  }
+
+  async getToolLinks(): Promise<ToolLink[]> {
+    return db.select().from(toolLinks).orderBy(toolLinks.sortOrder, toolLinks.createdAt);
+  }
+
+  async createToolLink(data: InsertToolLink): Promise<ToolLink> {
+    const [link] = await db.insert(toolLinks).values(data).returning();
+    return link;
+  }
+
+  async updateToolLink(id: string, data: Partial<InsertToolLink>): Promise<ToolLink | undefined> {
+    const [link] = await db.update(toolLinks).set(data).where(eq(toolLinks.id, id)).returning();
+    return link;
+  }
+
+  async deleteToolLink(id: string): Promise<boolean> {
+    const result = await db.delete(toolLinks).where(eq(toolLinks.id, id)).returning();
+    return result.length > 0;
   }
 }
 

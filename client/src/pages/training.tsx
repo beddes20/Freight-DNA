@@ -522,6 +522,92 @@ const MODULES: TrainingModule[] = [
     path: "/admin/users",
     roles: ["admin", "director", "national_account_manager"],
   },
+  // ── Team & Collaboration ────────────────────────────────────────────────────
+  {
+    id: "bulk-goals",
+    category: "Team & Collaboration",
+    title: "Bulk Goals",
+    icon: Target,
+    description:
+      "Bulk Goals lets NAMs and admins create the same goal for multiple account managers at once. Instead of setting goals one by one, choose a metric, target, period, and pick which AMs to apply it to — the system skips any AM who already has that goal.",
+    capabilities: [
+      "Set the same goal for every AM on your team in one action",
+      "Supports all goal types: Contacts Added, Load Count, Margin, Touchpoints, Custom",
+      "Duplicate prevention: existing goals are silently skipped, not overwritten",
+      "Returns a count of goals created vs. skipped so you know what happened",
+      "Combined with individual goals for fine-tuned target customization",
+    ],
+    tips: [
+      "Run bulk goals at the start of each quarter to baseline your team — then edit individuals as needed",
+      "If a goal was skipped, it means that AM already has one for that metric and period — edit it from their goal card",
+    ],
+    path: "/goals",
+    roles: ["admin", "director", "national_account_manager"],
+  },
+  {
+    id: "trend-badges",
+    category: "Team & Collaboration",
+    title: "Trend Badges",
+    icon: TrendingUp,
+    description:
+      "Trend badges appear on the Team Performance dashboard next to each rep's KPIs. They compare the current period's results to the previous one, showing whether each metric is up, down, or flat — with a dynamic label indicating exactly what's being compared.",
+    capabilities: [
+      "Green up-arrow: metric improved compared to prior period",
+      "Red down-arrow: metric declined compared to prior period",
+      "Gray dash: no change between periods",
+      "Label shows context: 'vs. last mo.' for monthly, 'vs. prior period' for custom ranges",
+      "Works across all rep metrics: touchpoints, contacts, tasks, and goal completion",
+    ],
+    tips: [
+      "Use trend badges during 1:1s to have data-driven conversations about momentum",
+      "A down-trend in touchpoints combined with a down-trend in contacts is an early warning sign",
+    ],
+    path: "/team-performance",
+    roles: ["admin", "director", "national_account_manager"],
+  },
+  {
+    id: "sales-account-association",
+    category: "Team & Collaboration",
+    title: "Sales Account Association",
+    icon: DollarSign,
+    description:
+      "Account Association links a company's financial record (from uploaded spreadsheets) to the correct salesperson in the system. When financial data is uploaded, the system auto-matches accounts to users by Rep ID — and admins can override that link manually on any company profile.",
+    capabilities: [
+      "Financial uploads auto-assign accounts to reps by their Rep ID code",
+      "Manual override available on any company detail page (admin/director/NAM)",
+      "Salesperson link controls which rep's financial data appears on their report card",
+      "Rep IDs are set per user in the admin user management page",
+      "Supports the OneDrive sync workflow — uploads and associations happen automatically",
+    ],
+    tips: [
+      "Always set a Rep ID for new users before uploading financial data for them",
+      "If a company shows no financial data, check that the salesperson link is set and the Rep ID matches",
+    ],
+    path: "/admin/users",
+    roles: ["admin", "director", "national_account_manager"],
+  },
+  {
+    id: "career-conversations",
+    category: "Team & Collaboration",
+    title: "Career Conversations",
+    icon: UserCircle,
+    description:
+      "Career Conversations is a structured framework for NAMs and AMs to discuss long-term career goals, development milestones, and promotion readiness. NAMs document key talking points and career objectives for each direct report, keeping those notes persistent across sessions.",
+    capabilities: [
+      "NAMs write and save career development notes for each AM",
+      "Notes persist across 1:1 sessions for continuity",
+      "Integrated with the 1:1 module — accessible from the AM detail view",
+      "Admins and directors can view career notes across the team",
+      "Supports candid conversations about promotion criteria and growth paths",
+    ],
+    tips: [
+      "Update career notes after every significant career conversation — not just scheduled 1:1s",
+      "Use the promotion readiness criteria in Admin to set clear expectations before the conversation",
+      "Career notes are private between NAM and admin/director — AMs do not see their own notes",
+    ],
+    path: "/goals",
+    roles: ["admin", "director", "national_account_manager"],
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, TrendingDown, BarChart3,
   Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart, ArrowUpDown,
-  Send, Loader2, XCircle, Star, Award, ChevronDown, ChevronUp, CalendarClock, ShieldAlert
+  Send, Loader2, XCircle, Star, Award, ChevronDown, ChevronUp, CalendarClock, ShieldAlert, Download
 } from "lucide-react";
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -352,7 +352,9 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
         </div>
         {(rep.prevCallTouchpoints != null || rep.prevTextTouchpoints != null) && (
           <div className="flex items-center gap-2 px-1 mb-3">
-            <span className="text-[10px] text-muted-foreground/60">vs last period:</span>
+            <span className="text-[10px] text-muted-foreground/60">
+              {period === "last" ? "vs. prior mo." : period === "ytd" ? "vs. last yr." : "vs. last mo."}
+            </span>
             <TrendBadge current={rep.callTouchpoints} prev={rep.prevCallTouchpoints ?? 0} />
             <TrendBadge current={rep.textTouchpoints} prev={rep.prevTextTouchpoints ?? 0} />
             <TrendBadge current={rep.emailTouchpoints} prev={rep.prevEmailTouchpoints ?? 0} />
@@ -433,6 +435,7 @@ type BulkSendResult = { sent: number; failed: number; total: number; results: { 
 export default function TeamPerformancePage() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const search = useSearch();
   const urlPeriod = new URLSearchParams(search).get("period") as PeriodOption | null;
   const [period, setPeriod] = useState<PeriodOption>(urlPeriod || "current");
@@ -622,6 +625,37 @@ export default function TeamPerformancePage() {
   const totalAllTouchpoints = totalCalls + totalTexts + totalEmails;
   const totalMeaningfulPct = totalAllTouchpoints > 0 ? Math.round((totalMeaningful / totalAllTouchpoints) * 100) : 0;
 
+  const handleExportCsv = () => {
+    const headers = ["Name", "Role", "Accounts", "Calls", "Texts", "Emails", "Meaningful", "New Contacts", "Touched", "Loads", "Margin ($)"];
+    const allReps = [...ams, ...nams, ...logistics, ...salesReps];
+    const rows = allReps.map(r => {
+      const isLm = r.role === "logistics_manager" || r.role === "logistics_coordinator";
+      const isSales = r.role === "sales_director" || r.role === "sales";
+      const fin = isLm ? lmLoadsMap[r.userId] : isSales ? salesLoadsMap[r.userId] : repLoadsMap[r.userId];
+      return [
+        r.name,
+        r.role.replace(/_/g, " "),
+        r.companyCount,
+        r.callTouchpoints,
+        r.textTouchpoints,
+        r.emailTouchpoints,
+        r.meaningfulTouchpoints ?? 0,
+        r.newContacts,
+        r.contactsTouched,
+        fin?.loads ?? "",
+        fin?.margin != null ? Math.round(fin.margin) : "",
+      ].map(v => `"${v}"`).join(",");
+    });
+    const csv = [headers.map(h => `"${h}"`).join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `team-performance-${period}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
@@ -636,6 +670,16 @@ export default function TeamPerformancePage() {
         </div>
         <div className="flex flex-col items-start sm:items-end gap-2">
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs gap-1.5"
+              onClick={handleExportCsv}
+              data-testid="button-export-csv"
+            >
+              <Download className="h-3 w-3" />
+              Export CSV
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -664,7 +708,7 @@ export default function TeamPerformancePage() {
                 <button
                   key={opt}
                   data-testid={`button-period-${opt}`}
-                  onClick={() => setPeriod(opt)}
+                  onClick={() => { setPeriod(opt); navigate(`/team-performance?period=${opt}`, { replace: true }); }}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                     period === opt
                       ? "bg-background shadow-sm text-foreground"

@@ -581,8 +581,12 @@ export default function CompanyDetail() {
   });
 
   const logTouchFromDetailMutation = useMutation({
-    mutationFn: ({ contactId, type, notes, sentiment, isMeaningful }: { contactId: string; type: string; notes: string; sentiment?: string; isMeaningful?: boolean }) =>
-      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false }),
+    mutationFn: ({ contactId, type, notes, sentiment, isMeaningful }: { contactId: string; type: string; notes: string; sentiment?: string; isMeaningful?: boolean }) => {
+      if (contactId === "__walkup__") {
+        return apiRequest("POST", `/api/companies/${companyId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false });
+      }
+      return apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "touchpoints"] });
@@ -3424,12 +3428,13 @@ export default function CompanyDetail() {
           </DialogHeader>
           <div className="space-y-3 pt-2">
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Contact</label>
+              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Contact <span className="font-normal text-muted-foreground">(optional)</span></label>
               <Select value={quickTouchContactId} onValueChange={setQuickTouchContactId}>
                 <SelectTrigger data-testid="select-quick-touch-contact-detail">
-                  <SelectValue placeholder="Pick a contact" />
+                  <SelectValue placeholder="Pick a contact or walk-up" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="__walkup__">🚶 No specific contact (walk-up)</SelectItem>
                   {(contacts ?? []).map((c: Contact) => (
                     <SelectItem key={c.id} value={c.id}>{c.name}{c.title ? ` · ${c.title}` : ""}</SelectItem>
                   ))}
