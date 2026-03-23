@@ -6849,6 +6849,7 @@ export async function registerRoutes(
         text: `New demo request from ${d.firstName} ${d.lastName} (${d.email}). Interest: ${d.interest}. Preferred: ${d.preferredDate} at ${d.preferredTime} CST.`,
       }).catch(() => {});
     } catch (error) {
+      console.error("[demo-request] error:", error);
       res.status(500).json({ error: "Failed to save demo request" });
     }
   });

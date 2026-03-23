@@ -359,8 +359,16 @@ export async function runMigrations() {
     );
     console.log("[migrations] jordan.baumgart password reset applied");
 
-    // demo_requests table (Task #53)
-    await client.query(`
+  } catch (err) {
+    console.error("[migrations] Migration error:", err);
+  } finally {
+    client.release();
+  }
+
+  // demo_requests table (Task #53) — runs independently so earlier failures don't block it
+  const client2 = await pool.connect();
+  try {
+    await client2.query(`
       CREATE TABLE IF NOT EXISTS demo_requests (
         id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
         first_name text NOT NULL,
@@ -374,10 +382,9 @@ export async function runMigrations() {
       )
     `);
     console.log("[migrations] demo_requests table ensured");
-
   } catch (err) {
-    console.error("[migrations] Migration error:", err);
+    console.error("[migrations] demo_requests migration error:", err);
   } finally {
-    client.release();
+    client2.release();
   }
 }
