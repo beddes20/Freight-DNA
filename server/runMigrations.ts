@@ -352,6 +352,13 @@ export async function runMigrations() {
 
     console.log("[migrations] organizations table and org-scoping columns ensured");
 
+    // One-time: reset Jordan Baumgart's password (locked out of production)
+    await client.query(
+      `UPDATE users SET password = $1 WHERE username = 'jordan.baumgart@valuetruck.com'`,
+      ['$2b$10$XV/Yel63VoBrjfAqW2doNeBoWm14rLfsxFDPN7m5kgXbTXvxH/y/e']
+    );
+    console.log("[migrations] jordan.baumgart password reset applied");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {
