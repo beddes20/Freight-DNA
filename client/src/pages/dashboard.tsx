@@ -13,7 +13,7 @@ import {
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
   Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search, MoreHorizontal,
-  Pin, PinOff, ChevronDown, ChevronUp,
+  Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -429,6 +429,14 @@ export default function Dashboard() {
     goals:    notifications.filter(n => !n.read && ["goal_set","goal_updated","goal_comment"].includes(n.type)).length,
   };
 
+  // Map task IDs to their unread notifications so we can surface alerts inside the portlet
+  const taskAssignedNotifMap = new Map(
+    notifications.filter(n => !n.read && n.type === "task_assigned" && n.relatedId).map(n => [n.relatedId!, n])
+  );
+  const taskCommentNotifIds = new Set(
+    notifications.filter(n => !n.read && n.type === "task_comment" && n.relatedId).map(n => n.relatedId!)
+  );
+
   const myTasks = allTasks
     .filter(t => t.assignedTo === currentUser?.id)
     .sort((a, b) => {
@@ -444,12 +452,25 @@ export default function Dashboard() {
   const completedCount = myTasks.filter(t => t.status === "completed").length;
   const displayTasks = openTasks.slice(0, 10);
 
+  // Split open tasks into "incoming" (assigned by others, not yet acknowledged) and regular
+  const incomingTasks = displayTasks.filter(t => t.assignedBy !== currentUser?.id && taskAssignedNotifMap.has(t.id));
+  const regularTasks = displayTasks.filter(t => !incomingTasks.includes(t));
+
   const toggleStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
       await apiRequest("PATCH", `/api/tasks/${id}`, { status });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+    },
+  });
+
+  const markNotifReadMutation = useMutation({
+    mutationFn: async (notifId: string) => {
+      await apiRequest("PATCH", `/api/notifications/${notifId}/read`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
     },
   });
 
@@ -943,11 +964,67 @@ export default function Dashboard() {
             </div>
           ) : (
             <>
-              {displayTasks.length > 0 && (
+              {incomingTasks.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide mb-1.5 flex items-center gap-1.5 px-1"
+                     style={{ color: "#ffb400" }}>
+                    <Bell className="h-3 w-3" />
+                    Incoming — needs acknowledgment
+                  </p>
+                  <div className="space-y-1">
+                    {incomingTasks.map(task => {
+                      const companyName = getCompanyName(task.companyId);
+                      const assignerName = getUserName(task.assignedBy);
+                      const hasNewComment = taskCommentNotifIds.has(task.id);
+                      const assignedNotif = taskAssignedNotifMap.get(task.id);
+                      return (
+                        <div
+                          key={task.id}
+                          className={`flex items-center gap-3 p-3 rounded-lg border transition-all group cursor-pointer border-amber-400/40 bg-amber-500/5 hover:bg-amber-500/10 ${task.status === "completed" ? "opacity-50" : ""}`}
+                          data-testid={`task-row-${task.id}`}
+                          onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
+                        >
+                          <button onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }} className="shrink-0 hover:scale-110 transition-transform" title={`Status: ${task.status}`} data-testid={`button-toggle-status-${task.id}`}>{statusIcon(task.status)}</button>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`} data-testid={`text-task-title-${task.id}`}>{task.title}</p>
+                              {hasNewComment && (
+                                <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-semibold shrink-0" style={{ background: "rgba(255,180,0,0.15)", color: "#ffb400", border: "1px solid rgba(255,180,0,0.3)" }} data-testid={`badge-new-comment-${task.id}`}>
+                                  <MessageCircle className="h-2.5 w-2.5" /> reply
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                              {companyName && <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`} onClick={(e) => e.stopPropagation()}>{companyName}</Link>}
+                              {assignerName && <span className="text-xs text-muted-foreground">from {assignerName}</span>}
+                            </div>
+                          </div>
+                          {dueDateBadge(task.dueDate)}
+                          {assignedNotif && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); markNotifReadMutation.mutate(assignedNotif.id.toString()); }}
+                              className="shrink-0 px-2 py-1 rounded text-xs font-medium"
+                              style={{ background: "rgba(255,180,0,0.15)", color: "#ffb400", border: "1px solid rgba(255,180,0,0.25)" }}
+                              title="Acknowledge — keeps task in open tasks"
+                              data-testid={`button-acknowledge-task-${task.id}`}
+                            >
+                              <Bell className="h-3 w-3" />
+                            </button>
+                          )}
+                          <button onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {regularTasks.length > 0 && <div className="border-t border-border mt-3 mb-2" />}
+                </div>
+              )}
+              {regularTasks.length > 0 && (
                 <div className="space-y-1">
-                  {displayTasks.map(task => {
+                  {regularTasks.map(task => {
                     const companyName = getCompanyName(task.companyId);
                     const assignerName = getUserName(task.assignedBy);
+                    const hasNewComment = taskCommentNotifIds.has(task.id);
                     return (
                       <div
                         key={task.id}
@@ -955,38 +1032,23 @@ export default function Dashboard() {
                         data-testid={`task-row-${task.id}`}
                         onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
                       >
-                        <button
-                          onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }}
-                          className="shrink-0 hover:scale-110 transition-transform"
-                          title={`Status: ${task.status}. Click to change.`}
-                          data-testid={`button-toggle-status-${task.id}`}
-                        >
-                          {statusIcon(task.status)}
-                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }} className="shrink-0 hover:scale-110 transition-transform" title={`Status: ${task.status}`} data-testid={`button-toggle-status-${task.id}`}>{statusIcon(task.status)}</button>
                         <div className="flex-1 min-w-0">
-                          <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`}
-                             data-testid={`text-task-title-${task.id}`}>
-                            {task.title}
-                          </p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`} data-testid={`text-task-title-${task.id}`}>{task.title}</p>
+                            {hasNewComment && (
+                              <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-semibold shrink-0" style={{ background: "rgba(255,180,0,0.15)", color: "#ffb400", border: "1px solid rgba(255,180,0,0.3)" }} data-testid={`badge-new-comment-${task.id}`}>
+                                <MessageCircle className="h-2.5 w-2.5" /> reply
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-2 flex-wrap mt-0.5">
-                            {companyName && (
-                              <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`} onClick={(e) => e.stopPropagation()}>
-                                {companyName}
-                              </Link>
-                            )}
-                            {assignerName && task.assignedBy !== currentUser?.id && (
-                              <span className="text-xs text-muted-foreground">from {assignerName}</span>
-                            )}
+                            {companyName && <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`} onClick={(e) => e.stopPropagation()}>{companyName}</Link>}
+                            {assignerName && task.assignedBy !== currentUser?.id && <span className="text-xs text-muted-foreground">from {assignerName}</span>}
                           </div>
                         </div>
                         {dueDateBadge(task.dueDate)}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }}
-                          className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                          data-testid={`button-delete-task-${task.id}`}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
                       </div>
                     );
                   })}
