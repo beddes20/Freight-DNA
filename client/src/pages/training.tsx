@@ -11,7 +11,8 @@ import {
   PhoneCall, DollarSign, MapPin, Building2, UserCircle, GitBranch,
   FileSpreadsheet, Award, Route, Flame, Lightbulb, Megaphone,
   UserCog, ArrowRightLeft, GraduationCap, ChevronDown, ChevronUp,
-  ExternalLink, Star, Info,
+  ExternalLink, Star, Info, Bot, Calculator, HeartPulse, Truck,
+  FileBarChart2, BadgeCheck, Gauge, BellRing, Shield,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -607,6 +608,319 @@ const MODULES: TrainingModule[] = [
     ],
     path: "/goals",
     roles: ["admin", "director", "national_account_manager"],
+  },
+
+  // ── New Features ────────────────────────────────────────────────────────────
+
+  {
+    id: "global-log-touch",
+    category: "Getting Started",
+    title: "Global Log Touch",
+    icon: Zap,
+    description:
+      "The Global Log Touch button (⚡ in the top header) lets you log a touchpoint for any contact without navigating to their company profile first. A quick search-and-select dialog finds the contact and records the interaction in seconds — ideal for logging calls on the go.",
+    capabilities: [
+      "Log a touchpoint from anywhere in the app — no navigation required",
+      "Search contacts by name and select the right one instantly",
+      "Choose interaction type: Call, Email, Text, or Site Visit",
+      "Optionally add a note and flag the conversation as Meaningful",
+      "Appears in the contact's full touchpoint history immediately",
+    ],
+    tips: [
+      "Use this right after hanging up a call — it takes under 30 seconds",
+      "Flag meaningful conversations while the details are fresh in your mind",
+    ],
+    path: "/",
+    isNew: true,
+  },
+  {
+    id: "touchpoint-streak",
+    category: "Getting Started",
+    title: "Touchpoint Streak",
+    icon: Flame,
+    description:
+      "The Touchpoint Streak tracks how many consecutive days you've logged at least your daily touchpoint goal. The streak counter appears as a KPI tile on your dashboard and keeps building as long as you hit your daily target. It resets if you miss a day.",
+    capabilities: [
+      "Dashboard KPI tile shows your current streak in days (🔥 icon)",
+      "Displays today's touchpoint count vs. your daily goal",
+      "Streak resets if you miss a day — motivation to stay consistent",
+      "Daily briefing banner also shows streak progress",
+    ],
+    tips: [
+      "Log at least one touch before end of day, every day — consistency is the whole game",
+      "The streak goal is set by your admin — ask if it doesn't match your expectations",
+    ],
+    path: "/",
+    isNew: true,
+  },
+  {
+    id: "dna-guru",
+    category: "Getting Started",
+    title: "DNA Guru (AI Assistant)",
+    icon: Bot,
+    description:
+      "DNA Guru is an AI-powered assistant built into the platform. It understands your account data, contacts, RFPs, and financial context — so you can ask real questions about your book of business and get intelligent, data-grounded answers without leaving the app.",
+    capabilities: [
+      "Ask natural language questions about any account or contact",
+      "Get a pre-call brief summary for any company before a call",
+      "Analyze RFP lane data, identify gaps, and suggest talking points",
+      "Review goal progress and touchpoint trends",
+      "Floating chat button available on every page",
+    ],
+    tips: [
+      "Be specific — 'What's the health score for Acuity Brands?' gets better answers than 'tell me about my accounts'",
+      "Use it before a big meeting to quickly pull together all the context you need",
+    ],
+    path: "/",
+    isNew: true,
+  },
+
+  // ── New Account Management features ────────────────────────────────────────
+  {
+    id: "health-score",
+    category: "Account Management",
+    title: "Relationship Health Score",
+    icon: HeartPulse,
+    description:
+      "Every company profile has a Relationship Health Score — a 0–100 rating that measures how strong your engagement is with that account. It factors in touchpoint recency, frequency, contact depth, RFP activity, and financial data. The score appears as a badge next to the company name.",
+    capabilities: [
+      "Score from 0–100 with grades: Excellent, Good, Fair, At Risk",
+      "Color-coded badge on the company detail header (green → red)",
+      "Five scoring factors: Recency (30pts), Frequency (25pts), Contact Depth (20pts), RFP/Award Activity (15pts), Financial Data (10pts)",
+      "Clicking the badge opens the full Pre-Call Planner with factor breakdown",
+      "Updates dynamically as you log touches and add contacts",
+    ],
+    tips: [
+      "An 'At Risk' score means no recent touchpoints or very thin contact coverage — prioritize these accounts",
+      "Contact Depth score improves by adding contacts across different levels of the org chart",
+    ],
+    path: "/customers",
+    isNew: true,
+  },
+  {
+    id: "pre-call-planner",
+    category: "Account Management",
+    title: "Pre-Call Planner",
+    icon: Shield,
+    description:
+      "The Pre-Call Planner is a one-stop brief that consolidates everything you need before reaching out to an account. Access it by clicking the health score badge on any company profile. It shows financials, key contacts with last-touch dates, recent activity, open tasks, active RFPs, account intelligence, and the full health score breakdown.",
+    capabilities: [
+      "Financial snapshot: loads, revenue, margin, spot loads",
+      "Key contacts with last touch date and recency badge",
+      "Last 5 touchpoints logged against this account",
+      "Open tasks linked to the account",
+      "Active RFPs and awarded business",
+      "Account intelligence: portal creds, quirks, spot process, dispatch email, tender style",
+      "Shipping mode badges and last meaningful conversation highlight",
+      "Print button to take a physical copy into a meeting",
+    ],
+    tips: [
+      "Open the Pre-Call Planner 5 minutes before every call — it replaces scrambling through your notes",
+      "The 'Last Meaningful Conversation' card shows in green when one exists — use it to reference in the call",
+    ],
+    path: "/customers",
+    isNew: true,
+  },
+  {
+    id: "meaningful-touchpoints",
+    category: "Account Management",
+    title: "Meaningful Touchpoints",
+    icon: BadgeCheck,
+    description:
+      "When logging a touchpoint, you can toggle it as 'Meaningful' — indicating it was a substantive conversation (freight needs, rates, real opportunity, or strategy — not just a check-in). Meaningful touches require a note and show as a green badge on contact cards in the org chart.",
+    capabilities: [
+      "Toggle on any touchpoint log dialog (quick log or full log)",
+      "Requires a note if marked meaningful — forces you to capture the substance",
+      "Green 'Last Meaningful' date badge shows on contact cards in the org chart",
+      "Dashboard alert: contacts with no meaningful touch in 30+ days",
+      "Pre-Call Planner shows the last meaningful conversation in a highlighted card",
+      "1:1 report cards show 'X meaningful / Y total' breakdown per rep",
+      "Meaningful touchpoints can be tracked as a goal metric for AMs",
+    ],
+    tips: [
+      "Not every call needs to be meaningful — use the toggle selectively for conversations that moved the relationship forward",
+      "The 30-day meaningful alert on the dashboard is your early warning system for drifting accounts",
+    ],
+    path: "/customers",
+    isNew: true,
+  },
+  {
+    id: "shipping-modes",
+    category: "Account Management",
+    title: "Shipping Modes",
+    icon: Truck,
+    description:
+      "Company profiles include shipping mode checkboxes (LTL, FTL, Drayage, IMDL) that describe which freight types this customer ships. Modes display as blue outline badges near the company's industry on the detail page header and can be filtered on the customer list.",
+    capabilities: [
+      "Set LTL, FTL, Drayage, and IMDL flags per company",
+      "Badges display in the company profile header for instant context",
+      "Customer list has filter chips to show only companies with a specific mode",
+      "Pre-Call Planner displays mode badges in the brief header",
+      "DNA Guru includes shipping modes in account analysis context",
+    ],
+    tips: [
+      "Update shipping modes when you learn what a customer actually ships — it helps the whole team",
+      "Use the FTL filter on the customer list to quickly find accounts relevant to a specific RFP type",
+    ],
+    path: "/customers",
+    isNew: true,
+  },
+  {
+    id: "wallet-share",
+    category: "Account Management",
+    title: "Wallet Share Calculator",
+    icon: Calculator,
+    description:
+      "The Wallet Share Calculator is a panel on the company detail page that projects how much incremental margin you could capture by winning more of an account's freight. If an RFP exists, it uses RFP total volume plus your financial data; otherwise it uses the estimated freight spend field.",
+    capabilities: [
+      "Slider from 1–25% to model different capture scenarios",
+      "Live incremental margin calculation as you move the slider",
+      "If an RFP is linked, uses actual RFP volume for accuracy",
+      "Falls back to estimated freight spend if no RFP is on file",
+      "'Copy as Talking Point' button generates a ready-to-use call prep sentence",
+      "Dashboard 'Top Wallet Share Opportunities' leaderboard shows top 5 accounts by untapped potential margin",
+    ],
+    tips: [
+      "Use the talking point copy button before a rate call — it gives you a crisp, data-backed sentence",
+      "Check the Wallet Share leaderboard on the dashboard to prioritize which accounts have the most upside",
+    ],
+    path: "/customers",
+    isNew: true,
+  },
+  {
+    id: "account-intelligence",
+    category: "Account Management",
+    title: "Account Intelligence",
+    icon: Lightbulb,
+    description:
+      "Account Intelligence is a dedicated section inside every company profile that stores critical operational context — portal credentials, financial aliases, tendering process, spot process, dispatch email, account quirks, and detailed process notes. Everything a rep needs to work the account confidently.",
+    capabilities: [
+      "Portal URL, username, and password stored securely per account",
+      "Financial alias field for accounts known by a different name in the TMS",
+      "Tender style and spot process fields for operational context",
+      "Dispatch email stored for quick reference",
+      "Account quirks: free-form field for anything unusual about the account",
+      "Detailed process notes section for step-by-step how-to context",
+      "All intelligence surfaces in the Pre-Call Planner for quick access",
+    ],
+    tips: [
+      "Fill in Account Intelligence before your first call — then update it after you learn something new",
+      "Quirks and process notes are gold for covering reps during PTO — always keep them current",
+    ],
+    path: "/customers",
+    isNew: true,
+  },
+  {
+    id: "customer-scorecard",
+    category: "Account Management",
+    title: "Customer Scorecard",
+    icon: FileBarChart2,
+    description:
+      "Company profiles support uploading and downloading scorecard documents — PDFs, spreadsheets, or any file that represents a formal account review or business review. Access is role-restricted so only authorized users can view and manage scorecards.",
+    capabilities: [
+      "Upload scorecard documents directly on a company profile",
+      "Download scorecards from the profile at any time",
+      "Role-based access: admins and NAMs can manage; AMs can view",
+      "Stored as file attachments tied to the company record",
+    ],
+    tips: [
+      "Upload the most recent QBR or account review deck as the scorecard — it gives everyone a baseline",
+    ],
+    path: "/customers",
+    isNew: true,
+  },
+
+  // ── New RFP features ────────────────────────────────────────────────────────
+  {
+    id: "awarded-lanes",
+    category: "RFP & Awards",
+    title: "Awarded Lane Highlighting",
+    icon: Award,
+    description:
+      "In the RFP Intelligence Lane Patterns → Corridors tab, any lane that also appears in an awarded or partially-awarded RFP is highlighted with a green '✓ We Ship This' badge and a green border. This lets you instantly see where you already have a foothold versus where you're competing blind.",
+    capabilities: [
+      "Green '✓ We Ship This' badge on corridors already in an awarded RFP",
+      "Visual green border around awarded corridor cards",
+      "Green summary bar: 'We ship X of Y corridors'",
+      "Amber alert listing top-3 unawarded high-volume lanes needing attention",
+      "Works across all RFPs linked to the same company",
+    ],
+    tips: [
+      "Use the amber alert to identify which high-volume lanes you should be pitching next",
+      "If a corridor shows 'We Ship This' but the account still uses another broker, that's your best upsell lane",
+    ],
+    path: "/rfp-awards",
+    isNew: true,
+  },
+
+  // ── New Analytics features ──────────────────────────────────────────────────
+  {
+    id: "report-cards",
+    category: "Analytics & Intelligence",
+    title: "Rep Report Cards",
+    icon: FileBarChart2,
+    description:
+      "Report Cards give each rep a comprehensive performance snapshot for a selected month — covering load volume, margin, touchpoints (including meaningful), contacts added, goal progress, and RFP win rate. NAMs and admins can view report cards for any rep; reps see their own.",
+    capabilities: [
+      "Select any month to see that period's performance",
+      "Load count, revenue, freight cost, and margin with vs-prior-month delta",
+      "Touchpoint breakdown: calls, emails, texts, site visits — plus meaningful/total ratio",
+      "Contacts added and goal completion per metric",
+      "RFP win rate for the period",
+      "Email report directly from the page (weekly and monthly auto-emails also available)",
+      "NAMs and admins can view any rep's card from the Report Cards list",
+    ],
+    tips: [
+      "Review your own report card before a 1:1 — it prevents any surprises",
+      "The meaningful touchpoint ratio is a quality-over-quantity indicator — aim for depth, not just volume",
+    ],
+    path: "/reports",
+    roles: ["admin", "director", "national_account_manager", "sales_director"],
+    isNew: true,
+  },
+  {
+    id: "my-report-card",
+    category: "Analytics & Intelligence",
+    title: "My Report Card",
+    icon: Gauge,
+    description:
+      "AMs, Sales, Logistics Managers, and Logistics Coordinators can view their own personal report card from the sidebar. It shows the same comprehensive data as the admin view — load volume, margin, touchpoints, goals, and win rate — for any selected month.",
+    capabilities: [
+      "View your own performance for any past month",
+      "Load, margin, touchpoint, and goal data in one view",
+      "Meaningful vs. total touchpoint breakdown",
+      "Goal progress per metric with % completion",
+      "Can be emailed to you directly from the page",
+    ],
+    tips: [
+      "Check this monthly, not just when a manager asks — own your numbers",
+      "Use it to build talking points for your own 1:1 review",
+    ],
+    path: "/report/me",
+    roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"],
+    isNew: true,
+  },
+  {
+    id: "dashboard-alerts",
+    category: "Analytics & Intelligence",
+    title: "Dashboard Alerts",
+    icon: BellRing,
+    description:
+      "The dashboard surfaces contextual alert cards based on what needs your attention right now — RFP deadlines approaching, goals not set for the month, pending 1:1 topics, contacts overdue for a meaningful conversation, and PTO coverage assignments.",
+    capabilities: [
+      "RFP deadline alert: RFPs due within 7 days show prominently",
+      "Missing goals alert: NAMs notified when monthly goals haven't been set for AMs",
+      "Meaningful overdue alert: contacts with no meaningful touch in 30+ days",
+      "Pending 1:1 topics: unresolved discussion items from active sessions",
+      "PTO coverage portlet: accounts you're covering with priority sort",
+      "Daily briefing: due tasks + today's touchpoints + streak progress",
+    ],
+    tips: [
+      "Work through alert cards every morning as your daily startup routine",
+      "The meaningful overdue alert is your relationship health warning system — don't ignore it",
+    ],
+    path: "/",
+    isNew: true,
   },
 ];
 
