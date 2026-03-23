@@ -55,15 +55,13 @@ export function BlackGold() {
       {/* Sidebar */}
       <div className="flex flex-col w-56 flex-shrink-0" style={{ background: SIDEBAR_BG, borderRight: "1px solid #222" }}>
         {/* Logo */}
-        <div className="flex items-center gap-3 px-4 py-4" style={{ borderBottom: "1px solid #222" }}>
-          {/* VT Circle Logo */}
-          <div className="flex items-center justify-center w-10 h-10 rounded-full flex-shrink-0" style={{ background: GOLD, border: `2px solid ${GOLD_LIGHT}` }}>
-            <span className="font-black text-sm leading-none" style={{ color: BLACK, letterSpacing: "-0.04em" }}>VT</span>
-          </div>
-          <div>
-            <div className="font-black leading-tight" style={{ color: "#fff", letterSpacing: "0.05em", fontSize: "11px" }}>GROWTH CHART VT</div>
-            <div className="leading-tight mt-0.5" style={{ color: GOLD, fontSize: "9px", letterSpacing: "0.06em", fontWeight: 600 }}>DNA — DOWN, NOT ACROSS</div>
-          </div>
+        <div className="flex items-center px-3 py-3" style={{ borderBottom: "1px solid #222" }}>
+          <img
+            src="/__mockup/images/vt-logo-full.png"
+            alt="Value Truck — DNA Down Not Across"
+            className="w-full"
+            style={{ maxHeight: "56px", objectFit: "contain", objectPosition: "left center" }}
+          />
         </div>
 
         {/* Search */}
@@ -157,8 +155,8 @@ export function BlackGold() {
         <div className="px-5 pt-4 pb-4 flex-shrink-0" style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
           <div className="flex items-center gap-4">
             {/* VT Circle Emblem */}
-            <div className="flex items-center justify-center w-14 h-14 rounded-full flex-shrink-0" style={{ background: "transparent", border: `2px solid ${GOLD}`, boxShadow: `0 0 16px rgba(255,180,0,0.25)` }}>
-              <span className="font-black text-xl leading-none" style={{ color: GOLD, letterSpacing: "-0.04em" }}>VT</span>
+            <div className="flex-shrink-0" style={{ width: "60px", height: "60px", borderRadius: "50%", overflow: "hidden", boxShadow: `0 0 20px rgba(255,180,0,0.3)` }}>
+              <img src="/__mockup/images/vt-logo-circle.png" alt="VT" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             </div>
             {/* Text */}
             <div className="flex-1">
