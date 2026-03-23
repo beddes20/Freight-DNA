@@ -132,17 +132,17 @@
   --elevate-1: rgba(255,255,255, .04);
   --elevate-2: rgba(255,255,255, .09);
 
-  --background: 222 47% 8%;
+  --background: 0 0% 6%;
 
-  --foreground: 210 20% 98%;
+  --foreground: 0 0% 94%;
 
-  --border: 217 19% 20%;
+  --border: 0 0% 15%;
 
-  --card: 222 47% 11%;
+  --card: 0 0% 9%;
 
-  --card-foreground: 210 20% 98%;
+  --card-foreground: 0 0% 94%;
 
-  --card-border: 217 19% 18%;
+  --card-border: 0 0% 14%;
 
   --sidebar: 0 0% 5%;
 
@@ -160,35 +160,35 @@
 
   --sidebar-ring: 43 100% 50%;
 
-  --popover: 222 47% 11%;
+  --popover: 0 0% 9%;
 
-  --popover-foreground: 210 20% 98%;
+  --popover-foreground: 0 0% 94%;
 
-  --popover-border: 217 19% 18%;
+  --popover-border: 0 0% 14%;
 
   --primary: 43 100% 50%;
 
   --primary-foreground: 0 0% 5%;
 
-  --secondary: 217 33% 17%;
+  --secondary: 0 0% 13%;
 
-  --secondary-foreground: 210 20% 98%;
+  --secondary-foreground: 0 0% 94%;
 
-  --muted: 217 19% 15%;
+  --muted: 0 0% 11%;
 
-  --muted-foreground: 215 16% 57%;
+  --muted-foreground: 0 0% 50%;
 
-  --accent: 217 33% 17%;
+  --accent: 43 40% 10%;
 
-  --accent-foreground: 210 20% 98%;
+  --accent-foreground: 0 0% 94%;
 
   --destructive: 0 72% 51%;
 
   --destructive-foreground: 0 0% 100%;
 
   /* Used as the border around inputs. Dark mode: Should be a border that is light enough to have high contrast when rendered on a --card background. More contrast than standard --border */
-  --input: 217 19% 27%;
-  --ring: 217 91% 60%;
+  --input: 0 0% 22%;
+  --ring: 43 100% 50%;
   --chart-1: 217 91% 60%;
   --chart-2: 173 58% 39%;
   --chart-3: 43 96% 56%;
