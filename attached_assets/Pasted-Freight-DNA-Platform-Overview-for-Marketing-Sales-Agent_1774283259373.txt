@@ -1,0 +1,159 @@
+Freight DNA — Platform Overview for Marketing/Sales Agent
+What It Is
+Freight DNA is a purpose-built CRM and sales intelligence platform designed exclusively for transportation brokerage sales teams. It is not a general-purpose CRM — every feature is tailored to the workflows, language, and data challenges unique to freight brokerage. The platform runs in a web browser and is accessible to the entire sales organization simultaneously, with each user seeing only the data and tools relevant to their role.
+Who It's For
+The platform supports a multi-tier sales organization:
+Admins (e.g., VP of Sales) — full visibility across the entire organization, all accounts, all reps, all data
+Directors — oversee multiple NAMs and their teams
+National Account Managers (NAMs) — manage a team of Account Managers, set goals, run 1:1 meetings, and handle large strategic accounts
+Account Managers (AMs) — own day-to-day customer relationships, log activity, manage contacts and org charts
+Sales / Sales Directors — additional sales roles with appropriate scoping
+Logistics Managers / Coordinators — operational staff who can be paired into 1:1 discussions and tracked
+All data is filtered by role automatically. An AM only sees their own accounts. A NAM sees their team's accounts. An admin sees everything.
+Core Features
+1. Company & Contact Management (The CRM Foundation)
+Users manage a list of customer accounts (companies). Each company has a detailed profile that includes:
+Basic info: company name, industry, address
+Account ownership: which AM owns it
+A full contact list with titles, phone numbers, emails, and reporting structures
+Organizational chart — a visual, hierarchical display of who reports to whom inside the customer's organization. This is the signature feature that gives the platform its name.
+Transportation-specific intelligence fields: how the customer tenders freight (TMS portal, email, EDI), their spot freight process, dispatch/logistics email, account quirks, and standard process notes
+Portal credentials: customer portal URL, login credentials, and a "Financial Name" alias used to match the account to financial data uploads
+2. Organizational Chart Visualization
+Each customer account has a built-in org chart builder. Reps add contacts and define reporting relationships (who reports to whom). The platform renders a live, hierarchical org chart so reps can instantly see the power structure within a customer account — who the decision-makers are, who the day-to-day contacts are, and where coverage gaps exist. Contacts on the org chart show color-coded "recency dots" indicating how recently a rep has been in touch with that person.
+3. Touchpoints (Activity Tracking)
+Reps log every customer interaction — calls, emails, texts, and site visits — directly on contact records. Each touchpoint can include a note. The platform then:
+Shows a "last touch" recency badge on every contact (green = recent, amber = getting cold, red = overdue at 30+ days)
+Displays a weekly touch count per contact
+Surfaces a "Contacts Needing Attention" alert on the dashboard for any contact untouched for 30+ days
+Tracks a touchpoint activity feed per account
+Supports a "Quick Log Touch" button on both the customer list and company detail pages — one click to log an interaction without navigating away
+4. RFP & Award Management
+This is the platform's most advanced feature set. When a customer issues a Request for Proposal (RFP) for their freight network, reps upload the RFP as an Excel file and the platform automatically:
+Parses every lane (origin city/state → destination city/state, equipment type, annual volume, weekly volume)
+Extracts the top high-volume lanes for focused attention
+Identifies which states the freight originates from and delivers to
+Tracks bid status (pending, won, lost, in progress)
+Stores the RFP value, due date, and notes
+Triggers deadline alerts on the dashboard when an RFP is due within 14 days
+Awards track which lanes were actually won from each RFP, creating a historical record of wins and losses.
+5. Lane Research & Assignment
+From each RFP's high-volume lanes, reps can assign ownership — specifying who is responsible for researching and winning each lane. This turns RFP data into actionable work items distributed across the team.
+6. Analytical Features (Data Intelligence)
+The platform includes several analytical tools that turn raw RFP and delivery data into sales insights:
+Facility Coverage Gap Analysis — compares RFP lane destinations against existing contact coverage to identify facilities that have no assigned planner or contact. Surfaces these as tasks for the team.
+Lane Pattern Analysis — identifies top freight corridors (state-to-state volume), shipping hubs (cities generating the most outbound freight), and receiving hubs (most common delivery destinations)
+Historical Data Analysis — when financial/account summary data is uploaded (via Excel or OneDrive sync), the platform maps historical delivery destinations, identifies "hot zones" (high-frequency delivery areas), and surfaces historical lane corridors
+Top Opportunities Engine — cross-references a customer's RFP lane origins against their historical delivery destinations to find where the company's existing freight network overlaps with the customer's needs — identifying the highest-probability lanes to win
+Proximity Matches — identifies delivery zones within a 75-mile radius of customer RFP pickup origins, surfacing nearby opportunities the team might have missed
+Lane Matching Portlet — overlaps the company's historical freight network with customer RFP lanes to identify backhaul opportunities and delivery lane matches
+7. Financial Data Integration (OneDrive Sync)
+The platform connects to a Microsoft OneDrive shared folder to automatically fetch monthly financial/account-summary Excel files. This sync:
+Pulls rep-level financial data (load counts, margin, revenue by account)
+Matches accounts using the company's "Financial Name" alias
+Populates the Team Performance dashboard with real financial metrics
+Can be triggered manually or runs automatically on the first business day of each month
+Shows an admin alert banner if the sync fails
+8. Team Performance Dashboard
+Admins and NAMs have a dedicated team performance view showing each rep's financial metrics side by side — loads booked, margin generated, revenue. Data is sourced from the monthly financial sync and matched to user records via Financial Rep IDs. This gives leadership a real-time snapshot of team performance without building spreadsheets.
+9. Goals System
+NAMs set monthly or custom-period goals for each of their AMs across five metric types:
+New Contacts Added (auto-tracked from contact creation)
+Touchpoints (auto-tracked from logged interactions)
+Load Count (manually updated)
+Margin (manually updated)
+Custom (user-defined metric with a custom label)
+Each goal shows a progress bar, percentage complete, and inline comments where NAMs and AMs can discuss progress. A "Goals Leaderboard" shows rankings across the team. On the 15th of each month, if any AM is under 50% on a goal, a "Goals Need Attention" alert appears on the dashboard for the NAM. If an NAM hasn't set goals for their AMs by month-end, a "Monthly Goals Not Set" alert appears.
+10. 1:1 Discussions (Meeting Management)
+Every NAM↔AM pairing has a dedicated, persistent 1:1 discussion thread. Both parties can:
+Add topics at any time with tags: Action Item, Question, FYI, Follow-up, Shoutout, Let's Work On
+Mark topics as discussed (with an "Undo" button to revert if needed)
+Post threaded replies under any topic
+Close a session, which archives discussed topics and carries pending ones forward to the next session
+The platform shows a badge on the dashboard with the count of pending undiscussed topics, keeping 1:1 agendas visible at all times.
+Key integration with the Task system: Any topic tagged as "Action Item" in a 1:1 session automatically appears in the "My Tasks" portlet on the dashboard under a "1:1 Action Items" section — so action items from meetings are never lost.
+11. Task Management
+A lightweight task system lets anyone on the team create and assign tasks with:
+Title, notes, due date
+Assignee and assigner
+Optional company link
+Status cycling: Open → In Progress → Completed
+Color-coded due date badges (red = overdue, amber = due today, yellow = due soon)
+Comment threads per task
+File attachments
+Tasks can be created in several ways: manually, from a contact card ("+" button on "Contacts Needing Attention"), from facility coverage gap analysis, or from lane research assignment. Tasks assigned to the current user appear in their "My Tasks" portlet on the dashboard.
+12. Callouts / Trends Feed
+A company-wide social feed where all users post updates, trends, wins, and ideas. Posts support:
+Categories: Growth Win, Trend, Callout, Idea, Shoutout, Let's Work On
+Optional company tag (links the post to a specific account)
+Threaded replies
+Emoji reactions
+@mentions of teammates
+File and image attachments (including paste-to-upload for screenshots)
+The dashboard shows recent posts across the team. Each company's profile page shows only posts tagged to that specific account.
+13. Leadership Callouts (Internal Comms)
+A private, leadership-only communication channel visible only to admins and directors. Allows leadership to send targeted messages to specific people (Jordan, Danny, Sam, or any combination) with full file/image attachment support. Completely separate from the public feed — invisible to AMs and NAMs.
+14. PTO Passoff
+When a rep goes on PTO, they create a formal passoff record specifying:
+Date range
+Who is covering
+Emergency contact info
+Per-account checklist cards capturing: priority level (High/Medium/Low), spot freight handler, key customer contact, open items, process notes, and active RFPs/bids
+The covering rep gets a dedicated "I'm Covering" tab and can acknowledge each account. When the rep returns, they close the passoff with a "Close & Return Accounts" button.
+15. Customer Scorecard
+Each company profile has a Scorecard section where reps can upload and download scorecard documents (PDFs, Word, Excel, images) directly on the account page. Useful for storing quarterly business review documents, customer scorecards, or performance summaries.
+16. Account Intelligence
+Each company profile has a structured "Account Intelligence" section with free-text fields covering:
+Tendering Process (how the customer sends freight: TMS, email, EDI, etc.)
+Spot Process (how they handle spot freight)
+D/L Email (dispatch/logistics contact email)
+Account Quirks (sensitivities, unusual requirements, things to know)
+Process Notes (standard operating procedures for the account)
+This knowledge base ensures that institutional knowledge stays with the account — not just in someone's head.
+17. Dashboard (Command Center)
+The dashboard is the daily starting point for every user. It surfaces:
+KPI stat cards (total companies, contacts, touchpoints this month, active RFPs)
+"Contacts Needing Attention" — contacts untouched 30+ days with a quick "+" to create a follow-up task
+"My Tasks" — open tasks assigned to the user, plus 1:1 Action Items
+RFP Deadlines Approaching — red alert for RFPs due within 14 days
+Goals Need Attention — amber alert mid-month for goals under 50%
+Monthly Goals Not Set — alert for NAMs who haven't set AM goals
+1:1 Discussion portlet with pending topic count badge
+Callouts/Trends feed
+Goals leaderboard
+18. Global Search
+A live, debounced global search bar that searches across all companies and users simultaneously as the user types — no page navigation required.
+19. Notifications
+A notification bell in the header shows real-time alerts for:
+New tasks assigned to you
+Task comments
+New contacts added to your accounts
+New feed posts and replies
+Goal updates
+1:1 topic additions and session closures
+New company accounts added
+RFP deadline reminders
+20. File Attachments
+Throughout the platform, users can attach files (PDFs, Word docs, Excel/CSV, images) to:
+Feed posts and replies
+1:1 discussion topics
+Touchpoints
+Tasks
+Customer scorecards
+Leadership callouts
+Images can be pasted directly from the clipboard (screenshot paste) with a lightbox preview before and after posting. Files are stored securely and downloadable by authorized users.
+21. User Management & Account Transfers
+Admins and NAMs can:
+Create, edit, and deactivate user accounts
+Assign roles and set manager hierarchy
+Set Financial Rep IDs (used for financial data matching)
+Transfer company accounts from one AM to another (useful for territory changes or rep turnover)
+Key Differentiators vs. Generic CRMs
+Built for freight, not adapted for it — fields like equipment type, tender style, lane data, spot process, and financial alias are first-class concepts, not custom fields bolted on
+RFP intelligence engine — no other CRM automatically parses freight RFP Excel files and surfaces lane opportunities, gap analysis, and backhaul matches
+Org chart as a core feature — not a bolt-on; visualizing power structures within customer accounts is central to the sales strategy
+Financial data integration — directly connects to the company's own financial data via OneDrive to populate rep performance metrics automatically
+Role hierarchy that mirrors transportation sales orgs — Admin → Director → NAM → AM → Logistics Manager/Coordinator is built into every data access decision
+Touchpoint recency as a visual signal — the org chart and contact cards show at a glance which relationships are going cold, prompting proactive outreach
+Action items that don't disappear — 1:1 action items surface on the dashboard task list so they're never buried in meeting notes
+PTO continuity — the passoff system ensures account coverage doesn't break down when reps are out

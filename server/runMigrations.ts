@@ -292,15 +292,39 @@ export async function runMigrations() {
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS dev_goals_nam_am_uniq ON development_goals(nam_id, am_id)`);
     console.log("[migrations] development_goals table ensured");
 
+    // vendor_routed table for vendor routing data
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS vendor_routed (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        row_key text NOT NULL,
+        active boolean NOT NULL DEFAULT true,
+        UNIQUE(company_id, row_key)
+      )
+    `);
+    console.log("[migrations] vendor_routed table ensured");
+
     // Multi-tenant organization foundation
     // Step 1: Create organizations table if it doesn't exist
     await client.query(`
       CREATE TABLE IF NOT EXISTS organizations (
         id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
         name text NOT NULL,
-        slug text NOT NULL UNIQUE,
+        slug text NOT NULL,
         created_at timestamp DEFAULT now() NOT NULL
       )
+    `);
+    // Ensure the named unique constraint drizzle expects exists
+    await client.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'organizations_slug_unique') THEN
+          ALTER TABLE organizations ADD CONSTRAINT organizations_slug_unique UNIQUE (slug);
+        END IF;
+        -- Drop the auto-named constraint if the named one was just added or already exists
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'organizations_slug_key') THEN
+          ALTER TABLE organizations DROP CONSTRAINT organizations_slug_key;
+        END IF;
+      END $$;
     `);
 
     // Step 2: Seed the default Value Truck organization
