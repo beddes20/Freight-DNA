@@ -7004,15 +7004,23 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     return s;
   }
 
-  // Helper: get companies owned by a NAM's direct reports
+  // Returns the effective owner ID for a company: prefer salesPersonId (financial linkage), fall back to assignedTo (CRM assignment)
+  function companyOwnerId(c: any): string | null {
+    return c.salesPersonId || c.assignedTo || null;
+  }
+
   function getNamTeamCompanies(namId: string, allUsers: any[], allCompanies: any[]): any[] {
     const directReportIds = new Set(allUsers.filter((u: any) => u.managerId === namId).map((u: any) => u.id));
-    return allCompanies.filter((c: any) => c.salesPersonId && directReportIds.has(c.salesPersonId));
+    directReportIds.add(namId); // include companies directly assigned to the NAM
+    return allCompanies.filter((c: any) => {
+      const owner = companyOwnerId(c);
+      return owner && directReportIds.has(owner);
+    });
   }
 
   // Helper: get companies owned by a specific AM
   function getAmCompanies(amId: string, allCompanies: any[]): any[] {
-    return allCompanies.filter((c: any) => c.salesPersonId === amId);
+    return allCompanies.filter((c: any) => companyOwnerId(c) === amId);
   }
 
   // Helper: get all companies within a director's vertical (director → NAMs → AMs → companies)
@@ -7026,7 +7034,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         if (u.managerId === namId) allScopedRepIds.add(u.id);
       }
     }
-    return allCompanies.filter((c: any) => c.salesPersonId && allScopedRepIds.has(c.salesPersonId));
+    return allCompanies.filter((c: any) => {
+      const owner = companyOwnerId(c);
+      return owner && allScopedRepIds.has(owner);
+    });
   }
 
   // Trending accounts — top 5 up, top 5 down by margin delta vs prior month
