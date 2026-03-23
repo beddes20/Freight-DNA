@@ -459,7 +459,7 @@ export default function CompanyDetail() {
   const companyRfps = allRfps.filter(r => r.companyId === companyId);
   const companyAwards = allAwards.filter(a => a.companyId === companyId);
   const rfpWon = companyRfps.filter(r => r.status === "awarded" || r.status === "partially_awarded").length;
-  const rfpLost = companyRfps.filter(r => r.status === "lost").length;
+  const rfpLost = companyRfps.filter(r => r.status === "lost" || r.status === "declined").length;
   const rfpPending = companyRfps.filter(r => r.status === "pending" || r.status === "submitted").length;
   const rfpWinRate = companyRfps.length > 0 && (rfpWon + rfpLost) > 0
     ? Math.round((rfpWon / (rfpWon + rfpLost)) * 100) : null;
@@ -1197,7 +1197,7 @@ export default function CompanyDetail() {
               </div>
               <div className="rounded-lg bg-red-50 dark:bg-red-950/30 p-2">
                 <p className="text-lg font-bold text-red-500 dark:text-red-400">{rfpLost}</p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">Lost</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Lost/Declined</p>
               </div>
               <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-2">
                 <p className="text-lg font-bold text-amber-600 dark:text-amber-400">{rfpPending}</p>

@@ -644,7 +644,7 @@ export default function TeamPerformancePage() {
         r.contactsTouched,
         fin?.loads ?? "",
         fin?.margin != null ? Math.round(fin.margin) : "",
-      ].map(v => `"${v}"`).join(",");
+      ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",");
     });
     const csv = [headers.map(h => `"${h}"`).join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });

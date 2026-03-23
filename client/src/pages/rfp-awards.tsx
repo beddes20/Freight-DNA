@@ -1460,7 +1460,7 @@ export default function RfpAwards() {
                     <Trophy className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
                     <span className="text-muted-foreground">Win Rate:</span>
                     <span className={`font-bold ${winRate >= 50 ? "text-green-600 dark:text-green-400" : winRate >= 25 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400"}`}>{winRate}%</span>
-                    <span className="text-xs text-muted-foreground">({stats.totalAwards}/{winOpportunities} submitted+won)</span>
+                    <span className="text-xs text-muted-foreground">({stats.totalAwards} awarded / {winOpportunities} decided)</span>
                   </div>
                 )}
               </div>

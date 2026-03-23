@@ -517,9 +517,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getLatestFinancialUpload(): Promise<FinancialUpload | undefined> {
-    const all = await db.select().from(financialUploads);
-    if (all.length === 0) return undefined;
-    return all.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))[0];
+    const [latest] = await db.select().from(financialUploads)
+      .orderBy(desc(financialUploads.uploadedAt))
+      .limit(1);
+    return latest;
   }
 
   async createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload> {

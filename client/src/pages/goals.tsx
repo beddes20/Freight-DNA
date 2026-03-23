@@ -118,6 +118,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
       setNewValue("");
       toast({ description: "Progress updated." });
     },
+    onError: () => toast({ variant: "destructive", description: "Failed to update progress." }),
   });
 
   const postComment = useMutation({
@@ -126,11 +127,13 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
       queryClient.invalidateQueries({ queryKey: ["/api/goals", goal.id, "comments"] });
       setCommentBody("");
     },
+    onError: () => toast({ variant: "destructive", description: "Failed to post comment." }),
   });
 
   const deleteComment = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/goal-comments/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/goals", goal.id, "comments"] }),
+    onError: () => toast({ variant: "destructive", description: "Failed to delete comment." }),
   });
 
   const canDelete = userRole === "admin" || goal.namId === currentUserId;
@@ -934,6 +937,12 @@ export default function GoalsPage() {
               disabled={!bulkForm.target || bulkGoalMutation.isPending}
               onClick={() => {
                 if (!bulkForm.target) { toast({ variant: "destructive", description: "Enter a target value." }); return; }
+                if (bulkForm.startDate && bulkForm.endDate && bulkForm.endDate < bulkForm.startDate) {
+                  toast({ variant: "destructive", description: "End date must be after start date." }); return;
+                }
+                if (bulkForm.metric === "custom" && !(bulkForm as any).customLabel?.trim()) {
+                  toast({ variant: "destructive", description: "Enter a name for your custom metric." }); return;
+                }
                 bulkGoalMutation.mutate({
                   ...bulkForm,
                   amIds: uniqueAms.map(a => a.amId),

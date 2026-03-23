@@ -398,7 +398,7 @@ export default function Dashboard() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const urgentRfps = allRfps.filter((r: any) => {
-    if (!r.dueDate || r.status === "awarded" || r.status === "lost") return false;
+    if (!r.dueDate || r.status === "awarded" || r.status === "partially_awarded" || r.status === "lost" || r.status === "declined") return false;
     const due = new Date(r.dueDate + "T00:00:00");
     const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
     return diffDays <= 14;
