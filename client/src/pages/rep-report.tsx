@@ -10,7 +10,7 @@ import {
   TrendingUp, TrendingDown, Minus, Phone, Mail, MessageSquare, Building2,
   Users, CheckSquare, AlertCircle, Target, ChevronRight, Zap, Trophy, Flame,
   Clock, ArrowLeft, Send, Loader2, ExternalLink, BookOpen, ChevronDown, ChevronUp, Save,
-  Package, DollarSign, Star, XCircle,
+  Package, DollarSign, Star, XCircle, Heart, UserCheck,
 } from "lucide-react";
 
 interface PromotionCriteria {
@@ -65,8 +65,8 @@ interface RepReportData {
   rep: { id: string; name: string; role: string; manager: string | null; director: string | null; createdAt?: string | null };
   period: { type: string; label: string; start: string; end: string };
   goals: Array<{ id: string; label: string; metric: string; period: string; current: number; target: number; pct: number }>;
-  touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; weeklyTrend: number[] };
-  contacts: { newThisPeriod: number };
+  touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; meaningful: number; weeklyTrend: number[] };
+  contacts: { newThisPeriod: number; contactsTouched: number };
   tasks: { completed: number; open: number; overdue: number };
   topAccounts: Array<{ name: string; touches: number; lastTouch: string }>;
   accountsNeedingAttention: number;
@@ -183,9 +183,11 @@ function PerformanceTimeline({ snapshots }: { snapshots: ReportCardSnapshot[] })
               <th className="text-left px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Period</th>
               <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Type</th>
               <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Touchpoints</th>
+              <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Meaningful</th>
               <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Goals</th>
               <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Tasks Done</th>
               <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">New Contacts</th>
+              <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Contacts Touched</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/40">
@@ -222,6 +224,11 @@ function PerformanceTimeline({ snapshots }: { snapshots: ReportCardSnapshot[] })
                     </div>
                   </td>
                   <td className="px-3 py-3 text-center">
+                    <span className="text-sm font-semibold text-amber-600 dark:text-amber-400">
+                      {(s.payload.touchpoints as any)?.meaningful ?? "—"}
+                    </span>
+                  </td>
+                  <td className="px-3 py-3 text-center">
                     <div className="flex items-center justify-center gap-1">
                       <span className={`text-sm font-semibold ${goalColor}`}>
                         {goalPct !== null ? `${goalPct}%` : "—"}
@@ -239,6 +246,11 @@ function PerformanceTimeline({ snapshots }: { snapshots: ReportCardSnapshot[] })
                   </td>
                   <td className="px-3 py-3 text-center">
                     <span className="text-sm font-semibold text-foreground">{s.payload.contacts?.newThisPeriod ?? "—"}</span>
+                  </td>
+                  <td className="px-3 py-3 text-center">
+                    <span className="text-sm font-semibold text-foreground">
+                      {(s.payload.contacts as any)?.contactsTouched ?? "—"}
+                    </span>
                   </td>
                 </tr>
               );
@@ -318,15 +330,16 @@ function SnapshotCard({ snapshot }: { snapshot: ReportCardSnapshot }) {
 
           <div>
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Touchpoints</p>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-5 gap-2">
               {[
                 { label: "Calls", count: tp.call },
                 { label: "Emails", count: tp.email },
                 { label: "Texts", count: tp.text },
                 { label: "Visits", count: tp.site_visit },
+                { label: "Meaningful", count: (tp as any).meaningful ?? 0 },
               ].map(({ label, count }) => (
-                <div key={label} className="text-center bg-background rounded-lg p-2 border border-border/50">
-                  <p className="text-sm font-bold text-foreground">{count}</p>
+                <div key={label} className={`text-center bg-background rounded-lg p-2 border ${label === "Meaningful" ? "border-amber-400/30 bg-amber-50 dark:bg-amber-950/20" : "border-border/50"}`}>
+                  <p className={`text-sm font-bold ${label === "Meaningful" ? "text-amber-600 dark:text-amber-400" : "text-foreground"}`}>{count}</p>
                   <p className="text-xs text-muted-foreground">{label}</p>
                 </div>
               ))}
@@ -574,10 +587,12 @@ export default function RepReportPage() {
           </div>
 
           {/* KPI quick-stats */}
-          <div className={`grid gap-3 mt-8 ${hasFinancials ? "grid-cols-2 md:grid-cols-3" : "grid-cols-2 md:grid-cols-4"}`}>
+          <div className="grid gap-3 mt-8 grid-cols-2 md:grid-cols-4">
             {[
               { label: "Touchpoints", value: String(tp.total), sub: `this ${period === "weekly" ? "week" : "month"}`, trend: 0, icon: Zap },
+              { label: "Meaningful", value: String(tp.meaningful ?? 0), sub: "conversations", trend: 0, icon: Heart },
               { label: "New Contacts", value: String(contacts.newThisPeriod), sub: `this ${period === "weekly" ? "week" : "month"}`, trend: 0, icon: Users },
+              { label: "Contacts Touched", value: String(contacts.contactsTouched ?? 0), sub: "unique in period", trend: 0, icon: UserCheck },
               { label: "Tasks Done", value: tasksDoneLabel, sub: `${tasks.overdue} overdue`, trend: tasks.overdue > 0 ? -1 : 0, icon: CheckSquare },
               { label: "Need Attention", value: String(accountsNeedingAttention), sub: "14+ days quiet", trend: accountsNeedingAttention > 0 ? -1 : 0, icon: AlertCircle },
               ...(hasFinancials ? [

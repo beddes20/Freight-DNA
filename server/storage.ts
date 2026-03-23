@@ -112,7 +112,7 @@ export interface RepReportData {
   period: { type: string; label: string; start: string; end: string };
   goals: Array<{ id: string; label: string; metric: string; period: string; current: number; target: number; pct: number }>;
   touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; meaningful: number; weeklyTrend: number[] };
-  contacts: { newThisPeriod: number };
+  contacts: { newThisPeriod: number; contactsTouched: number };
   tasks: { completed: number; open: number; overdue: number };
   topAccounts: Array<{ name: string; touches: number; lastTouch: string }>;
   accountsNeedingAttention: number;
@@ -1398,6 +1398,7 @@ export class DatabaseStorage implements IStorage {
     }
 
     const newContactsCount = await this.getContactsAddedByAm(userId, periodStart, periodEnd);
+    const contactsTouched = new Set(periodTps.map(t => t.contactId).filter(Boolean)).size;
 
     const userTasks = allTasks.filter(t => t.assignedTo === userId);
     const taskStats = {
@@ -1539,7 +1540,7 @@ export class DatabaseStorage implements IStorage {
       period: { type: period, label: periodLabel, start: periodStart, end: periodEnd },
       goals: enrichedGoals,
       touchpoints: { ...tpBreakdown, weeklyTrend },
-      contacts: { newThisPeriod: newContactsCount },
+      contacts: { newThisPeriod: newContactsCount, contactsTouched },
       tasks: taskStats,
       topAccounts,
       accountsNeedingAttention,
