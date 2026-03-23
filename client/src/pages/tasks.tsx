@@ -707,7 +707,7 @@ export default function TasksPage() {
           tasks={myTasks}
           companies={companies}
           teamMembers={teamMembers}
-          currentUser={currentUser}
+          currentUser={currentUser ?? null}
           onTaskClick={task => { setEditingTask(task); setTaskDialogOpen(true); }}
         />
       )}

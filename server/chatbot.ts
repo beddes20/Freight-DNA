@@ -55,9 +55,9 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
         myCompanies.some(co => co.id === c.companyId) && c.createdAt && c.createdAt >= firstOfMonth
       ).length;
       const touchpointsThisMonth = allTouchpoints.filter(tp =>
-        myContactIds.includes(tp.contactId) && tp.date >= firstOfMonth
+        tp.contactId !== null && myContactIds.includes(tp.contactId) && tp.date >= firstOfMonth
       ).length;
-      const touchpoints30d = allTouchpoints.filter(tp => myContactIds.includes(tp.contactId)).length;
+      const touchpoints30d = allTouchpoints.filter(tp => tp.contactId !== null && myContactIds.includes(tp.contactId)).length;
       ctx += `- ${u.name} (${u.role.replace(/_/g, " ")}): ${myCompanies.length} accounts, ${myContactIds.length} contacts total, ${contactsThisMonth} new contacts this month, ${touchpointsThisMonth} touchpoints this month, ${touchpoints30d} touchpoints last 30d\n`;
     });
 

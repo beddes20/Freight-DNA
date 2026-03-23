@@ -204,7 +204,6 @@ export function PreCallPlanner({
               </div>
               <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap mt-0.5">
                 {company.industry && <span>{company.industry}</span>}
-                {company.type && <span>· {company.type}</span>}
                 {company.website && (
                   <a href={company.website.startsWith("http") ? company.website : `https://${company.website}`} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
                     {company.website}

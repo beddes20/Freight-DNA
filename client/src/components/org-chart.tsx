@@ -316,6 +316,7 @@ export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewCont
   const tpMap = useMemo(() => {
     const map = new Map<string, Touchpoint[]>();
     for (const tp of touchpoints) {
+      if (!tp.contactId) continue;
       const arr = map.get(tp.contactId) ?? [];
       arr.push(tp);
       map.set(tp.contactId, arr);

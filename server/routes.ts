@@ -5590,6 +5590,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           computedValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
         } else if (goal.metric === "touchpoints") {
           computedValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "meaningful_touchpoints") {
+          computedValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
         } else if (goal.metric === "margin" && latestUpload) {
           const amUser = allUsers.find(u => u.id === goal.amId);
           const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
@@ -5678,6 +5680,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           effectiveValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
         } else if (goal.metric === "touchpoints") {
           effectiveValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "meaningful_touchpoints") {
+          effectiveValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
         } else if (goal.metric === "margin" && latestUpload) {
           const repKey = (amUser as any).financialRepId as string | null;
           if (repKey) {
@@ -6001,6 +6005,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         autoValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
       } else if (goal.metric === "touchpoints") {
         autoValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+      } else if (goal.metric === "meaningful_touchpoints") {
+        autoValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
       } else if (goal.metric === "loads_booked" || goal.metric === "margin_pct" || (goal.metric === "margin" && isLMGoal)) {
         // LM metrics — computed from the Dispatcher column in transaction rows
         const repKey = targetUser ? (targetUser as any).financialRepId as string | null : null;

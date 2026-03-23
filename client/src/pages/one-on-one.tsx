@@ -1009,7 +1009,7 @@ function TopicRow({ topic, addedByName, onToggle, onDelete, dimmed, currentUserI
   allUsers: SafeUser[];
 }) {
   const { toast } = useToast();
-  const tag = TAG_CONFIG[topic.tag] || TAG_CONFIG.fyi;
+  const tag = TAG_CONFIG[topic.tag ?? "fyi"] || TAG_CONFIG.fyi;
   const [showReplies, setShowReplies] = useState(false);
   const [replyText, setReplyText] = useState("");
   const replyInputRef = useRef<HTMLInputElement>(null);
@@ -1216,7 +1216,7 @@ function ArchivedSessionCard({ session, allUsers }: {
             <p className="text-sm text-muted-foreground">No topics were added in this session</p>
           ) : (
             session.topics.map(t => {
-              const tag = TAG_CONFIG[t.tag] || TAG_CONFIG.fyi;
+              const tag = TAG_CONFIG[t.tag ?? "fyi"] || TAG_CONFIG.fyi;
               return (
                 <div key={t.id} className={`flex items-start gap-2.5 py-1.5 ${t.status === "discussed" ? "opacity-60" : ""}`}>
                   {t.status === "discussed"

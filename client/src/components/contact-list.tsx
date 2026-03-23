@@ -99,6 +99,7 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
   const contactsMap = new Map(contacts.map((c) => [c.id, c]));
   const tpByContact = new Map<string, Touchpoint[]>();
   for (const tp of touchpoints) {
+    if (!tp.contactId) continue;
     const arr = tpByContact.get(tp.contactId) ?? [];
     arr.push(tp);
     tpByContact.set(tp.contactId, arr);

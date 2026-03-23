@@ -497,7 +497,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
 
       const laneRows = rows
         .map(r => ({
-          lane: origCol && destCol ? `${r[origCol]}, ${r[stateOrigCol] || ""} → ${r[destCol]}, ${r[stateDestCol] || ""}` : (laneCol ? r[laneCol] : ""),
+          lane: origCol && destCol ? `${r[origCol]}, ${stateOrigCol ? r[stateOrigCol] || "" : ""} → ${r[destCol]}, ${stateDestCol ? r[stateDestCol] || "" : ""}` : (laneCol ? r[laneCol] : ""),
           volume: volCol ? Number(String(r[volCol]).replace(/[^0-9.]/g, "")) || 0 : 0,
           equipment: eqCol ? r[eqCol] : "",
         }))
