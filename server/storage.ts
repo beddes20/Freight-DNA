@@ -176,6 +176,7 @@ export interface IStorage {
   deleteFinancialUpload(id: string): Promise<boolean>;
   deleteAllFinancialUploads(): Promise<void>;
   deleteEmptyFinancialUploads(): Promise<number>;
+  appendFinancialRows(uploadId: string, rows: any[]): Promise<void>;
 
   searchCompanies(query: string, organizationId: string): Promise<Company[]>;
   searchUsers(query: string, roles: string[], organizationId: string): Promise<Omit<User, 'password'>[]>;
@@ -610,6 +611,13 @@ export class DatabaseStorage implements IStorage {
       console.log(`[startup] Deleted ${deleted} financial upload record(s) with empty rows array.`);
     }
     return deleted;
+  }
+
+  async appendFinancialRows(uploadId: string, rows: any[]): Promise<void> {
+    await pool.query(
+      `UPDATE financial_uploads SET rows = rows || $1::jsonb WHERE id = $2`,
+      [JSON.stringify(rows), uploadId]
+    );
   }
 
   async searchCompanies(query: string, organizationId: string): Promise<Company[]> {

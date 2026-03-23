@@ -3845,6 +3845,20 @@ export async function registerRoutes(
     }
   });
 
+  // Admin-only endpoint to import financial rows in chunks (for DB cloning)
+  app.post("/api/admin/import-financial-rows", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+      const { uploadId, rows } = req.body;
+      if (!uploadId || !Array.isArray(rows)) return res.status(400).json({ error: "uploadId and rows required" });
+      await storage.appendFinancialRows(uploadId, rows);
+      res.json({ ok: true, added: rows.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/financials/sync-onedrive", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
