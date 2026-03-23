@@ -663,7 +663,7 @@ export default function Dashboard() {
         <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
 
         <div className="relative flex items-center justify-between gap-4">
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="text-xs font-medium tracking-widest uppercase mb-1" style={{ color: "#ffb400" }}>
               {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
             </p>
@@ -675,11 +675,42 @@ export default function Dashboard() {
                 return first ? `${greeting}, ${first}` : greeting;
               })()}
             </h2>
-            <p className="mt-2.5 text-sm tracking-wide" style={{ color: "#ffc333" }} data-testid="text-dna-tagline-hero">
+            <p className="mt-2 text-sm tracking-wide" style={{ color: "#ffc333" }} data-testid="text-dna-tagline-hero">
               <span className="font-bold">DNA</span>
               <span className="mx-2" style={{ color: "#444" }}>·</span>
               <span className="font-bold">D</span>own <span className="font-bold">N</span>ot <span className="font-bold">A</span>cross
             </p>
+            {briefingData && (
+              <div className="flex flex-wrap items-center gap-2 mt-3">
+                <span
+                  className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium"
+                  style={{ background: "rgba(255,180,0,0.12)", color: "#ffc333", border: "1px solid rgba(255,180,0,0.2)" }}
+                  data-testid="text-hero-touches"
+                >
+                  <PhoneCall className="h-3 w-3" />
+                  {briefingData.streakToday}/{briefingData.streakGoal} touches today
+                </span>
+                {briefingData.dueTasks > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium"
+                    style={{ background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)", border: "1px solid rgba(255,255,255,0.12)" }}
+                    data-testid="text-hero-tasks"
+                  >
+                    <ListTodo className="h-3 w-3" />
+                    {briefingData.dueTasks} task{briefingData.dueTasks !== 1 ? "s" : ""} due
+                  </span>
+                )}
+                {briefingData.streak > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-semibold"
+                    style={{ background: "rgba(251,146,60,0.15)", color: "#fb923c", border: "1px solid rgba(251,146,60,0.25)" }}
+                    data-testid="text-hero-streak"
+                  >
+                    🔥 {briefingData.streak}-day streak
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div
             className="shrink-0 hidden sm:flex items-center justify-center h-16 w-16 rounded-full p-2.5"
