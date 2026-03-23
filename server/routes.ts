@@ -6837,8 +6837,14 @@ export async function registerRoutes(
           <p class="item-meta">${d.email}${d.phone ? ` · ${d.phone}` : ""}</p>
         </div>
         <div class="item">
-          <p class="item-title">Interest: ${d.interest}</p>
-          <p class="item-meta">Preferred: ${d.preferredDate} at ${d.preferredTime} CST</p>
+          <p class="item-title">Areas of Interest</p>
+          <ul style="margin:4px 0 0 0;padding-left:18px;color:#555;">
+            ${d.interest.split(",").map((i: string) => `<li style="margin-bottom:2px;">${i.trim()}</li>`).join("")}
+          </ul>
+        </div>
+        <div class="item">
+          <p class="item-title">Preferred Time</p>
+          <p class="item-meta">${d.preferredDate} at ${d.preferredTime} CST</p>
         </div>
         <p>Please follow up to confirm the demo time.</p>
       `;
@@ -6846,7 +6852,7 @@ export async function registerRoutes(
         to: "info@freight-dna.com",
         subject: `New Demo Request from ${d.firstName} ${d.lastName}`,
         html: baseEmailTemplate("New Demo Request", bodyHtml),
-        text: `New demo request from ${d.firstName} ${d.lastName} (${d.email}). Interest: ${d.interest}. Preferred: ${d.preferredDate} at ${d.preferredTime} CST.`,
+        text: `New demo request from ${d.firstName} ${d.lastName} (${d.email}). Interests: ${d.interest}. Preferred: ${d.preferredDate} at ${d.preferredTime} CST.`,
       }).catch(() => {});
     } catch (error) {
       console.error("[demo-request] error:", error);
