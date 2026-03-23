@@ -655,20 +655,19 @@ export default function Dashboard() {
       {/* Hero Banner */}
       <div
         className="relative overflow-hidden rounded-xl px-6 py-5 text-white"
-        style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%)" }}
+        style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}
         data-testid="banner-hero"
       >
-        {/* decorative circles */}
-        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full bg-white/5" />
-        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full bg-white/5" />
-        <div className="pointer-events-none absolute top-1/2 right-24 -translate-y-1/2 h-20 w-20 rounded-full bg-white/5" />
+        {/* decorative gold glow circles */}
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
 
         <div className="relative flex items-center justify-between gap-4">
           <div>
-            <p className="text-white/60 text-xs font-medium tracking-widest uppercase mb-1">
+            <p className="text-xs font-medium tracking-widest uppercase mb-1" style={{ color: "#ffb400" }}>
               {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
             </p>
-            <h2 className="text-xl font-bold leading-tight">
+            <h2 className="text-xl font-bold leading-tight text-white">
               {(() => {
                 const h = new Date().getHours();
                 const greeting = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
@@ -676,13 +675,16 @@ export default function Dashboard() {
                 return first ? `${greeting}, ${first}` : greeting;
               })()}
             </h2>
-            <p className="mt-2.5 text-sm text-white/70 tracking-wide" data-testid="text-dna-tagline-hero">
-              <span className="font-bold text-white">DNA</span>
-              <span className="mx-2 text-white/30">·</span>
-              <span className="font-bold text-white">D</span>own <span className="font-bold text-white">N</span>ot <span className="font-bold text-white">A</span>cross
+            <p className="mt-2.5 text-sm tracking-wide" style={{ color: "#ffc333" }} data-testid="text-dna-tagline-hero">
+              <span className="font-bold">DNA</span>
+              <span className="mx-2" style={{ color: "#444" }}>·</span>
+              <span className="font-bold">D</span>own <span className="font-bold">N</span>ot <span className="font-bold">A</span>cross
             </p>
           </div>
-          <div className="shrink-0 hidden sm:flex items-center justify-center h-14 w-14 rounded-full bg-white/10 border border-white/20 p-2">
+          <div
+            className="shrink-0 hidden sm:flex items-center justify-center h-16 w-16 rounded-full p-2.5"
+            style={{ border: "2px solid #ffb400", background: "#111", boxShadow: "0 0 20px rgba(255,180,0,0.2)" }}
+          >
             <img src={vtLogoWhite} alt="Value Truck" className="w-full h-full object-contain" />
           </div>
         </div>

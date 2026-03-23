@@ -84,12 +84,12 @@ export function AppSidebar() {
       <SidebarHeader className="p-4 border-b border-sidebar-border">
         <div className="flex flex-col items-center justify-center py-1 gap-1 group-data-[collapsible=icon]:hidden">
           <img src={vtLogoWhite} alt="Value Truck" className="h-10 w-auto object-contain" />
-          <p className="text-[10px] tracking-wide text-sidebar-foreground/60 text-center" data-testid="text-dna-tagline-sidebar">
-            <span className="font-bold text-sidebar-foreground/80">DNA</span>
+          <p className="text-[10px] tracking-wide text-center" style={{ color: "#ffb400" }} data-testid="text-dna-tagline-sidebar">
+            <span className="font-bold">DNA</span>
             {" · "}
-            <span className="font-bold text-sidebar-foreground/80">D</span>own{" "}
-            <span className="font-bold text-sidebar-foreground/80">N</span>ot{" "}
-            <span className="font-bold text-sidebar-foreground/80">A</span>cross
+            <span className="font-bold">D</span>own{" "}
+            <span className="font-bold">N</span>ot{" "}
+            <span className="font-bold">A</span>cross
           </p>
         </div>
         <div className="hidden group-data-[collapsible=icon]:flex justify-center py-1">
