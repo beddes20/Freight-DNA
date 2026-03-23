@@ -44,7 +44,7 @@ const formSchema = z.object({
   lastName: z.string().min(1, "Last name is required"),
   email: z.string().email("Enter a valid business email"),
   phone: z.string().optional(),
-  interest: z.string().min(1, "Please select an area of interest"),
+  interests: z.array(z.string()).min(1, "Please select at least one area of interest"),
   preferredDate: z.string().min(1, "Preferred date is required"),
   preferredTime: z.string().min(1, "Preferred time is required"),
 });
@@ -94,15 +94,28 @@ export default function ScheduleDemoModal({ open, onClose }: Props) {
       lastName: "",
       email: "",
       phone: "",
-      interest: "",
+      interests: [],
       preferredDate: "",
       preferredTime: "",
     },
   });
 
+  const selectedInterests = form.watch("interests");
+
+  const toggleInterest = (opt: string) => {
+    const current = form.getValues("interests");
+    const updated = current.includes(opt)
+      ? current.filter(i => i !== opt)
+      : [...current, opt];
+    form.setValue("interests", updated, { shouldValidate: true });
+  };
+
   const mutation = useMutation({
     mutationFn: (data: FormValues) =>
-      apiRequest("POST", "/api/demo-requests", data),
+      apiRequest("POST", "/api/demo-requests", {
+        ...data,
+        interest: data.interests.join(", "),
+      }),
     onSuccess: () => {
       setSubmitted(true);
     },
@@ -239,18 +252,60 @@ export default function ScheduleDemoModal({ open, onClose }: Props) {
 
                 <div>
                   <label style={labelStyle}>What are you interested in? <span style={{ color: "#f87171" }}>*</span></label>
-                  <select
-                    {...form.register("interest")}
-                    style={{ ...inputStyle, appearance: "none" }}
-                    data-testid="select-interest"
-                  >
-                    <option value="">Select an area...</option>
-                    {interestOptions.map(opt => (
-                      <option key={opt} value={opt}>{opt}</option>
-                    ))}
-                  </select>
-                  {form.formState.errors.interest && (
-                    <p style={errorStyle}>{form.formState.errors.interest.message}</p>
+                  <div className="grid grid-cols-2 gap-2 mt-1" data-testid="checkbox-group-interests">
+                    {interestOptions.map(opt => {
+                      const checked = selectedInterests.includes(opt);
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => toggleInterest(opt)}
+                          data-testid={`checkbox-interest-${opt.replace(/\s+/g, "-").toLowerCase()}`}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            padding: "8px 10px",
+                            borderRadius: "6px",
+                            border: checked
+                              ? "1px solid rgba(255,180,0,0.7)"
+                              : "1px solid rgba(255,255,255,0.1)",
+                            background: checked
+                              ? "rgba(255,180,0,0.08)"
+                              : "rgba(255,255,255,0.03)",
+                            color: checked ? "#ffb400" : "rgba(255,255,255,0.6)",
+                            fontSize: "13px",
+                            fontWeight: checked ? 600 : 400,
+                            cursor: "pointer",
+                            textAlign: "left",
+                            transition: "all 0.15s",
+                            width: "100%",
+                          }}
+                        >
+                          <span style={{
+                            width: "14px",
+                            height: "14px",
+                            borderRadius: "3px",
+                            border: checked ? "2px solid #ffb400" : "2px solid rgba(255,255,255,0.25)",
+                            background: checked ? "#ffb400" : "transparent",
+                            flexShrink: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}>
+                            {checked && (
+                              <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
+                                <path d="M1 3.5L3.5 6L8 1" stroke="#111" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            )}
+                          </span>
+                          {opt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {form.formState.errors.interests && (
+                    <p style={errorStyle}>{form.formState.errors.interests.message}</p>
                   )}
                 </div>
 
