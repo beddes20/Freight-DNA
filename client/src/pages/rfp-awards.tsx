@@ -1203,6 +1203,15 @@ export default function RfpAwards() {
   const [isDragging, setIsDragging] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [uploadCompanyId, setUploadCompanyId] = useState("");
+  const [columnMappingOpen, setColumnMappingOpen] = useState(false);
+  const [columnMappingData, setColumnMappingData] = useState<{
+    headers: string[];
+    suggestedMappings: Record<string, string>;
+    confident: boolean;
+    sheetName: string;
+    columnSamples: Record<string, string[]>;
+  } | null>(null);
+  const [confirmedMapping, setConfirmedMapping] = useState<Record<string, string>>({});
 
   const { data: rfps, isLoading: rfpsLoading } = useQuery<Rfp[]>({
     queryKey: ["/api/rfps"],
@@ -1247,10 +1256,13 @@ export default function RfpAwards() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: async ({ file, companyId }: { file: File; companyId: string }) => {
+    mutationFn: async ({ file, companyId, mapping }: { file: File; companyId: string; mapping?: Record<string, string> }) => {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("companyId", companyId);
+      if (mapping) {
+        formData.append("confirmedMapping", JSON.stringify(mapping));
+      }
       const response = await fetch("/api/rfps/upload", { method: "POST", body: formData });
       if (!response.ok) {
         const err = await response.json();
@@ -1261,24 +1273,57 @@ export default function RfpAwards() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
       setPendingFile(null);
+      setColumnMappingOpen(false);
+      setColumnMappingData(null);
+      setConfirmedMapping({});
       const sheetInfo = data.sheetName ? ` (tab: "${data.sheetName}")` : "";
-      toast({
-        title: "RFP uploaded successfully",
-        description: `Analyzed ${data.analysis.laneCount} lanes from ${data.rfp.fileName}${sheetInfo}`,
-      });
+      const laneCount = data.analysis?.laneCount ?? 0;
+      if (laneCount === 0) {
+        toast({
+          title: "RFP uploaded with warnings",
+          description: `No lanes were detected in ${data.rfp.fileName}${sheetInfo}. Check that the column mapping is correct.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "RFP uploaded successfully",
+          description: `Analyzed ${laneCount} lanes from ${data.rfp.fileName}${sheetInfo}`,
+        });
+      }
     },
     onError: (error: Error) => {
       toast({ title: "Upload failed", description: error.message, variant: "destructive" });
     },
   });
 
+  const previewHeadersMutation = useMutation({
+    mutationFn: async ({ file }: { file: File }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/rfps/preview-headers", { method: "POST", body: formData });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || "Failed to analyze file");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setColumnMappingData(data);
+      setConfirmedMapping({ ...data.suggestedMappings });
+      setColumnMappingOpen(true);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to analyze file", description: error.message, variant: "destructive" });
+    },
+  });
+
   const triggerUpload = useCallback((file: File) => {
+    setPendingFile(file);
     if (!uploadCompanyId) {
-      setPendingFile(file);
-    } else {
-      uploadMutation.mutate({ file, companyId: uploadCompanyId });
+      return;
     }
-  }, [uploadCompanyId, uploadMutation]);
+    previewHeadersMutation.mutate({ file });
+  }, [uploadCompanyId, previewHeadersMutation]);
 
   const companiesMap = new Map(companies?.map((c) => [c.id, c]) || []);
 
@@ -1488,8 +1533,8 @@ export default function RfpAwards() {
           <div
             className="flex flex-col items-center gap-4"
           >
-            <div className={`rounded-full p-4 transition-colors ${isDragging ? "bg-primary/10" : uploadMutation.isPending ? "bg-green-100 dark:bg-green-900/30" : "bg-muted"}`}>
-              {uploadMutation.isPending ? (
+            <div className={`rounded-full p-4 transition-colors ${isDragging ? "bg-primary/10" : (uploadMutation.isPending || previewHeadersMutation.isPending) ? "bg-green-100 dark:bg-green-900/30" : "bg-muted"}`}>
+              {(uploadMutation.isPending || previewHeadersMutation.isPending) ? (
                 <Loader2 className="h-8 w-8 text-green-600 dark:text-green-400 animate-spin" />
               ) : (
                 <Upload className={`h-8 w-8 ${isDragging ? "text-primary" : "text-muted-foreground"}`} />
@@ -1497,7 +1542,7 @@ export default function RfpAwards() {
             </div>
             <div className="text-center">
               <h3 className="font-medium mb-1">
-                {uploadMutation.isPending ? "Uploading & Analyzing..." : "Upload RFP Spreadsheet"}
+                {previewHeadersMutation.isPending ? "Analyzing columns..." : uploadMutation.isPending ? "Uploading & Analyzing..." : "Upload RFP Spreadsheet"}
               </h3>
               <p className="text-sm text-muted-foreground mb-3">
                 Drag and drop an Excel or CSV file here to create an RFP with data analysis
@@ -1516,7 +1561,7 @@ export default function RfpAwards() {
               <Select value={uploadCompanyId} onValueChange={(val) => {
                 setUploadCompanyId(val);
                 if (pendingFile && val) {
-                  uploadMutation.mutate({ file: pendingFile, companyId: val });
+                  previewHeadersMutation.mutate({ file: pendingFile });
                 }
               }}>
                 <SelectTrigger className="flex-1" data-testid="select-upload-company">
@@ -1536,12 +1581,12 @@ export default function RfpAwards() {
                   accept=".xlsx,.xls,.csv"
                   onChange={handleFileSelect}
                   className="hidden"
-                  disabled={uploadMutation.isPending}
+                  disabled={uploadMutation.isPending || previewHeadersMutation.isPending}
                   data-testid="input-file-upload"
                 />
                 <Button
                   variant="outline"
-                  disabled={uploadMutation.isPending}
+                  disabled={uploadMutation.isPending || previewHeadersMutation.isPending}
                   asChild
                 >
                   <span className="cursor-pointer">
@@ -1575,6 +1620,154 @@ export default function RfpAwards() {
           data-testid="input-search-rfps"
         />
       </div>
+
+      {/* Column Mapping Dialog */}
+      {columnMappingData && (
+        <Dialog open={columnMappingOpen} onOpenChange={(open) => {
+          if (!open) {
+            setColumnMappingOpen(false);
+            setColumnMappingData(null);
+            setConfirmedMapping({});
+          }
+        }}>
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="dialog-column-mapping">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-primary" />
+                Confirm Column Mapping
+              </DialogTitle>
+              <p className="text-sm text-muted-foreground">
+                AI has detected the following column mappings from{" "}
+                <span className="font-medium">{pendingFile?.name}</span>
+                {columnMappingData.sheetName ? ` (tab: "${columnMappingData.sheetName}")` : ""}. Review and adjust as needed.
+              </p>
+              {columnMappingData.confident ? (
+                <Badge variant="outline" className="w-fit text-green-700 dark:text-green-400 border-green-300 dark:border-green-700" data-testid="badge-ai-confidence-high">
+                  <Sparkles className="h-3 w-3 mr-1" />
+                  High confidence
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="w-fit text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700" data-testid="badge-ai-confidence-low">
+                  <AlertTriangle className="h-3 w-3 mr-1" />
+                  Low confidence — please review carefully
+                </Badge>
+              )}
+            </DialogHeader>
+
+            {/* Required field validation */}
+            {(() => {
+              const mappedFields = Object.values(confirmedMapping);
+              const hasOrigin = mappedFields.some(f => f.startsWith("origin_"));
+              const hasDestination = mappedFields.some(f => f.startsWith("dest_"));
+              const hasVolume = mappedFields.includes("volume");
+              const missing: string[] = [];
+              if (!hasOrigin) missing.push("origin");
+              if (!hasDestination) missing.push("destination");
+              if (!hasVolume) missing.push("volume");
+              if (missing.length > 0) {
+                return (
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-sm text-amber-800 dark:text-amber-300" data-testid="warning-missing-fields">
+                    <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span>
+                      Missing required field{missing.length > 1 ? "s" : ""}: <strong>{missing.join(", ")}</strong>.
+                      You can still proceed, but lane analysis may be incomplete.
+                    </span>
+                  </div>
+                );
+              }
+              return (
+                <div className="flex items-center gap-2 p-3 rounded-md bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 text-sm text-green-800 dark:text-green-300" data-testid="status-mapping-complete">
+                  <CheckCircle className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
+                  <span>All required fields mapped. Ready to confirm.</span>
+                </div>
+              );
+            })()}
+
+            <div className="space-y-1">
+              <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center text-xs font-medium text-muted-foreground px-1 pb-1">
+                <span>Spreadsheet Column</span>
+                <span />
+                <span>Maps To</span>
+              </div>
+              {columnMappingData.headers.map((header) => {
+                const samples = columnMappingData.columnSamples[header] || [];
+                return (
+                  <div
+                    key={header}
+                    className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center p-2 rounded-md hover:bg-muted/50 transition-colors"
+                    data-testid={`row-column-mapping-${header}`}
+                  >
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{header}</p>
+                      {samples.length > 0 && (
+                        <p className="text-xs text-muted-foreground truncate">
+                          e.g. {samples.slice(0, 2).join(", ")}
+                        </p>
+                      )}
+                    </div>
+                    <ArrowRightLeft className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <Select
+                      value={confirmedMapping[header] || "ignore"}
+                      onValueChange={(val) => setConfirmedMapping(prev => ({ ...prev, [header]: val }))}
+                    >
+                      <SelectTrigger className="text-sm h-9" data-testid={`select-mapping-${header}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="origin_city">Origin City</SelectItem>
+                        <SelectItem value="origin_state">Origin State</SelectItem>
+                        <SelectItem value="origin_zip">Origin ZIP</SelectItem>
+                        <SelectItem value="dest_city">Destination City</SelectItem>
+                        <SelectItem value="dest_state">Destination State</SelectItem>
+                        <SelectItem value="dest_zip">Destination ZIP</SelectItem>
+                        <SelectItem value="volume">Volume (loads)</SelectItem>
+                        <SelectItem value="equipment">Equipment Type</SelectItem>
+                        <SelectItem value="lane_id">Lane ID</SelectItem>
+                        <SelectItem value="ignore">Ignore</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setColumnMappingOpen(false);
+                  setColumnMappingData(null);
+                  setConfirmedMapping({});
+                }}
+                data-testid="button-cancel-mapping"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  if (pendingFile && uploadCompanyId) {
+                    uploadMutation.mutate({ file: pendingFile, companyId: uploadCompanyId, mapping: confirmedMapping });
+                  }
+                }}
+                disabled={uploadMutation.isPending}
+                data-testid="button-confirm-mapping"
+              >
+                {uploadMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="h-4 w-4 mr-2" />
+                    Confirm & Upload
+                  </>
+                )}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {viewingRfp && (
         <RfpDataViewer

@@ -21,7 +21,7 @@ The application uses React, TypeScript, and Tailwind CSS with `shadcn/ui` for a 
 - **Data Models**: Key entities include Users, Companies, Contacts, RFPs, Awards, and Tasks, supporting hierarchical relationships and specific transportation data.
 - **Key Features**:
     - **Company & Contact Management**: Full CRUD operations with transportation-specific fields and organizational chart visualization.
-    - **RFP & Award Management**: Modules for managing RFPs and awards, including Excel upload for lane analysis.
+    - **RFP & Award Management**: Modules for managing RFPs and awards, including Excel upload with AI-assisted column mapping (preview-headers endpoint uses OpenAI to suggest standard field mappings, user confirms via dialog before upload).
     - **Lane Research & Assignment**: Identification and assignment of high-volume lanes from RFPs.
     - **Analytical Features**: Facility coverage gap analysis, lane pattern analysis, historical data analysis, top opportunities identification, proximity matches, and a lane matching portlet.
     - **User Management & Account Transfer**: Admin and NAM tools for user management, team hierarchy, and company reassignment.

@@ -437,6 +437,162 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
   };
 }
 
+// Standard field types for RFP column mapping
+type RfpFieldType = "origin_city" | "origin_state" | "origin_zip" | "dest_city" | "dest_state" | "dest_zip" | "volume" | "equipment" | "lane_id" | "ignore";
+
+type ConfirmedColumnMapping = Record<string, RfpFieldType>;
+
+function analyzeRfpSpreadsheetWithMapping(workbook: XLSX.WorkBook, confirmedMapping: ConfirmedColumnMapping) {
+  const sheetName = selectBestRfpSheet(workbook);
+  const sheet = workbook.Sheets[sheetName];
+
+  const rawAll: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+  if (rawAll.length === 0) {
+    return { rows: [], headers: [], highVolumeLanes: [], sheetName, analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0, isWeeklyVolume: false } };
+  }
+
+  // Detect header row using same heuristic
+  const headerKeywords = ["origin", "dest", "volume", "load", "ship", "from", "to", "lane", "state", "city", "zip", "rate", "qty", "pickup", "delivery"];
+  let headerRowIdx = 0;
+  let bestScore = 0;
+
+  for (let i = 0; i < Math.min(15, rawAll.length); i++) {
+    const rowStr = rawAll[i].join(" ").toLowerCase();
+    const score = headerKeywords.filter(kw => rowStr.includes(kw)).length;
+    if (score > bestScore) {
+      bestScore = score;
+      headerRowIdx = i;
+    }
+  }
+
+  let rows: Record<string, any>[];
+  let headers: string[];
+
+  if (bestScore >= 2) {
+    headers = rawAll[headerRowIdx].map((h: any, i: number) => (h !== "" && h !== null) ? String(h).trim() : `col_${i}`);
+    rows = rawAll.slice(headerRowIdx + 1).map((row: any[]) => {
+      const obj: Record<string, any> = {};
+      headers.forEach((h, i) => { obj[h] = row[i] ?? ""; });
+      return obj;
+    }).filter(r => Object.values(r).some(v => v !== "" && v !== null));
+  } else {
+    rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    headers = rows.length > 0 ? Object.keys(rows[0]) : [];
+  }
+
+  if (rows.length === 0) {
+    return { rows: [], headers: [], highVolumeLanes: [], sheetName, analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0, isWeeklyVolume: false } };
+  }
+
+  // Build reverse lookup: fieldType -> column header
+  const fieldToCol = (field: RfpFieldType): string | null => {
+    for (const [col, f] of Object.entries(confirmedMapping)) {
+      if (f === field) return col;
+    }
+    return null;
+  };
+
+  const originCityCol = fieldToCol("origin_city");
+  const originStateCol = fieldToCol("origin_state");
+  const originZipCol = fieldToCol("origin_zip");
+  const destCityCol = fieldToCol("dest_city");
+  const destStateCol = fieldToCol("dest_state");
+  const destZipCol = fieldToCol("dest_zip");
+  const volumeCol = fieldToCol("volume");
+  const equipmentCol = fieldToCol("equipment");
+  const laneIdCol = fieldToCol("lane_id");
+
+  // Determine volume cadence from column name (weekly or monthly)
+  let isWeeklyVolume = false;
+  let isMonthlyVolume = false;
+  if (volumeCol) {
+    const colLower = volumeCol.toLowerCase();
+    if (colLower.includes("week") || colLower.includes("wkly")) {
+      isWeeklyVolume = true;
+    } else if (colLower.includes("month") || colLower.includes("mthly") || colLower.includes("mo ") || colLower.includes("mo.")) {
+      isMonthlyVolume = true;
+    } else {
+      // Auto-detect: if max value <= 52, likely weekly
+      const numericVals = rows.map(r => parseFloat(String(r[volumeCol!] || "").replace(/[^0-9.]/g, ""))).filter(v => !isNaN(v) && v > 0);
+      const maxVal = numericVals.length > 0 ? Math.max(...numericVals) : 0;
+      if (numericVals.length > 0 && maxVal <= 52) isWeeklyVolume = true;
+    }
+  }
+
+  const originStates = new Set<string>();
+  const destStates = new Set<string>();
+  let totalVolume = 0;
+  const highVolumeLanes: Record<string, any>[] = [];
+
+  for (const row of rows) {
+    const oState = originStateCol ? String(row[originStateCol] || "").trim() : "";
+    const dState = destStateCol ? String(row[destStateCol] || "").trim() : "";
+    if (oState) originStates.add(oState.toUpperCase());
+    if (dState) destStates.add(dState.toUpperCase());
+
+    let rowVolume = 0;
+    if (volumeCol && row[volumeCol] !== "" && row[volumeCol] !== null) {
+      const v = parseFloat(String(row[volumeCol]).replace(/[^0-9.]/g, ""));
+      if (!isNaN(v) && v > 0) {
+        const annualV = isWeeklyVolume ? v * 52 : isMonthlyVolume ? v * 12 : v;
+        totalVolume += annualV;
+        rowVolume = annualV;
+      }
+    }
+
+    if (rowVolume > 50) {
+      // Resolve origin
+      const rawOriginCity = originCityCol ? String(row[originCityCol] || "").trim() : "";
+      const rawOriginZip = originZipCol ? String(row[originZipCol] || "").trim() : "";
+      const originCity = rawOriginCity || zipToCity(rawOriginZip);
+
+      // Resolve dest
+      const rawDestCity = destCityCol ? String(row[destCityCol] || "").trim() : "";
+      const rawDestZip = destZipCol ? String(row[destZipCol] || "").trim() : "";
+      const destCity = rawDestCity || zipToCity(rawDestZip);
+
+      const laneName = laneIdCol ? String(row[laneIdCol] || "").trim() : "";
+      const originPart = originCity ? `${originCity}${oState ? `, ${oState}` : ""}` : oState;
+      const destPart = destCity ? `${destCity}${dState ? `, ${dState}` : ""}` : dState;
+      const cityDescription = originPart && destPart ? `${originPart} → ${destPart}` : originPart || destPart || "";
+      const laneDescription = cityDescription || laneName || "Unknown Lane";
+
+      highVolumeLanes.push({
+        lane: laneDescription,
+        laneId: laneName || "",
+        origin: originCity || rawOriginZip || oState || "",
+        destination: destCity || rawDestZip || dState || "",
+        originState: oState,
+        destinationState: dState,
+        volume: rowVolume,
+        equipment: equipmentCol ? String(row[equipmentCol] || "") : "",
+        rawRow: row,
+      });
+    }
+  }
+
+  highVolumeLanes.sort((a, b) => b.volume - a.volume);
+
+  return {
+    rows: rows.slice(0, 100),
+    headers,
+    highVolumeLanes,
+    sheetName,
+    analysis: {
+      laneCount: rows.length,
+      totalVolume: String(Math.round(totalVolume)),
+      originStates: Array.from(originStates).sort(),
+      destinationStates: Array.from(destStates).sort(),
+      highVolumeLaneCount: highVolumeLanes.length,
+      isWeeklyVolume,
+      originColumn: originCityCol || originZipCol || originStateCol,
+      destinationColumn: destCityCol || destZipCol || destStateCol,
+      volumeColumn: volumeCol,
+    },
+  };
+}
+
 function toMonthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
@@ -1255,6 +1411,145 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/rfps/preview-headers", upload.single("file"), async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const allowedExts = [".xlsx", ".xls", ".csv"];
+      const fileExt = req.file.originalname.toLowerCase().replace(/.*(\.[^.]+)$/, "$1");
+      if (!allowedExts.includes(fileExt)) {
+        return res.status(400).json({ error: "Invalid file type. Please upload an Excel (.xlsx, .xls) or CSV file." });
+      }
+
+      let workbook: XLSX.WorkBook;
+      try {
+        workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      } catch {
+        return res.status(400).json({ error: "Could not parse file. Please ensure it is a valid Excel or CSV file." });
+      }
+
+      const sheetName = selectBestRfpSheet(workbook);
+      const sheet = workbook.Sheets[sheetName];
+      const rawAll: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+      if (rawAll.length === 0) {
+        return res.status(400).json({ error: "File appears to be empty." });
+      }
+
+      // Detect header row
+      const headerKeywords = ["origin", "dest", "volume", "load", "ship", "from", "to", "lane", "state", "city", "zip", "rate", "qty", "pickup", "delivery"];
+      let headerRowIdx = 0;
+      let bestScore = 0;
+
+      for (let i = 0; i < Math.min(15, rawAll.length); i++) {
+        const rowStr = rawAll[i].join(" ").toLowerCase();
+        const score = headerKeywords.filter(kw => rowStr.includes(kw)).length;
+        if (score > bestScore) {
+          bestScore = score;
+          headerRowIdx = i;
+        }
+      }
+
+      const allHeaders: { name: string; colIndex: number }[] = rawAll[headerRowIdx]
+        .map((h: any, i: number) => ({
+          name: (h !== "" && h !== null) ? String(h).trim() : `col_${i}`,
+          colIndex: i,
+        }))
+        .filter((entry: { name: string; colIndex: number }) =>
+          !entry.name.startsWith("col_") || rawAll[headerRowIdx + 1]?.[entry.colIndex] !== ""
+        );
+
+      const headers: string[] = allHeaders.map(e => e.name);
+
+      // Get a few sample values per column for AI context (use original column indices)
+      const sampleRows = rawAll.slice(headerRowIdx + 1, headerRowIdx + 4);
+      const columnSamples: Record<string, string[]> = {};
+      allHeaders.forEach(({ name, colIndex }) => {
+        columnSamples[name] = sampleRows.map(r => String(r[colIndex] ?? "")).filter(v => v !== "");
+      });
+
+      let suggestedMappings: Record<string, string> = {};
+      try {
+        const OpenAI = (await import("openai")).default;
+        const openai = new OpenAI({
+          apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+          baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+        });
+
+        const headersList = headers.map(h => {
+          const samples = columnSamples[h]?.slice(0, 3).join(", ") || "";
+          return `"${h}" (samples: ${samples || "none"})`;
+        }).join("\n");
+
+        const aiResponse = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content: `You are an expert at analyzing freight RFP (Request for Proposal) spreadsheet headers. 
+Your task is to map spreadsheet column headers to standard freight lane fields.
+The standard fields are:
+- origin_city: City name for origin/pickup location
+- origin_state: State abbreviation for origin
+- origin_zip: ZIP code for origin
+- dest_city: City name for destination/delivery location  
+- dest_state: State abbreviation for destination
+- dest_zip: ZIP code for destination
+- volume: Number of loads/shipments (annual or weekly)
+- equipment: Equipment or trailer type (e.g. Van, Flatbed, Reefer)
+- lane_id: Lane identifier or name
+- ignore: Column is not relevant
+
+Respond ONLY with a JSON object where keys are the original column names and values are one of the standard field types above.
+Be conservative - if unsure, use "ignore". Every column must be assigned.`,
+            },
+            {
+              role: "user",
+              content: `Map these columns from an RFP spreadsheet:\n${headersList}\n\nRespond with JSON only.`,
+            },
+          ],
+          response_format: { type: "json_object" },
+          max_completion_tokens: 1024,
+        });
+
+        const parsed = JSON.parse(aiResponse.choices[0].message.content || "{}");
+        const validFields = new Set(["origin_city", "origin_state", "origin_zip", "dest_city", "dest_state", "dest_zip", "volume", "equipment", "lane_id", "ignore"]);
+        for (const h of headers) {
+          const suggestion = parsed[h];
+          suggestedMappings[h] = validFields.has(suggestion) ? suggestion : "ignore";
+        }
+      } catch (aiError) {
+        console.error("AI column mapping failed, using defaults:", aiError);
+        headers.forEach(h => { suggestedMappings[h] = "ignore"; });
+      }
+
+      // Determine confidence: all non-ignore fields must be present
+      const mappedFields = Object.values(suggestedMappings).filter(v => v !== "ignore");
+      const hasOrigin = mappedFields.some(f => f.startsWith("origin_"));
+      const hasDestination = mappedFields.some(f => f.startsWith("dest_"));
+      const hasVolume = mappedFields.includes("volume");
+      const confident = hasOrigin && hasDestination && hasVolume;
+
+      return res.json({
+        headers,
+        suggestedMappings,
+        confident,
+        sheetName,
+        columnSamples,
+      });
+    } catch (error) {
+      console.error("Error previewing RFP headers:", error);
+      res.status(500).json({ error: "Failed to analyze file headers" });
+    }
+  });
+
   app.post("/api/rfps/upload", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) {
@@ -1283,7 +1578,22 @@ export async function registerRoutes(
       } catch {
         return res.status(400).json({ error: "Could not parse file. Please ensure it is a valid Excel or CSV file." });
       }
-      const result = analyzeRfpSpreadsheet(workbook);
+
+      // Use confirmed mapping if provided, otherwise fall back to keyword guessing
+      let result: ReturnType<typeof analyzeRfpSpreadsheet>;
+      const confirmedMappingRaw = req.body.confirmedMapping;
+      if (confirmedMappingRaw) {
+        try {
+          const confirmedMapping: ConfirmedColumnMapping = typeof confirmedMappingRaw === "string"
+            ? JSON.parse(confirmedMappingRaw)
+            : confirmedMappingRaw;
+          result = analyzeRfpSpreadsheetWithMapping(workbook, confirmedMapping);
+        } catch {
+          result = analyzeRfpSpreadsheet(workbook);
+        }
+      } else {
+        result = analyzeRfpSpreadsheet(workbook);
+      }
 
       const rfpData = {
         companyId,
