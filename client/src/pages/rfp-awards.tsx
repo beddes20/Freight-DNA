@@ -49,6 +49,7 @@ import {
   Users,
   ChevronDown,
   Sparkles,
+  XCircle,
 } from "lucide-react";
 import {
   AlertDialog,
