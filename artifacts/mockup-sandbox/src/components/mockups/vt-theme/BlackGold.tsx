@@ -55,13 +55,14 @@ export function BlackGold() {
       {/* Sidebar */}
       <div className="flex flex-col w-56 flex-shrink-0" style={{ background: SIDEBAR_BG, borderRight: "1px solid #222" }}>
         {/* Logo */}
-        <div className="flex items-center gap-2 px-4 py-4" style={{ borderBottom: "1px solid #222" }}>
-          <div className="flex items-center justify-center w-8 h-8 rounded" style={{ background: GOLD }}>
-            <Truck className="w-4 h-4" style={{ color: BLACK }} />
+        <div className="flex items-center gap-3 px-4 py-4" style={{ borderBottom: "1px solid #222" }}>
+          {/* VT Circle Logo */}
+          <div className="flex items-center justify-center w-10 h-10 rounded-full flex-shrink-0" style={{ background: GOLD, border: `2px solid ${GOLD_LIGHT}` }}>
+            <span className="font-black text-sm leading-none" style={{ color: BLACK, letterSpacing: "-0.04em" }}>VT</span>
           </div>
           <div>
-            <div className="text-xs font-bold leading-tight" style={{ color: "#fff", letterSpacing: "0.04em" }}>GROWTH CHART</div>
-            <div className="text-xs leading-tight" style={{ color: GOLD, fontSize: "10px", letterSpacing: "0.08em" }}>VALUE TRUCK</div>
+            <div className="font-black leading-tight" style={{ color: "#fff", letterSpacing: "0.05em", fontSize: "11px" }}>GROWTH CHART VT</div>
+            <div className="leading-tight mt-0.5" style={{ color: GOLD, fontSize: "9px", letterSpacing: "0.06em", fontWeight: 600 }}>DNA — DOWN, NOT ACROSS</div>
           </div>
         </div>
 
@@ -153,15 +154,21 @@ export function BlackGold() {
         </div>
 
         {/* Hero Banner */}
-        <div className="px-5 pt-4 pb-3 flex-shrink-0" style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
-          <div className="flex items-center justify-between mb-2">
-            <div>
+        <div className="px-5 pt-4 pb-4 flex-shrink-0" style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
+          <div className="flex items-center gap-4">
+            {/* VT Circle Emblem */}
+            <div className="flex items-center justify-center w-14 h-14 rounded-full flex-shrink-0" style={{ background: "transparent", border: `2px solid ${GOLD}`, boxShadow: `0 0 16px rgba(255,180,0,0.25)` }}>
+              <span className="font-black text-xl leading-none" style={{ color: GOLD, letterSpacing: "-0.04em" }}>VT</span>
+            </div>
+            {/* Text */}
+            <div className="flex-1">
               <div className="flex items-center gap-2 mb-0.5">
                 <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: GOLD }}>Good morning, Ben</span>
               </div>
               <h2 className="text-lg font-bold" style={{ color: "#fff" }}>Your sales pulse for today</h2>
             </div>
-            <div className="flex items-center gap-2 text-xs" style={{ color: "#666" }}>
+            {/* Streak */}
+            <div className="flex items-center gap-2 text-xs flex-shrink-0" style={{ color: "#666" }}>
               <Activity className="w-3.5 h-3.5" style={{ color: GOLD }} />
               <span>Streak: <span style={{ color: GOLD, fontWeight: 700 }}>5 days</span></span>
             </div>
