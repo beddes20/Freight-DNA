@@ -326,6 +326,8 @@ export interface IStorage {
   createToolLink(data: InsertToolLink): Promise<ToolLink>;
   updateToolLink(id: string, data: Partial<InsertToolLink>): Promise<ToolLink | undefined>;
   deleteToolLink(id: string): Promise<boolean>;
+
+  createDemoRequest(data: import('../shared/schema').InsertDemoRequest): Promise<import('../shared/schema').DemoRequest>;
 }
 
 const pool = new Pool({
@@ -1874,6 +1876,12 @@ export class DatabaseStorage implements IStorage {
   async deleteToolLink(id: string): Promise<boolean> {
     const result = await db.delete(toolLinks).where(eq(toolLinks.id, id)).returning();
     return result.length > 0;
+  }
+
+  async createDemoRequest(data: import('../shared/schema').InsertDemoRequest): Promise<import('../shared/schema').DemoRequest> {
+    const { demoRequests } = await import('@shared/schema');
+    const [record] = await db.insert(demoRequests).values(data).returning();
+    return record;
   }
 }
 

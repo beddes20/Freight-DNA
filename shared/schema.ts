@@ -590,6 +590,22 @@ export const insertInternalPostSchema = createInsertSchema(internalPosts).omit({
 export type InsertInternalPost = z.infer<typeof insertInternalPostSchema>;
 export type InternalPost = typeof internalPosts.$inferSelect;
 
+export const demoRequests = pgTable("demo_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  interest: text("interest").notNull(),
+  preferredDate: text("preferred_date").notNull(),
+  preferredTime: text("preferred_time").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertDemoRequestSchema = createInsertSchema(demoRequests).omit({ id: true, createdAt: true });
+export type InsertDemoRequest = z.infer<typeof insertDemoRequestSchema>;
+export type DemoRequest = typeof demoRequests.$inferSelect;
+
 export const toolLinks = pgTable("tool_links", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),

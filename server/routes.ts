@@ -522,6 +522,7 @@ export async function registerRoutes(
 
   app.use("/api", (req, res, next) => {
     if (req.path.startsWith("/auth/")) return next();
+    if (req.path === "/demo-requests" && req.method === "POST") return next();
     requireAuth(req, res, next);
   });
 
@@ -6814,6 +6815,41 @@ export async function registerRoutes(
       res.json(tp);
     } catch (error) {
       res.status(500).json({ error: "Failed to log touch" });
+    }
+  });
+
+  app.post("/api/demo-requests", async (req, res) => {
+    try {
+      const { insertDemoRequestSchema } = await import("@shared/schema");
+      const parsed = insertDemoRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+      }
+      const record = await storage.createDemoRequest(parsed.data);
+      res.status(201).json(record);
+
+      const { sendEmail, baseEmailTemplate } = await import("./emailService");
+      const d = parsed.data;
+      const bodyHtml = `
+        <p>A new demo request has been submitted on Freight DNA.</p>
+        <div class="item">
+          <p class="item-title">${d.firstName} ${d.lastName}</p>
+          <p class="item-meta">${d.email}${d.phone ? ` · ${d.phone}` : ""}</p>
+        </div>
+        <div class="item">
+          <p class="item-title">Interest: ${d.interest}</p>
+          <p class="item-meta">Preferred: ${d.preferredDate} at ${d.preferredTime} CST</p>
+        </div>
+        <p>Please follow up to confirm the demo time.</p>
+      `;
+      sendEmail({
+        to: "info@freight-dna.com",
+        subject: `New Demo Request from ${d.firstName} ${d.lastName}`,
+        html: baseEmailTemplate("New Demo Request", bodyHtml),
+        text: `New demo request from ${d.firstName} ${d.lastName} (${d.email}). Interest: ${d.interest}. Preferred: ${d.preferredDate} at ${d.preferredTime} CST.`,
+      }).catch(() => {});
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save demo request" });
     }
   });
 

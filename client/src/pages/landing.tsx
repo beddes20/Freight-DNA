@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { useLocation } from "wouter";
 import { TrendingUp, Network, FileSearch, MousePointerClick, BarChart3, Target, Map } from "lucide-react";
+import ScheduleDemoModal from "@/components/ScheduleDemoModal";
 
 const features = [
   {
@@ -36,9 +38,12 @@ const features = [
 
 export default function LandingPage() {
   const [, navigate] = useLocation();
+  const [demoOpen, setDemoOpen] = useState(false);
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#0a0a0a", color: "#fff" }}>
+
+      <ScheduleDemoModal open={demoOpen} onClose={() => setDemoOpen(false)} />
 
       {/* Fixed top nav */}
       <header
@@ -57,23 +62,39 @@ export default function LandingPage() {
           </span>
         </div>
 
-        <a
-          href="/login"
-          onClick={e => { e.preventDefault(); navigate("/login"); }}
-          className="text-sm font-semibold px-4 py-2 rounded transition-all duration-150"
-          style={{ border: "1px solid rgba(255,180,0,0.5)", color: "#ffb400", background: "transparent" }}
-          data-testid="link-nav-login"
-          onMouseEnter={e => {
-            (e.currentTarget as HTMLElement).style.background = "#ffb400";
-            (e.currentTarget as HTMLElement).style.color = "#0a0a0a";
-          }}
-          onMouseLeave={e => {
-            (e.currentTarget as HTMLElement).style.background = "transparent";
-            (e.currentTarget as HTMLElement).style.color = "#ffb400";
-          }}
-        >
-          Login
-        </a>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setDemoOpen(true)}
+            className="text-sm font-bold px-4 py-2 rounded transition-all duration-150"
+            style={{ background: "#ffc333", color: "#0a0a0a" }}
+            data-testid="button-nav-schedule-demo"
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.background = "#ffb400";
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.background = "#ffc333";
+            }}
+          >
+            Schedule Demo
+          </button>
+          <a
+            href="/login"
+            onClick={e => { e.preventDefault(); navigate("/login"); }}
+            className="text-sm font-semibold px-4 py-2 rounded transition-all duration-150"
+            style={{ border: "1px solid rgba(255,180,0,0.5)", color: "#ffb400", background: "transparent" }}
+            data-testid="link-nav-login"
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.background = "#ffb400";
+              (e.currentTarget as HTMLElement).style.color = "#0a0a0a";
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.background = "transparent";
+              (e.currentTarget as HTMLElement).style.color = "#ffb400";
+            }}
+          >
+            Login
+          </a>
+        </div>
       </header>
 
       {/* Hero */}
@@ -110,12 +131,11 @@ export default function LandingPage() {
         </p>
 
         <div className="flex items-center gap-4">
-          <a
-            href="/login"
-            onClick={e => { e.preventDefault(); navigate("/login"); }}
+          <button
+            onClick={() => setDemoOpen(true)}
             className="text-sm font-bold px-7 py-3 rounded transition-all duration-150"
             style={{ background: "#ffc333", color: "#0a0a0a" }}
-            data-testid="button-hero-cta"
+            data-testid="button-hero-schedule-demo"
             onMouseEnter={e => {
               (e.currentTarget as HTMLElement).style.background = "#ffb400";
             }}
@@ -123,14 +143,14 @@ export default function LandingPage() {
               (e.currentTarget as HTMLElement).style.background = "#ffc333";
             }}
           >
-            Get Started
-          </a>
+            Schedule Demo
+          </button>
           <a
             href="/login"
             onClick={e => { e.preventDefault(); navigate("/login"); }}
             className="text-sm font-semibold px-7 py-3 rounded transition-all duration-150"
             style={{ border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.7)" }}
-            data-testid="link-hero-login"
+            data-testid="button-hero-cta"
             onMouseEnter={e => {
               (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.35)";
               (e.currentTarget as HTMLElement).style.color = "#fff";
@@ -140,7 +160,7 @@ export default function LandingPage() {
               (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.7)";
             }}
           >
-            Sign In
+            Get Started
           </a>
         </div>
       </section>
