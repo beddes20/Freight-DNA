@@ -93,6 +93,9 @@ import {
   toolLinks,
   type ToolLink,
   type InsertToolLink,
+  lmDailyChecks,
+  type LmDailyCheck,
+  type InsertLmDailyCheck,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -331,6 +334,9 @@ export interface IStorage {
   deleteToolLink(id: string): Promise<boolean>;
 
   createDemoRequest(data: import('../shared/schema').InsertDemoRequest): Promise<import('../shared/schema').DemoRequest>;
+
+  getLmDailyChecks(lmUserId: string): Promise<LmDailyCheck[]>;
+  upsertLmDailyCheck(data: { organizationId: string; lmUserId: string; checkedByUserId: string; date: string; callsBeforeSevenThirty?: boolean | null; checkoutCompleted?: boolean | null }): Promise<LmDailyCheck>;
 }
 
 const pool = new Pool({
@@ -1909,6 +1915,39 @@ export class DatabaseStorage implements IStorage {
     const { demoRequests } = await import('@shared/schema');
     const [record] = await db.insert(demoRequests).values(data).returning();
     return record;
+  }
+
+  async getLmDailyChecks(lmUserId: string): Promise<LmDailyCheck[]> {
+    return db.select().from(lmDailyChecks)
+      .where(eq(lmDailyChecks.lmUserId, lmUserId))
+      .orderBy(desc(lmDailyChecks.date))
+      .limit(30);
+  }
+
+  async upsertLmDailyCheck(data: { organizationId: string; lmUserId: string; checkedByUserId: string; date: string; callsBeforeSevenThirty?: boolean | null; checkoutCompleted?: boolean | null }): Promise<LmDailyCheck> {
+    const existing = await db.select().from(lmDailyChecks)
+      .where(and(eq(lmDailyChecks.lmUserId, data.lmUserId), eq(lmDailyChecks.date, data.date)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      const updateData: Partial<LmDailyCheck> = { checkedByUserId: data.checkedByUserId };
+      if (data.callsBeforeSevenThirty !== undefined) updateData.callsBeforeSevenThirty = data.callsBeforeSevenThirty;
+      if (data.checkoutCompleted !== undefined) updateData.checkoutCompleted = data.checkoutCompleted;
+      const [updated] = await db.update(lmDailyChecks).set(updateData)
+        .where(eq(lmDailyChecks.id, existing[0].id))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(lmDailyChecks).values({
+        organizationId: data.organizationId,
+        lmUserId: data.lmUserId,
+        checkedByUserId: data.checkedByUserId,
+        date: data.date,
+        callsBeforeSevenThirty: data.callsBeforeSevenThirty ?? null,
+        checkoutCompleted: data.checkoutCompleted ?? null,
+      }).returning();
+      return created;
+    }
   }
 }
 

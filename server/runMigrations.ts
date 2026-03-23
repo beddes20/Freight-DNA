@@ -398,4 +398,26 @@ export async function runMigrations() {
   } finally {
     client2.release();
   }
+
+  // lm_daily_checks table (Task #61)
+  const clientLm = await pool.connect();
+  try {
+    await clientLm.query(`
+      CREATE TABLE IF NOT EXISTS lm_daily_checks (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id),
+        lm_user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        checked_by_user_id varchar NOT NULL REFERENCES users(id),
+        date text NOT NULL,
+        calls_before_seven_thirty boolean,
+        checkout_completed boolean,
+        CONSTRAINT lm_daily_checks_lm_date UNIQUE (lm_user_id, date)
+      )
+    `);
+    console.log("[migrations] lm_daily_checks table ensured");
+  } catch (err) {
+    console.error("[migrations] lm_daily_checks migration error:", err);
+  } finally {
+    clientLm.release();
+  }
 }

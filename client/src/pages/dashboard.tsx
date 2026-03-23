@@ -37,6 +37,7 @@ import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
 import { LmCareerPanel } from "@/components/lm-career-panel";
+import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -199,6 +200,11 @@ export default function Dashboard() {
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
+  });
+
+  const { data: lmDirectReports = [] } = useQuery<SafeUser[]>({
+    queryKey: ["/api/lm-direct-reports"],
+    enabled: currentUser?.role !== "logistics_manager" && currentUser?.role !== "logistics_coordinator",
   });
 
   const { data: feedPosts = [], isLoading: feedLoading } = useQuery<FeedPostWithReplies[]>({
@@ -1636,6 +1642,39 @@ export default function Dashboard() {
 
       {/* LM Career Panel — operational stats + path-to-AM progress */}
       {currentUser?.role === "logistics_manager" && <LmCareerPanel />}
+
+      {/* LM Daily Check-In Portlets */}
+      {currentUser?.role === "logistics_manager" && currentUser.id && (
+        <LmDailyCheckInPortlets lmUserId={currentUser.id} canEdit={false} />
+      )}
+
+      {/* LM Daily Check-In Portlets for managers */}
+      {(() => {
+        if (!currentUser || currentUser.role === "logistics_manager") return null;
+        const directReportIds = new Set(lmDirectReports.map(lm => lm.id));
+        // All LMs in management chain (from teamMembers for directors/NAMs/admins)
+        const chainLms = teamMembers.filter(m => m.role === "logistics_manager" && !directReportIds.has(m.id));
+        return (
+          <>
+            {lmDirectReports.map(lm => (
+              <div key={lm.id} className="space-y-2">
+                <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+                  Daily Check-In — {lm.name}
+                </h3>
+                <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={true} />
+              </div>
+            ))}
+            {chainLms.map(lm => (
+              <div key={lm.id} className="space-y-2">
+                <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+                  Daily Check-In — {lm.name}
+                </h3>
+                <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={false} />
+              </div>
+            ))}
+          </>
+        );
+      })()}
 
       {/* PTO Coverage Portlet — only shown to users who are assigned as covering someone */}
       {currentUser && passoffs.filter((p: any) => p.coveringUserId === currentUser.id).map((passoff: any) => {

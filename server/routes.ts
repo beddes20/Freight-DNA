@@ -7819,6 +7819,91 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  // LM direct reports for daily check-in purposes (visible to any manager)
+  app.get("/api/lm-direct-reports", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const allUsers = await storage.getUsers(user.organizationId);
+      const lmDirectReports = allUsers
+        .filter(u => u.role === "logistics_manager" && u.managerId === user.id)
+        .map(({ password, ...u }) => u);
+      res.json(lmDirectReports);
+    } catch (error) {
+      console.error("[lm-direct-reports] error:", error);
+      res.status(500).json({ error: "Failed to fetch LM direct reports" });
+    }
+  });
+
+  // LM Daily Check-In routes
+  app.get("/api/lm-daily-checks/:lmUserId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const { lmUserId } = req.params;
+      const lmUser = await storage.getUser(lmUserId);
+      if (!lmUser || lmUser.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // LM can see their own checks; managers (anyone in chain above) can also see
+      const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+      const isManagerOf = teamIds.includes(lmUserId);
+      const isSelf = user.id === lmUserId;
+      const isAdmin = user.role === "admin";
+      if (!isSelf && !isManagerOf && !isAdmin) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const checks = await storage.getLmDailyChecks(lmUserId);
+      // Enrich with checker name
+      const allOrgUsers = await storage.getUsers(user.organizationId);
+      const userMap = Object.fromEntries(allOrgUsers.map(u => [u.id, u.name]));
+      const enriched = checks.map(c => ({ ...c, checkedByName: userMap[c.checkedByUserId] ?? null }));
+      res.json(enriched);
+    } catch (error) {
+      console.error("[lm-daily-checks GET] error:", error);
+      res.status(500).json({ error: "Failed to fetch LM daily checks" });
+    }
+  });
+
+  app.post("/api/lm-daily-checks/:lmUserId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const { lmUserId } = req.params;
+      const lmUser = await storage.getUser(lmUserId);
+      if (!lmUser || lmUser.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Only the LM's direct manager or admin can write
+      const isDirectManager = lmUser.managerId === user.id;
+      const isAdmin = user.role === "admin";
+      if (!isDirectManager && !isAdmin) {
+        return res.status(403).json({ error: "Only the LM's direct manager can submit daily check-ins" });
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const { callsBeforeSevenThirty, checkoutCompleted } = req.body as { callsBeforeSevenThirty?: boolean | null; checkoutCompleted?: boolean | null };
+
+      const check = await storage.upsertLmDailyCheck({
+        organizationId: user.organizationId,
+        lmUserId,
+        checkedByUserId: user.id,
+        date: today,
+        callsBeforeSevenThirty,
+        checkoutCompleted,
+      });
+      res.json(check);
+    } catch (error) {
+      console.error("[lm-daily-checks POST] error:", error);
+      res.status(500).json({ error: "Failed to upsert LM daily check" });
+    }
+  });
+
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {
       if (err.code === "LIMIT_FILE_SIZE") {

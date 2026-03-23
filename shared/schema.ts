@@ -607,6 +607,22 @@ export const insertDemoRequestSchema = createInsertSchema(demoRequests).omit({ i
 export type InsertDemoRequest = z.infer<typeof insertDemoRequestSchema>;
 export type DemoRequest = typeof demoRequests.$inferSelect;
 
+export const lmDailyChecks = pgTable("lm_daily_checks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  lmUserId: varchar("lm_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  checkedByUserId: varchar("checked_by_user_id").notNull().references(() => users.id),
+  date: text("date").notNull(),
+  callsBeforeSevenThirty: boolean("calls_before_seven_thirty"),
+  checkoutCompleted: boolean("checkout_completed"),
+}, (table) => [
+  uniqueIndex("lm_daily_checks_lm_date").on(table.lmUserId, table.date),
+]);
+
+export const insertLmDailyCheckSchema = createInsertSchema(lmDailyChecks).omit({ id: true });
+export type InsertLmDailyCheck = z.infer<typeof insertLmDailyCheckSchema>;
+export type LmDailyCheck = typeof lmDailyChecks.$inferSelect;
+
 export const toolLinks = pgTable("tool_links", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),
