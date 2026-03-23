@@ -25,6 +25,7 @@ import {
   ArrowUpDown,
   Bookmark,
   BookmarkCheck,
+  UserPlus,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -99,6 +100,12 @@ export default function Customers() {
   const [quickTouchNote, setQuickTouchNote] = useState("");
   const [quickTouchSentiment, setQuickTouchSentiment] = useState("");
   const [quickTouchMeaningful, setQuickTouchMeaningful] = useState(false);
+
+  const [quickAddContact, setQuickAddContact] = useState<Company | null>(null);
+  const [quickAddName, setQuickAddName] = useState("");
+  const [quickAddTitle, setQuickAddTitle] = useState("");
+  const [quickAddEmail, setQuickAddEmail] = useState("");
+  const [quickAddPhone, setQuickAddPhone] = useState("");
   const [saveFilterName, setSaveFilterName] = useState("");
   const [showSaveFilter, setShowSaveFilter] = useState(false);
 
@@ -150,6 +157,18 @@ export default function Customers() {
       setQuickTouchMeaningful(false);
     },
     onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
+  });
+
+  const addContactMutation = useMutation({
+    mutationFn: (data: { companyId: string; name: string; title?: string; email?: string; phone?: string }) =>
+      apiRequest("POST", "/api/contacts", { ...data, createdAt: new Date().toISOString().slice(0, 10) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
+      toast({ title: "Contact added!" });
+      setQuickAddContact(null);
+      setQuickAddName(""); setQuickAddTitle(""); setQuickAddEmail(""); setQuickAddPhone("");
+    },
+    onError: () => toast({ title: "Failed to add contact", variant: "destructive" }),
   });
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
@@ -532,20 +551,36 @@ export default function Customers() {
                           })()}
                         </div>
                       </div>
-                      {contacts.length > 0 && !company.archivedAt && (
-                        <button
-                          className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-                          title="Quick log touch"
-                          data-testid={`button-quick-touch-${company.id}`}
-                          onClick={e => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setQuickTouch({ company, contacts });
-                            setQuickTouchContactId(contacts[0]?.id ?? "");
-                          }}
-                        >
-                          <PhoneCall className="h-4 w-4" />
-                        </button>
+                      {!company.archivedAt && (
+                        <div className="flex items-center gap-1">
+                          {contacts.length > 0 && (
+                            <button
+                              className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                              title="Quick log touch"
+                              data-testid={`button-quick-touch-${company.id}`}
+                              onClick={e => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setQuickTouch({ company, contacts });
+                                setQuickTouchContactId(contacts[0]?.id ?? "");
+                              }}
+                            >
+                              <PhoneCall className="h-4 w-4" />
+                            </button>
+                          )}
+                          <button
+                            className="p-1 rounded text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
+                            title="Quick add contact"
+                            data-testid={`button-quick-add-contact-${company.id}`}
+                            onClick={e => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setQuickAddContact(company);
+                            }}
+                          >
+                            <UserPlus className="h-4 w-4" />
+                          </button>
+                        </div>
                       )}
                       <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
                     </div>
@@ -571,6 +606,12 @@ export default function Customers() {
                         </span>
                       )}
                     </div>
+
+                    {(company as any).accountSummary && (
+                      <p className="mt-2 text-xs text-muted-foreground line-clamp-2 italic leading-relaxed">
+                        {(company as any).accountSummary}
+                      </p>
+                    )}
 
                     {!company.archivedAt && (
                       <div className="mt-3 pt-3 border-t flex items-center gap-4 flex-wrap">
@@ -735,6 +776,76 @@ export default function Customers() {
               data-testid="button-submit-quick-touch"
             >
               Log Touch
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quick Add Contact Dialog */}
+      <Dialog open={!!quickAddContact} onOpenChange={open => { if (!open) { setQuickAddContact(null); setQuickAddName(""); setQuickAddTitle(""); setQuickAddEmail(""); setQuickAddPhone(""); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-4 w-4 text-emerald-600" />
+              Add Contact — {quickAddContact?.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div>
+              <label className="text-sm font-medium block mb-1">Full Name <span className="text-red-500">*</span></label>
+              <Input
+                placeholder="Jane Smith"
+                value={quickAddName}
+                onChange={e => setQuickAddName(e.target.value)}
+                data-testid="input-quick-add-name"
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium block mb-1">Title</label>
+              <Input
+                placeholder="VP of Logistics"
+                value={quickAddTitle}
+                onChange={e => setQuickAddTitle(e.target.value)}
+                data-testid="input-quick-add-title"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium block mb-1">Email</label>
+                <Input
+                  placeholder="jane@acme.com"
+                  value={quickAddEmail}
+                  onChange={e => setQuickAddEmail(e.target.value)}
+                  data-testid="input-quick-add-email"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium block mb-1">Phone</label>
+                <Input
+                  placeholder="555-000-0000"
+                  value={quickAddPhone}
+                  onChange={e => setQuickAddPhone(e.target.value)}
+                  data-testid="input-quick-add-phone"
+                />
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" onClick={() => setQuickAddContact(null)}>Cancel</Button>
+            <Button
+              onClick={() => quickAddContact && addContactMutation.mutate({
+                companyId: quickAddContact.id,
+                name: quickAddName.trim(),
+                title: quickAddTitle.trim() || undefined,
+                email: quickAddEmail.trim() || undefined,
+                phone: quickAddPhone.trim() || undefined,
+              })}
+              disabled={!quickAddName.trim() || addContactMutation.isPending}
+              data-testid="button-submit-quick-add-contact"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {addContactMutation.isPending ? "Adding..." : "Add Contact"}
             </Button>
           </div>
         </DialogContent>

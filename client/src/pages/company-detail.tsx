@@ -236,6 +236,7 @@ export default function CompanyDetail() {
   const [processNotes, setProcessNotes] = useState("");
   const [spotProcess, setSpotProcess] = useState("");
   const [dlEmail, setDlEmail] = useState("");
+  const [accountSummary, setAccountSummary] = useState("");
   const [financialAliasEdit, setFinancialAliasEdit] = useState("");
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState("");
@@ -638,6 +639,7 @@ export default function CompanyDetail() {
         processNotes: processNotes || null,
         spotProcess: spotProcess || null,
         dlEmail: dlEmail || null,
+        accountSummary: accountSummary.trim() || null,
         salesPersonId: salesPersonIdEdit || null,
       });
     },
@@ -673,6 +675,7 @@ export default function CompanyDetail() {
     setProcessNotes(company?.processNotes || "");
     setSpotProcess(company?.spotProcess || "");
     setDlEmail(company?.dlEmail || "");
+    setAccountSummary((company as any)?.accountSummary || "");
     setSalesPersonIdEdit((company as any)?.salesPersonId || "");
     setPortalEdit(true);
   };
@@ -1569,6 +1572,20 @@ export default function CompanyDetail() {
                 </div>
               </div>
 
+              {/* Account Summary Section */}
+              <div className="border-t pt-4">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Summary</p>
+                <p className="text-xs text-muted-foreground mb-2">A brief snapshot of this account's current status, relationship, and strategic context.</p>
+                <textarea
+                  className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+                  placeholder="e.g. Key account, good relationship with VP. Currently trialing us on Midwest lanes. RFP renewal in Q3 — position to expand."
+                  value={accountSummary}
+                  onChange={e => setAccountSummary(e.target.value)}
+                  rows={3}
+                  data-testid="input-account-summary"
+                />
+              </div>
+
               {/* Account Intelligence Section */}
               <div className="border-t pt-4">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Intelligence</p>
@@ -1691,6 +1708,14 @@ export default function CompanyDetail() {
                   })()}
                 </div>
               </div>
+
+              {/* Account Summary View */}
+              {(company as any).accountSummary && (
+                <div className="border-t pt-4">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Summary</p>
+                  <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap" data-testid="text-account-summary">{(company as any).accountSummary}</p>
+                </div>
+              )}
 
               {/* Account Intelligence */}
               {(company.tenderStyle || company.spotProcess || company.dlEmail || company.accountQuirks || company.processNotes) && (

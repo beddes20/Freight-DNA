@@ -365,6 +365,17 @@ export async function runMigrations() {
     client.release();
   }
 
+  // account_summary column on companies
+  const client3 = await pool.connect();
+  try {
+    await client3.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS account_summary text`);
+    console.log("[migrations] account_summary column ensured");
+  } catch (err) {
+    console.error("[migrations] account_summary migration error:", err);
+  } finally {
+    client3.release();
+  }
+
   // demo_requests table (Task #53) — runs independently so earlier failures don't block it
   const client2 = await pool.connect();
   try {

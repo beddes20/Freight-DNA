@@ -6026,6 +6026,51 @@ export async function registerRoutes(
     }
   });
 
+  // Weekly touchpoint leaderboard — shows this-week touchpoint counts per rep
+  app.get("/api/leaderboard/weekly-touchpoints", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const now = new Date();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+      monday.setHours(0, 0, 0, 0);
+      const weekStart = monday.toISOString().slice(0, 10);
+
+      const all = await storage.getTouchpoints();
+      const thisWeek = all.filter(t => t.date >= weekStart);
+
+      const teamIds: string[] | null = (user.role === "admin" || user.role === "director" || user.role === "sales_director")
+        ? null
+        : await storage.getTeamMemberIds(user.id, user.organizationId);
+
+      const filtered = teamIds === null ? thisWeek : thisWeek.filter(t => t.loggedById && (teamIds.includes(t.loggedById) || t.loggedById === user.id));
+
+      const byUser: Record<string, { userId: string; name: string; total: number; call: number; email: number; text: number; site_visit: number; meaningful: number }> = {};
+      const allUsers = await storage.getUsers();
+      const userMap: Record<string, string> = {};
+      for (const u of allUsers) userMap[u.id] = `${u.firstName} ${u.lastName}`.trim() || u.username;
+
+      for (const tp of filtered) {
+        if (!tp.loggedById) continue;
+        if (!byUser[tp.loggedById]) {
+          byUser[tp.loggedById] = { userId: tp.loggedById, name: userMap[tp.loggedById] || "Unknown", total: 0, call: 0, email: 0, text: 0, site_visit: 0, meaningful: 0 };
+        }
+        byUser[tp.loggedById].total++;
+        const t = tp.type as "call" | "email" | "text" | "site_visit";
+        if (t in byUser[tp.loggedById]) byUser[tp.loggedById][t]++;
+        if ((tp as any).isMeaningful) byUser[tp.loggedById].meaningful++;
+      }
+
+      const results = Object.values(byUser).sort((a, b) => b.total - a.total);
+      res.json({ weekStart, results });
+    } catch (error) {
+      console.error("Error computing weekly leaderboard:", error);
+      res.status(500).json({ error: "Failed to compute weekly leaderboard" });
+    }
+  });
+
   async function canAccessAttachmentEntity(user: { id: string; role: string; managerId: string | null }, entityType: string, entityId: string): Promise<boolean> {
     try {
       if (entityType === "feed_post") {

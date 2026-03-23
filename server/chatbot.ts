@@ -589,20 +589,28 @@ ${ANALYST_RULES}`,
       const openRfps = (rfpList || []).filter((r: any) => r.status === "open" || r.status === "pending");
       const overdueTasks = (tsks || []).filter((t: any) => t.status === "open" && t.dueDate && new Date(t.dueDate) < new Date());
 
-      const prompt = `You're helping a freight broker prep for a call with ${company.name}.
+      const rfpsWithDeadlines = (rfpList || []).map((r: any) => {
+        const daysLeft = r.dueDate ? Math.ceil((new Date(r.dueDate).getTime() - Date.now()) / 86400000) : null;
+        return { ...r, daysLeft };
+      });
+      const urgentRfps = rfpsWithDeadlines.filter((r: any) => r.daysLeft !== null && r.daysLeft <= 14 && r.daysLeft >= 0);
+      const openTasksList = (tsks || []).filter((t: any) => t.status === "open");
 
-Key contacts:\n${lastTouches || "None on file"}
-${financialSummary ? `\nFinancial: YTD loads ${financialSummary.ytdLoads ?? "?"}, margin $${financialSummary.ytdMargin ?? "?"}` : ""}
-${openRfps.length > 0 ? `\nOpen RFPs: ${openRfps.map((r: any) => r.title).join(", ")}` : ""}
-${overdueTasks.length > 0 ? `\nOverdue tasks: ${overdueTasks.map((t: any) => t.title).join(", ")}` : ""}
+      const prompt = `You are a freight broker sales coach. Help prep for a call with ${company.name}${company.industry ? ` (${company.industry})` : ""}.
+
+${(req.body.accountSummary) ? `Current account status: ${req.body.accountSummary}\n` : ""}Key contacts:\n${lastTouches || "None on file"}
+${financialSummary ? `\nFinancials YTD: ${financialSummary.ytdLoads ?? "?"} loads, $${Number(financialSummary.ytdMargin ?? 0).toLocaleString()} margin` : ""}
+${urgentRfps.length > 0 ? `\nURGENT — RFPs due soon: ${urgentRfps.map((r: any) => `${r.title} (${r.daysLeft}d)`).join(", ")}` : openRfps.length > 0 ? `\nOpen RFPs: ${openRfps.map((r: any) => r.title).join(", ")}` : ""}
+${overdueTasks.length > 0 ? `\nOverdue tasks: ${overdueTasks.map((t: any) => t.title).join(", ")}` : openTasksList.length > 0 ? `\nOpen tasks: ${openTasksList.slice(0, 3).map((t: any) => t.title).join(", ")}` : ""}
 ${accountIntelligence?.quirks ? `\nAccount quirks: ${accountIntelligence.quirks}` : ""}
 ${accountIntelligence?.spotProcess ? `\nSpot process: ${accountIntelligence.spotProcess}` : ""}
+${accountIntelligence?.tenderStyle ? `\nTender style: ${accountIntelligence.tenderStyle}` : ""}
 
-Give exactly 3 punchy talking points for this call. 1-2 sentences each, specific and actionable. No filler. Numbered list.`;
+Generate exactly 3 sharp, specific talking points for this call. Each is 1-2 sentences. Be direct and actionable — reference the specific account details above. No generic freight advice. Numbered list.`;
 
       const message = await anthropic.messages.create({
         model: "claude-opus-4-5",
-        max_tokens: 400,
+        max_tokens: 600,
         messages: [{ role: "user", content: prompt }],
       });
 

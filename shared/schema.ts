@@ -35,6 +35,7 @@ export const companies = pgTable("companies", {
   salesPersonId: varchar("sales_person_id"),
   shippingModes: text("shipping_modes").array(),
   estimatedFreightSpend: decimal("estimated_freight_spend", { precision: 14, scale: 2 }),
+  accountSummary: text("account_summary"),
 });
 
 export const insertCompanySchema = createInsertSchema(companies).omit({

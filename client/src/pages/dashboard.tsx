@@ -193,6 +193,14 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
+  type WeeklyRep = { userId: string; name: string; total: number; call: number; email: number; text: number; site_visit: number; meaningful: number };
+  const { data: weeklyData, isLoading: weeklyLoading } = useQuery<{ weekStart: string; results: WeeklyRep[] }>({
+    queryKey: ["/api/leaderboard/weekly-touchpoints"],
+    enabled: canSeeTeam,
+    refetchInterval: 5 * 60 * 1000,
+  });
+  const weeklyResults = weeklyData?.results || [];
+
   const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string } | undefined>();
   const [prefillDialogOpen, setPrefillDialogOpen] = useState(false);
   const [briefingDismissed, setBriefingDismissed] = useState(() => {
@@ -1985,6 +1993,48 @@ export default function Dashboard() {
                       {group.entries.length === 0 && (
                         <p className="text-xs text-muted-foreground py-2">No active goals</p>
                       )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Weekly Touchpoint Leaderboard */}
+      {canSeeTeam && (weeklyLoading || weeklyResults.length > 0) && (
+        <Card data-testid="card-weekly-leaderboard">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <PhoneCall className="h-4 w-4 text-amber-500" />
+              Weekly Activity — This Week
+              {weeklyData?.weekStart && (
+                <span className="ml-auto text-xs font-normal text-muted-foreground">
+                  Week of {new Date(weeklyData.weekStart + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                </span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {weeklyLoading ? (
+              <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full rounded" />)}</div>
+            ) : (
+              <div className="space-y-2">
+                {weeklyResults.slice(0, 8).map((rep, idx) => {
+                  const medals = ["🥇", "🥈", "🥉"];
+                  return (
+                    <div key={rep.userId} className="flex items-center gap-2" data-testid={`weekly-leaderboard-${rep.userId}`}>
+                      <span className="text-sm w-6 shrink-0 text-center">{medals[idx] || `${idx + 1}.`}</span>
+                      <span className="text-sm font-medium flex-1 truncate">{rep.name.split(" ")[0]}</span>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
+                        {rep.call > 0 && <span title="Calls">📞{rep.call}</span>}
+                        {rep.email > 0 && <span title="Emails">✉️{rep.email}</span>}
+                        {rep.text > 0 && <span title="Texts">💬{rep.text}</span>}
+                        {rep.site_visit > 0 && <span title="Site Visits">🏢{rep.site_visit}</span>}
+                        {rep.meaningful > 0 && <span className="text-green-600 dark:text-green-400 font-semibold" title="Meaningful">★{rep.meaningful}</span>}
+                      </div>
+                      <span className="text-sm font-bold tabular-nums w-8 text-right">{rep.total}</span>
                     </div>
                   );
                 })}

@@ -1606,6 +1606,65 @@ export default function RfpAwards() {
         </div>
       ) : (
         <div className="space-y-8">
+
+          {/* RFP Deadline Timeline */}
+          {(() => {
+            const now = Date.now();
+            const upcomingRfps = [...rfps]
+              .filter(r => r.dueDate && (r.status === "open" || r.status === "pending"))
+              .map(r => {
+                const daysLeft = Math.ceil((new Date(r.dueDate!).getTime() - now) / 86400000);
+                return { ...r, daysLeft };
+              })
+              .sort((a, b) => a.daysLeft - b.daysLeft)
+              .slice(0, 6);
+
+            if (upcomingRfps.length === 0) return null;
+            return (
+              <section>
+                <div className="flex items-center gap-2 mb-3">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Deadline Timeline</h2>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {upcomingRfps.map(rfp => {
+                    const isOverdue = rfp.daysLeft < 0;
+                    const isUrgent = rfp.daysLeft >= 0 && rfp.daysLeft <= 7;
+                    const isWarning = rfp.daysLeft > 7 && rfp.daysLeft <= 14;
+                    const colorCls = isOverdue
+                      ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"
+                      : isUrgent
+                        ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"
+                        : isWarning
+                          ? "border-yellow-200 bg-yellow-50/60 dark:border-yellow-800 dark:bg-yellow-950/20"
+                          : "border-border bg-card";
+                    const textCls = isOverdue ? "text-red-600 dark:text-red-400" : isUrgent ? "text-amber-600 dark:text-amber-400" : isWarning ? "text-yellow-600 dark:text-yellow-500" : "text-muted-foreground";
+                    const label = isOverdue ? `${Math.abs(rfp.daysLeft)}d overdue` : rfp.daysLeft === 0 ? "Due today" : `${rfp.daysLeft}d left`;
+                    const co = companiesMap.get(rfp.companyId);
+                    return (
+                      <div key={rfp.id} className={`rounded-lg border px-3 py-2.5 flex items-center gap-3 ${colorCls}`} data-testid={`rfp-deadline-${rfp.id}`}>
+                        <div className="shrink-0">
+                          {isOverdue ? (
+                            <AlertTriangle className="h-4 w-4 text-red-500" />
+                          ) : isUrgent ? (
+                            <Clock className="h-4 w-4 text-amber-500" />
+                          ) : (
+                            <Calendar className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-semibold truncate">{rfp.title}</p>
+                          {co && <p className="text-xs text-muted-foreground truncate">{co.name}</p>}
+                        </div>
+                        <div className={`text-xs font-bold tabular-nums shrink-0 ${textCls}`}>{label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })()}
+
           <section>
             <div className="flex items-center gap-2 mb-4">
               <FileText className="h-5 w-5 text-muted-foreground" />

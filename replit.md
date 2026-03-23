@@ -80,3 +80,10 @@ The application uses React, TypeScript, and Tailwind CSS with `shadcn/ui` for a 
 - **Top header**: Black, gold mantras centered ("Service Exceptionally · Move Fast · Build Relationships · Hunt Opportunities · Grow Relentlessly")
 - **Dashboard hero banner**: Black background, gold date/DNA text, VT logo in gold-outlined circle with glow
 - **Primary color**: `43 100% 50%` (HSL for #ffb400); primary-foreground dark (0 0% 5%) for dark text on gold buttons
+
+## Recently Added (Session)
+- **Account Summary**: `account_summary` text field on companies (DB migrated). Editable in company detail sidebar (Account Intelligence edit panel). Shows in view panel and as italic preview on customer list cards.
+- **Quick-Add Contact**: `UserPlus` button on every customer card opens a dialog to add a contact (name/title/email/phone) without navigating away. POSTs to `/api/contacts`.
+- **Weekly Touchpoint Leaderboard**: `/api/leaderboard/weekly-touchpoints` endpoint aggregates current-week touchpoints by rep (Mon–Sun), broken down by type (call/email/text/site_visit/meaningful). Card shown on dashboard for NAM/admin/director/sales_director roles.
+- **RFP Deadline Timeline**: Horizontal timeline section at the top of RFP & Awards page showing open/pending RFPs sorted by due date with urgency coloring (overdue=red, ≤7d=amber, ≤14d=yellow, beyond=normal). Shows up to 6 RFPs.
+- **Enhanced AI Talking Points**: Chatbot prompt now includes `accountSummary`, tender style, urgent RFPs (≤14d), open tasks, industry context; max tokens raised to 600.
