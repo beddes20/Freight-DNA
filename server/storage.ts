@@ -172,6 +172,7 @@ export interface IStorage {
 
   getFinancialUploads(): Promise<FinancialUpload[]>;
   getLatestFinancialUpload(): Promise<FinancialUpload | undefined>;
+  getLatestFinancialUploadForOrg(organizationId: string): Promise<FinancialUpload | undefined>;
   createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload>;
   deleteFinancialUpload(id: string): Promise<boolean>;
   deleteAllFinancialUploads(): Promise<void>;
@@ -548,6 +549,16 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(financialUploads.uploadedAt))
       .limit(1);
     return latest;
+  }
+
+  async getLatestFinancialUploadForOrg(organizationId: string): Promise<FinancialUpload | undefined> {
+    // financial_uploads does not have an organizationId column; scope by checking
+    // that the uploader (uploadedBy) belongs to the given organization
+    const orgUsers = await this.getUsers(organizationId);
+    const orgUserIds = new Set(orgUsers.map(u => u.id));
+    const allUploads = await db.select().from(financialUploads)
+      .orderBy(desc(financialUploads.uploadedAt));
+    return allUploads.find(u => orgUserIds.has(u.uploadedBy));
   }
 
   async createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload> {

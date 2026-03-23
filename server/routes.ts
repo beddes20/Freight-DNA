@@ -5488,7 +5488,17 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const existing = await storage.getGoal(req.params.id);
       if (!existing) return res.status(404).json({ error: "Goal not found" });
-      const canEdit = user.role === "admin" || existing.namId === user.id || existing.amId === user.id;
+      let canEdit = user.role === "admin" || existing.namId === user.id || existing.amId === user.id;
+      if (!canEdit && (user.role === "director" || user.role === "sales_director")) {
+        // Directors can edit margin goals for users in their own organization
+        const orgId = req.session.organizationId;
+        if (orgId && existing.metric === "margin") {
+          const orgUsers = await storage.getUsers(orgId);
+          const orgUserIds = new Set(orgUsers.map(u => u.id));
+          canEdit = (existing.namId ? orgUserIds.has(existing.namId) : false) ||
+                    (existing.amId ? orgUserIds.has(existing.amId) : false);
+        }
+      }
       if (!canEdit) return res.status(403).json({ error: "Access denied" });
       const updated = await storage.updateGoal(req.params.id, req.body);
       // Notify the other party about goal updates
@@ -6619,6 +6629,270 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: "Failed to save filters" });
+    }
+  });
+
+  // ─── Director/Admin Dashboard Portlet Endpoints ───────────────────────────
+
+  const DIRECTOR_ROLES = ["admin", "director", "sales_director"] as const;
+
+  // Trending accounts — top 5 up, top 5 down by margin delta vs prior month
+  app.get("/api/dashboard/trending-accounts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(DIRECTOR_ROLES as readonly string[]).includes(user.role)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const orgId = req.session.organizationId!;
+      const upload = await storage.getLatestFinancialUploadForOrg(orgId);
+      if (!upload || !upload.rows) return res.json({ up: [], down: [] });
+
+      const rows: any[] = upload.rows as any[];
+      const cols = resolveColumns(rows);
+
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      // Compute margin by company alias, grouped by month
+      const byCustomerMonth: Record<string, Record<string, number>> = {};
+      const allMonthKeys = new Set<string>();
+      for (const row of rows) {
+        const cust = getCustomerFromRow(row, cols);
+        if (!cust) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, cols);
+        if (!monthKey) continue;
+        allMonthKeys.add(monthKey);
+        const key = normalize(cust);
+        if (!byCustomerMonth[key]) byCustomerMonth[key] = {};
+        byCustomerMonth[key][monthKey] = (byCustomerMonth[key][monthKey] || 0) + margin;
+      }
+
+      // Determine current and prior month from the data, not calendar month
+      // This ensures we use the latest data present in the upload (not necessarily today's month)
+      const sortedMonthKeys = Array.from(allMonthKeys).sort();
+      const curMonthKey = sortedMonthKeys.length > 0 ? sortedMonthKeys[sortedMonthKeys.length - 1] : toMonthKey(new Date());
+      const priorIdx = sortedMonthKeys.indexOf(curMonthKey) - 1;
+      const priorMonthKey = priorIdx >= 0 ? sortedMonthKeys[priorIdx] : (() => {
+        const [yr, mo] = curMonthKey.split("-").map(Number);
+        const priorDate = new Date(yr, mo - 2, 1);
+        return toMonthKey(priorDate);
+      })();
+
+      // Build delta list
+      const deltas: { alias: string; delta: number; curMargin: number; priorMargin: number }[] = [];
+      for (const [alias, monthMap] of Object.entries(byCustomerMonth)) {
+        const cur = monthMap[curMonthKey] ?? null;
+        const prior = monthMap[priorMonthKey] ?? null;
+        if (cur === null || prior === null) continue;
+        deltas.push({ alias, delta: cur - prior, curMargin: cur, priorMargin: prior });
+      }
+
+      // Match to company names
+      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+      const resolveCompanyName = (alias: string): string => {
+        const norm = normalize(alias);
+        const match = allCompanies.find(c => {
+          const cn = normalize(c.financialAlias || c.name);
+          return cn === norm || cn.includes(norm) || norm.includes(cn);
+        });
+        return match?.name || alias;
+      };
+
+      deltas.sort((a, b) => b.delta - a.delta);
+      const up = deltas.slice(0, 5).filter(d => d.delta > 0).map(d => ({
+        name: resolveCompanyName(d.alias),
+        delta: d.delta,
+      }));
+      const down = [...deltas].sort((a, b) => a.delta - b.delta).slice(0, 5).filter(d => d.delta < 0).map(d => ({
+        name: resolveCompanyName(d.alias),
+        delta: d.delta,
+      }));
+
+      res.json({ up, down });
+    } catch (err) {
+      console.error("Error computing trending accounts:", err);
+      res.status(500).json({ error: "Failed to compute trending accounts" });
+    }
+  });
+
+  // Team activity metrics — today's touches, meaningful touches, new contacts (org-scoped)
+  app.get("/api/dashboard/team-activity", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(DIRECTOR_ROLES as readonly string[]).includes(user.role)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const orgId = req.session.organizationId!;
+      const today = new Date().toISOString().slice(0, 10);
+
+      // Scope via org companies — touchpoints are attached to companies which belong to orgs
+      const orgCompanies = await storage.getCompanies(orgId);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+
+      const allTouchpoints = await storage.getTouchpoints();
+      const todayTouchpoints = allTouchpoints.filter(t => t.date === today && orgCompanyIds.has(t.companyId));
+      const touches = todayTouchpoints.length;
+      const meaningful = todayTouchpoints.filter(t => t.isMeaningful).length;
+
+      // Count new contacts in this org (contacts belong to companies which belong to orgs)
+      const allContacts = await storage.getContacts();
+      const newContacts = allContacts.filter(c =>
+        c.createdAt &&
+        c.createdAt.slice(0, 10) === today &&
+        orgCompanyIds.has(c.companyId)
+      ).length;
+
+      res.json({ touches, meaningful, newContacts });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load team activity" });
+    }
+  });
+
+  // Relationships moved up a base — accounts (companies) with contacts that advanced this month
+  app.get("/api/dashboard/relationships-moved", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(DIRECTOR_ROLES as readonly string[]).includes(user.role)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const orgId = req.session.organizationId!;
+      const now = new Date();
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
+      // Scope to org companies, then count unique companies that have at least one contact
+      // with baseAdvancedAt in current month (contact-level proxy for account relationship advancement)
+      const orgCompanies = await storage.getCompanies(orgId);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+
+      const allContacts = await storage.getContacts();
+      const advancedCompanyIds = new Set(
+        allContacts
+          .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && orgCompanyIds.has(c.companyId))
+          .map(c => c.companyId)
+      );
+      const count = advancedCompanyIds.size;
+
+      res.json({ count });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load relationships moved" });
+    }
+  });
+
+  // NAM/AM Margin Metrics — current month margin vs goal for each user by role
+  app.get("/api/dashboard/margin-metrics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(DIRECTOR_ROLES as readonly string[]).includes(user.role)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const now = new Date();
+
+      // Get latest financial data — org-scoped to prevent cross-tenant data leakage
+      const upload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      const rows: any[] = (upload?.rows as any[]) || [];
+      const cols = resolveColumns(rows);
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      // Derive the latest month from the uploaded data (not calendar month)
+      // This ensures correct results even when uploads lag behind the calendar
+      const uploadMonthKeys = new Set<string>();
+      for (const row of rows) {
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (monthKey) uploadMonthKeys.add(monthKey);
+      }
+      const sortedUploadKeys = Array.from(uploadMonthKeys).sort();
+      const curMonthKey = sortedUploadKeys.length > 0
+        ? sortedUploadKeys[sortedUploadKeys.length - 1]
+        : toMonthKey(now);
+
+      // For goal matching, we still use calendar month range for goal overlap
+      const [yr, mo] = curMonthKey.split("-").map(Number);
+      const monthStart = `${curMonthKey}-01`;
+      const monthEnd = new Date(yr, mo, 0).toISOString().slice(0, 10);
+
+      // Margin by financialRepId / customer — map by user's financialRepId
+      const byRepId: Record<string, number> = {};
+      for (const row of rows) {
+        const { monthKey, margin } = parseHistoricalRow(row, cols);
+        if (monthKey !== curMonthKey) continue;
+        // Use the rep field in the financial data
+        const rep = getRepFromRow(row, cols);
+        if (!rep) continue;
+        byRepId[rep] = (byRepId[rep] || 0) + margin;
+      }
+
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      // Scope goals to org users only — filter after fetching to avoid cross-tenant leakage
+      const orgUserIds = new Set(allUsers.map(u => u.id));
+      const allGoalsRaw = await storage.getGoals({});
+      const allGoals = allGoalsRaw.filter(g =>
+        (g.namId && orgUserIds.has(g.namId)) || (g.amId && orgUserIds.has(g.amId))
+      );
+
+      const buildMetrics = (roleFilter: string[]) => {
+        return allUsers
+          .filter(u => roleFilter.includes(u.role))
+          .map(u => {
+            // Match by financialRepId or by name normalization
+            let margin = 0;
+            if (u.financialRepId) {
+              const repKey = u.financialRepId.toLowerCase().trim();
+              margin = byRepId[repKey] || 0;
+              // Also try full name lookup if nothing found
+              if (!margin) {
+                const nameNorm = normalize(u.name);
+                for (const [k, v] of Object.entries(byRepId)) {
+                  if (normalize(k).includes(nameNorm) || nameNorm.includes(normalize(k))) {
+                    margin = v;
+                    break;
+                  }
+                }
+              }
+            } else {
+              const nameNorm = normalize(u.name);
+              for (const [k, v] of Object.entries(byRepId)) {
+                if (normalize(k).includes(nameNorm) || nameNorm.includes(normalize(k))) {
+                  margin = v;
+                  break;
+                }
+              }
+            }
+
+            // Find their margin goal for this month
+            const marginGoal = allGoals.find(g =>
+              g.metric === "margin" &&
+              g.amId === u.id &&
+              g.startDate <= monthEnd &&
+              g.endDate >= monthStart
+            );
+
+            return {
+              userId: u.id,
+              name: u.name,
+              role: u.role,
+              margin,
+              goal: marginGoal ? { id: marginGoal.id, target: parseFloat(marginGoal.target) } : null,
+            };
+          });
+      };
+
+      const namRoles = ["national_account_manager"];
+      const amRoles = ["account_manager"];
+
+      res.json({
+        nams: buildMetrics(namRoles),
+        ams: buildMetrics(amRoles),
+      });
+    } catch (err) {
+      console.error("Error loading margin metrics:", err);
+      res.status(500).json({ error: "Failed to load margin metrics" });
     }
   });
 

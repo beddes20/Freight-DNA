@@ -7,13 +7,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import {
-  Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp,
+  Popover, PopoverContent, PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Building2, Users, MapPin, DollarSign, ChevronRight, TrendingUp, TrendingDown,
   ShieldCheck, UserCircle, ClipboardList, Plus, Circle, PlayCircle,
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
   Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search, MoreHorizontal,
-  Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell,
+  Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell, Pencil, ArrowUpRight, ArrowDownRight,
+  Activity, UserPlus, Repeat2,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -77,6 +82,59 @@ const statusIcon = (status: string) => {
 };
 
 const nextStatus = (s: string) => s === "open" ? "in_progress" : s === "in_progress" ? "completed" : "open";
+
+function MarginGoalEditButton({ userId, goalId, currentTarget, onSave }: {
+  userId: string;
+  goalId: string | null;
+  currentTarget: number;
+  onSave: (target: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(currentTarget > 0 ? String(Math.round(currentTarget)) : "");
+
+  const handleSave = () => {
+    const n = parseFloat(value.replace(/,/g, ""));
+    if (!isNaN(n) && n > 0) {
+      onSave(n);
+      setOpen(false);
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+          title={goalId ? "Edit margin goal" : "Set margin goal"}
+          data-testid={`button-edit-margin-goal-${userId}`}
+        >
+          <Pencil className="h-3 w-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-3" align="end">
+        <p className="text-xs font-semibold mb-2">Monthly Margin Goal</p>
+        <div className="flex gap-2">
+          <Input
+            type="number"
+            min={0}
+            step={1000}
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            placeholder="e.g. 50000"
+            className="h-8 text-sm"
+            onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") setOpen(false); }}
+            data-testid={`input-margin-goal-${userId}`}
+            autoFocus
+          />
+          <Button size="sm" className="h-8 px-2" onClick={handleSave} data-testid={`button-save-margin-goal-${userId}`}>
+            Save
+          </Button>
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-1.5">Enter target margin in dollars for this month.</p>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export default function Dashboard() {
   const { user: currentUser } = useAuth();
@@ -181,6 +239,46 @@ export default function Dashboard() {
 
   const { data: myGoals = [] } = useQuery<any[]>({
     queryKey: ["/api/goals"],
+    refetchInterval: 120000,
+  });
+
+  const isDirector = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director";
+
+  // Collapsible state for director portlets
+  const [trendingUpCollapsed, setTrendingUpCollapsed] = useState(false);
+  const [trendingDownCollapsed, setTrendingDownCollapsed] = useState(false);
+  const [namMarginCollapsed, setNamMarginCollapsed] = useState(false);
+  const [amMarginCollapsed, setAmMarginCollapsed] = useState(false);
+
+  type TrendingAccount = { name: string; delta: number };
+  const { data: trendingAccounts, isLoading: trendingLoading } = useQuery<{ up: TrendingAccount[]; down: TrendingAccount[] }>({
+    queryKey: ["/api/dashboard/trending-accounts"],
+    enabled: isDirector,
+    refetchOnWindowFocus: false,
+  });
+
+  type TeamActivity = { touches: number; meaningful: number; newContacts: number };
+  const { data: teamActivity, isLoading: teamActivityLoading } = useQuery<TeamActivity>({
+    queryKey: ["/api/dashboard/team-activity"],
+    enabled: isDirector,
+    refetchInterval: 120000,
+  });
+
+  type RelationshipsMovedData = { count: number };
+  const { data: relationshipsMoved, isLoading: relationshipsMovedLoading } = useQuery<RelationshipsMovedData>({
+    queryKey: ["/api/dashboard/relationships-moved"],
+    enabled: isDirector,
+    refetchInterval: 120000,
+  });
+
+  type MarginUserMetric = {
+    userId: string; name: string; role: string; margin: number;
+    goal: { id: string; target: number } | null;
+  };
+  type MarginMetrics = { nams: MarginUserMetric[]; ams: MarginUserMetric[] };
+  const { data: marginMetrics, isLoading: marginMetricsLoading } = useQuery<MarginMetrics>({
+    queryKey: ["/api/dashboard/margin-metrics"],
+    enabled: isDirector,
     refetchInterval: 120000,
   });
 
@@ -493,6 +591,38 @@ export default function Dashboard() {
     },
   });
 
+  const setMarginGoalMutation = useMutation({
+    mutationFn: async ({ userId, goalId, target }: { userId: string; goalId: string | null; target: number }) => {
+      const now = new Date();
+      const startDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const endDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      if (goalId) {
+        const res = await apiRequest("PATCH", `/api/goals/${goalId}`, { target: String(target) });
+        return res.json();
+      } else {
+        const res = await apiRequest("POST", "/api/goals", {
+          amId: userId,
+          metric: "margin",
+          period: "monthly",
+          target: String(target),
+          startDate,
+          endDate,
+          title: `Margin Goal – ${now.toLocaleString("default", { month: "long", year: "numeric" })}`,
+        });
+        return res.json();
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/margin-metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      toast({ title: "Margin goal saved" });
+    },
+    onError: () => {
+      toast({ title: "Failed to save margin goal", variant: "destructive" });
+    },
+  });
+
   const getUserName = (userId: string) => teamMembers.find(u => u.id === userId)?.name || "";
   const getCompanyName = (companyId: string | null) => companyId ? companies?.find(c => c.id === companyId)?.name || "" : "";
 
@@ -756,34 +886,287 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => (
-          <Card key={stat.title} className="overflow-hidden">
-            <CardContent className="p-4 sm:p-6">
-              {isLoading ? (
-                <Skeleton className="h-16 w-full" />
-              ) : (
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bg}`}>
-                      <stat.icon className={`h-4 w-4 ${stat.color}`} />
+      {/* KPI Stats Row — only for non-director roles */}
+      {!isDirector && (
+        <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
+          {stats.map((stat) => (
+            <Card key={stat.title} className="overflow-hidden">
+              <CardContent className="p-4 sm:p-6">
+                {isLoading ? (
+                  <Skeleton className="h-16 w-full" />
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bg}`}>
+                        <stat.icon className={`h-4 w-4 ${stat.color}`} />
+                      </div>
+                      <TrendingUp className="h-3 w-3 text-green-500" />
                     </div>
-                    <TrendingUp className="h-3 w-3 text-green-500" />
-                  </div>
-                  <div>
-                    <div className="text-xl sm:text-2xl font-bold" data-testid={`text-stat-${stat.title.toLowerCase().replace(/\s/g, "-")}`}>
-                      {stat.value}
+                    <div>
+                      <div className="text-xl sm:text-2xl font-bold" data-testid={`text-stat-${stat.title.toLowerCase().replace(/\s/g, "-")}`}>
+                        {stat.value}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {stat.description}
+                      </p>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {stat.description}
-                    </p>
                   </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* ── Director/Admin Portlets ─────────────────────────────────────────── */}
+      {isDirector && (
+        <>
+          {/* Row 1: Small activity count portlets */}
+          <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="director-activity-row">
+
+            {/* Relationships Moved Up */}
+            <Card className="overflow-hidden" data-testid="portlet-relationships-moved">
+              <CardContent className="p-4">
+                {relationshipsMovedLoading ? <Skeleton className="h-16 w-full" /> : (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
+                        <Repeat2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" data-testid="stat-relationships-moved">{relationshipsMoved?.count ?? 0}</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Relationships moved up this month</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Meaningful Conversations Today */}
+            <Card className="overflow-hidden" data-testid="portlet-meaningful-conversations">
+              <CardContent className="p-4">
+                {teamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
+                        <MessageSquare className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" data-testid="stat-meaningful-conversations">{teamActivity?.meaningful ?? 0}</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Meaningful conversations today</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* New Contacts Added Today */}
+            <Card className="overflow-hidden" data-testid="portlet-new-contacts">
+              <CardContent className="p-4">
+                {teamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                        <UserPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" data-testid="stat-new-contacts">{teamActivity?.newContacts ?? 0}</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">New contacts added today</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Touches Today */}
+            <Card className="overflow-hidden" data-testid="portlet-touches-today">
+              <CardContent className="p-4">
+                {teamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
+                        <Activity className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold" data-testid="stat-touches-today">{teamActivity?.touches ?? 0}</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Touches today (all types)</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Row 2: Trending accounts up & down */}
+          <div className="grid gap-4 md:grid-cols-2" data-testid="director-trending-row">
+
+            {/* Trending Up */}
+            <Card data-testid="portlet-trending-up">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => setTrendingUpCollapsed(!trendingUpCollapsed)}
+                    className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                    data-testid="button-toggle-trending-up"
+                  >
+                    {trendingUpCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
+                      Trending Accounts Up
+                    </CardTitle>
+                  </button>
+                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
                 </div>
+              </CardHeader>
+              {!trendingUpCollapsed && (
+                <CardContent className="pt-0">
+                  {trendingLoading ? (
+                    <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+                  ) : (trendingAccounts?.up?.length ?? 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {trendingAccounts!.up.map((acct, idx) => (
+                        <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-up-${idx}`}>
+                          <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                          <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                          <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
+                            <ArrowUpRight className="h-3.5 w-3.5" />
+                            ${Math.round(acct.delta).toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
               )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            </Card>
+
+            {/* Trending Down */}
+            <Card data-testid="portlet-trending-down">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => setTrendingDownCollapsed(!trendingDownCollapsed)}
+                    className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                    data-testid="button-toggle-trending-down"
+                  >
+                    {trendingDownCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <TrendingDown className="h-4 w-4 text-red-500 dark:text-red-400" />
+                      Trending Accounts Down
+                    </CardTitle>
+                  </button>
+                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                </div>
+              </CardHeader>
+              {!trendingDownCollapsed && (
+                <CardContent className="pt-0">
+                  {trendingLoading ? (
+                    <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+                  ) : (trendingAccounts?.down?.length ?? 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {trendingAccounts!.down.map((acct, idx) => (
+                        <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-down-${idx}`}>
+                          <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                          <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                          <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
+                            <ArrowDownRight className="h-3.5 w-3.5" />
+                            ${Math.round(Math.abs(acct.delta)).toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              )}
+            </Card>
+          </div>
+
+          {/* Row 3: NAM & AM Margin Metrics */}
+          <div className="grid gap-4 md:grid-cols-2" data-testid="director-margin-row">
+            {(["nams", "ams"] as const).map(group => {
+              const label = group === "nams" ? "NAM Margin Metrics" : "AM Margin Metrics";
+              const members: MarginUserMetric[] = (marginMetrics?.[group] ?? []) as MarginUserMetric[];
+              const iconColor = group === "nams" ? "text-blue-600 dark:text-blue-400" : "text-green-600 dark:text-green-400";
+              const Icon = group === "nams" ? ShieldCheck : UserCircle;
+              const monthLabel = new Date().toLocaleString("default", { month: "long", year: "numeric" });
+              const collapsed = group === "nams" ? namMarginCollapsed : amMarginCollapsed;
+              const setCollapsed = group === "nams" ? setNamMarginCollapsed : setAmMarginCollapsed;
+
+              return (
+                <Card key={group} data-testid={`portlet-margin-${group}`}>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <button
+                        onClick={() => setCollapsed(!collapsed)}
+                        className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                        data-testid={`button-toggle-margin-${group}`}
+                      >
+                        {collapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <Icon className={`h-4 w-4 ${iconColor}`} />
+                          {label}
+                        </CardTitle>
+                      </button>
+                      <span className="text-xs font-normal text-muted-foreground">{monthLabel}</span>
+                    </div>
+                  </CardHeader>
+                  {!collapsed && (
+                  <CardContent className="pt-0">
+                    {marginMetricsLoading ? (
+                      <div className="space-y-3">{[1,2,3].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
+                    ) : members.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-3">No {group === "nams" ? "NAMs" : "AMs"} found.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {members.map(m => {
+                          const target = m.goal?.target ?? 0;
+                          const pct = target > 0 ? Math.min(Math.round((m.margin / target) * 100), 100) : 0;
+                          return (
+                            <div key={m.userId} className="space-y-1" data-testid={`margin-metric-${m.userId}`}>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium flex-1 truncate">{m.name}</span>
+                                <span className="text-sm font-bold tabular-nums text-green-700 dark:text-green-400">
+                                  ${Math.round(m.margin).toLocaleString()}
+                                </span>
+                                {target > 0 && (
+                                  <span className="text-xs text-muted-foreground">/ ${Math.round(target).toLocaleString()}</span>
+                                )}
+                                <MarginGoalEditButton
+                                  userId={m.userId}
+                                  goalId={m.goal?.id ?? null}
+                                  currentTarget={target}
+                                  onSave={(t) => setMarginGoalMutation.mutate({ userId: m.userId, goalId: m.goal?.id ?? null, target: t })}
+                                />
+                              </div>
+                              {target > 0 && (
+                                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : pct >= 50 ? "bg-blue-500" : "bg-amber-500"}`}
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </CardContent>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* LM Career Panel — operational stats + path-to-AM progress */}
       {currentUser?.role === "logistics_manager" && <LmCareerPanel />}
