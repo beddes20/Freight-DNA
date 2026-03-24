@@ -263,6 +263,7 @@ export default function CompanyDetail() {
   const [quickTouchSentiment, setQuickTouchSentiment] = useState<string>("");
   const [quickTouchMeaningful, setQuickTouchMeaningful] = useState(false);
   const [walletSharePct, setWalletSharePct] = useState(5);
+  const [avgMarginOverride, setAvgMarginOverride] = useState<string>("");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
   const [focusTaskComments, setFocusTaskComments] = useState(false);
@@ -309,6 +310,10 @@ export default function CompanyDetail() {
       }, 450);
     }
   }, [rfpIntelTab]);
+
+  useEffect(() => {
+    setAvgMarginOverride("");
+  }, [companyId]);
 
   const { data: company, isLoading: companyLoading } = useQuery<Company>({
     queryKey: ["/api/companies", companyId],
@@ -1876,17 +1881,19 @@ export default function CompanyDetail() {
 
         // Calculate opportunity
         const sliderPct = walletSharePct;
+        const overrideVal = avgMarginOverride !== "" ? parseFloat(avgMarginOverride) : null;
+        const effectiveAvgMargin = (overrideVal !== null && !isNaN(overrideVal)) ? overrideVal : (avgMarginPerLoad ?? 0);
         let additionalLoads = 0;
         let extraMarginDollars = 0;
         let currentSharePct: number | null = null;
 
         if (hasRfp && hasFinancial) {
           additionalLoads = Math.round(rfpTotalVolume * sliderPct / 100);
-          extraMarginDollars = additionalLoads * (avgMarginPerLoad ?? 0);
+          extraMarginDollars = additionalLoads * effectiveAvgMargin;
           currentSharePct = ytd.totalLoads / rfpTotalVolume * 100;
         } else if (hasEstimate && hasFinancial && avgRevenuePerLoad) {
           additionalLoads = Math.round((estimatedSpend! * sliderPct / 100) / avgRevenuePerLoad);
-          extraMarginDollars = additionalLoads * (avgMarginPerLoad ?? 0);
+          extraMarginDollars = additionalLoads * effectiveAvgMargin;
         }
 
         const showCalculator = (hasRfp || hasEstimate) && hasFinancial;
@@ -1947,7 +1954,19 @@ export default function CompanyDetail() {
                 </div>
                 <div className="text-right">
                   <p className="text-xs text-muted-foreground">Avg margin/load</p>
-                  <p className="text-sm font-semibold" data-testid="text-avg-margin-per-load">${(avgMarginPerLoad ?? 0).toFixed(0)}</p>
+                  <div className="flex items-center justify-end gap-0.5">
+                    <span className="text-sm font-semibold">$</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={avgMarginOverride !== "" ? avgMarginOverride : (avgMarginPerLoad ?? 0).toFixed(0)}
+                      onChange={e => setAvgMarginOverride(e.target.value)}
+                      onBlur={e => { if (e.target.value === "" || isNaN(parseFloat(e.target.value))) setAvgMarginOverride(""); }}
+                      className="w-16 text-sm font-semibold text-right bg-transparent border-b border-dashed border-muted-foreground/40 focus:outline-none focus:border-green-500 focus:border-solid"
+                      data-testid="input-avg-margin-per-load"
+                    />
+                  </div>
                 </div>
               </div>
 
