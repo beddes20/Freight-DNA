@@ -20,6 +20,7 @@ import RfpAwards from "@/pages/rfp-awards";
 import ResearchTasks from "@/pages/research-tasks";
 import Customers from "@/pages/customers";
 import LoginPage from "@/pages/login";
+import ResetPasswordPage from "@/pages/reset-password";
 import LandingPage from "@/pages/landing";
 import AdminUsers from "@/pages/admin-users";
 import RepCustomers from "@/pages/rep-customers";
@@ -90,6 +91,7 @@ function AuthenticatedApp() {
     return (
       <Switch>
         <Route path="/login" component={LoginPage} />
+        <Route path="/reset-password" component={ResetPasswordPage} />
         <Route component={LandingPage} />
       </Switch>
     );

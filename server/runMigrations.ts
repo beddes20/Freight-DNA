@@ -449,4 +449,23 @@ export async function runMigrations() {
   } finally {
     clientRfpType.release();
   }
+
+  // password_reset_tokens table
+  const clientPRT = await pool.connect();
+  try {
+    await clientPRT.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token varchar(128) NOT NULL UNIQUE,
+        expires_at text NOT NULL,
+        created_at text NOT NULL
+      )
+    `);
+    console.log("[migrations] password_reset_tokens table ensured");
+  } catch (err) {
+    console.error("[migrations] password_reset_tokens migration error:", err);
+  } finally {
+    clientPRT.release();
+  }
 }

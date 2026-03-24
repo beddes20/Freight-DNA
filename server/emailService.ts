@@ -384,3 +384,36 @@ export function buildFeedbackEmail(data: {
 </div>
 </body></html>`;
 }
+
+export function buildPasswordResetEmail(name: string, resetUrl: string): string {
+  return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f1f5f9;font-family:Inter,Arial,sans-serif;">
+<div style="max-width:560px;margin:40px auto;">
+
+  <!-- Header -->
+  <div style="background:#111;border-radius:16px 16px 0 0;padding:32px;text-align:center;">
+    <p style="color:#ffb400;font-size:20px;font-weight:700;margin:0;letter-spacing:0.05em;">freight · dna</p>
+    <p style="color:rgba(255,180,0,0.55);font-size:11px;letter-spacing:0.15em;text-transform:uppercase;margin:4px 0 0;">Value Truck · Sales Intelligence</p>
+  </div>
+
+  <!-- Body -->
+  <div style="background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 16px 16px;padding:36px 32px;">
+    <h2 style="color:#0f172a;font-size:20px;margin:0 0 8px;">Password Reset Request</h2>
+    <p style="color:#475569;font-size:14px;margin:0 0 24px;">Hi ${name}, we received a request to reset your Freight DNA password. Click the button below to set a new password. This link expires in <strong>1 hour</strong>.</p>
+
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${resetUrl}" style="display:inline-block;background:#ffb400;color:#111;font-size:15px;font-weight:700;padding:14px 36px;border-radius:50px;text-decoration:none;letter-spacing:0.01em;">
+        Reset My Password →
+      </a>
+    </div>
+
+    <p style="color:#94a3b8;font-size:12px;margin:24px 0 0;line-height:1.6;">If you didn't request a password reset, you can safely ignore this email — your password will not change. If you have concerns, contact your administrator.</p>
+
+    <div style="border-top:1px solid #f1f5f9;margin-top:24px;padding-top:16px;">
+      <p style="color:#cbd5e1;font-size:11px;margin:0;">This link will expire at ${new Date(Date.now() + 3600000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}. If it has expired, visit the login page and request a new one.</p>
+    </div>
+  </div>
+
+  <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:16px;">Value Truck · Freight DNA · freight-dna.com</p>
+</div>
+</body></html>`;
+}

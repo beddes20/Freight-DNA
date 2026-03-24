@@ -6,16 +6,27 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, TrendingUp } from "lucide-react";
+import { Loader2, TrendingUp, ArrowLeft, CheckCircle } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 
 export default function LoginPage() {
   const [isRegister, setIsRegister] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSent, setForgotSent] = useState(false);
   const [, navigate] = useLocation();
   const { login, register } = useAuth();
   const { toast } = useToast();
+
+  const forgotMutation = useMutation({
+    mutationFn: (email: string) => apiRequest("POST", "/api/auth/forgot-password", { email }),
+    onSuccess: () => setForgotSent(true),
+    onError: () => toast({ title: "Error", description: "Failed to send reset email. Please try again.", variant: "destructive" }),
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -131,83 +142,177 @@ export default function LoginPage() {
             style={{ background: "#161616", border: "1px solid rgba(255,180,0,0.15)" }}
             data-testid="card-login"
           >
-            <CardHeader className="text-center space-y-2 pb-6 pt-8">
-              <h1 className="text-xl font-bold text-white">
-                {isRegister ? "Create your account" : "Welcome back"}
-              </h1>
-              <CardDescription style={{ color: "rgba(255,255,255,0.45)" }}>
-                {isRegister ? "Fill in your details to get started" : "Sign in to your workspace"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pb-8">
-              <form onSubmit={handleSubmit} className="space-y-4">
-                {isRegister && (
-                  <div className="space-y-2">
-                    <Label htmlFor="name" className="text-white/70 text-xs uppercase tracking-wider">Full Name</Label>
-                    <Input
-                      id="name"
-                      data-testid="input-name"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="John Smith"
-                      required
-                      style={{ background: "#1e1e1e", borderColor: "rgba(255,255,255,0.1)", color: "#fff" }}
-                      className="placeholder:text-white/25"
-                    />
+            {showForgot ? (
+              <>
+                <CardHeader className="text-center space-y-2 pb-6 pt-8">
+                  <h1 className="text-xl font-bold text-white">
+                    {forgotSent ? "Check your email" : "Reset password"}
+                  </h1>
+                  <CardDescription style={{ color: "rgba(255,255,255,0.45)" }}>
+                    {forgotSent
+                      ? "We sent a reset link to your email. It expires in 1 hour."
+                      : "Enter your email and we'll send you a reset link"}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pb-8">
+                  {forgotSent ? (
+                    <div className="flex flex-col items-center gap-4 py-2">
+                      <CheckCircle className="w-12 h-12" style={{ color: "#ffb400" }} />
+                      <p className="text-sm text-center" style={{ color: "rgba(255,255,255,0.5)" }}>
+                        Didn't get it? Check your spam folder or{" "}
+                        <button
+                          className="underline"
+                          style={{ color: "rgba(255,180,0,0.7)" }}
+                          onClick={() => { setForgotSent(false); setForgotEmail(""); }}
+                        >
+                          try again
+                        </button>.
+                      </p>
+                      <Button
+                        variant="ghost"
+                        className="mt-2 text-xs"
+                        style={{ color: "rgba(255,180,0,0.6)" }}
+                        onClick={() => { setShowForgot(false); setForgotSent(false); setForgotEmail(""); }}
+                      >
+                        <ArrowLeft className="w-3 h-3 mr-1" /> Back to sign in
+                      </Button>
+                    </div>
+                  ) : (
+                    <form
+                      onSubmit={(e) => { e.preventDefault(); forgotMutation.mutate(forgotEmail); }}
+                      className="space-y-4"
+                    >
+                      <div className="space-y-2">
+                        <Label htmlFor="forgot-email" className="text-white/70 text-xs uppercase tracking-wider">Email</Label>
+                        <Input
+                          id="forgot-email"
+                          data-testid="input-forgot-email"
+                          type="email"
+                          value={forgotEmail}
+                          onChange={(e) => setForgotEmail(e.target.value)}
+                          placeholder="you@company.com"
+                          required
+                          style={{ background: "#1e1e1e", borderColor: "rgba(255,255,255,0.1)", color: "#fff" }}
+                          className="placeholder:text-white/25"
+                        />
+                      </div>
+                      <Button
+                        type="submit"
+                        className="w-full mt-2 font-semibold tracking-wide"
+                        disabled={forgotMutation.isPending}
+                        data-testid="button-send-reset"
+                      >
+                        {forgotMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Send Reset Link
+                      </Button>
+                      <div className="text-center">
+                        <button
+                          type="button"
+                          className="text-xs hover:underline"
+                          style={{ color: "rgba(255,180,0,0.6)" }}
+                          onClick={() => setShowForgot(false)}
+                        >
+                          <ArrowLeft className="inline w-3 h-3 mr-1" />Back to sign in
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </CardContent>
+              </>
+            ) : (
+              <>
+                <CardHeader className="text-center space-y-2 pb-6 pt-8">
+                  <h1 className="text-xl font-bold text-white">
+                    {isRegister ? "Create your account" : "Welcome back"}
+                  </h1>
+                  <CardDescription style={{ color: "rgba(255,255,255,0.45)" }}>
+                    {isRegister ? "Fill in your details to get started" : "Sign in to your workspace"}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pb-8">
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    {isRegister && (
+                      <div className="space-y-2">
+                        <Label htmlFor="name" className="text-white/70 text-xs uppercase tracking-wider">Full Name</Label>
+                        <Input
+                          id="name"
+                          data-testid="input-name"
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          placeholder="John Smith"
+                          required
+                          style={{ background: "#1e1e1e", borderColor: "rgba(255,255,255,0.1)", color: "#fff" }}
+                          className="placeholder:text-white/25"
+                        />
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label htmlFor="username" className="text-white/70 text-xs uppercase tracking-wider">Email</Label>
+                      <Input
+                        id="username"
+                        data-testid="input-username"
+                        type="email"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="you@company.com"
+                        required
+                        style={{ background: "#1e1e1e", borderColor: "rgba(255,255,255,0.1)", color: "#fff" }}
+                        className="placeholder:text-white/25"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="password" className="text-white/70 text-xs uppercase tracking-wider">Password</Label>
+                        {!isRegister && (
+                          <button
+                            type="button"
+                            className="text-xs hover:underline"
+                            style={{ color: "rgba(255,180,0,0.55)" }}
+                            onClick={() => setShowForgot(true)}
+                            data-testid="link-forgot-password"
+                          >
+                            Forgot password?
+                          </button>
+                        )}
+                      </div>
+                      <Input
+                        id="password"
+                        data-testid="input-password"
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        required
+                        style={{ background: "#1e1e1e", borderColor: "rgba(255,255,255,0.1)", color: "#fff" }}
+                        className="placeholder:text-white/25"
+                      />
+                    </div>
+                    <Button
+                      type="submit"
+                      className="w-full mt-2 font-semibold tracking-wide"
+                      disabled={isPending}
+                      data-testid="button-submit-login"
+                    >
+                      {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      {isRegister ? "Create Account" : "Sign In"}
+                    </Button>
+                  </form>
+                  <div className="mt-5 text-center text-xs">
+                    <button
+                      type="button"
+                      className="hover:underline transition-colors"
+                      style={{ color: "rgba(255,180,0,0.6)" }}
+                      onClick={() => setIsRegister(!isRegister)}
+                      data-testid="button-toggle-auth-mode"
+                    >
+                      {isRegister
+                        ? "Already have an account? Sign in"
+                        : "Need an account? Register"}
+                    </button>
                   </div>
-                )}
-                <div className="space-y-2">
-                  <Label htmlFor="username" className="text-white/70 text-xs uppercase tracking-wider">Email</Label>
-                  <Input
-                    id="username"
-                    data-testid="input-username"
-                    type="email"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="you@company.com"
-                    required
-                    style={{ background: "#1e1e1e", borderColor: "rgba(255,255,255,0.1)", color: "#fff" }}
-                    className="placeholder:text-white/25"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="password" className="text-white/70 text-xs uppercase tracking-wider">Password</Label>
-                  <Input
-                    id="password"
-                    data-testid="input-password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    required
-                    style={{ background: "#1e1e1e", borderColor: "rgba(255,255,255,0.1)", color: "#fff" }}
-                    className="placeholder:text-white/25"
-                  />
-                </div>
-                <Button
-                  type="submit"
-                  className="w-full mt-2 font-semibold tracking-wide"
-                  disabled={isPending}
-                  data-testid="button-submit-login"
-                >
-                  {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  {isRegister ? "Create Account" : "Sign In"}
-                </Button>
-              </form>
-              <div className="mt-5 text-center text-xs">
-                <button
-                  type="button"
-                  className="hover:underline transition-colors"
-                  style={{ color: "rgba(255,180,0,0.6)" }}
-                  onClick={() => setIsRegister(!isRegister)}
-                  data-testid="button-toggle-auth-mode"
-                >
-                  {isRegister
-                    ? "Already have an account? Sign in"
-                    : "Need an account? Register"}
-                </button>
-              </div>
-            </CardContent>
+                </CardContent>
+              </>
+            )}
           </Card>
 
           <p className="text-center text-xs mt-6" style={{ color: "rgba(255,255,255,0.2)" }}>

@@ -625,6 +625,14 @@ export const insertLmDailyCheckSchema = createInsertSchema(lmDailyChecks).omit({
 export type InsertLmDailyCheck = z.infer<typeof insertLmDailyCheckSchema>;
 export type LmDailyCheck = typeof lmDailyChecks.$inferSelect;
 
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  token: varchar("token", { length: 128 }).notNull().unique(),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
 export const toolLinks = pgTable("tool_links", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),

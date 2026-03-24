@@ -23,6 +23,7 @@ import {
   goalComments,
   touchpoints,
   internalPosts,
+  passwordResetTokens,
   type Organization,
   type User,
   type InsertUser,
@@ -132,6 +133,9 @@ export interface IStorage {
   /** Auth-only lookup by PK — trusted IDs only (session, FK chains). No org filter. */
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
+  createPasswordResetToken(userId: string, token: string, expiresAt: string): Promise<void>;
+  getPasswordResetToken(token: string): Promise<{ userId: string; expiresAt: string } | undefined>;
+  deletePasswordResetTokensByUser(userId: string): Promise<void>;
   getUsers(organizationId: string): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
   /** Route-level update — scoped to org to prevent cross-tenant writes. */
@@ -366,6 +370,21 @@ export class DatabaseStorage implements IStorage {
   async getUserByUsername(username: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.username, username));
     return user;
+  }
+
+  async createPasswordResetToken(userId: string, token: string, expiresAt: string): Promise<void> {
+    await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
+    await db.insert(passwordResetTokens).values({ userId, token, expiresAt, createdAt: new Date().toISOString() });
+  }
+
+  async getPasswordResetToken(token: string): Promise<{ userId: string; expiresAt: string } | undefined> {
+    const [row] = await db.select().from(passwordResetTokens).where(eq(passwordResetTokens.token, token));
+    if (!row) return undefined;
+    return { userId: row.userId, expiresAt: row.expiresAt };
+  }
+
+  async deletePasswordResetTokensByUser(userId: string): Promise<void> {
+    await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
   }
 
   async getUsers(organizationId: string): Promise<User[]> {

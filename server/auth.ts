@@ -2,7 +2,9 @@ import { Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import bcrypt from "bcrypt";
+import crypto from "crypto";
 import { storage } from "./storage";
+import { sendEmail, buildPasswordResetEmail } from "./emailService";
 import type { User } from "@shared/schema";
 
 const PgStore = connectPgSimple(session);
@@ -107,6 +109,66 @@ export function setupAuth(app: any) {
     req.session.destroy(() => {
       res.json({ success: true });
     });
+  });
+
+  app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
+    try {
+      const { email } = req.body;
+      if (!email || typeof email !== "string") {
+        return res.status(400).json({ error: "Email is required" });
+      }
+      const user = await storage.getUserByUsername(email.trim().toLowerCase());
+      if (!user) {
+        return res.json({ success: true });
+      }
+      const token = crypto.randomBytes(48).toString("hex");
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      await storage.createPasswordResetToken(user.id, token, expiresAt);
+      const proto = req.headers["x-forwarded-proto"] || req.protocol;
+      const host = req.headers["x-forwarded-host"] || req.headers.host;
+      const baseUrl = `${proto}://${host}`;
+      const resetUrl = `${baseUrl}/reset-password?token=${token}`;
+      await sendEmail({
+        to: user.username,
+        subject: "Reset your Freight DNA password",
+        html: buildPasswordResetEmail(user.name, resetUrl),
+        text: `Hi ${user.name}, reset your password here: ${resetUrl} (expires in 1 hour)`,
+      });
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[auth] forgot-password error:", err);
+      res.status(500).json({ error: "Failed to send reset email" });
+    }
+  });
+
+  app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
+    try {
+      const { token, password } = req.body;
+      if (!token || !password || typeof token !== "string" || typeof password !== "string") {
+        return res.status(400).json({ error: "Token and password are required" });
+      }
+      if (password.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      }
+      const record = await storage.getPasswordResetToken(token);
+      if (!record) {
+        return res.status(400).json({ error: "Invalid or expired reset link" });
+      }
+      if (new Date(record.expiresAt) < new Date()) {
+        return res.status(400).json({ error: "Reset link has expired. Please request a new one." });
+      }
+      const hashed = await bcrypt.hash(password, 10);
+      const user = await storage.getUser(record.userId);
+      if (!user) {
+        return res.status(400).json({ error: "User not found" });
+      }
+      await storage.updateUser(user.id, user.organizationId, { password: hashed });
+      await storage.deletePasswordResetTokensByUser(user.id);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[auth] reset-password error:", err);
+      res.status(500).json({ error: "Failed to reset password" });
+    }
   });
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
