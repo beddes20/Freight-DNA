@@ -8419,6 +8419,35 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
+  // ── ZoomInfo Contact Search ───────────────────────────────────────────────
+  app.get("/api/zoominfo/search-contacts", async (req, res) => {
+    const user = req.session?.user;
+    if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+    const companyName = req.query.companyName as string;
+    if (!companyName?.trim()) return res.status(400).json({ error: "companyName is required" });
+
+    if (!process.env.ZOOMINFO_CLIENT_ID || !process.env.ZOOMINFO_CLIENT_SECRET) {
+      return res.status(503).json({ error: "ZoomInfo integration not configured" });
+    }
+
+    try {
+      const { searchZoomInfoContacts } = await import("./zoominfo.js");
+      const contacts = await searchZoomInfoContacts(companyName.trim(), 25);
+      res.json({ contacts });
+    } catch (error: any) {
+      console.error("[zoominfo] search error:", error?.message);
+      res.status(502).json({ error: error?.message || "ZoomInfo search failed" });
+    }
+  });
+
+  app.get("/api/zoominfo/status", async (req, res) => {
+    const user = req.session?.user;
+    if (!user) return res.status(401).json({ error: "Not authenticated" });
+    const configured = !!(process.env.ZOOMINFO_CLIENT_ID && process.env.ZOOMINFO_CLIENT_SECRET);
+    res.json({ configured });
+  });
+
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {
       if (err.code === "LIMIT_FILE_SIZE") {

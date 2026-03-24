@@ -88,6 +88,7 @@ import {
   Printer,
   Brain,
   Copy,
+  Search,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -110,6 +111,7 @@ import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type Pend
 import { MarketShareCard } from "@/components/market-share-card";
 import { PreCallPlanner } from "@/components/pre-call-planner";
 import { ContactIntelModal } from "@/components/contact-intel-modal";
+import { ZoomInfoSuggestionsDialog } from "@/components/zoominfo-suggestions";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
@@ -268,6 +270,7 @@ export default function CompanyDetail() {
   const [expandedCallouts, setExpandedCallouts] = useState<Set<string>>(new Set());
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [zoomInfoOpen, setZoomInfoOpen] = useState(false);
   const [preCallOpen, setPreCallOpen] = useState(false);
   const [touchLogCollapsed, setTouchLogCollapsed] = useState(false);
   const [importRows, setImportRows] = useState<any[]>([]);
@@ -2099,6 +2102,10 @@ export default function CompanyDetail() {
               <Badge variant="secondary">{contacts?.length || 0} contacts</Badge>
             </div>
             <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setZoomInfoOpen(true)} className="border-amber-400/50 text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/30" data-testid="button-zoominfo-suggest">
+                <Search className="h-3.5 w-3.5 mr-1.5" />
+                Find Contacts
+              </Button>
               <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)} data-testid="button-import-contacts">
                 <Upload className="h-4 w-4 mr-1.5" />
                 Import
@@ -3558,6 +3565,13 @@ export default function CompanyDetail() {
           onClose={() => setIntelContact(null)}
         />
       )}
+
+      <ZoomInfoSuggestionsDialog
+        open={zoomInfoOpen}
+        onClose={() => setZoomInfoOpen(false)}
+        companyId={company.id}
+        companyName={company.name}
+      />
 
       <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); setQuickTouchNote(""); setQuickTouchSentiment(""); setQuickTouchMeaningful(false); } }}>
         <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch-detail">
