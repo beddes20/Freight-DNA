@@ -89,6 +89,7 @@ export const rfps = pgTable("rfps", {
   destinationStates: text("destination_states").array(),
   closeReason: text("close_reason"),
   closeNotes: text("close_notes"),
+  rfpType: text("rfp_type"),
 });
 
 export const insertRfpSchema = createInsertSchema(rfps).omit({

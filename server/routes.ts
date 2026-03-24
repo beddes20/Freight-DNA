@@ -1620,6 +1620,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         totalVolume: result.analysis.totalVolume,
         originStates: result.analysis.originStates,
         destinationStates: result.analysis.destinationStates,
+        rfpType: req.body.rfpType || null,
       };
 
       const rfp = await storage.createRfp(rfpData);

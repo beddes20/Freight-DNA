@@ -438,4 +438,15 @@ export async function runMigrations() {
   } finally {
     clientLm.release();
   }
+
+  // rfp_type column on rfps (Task #68)
+  const clientRfpType = await pool.connect();
+  try {
+    await clientRfpType.query(`ALTER TABLE rfps ADD COLUMN IF NOT EXISTS rfp_type text`);
+    console.log("[migrations] rfp_type column ensured on rfps");
+  } catch (err) {
+    console.error("[migrations] rfp_type migration error:", err);
+  } finally {
+    clientRfpType.release();
+  }
 }

@@ -36,6 +36,7 @@ const rfpSchema = z.object({
   companyId: z.string().min(1, "Company is required"),
   title: z.string().min(1, "Title is required"),
   status: z.string().min(1, "Status is required"),
+  rfpType: z.string().min(1, "RFP type is required"),
   value: z.string().optional(),
   dueDate: z.string().optional(),
   notes: z.string().optional(),
@@ -79,6 +80,7 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
       companyId: "",
       title: "",
       status: "pending",
+      rfpType: "",
       value: "",
       dueDate: "",
       notes: "",
@@ -96,17 +98,19 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
         companyId: rfp.companyId || "",
         title: rfp.title || "",
         status: rfp.status || "pending",
+        rfpType: rfp.rfpType || "",
         value: rfp.value || "",
         dueDate: rfp.dueDate || "",
         notes: rfp.notes || "",
-        closeReason: (rfp as any).closeReason || "",
-        closeNotes: (rfp as any).closeNotes || "",
+        closeReason: rfp.closeReason || "",
+        closeNotes: rfp.closeNotes || "",
       });
     } else {
       form.reset({
         companyId: "",
         title: "",
         status: "pending",
+        rfpType: "",
         value: "",
         dueDate: "",
         notes: "",
@@ -152,6 +156,7 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
       companyId: data.companyId,
       title: data.title,
       status: data.status,
+      rfpType: data.rfpType || null,
       value: data.value || null,
       dueDate: data.dueDate || null,
       notes: data.notes || null,
@@ -240,6 +245,28 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
                       <SelectItem value="partially_awarded">Partially Awarded ✅</SelectItem>
                       <SelectItem value="lost">Lost ❌</SelectItem>
                       <SelectItem value="declined">Declined / No Bid</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="rfpType"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>RFP Type</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl>
+                      <SelectTrigger data-testid="select-rfp-type">
+                        <SelectValue placeholder="Select type" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="mini_bid">Mini Bid</SelectItem>
+                      <SelectItem value="full_rfp">Full RFP</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />

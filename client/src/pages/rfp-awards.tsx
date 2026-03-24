@@ -110,10 +110,17 @@ function RfpCard({ rfp, company, onEdit, onDelete, onViewData }: RfpCardProps) {
               </div>
             )}
           </div>
-          <Badge className={status.color}>
-            <StatusIcon className="h-3 w-3 mr-1" />
-            {status.label}
-          </Badge>
+          <div className="flex flex-col items-end gap-1">
+            <Badge className={status.color}>
+              <StatusIcon className="h-3 w-3 mr-1" />
+              {status.label}
+            </Badge>
+            {rfp.rfpType && (
+              <Badge variant="outline" className={rfp.rfpType === "mini_bid" ? "text-blue-700 dark:text-blue-400 border-blue-300 dark:border-blue-700 text-xs" : "text-purple-700 dark:text-purple-400 border-purple-300 dark:border-purple-700 text-xs"} data-testid={`badge-rfp-type-${rfp.id}`}>
+                {rfp.rfpType === "mini_bid" ? "Mini Bid" : "Full RFP"}
+              </Badge>
+            )}
+          </div>
         </div>
 
         <div className="space-y-2 text-sm">
@@ -1212,6 +1219,7 @@ export default function RfpAwards() {
     columnSamples: Record<string, string[]>;
   } | null>(null);
   const [confirmedMapping, setConfirmedMapping] = useState<Record<string, string>>({});
+  const [uploadRfpType, setUploadRfpType] = useState<"mini_bid" | "full_rfp" | "">("");
 
   const { data: rfps, isLoading: rfpsLoading } = useQuery<Rfp[]>({
     queryKey: ["/api/rfps"],
@@ -1256,12 +1264,15 @@ export default function RfpAwards() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: async ({ file, companyId, mapping }: { file: File; companyId: string; mapping?: Record<string, string> }) => {
+    mutationFn: async ({ file, companyId, mapping, rfpType }: { file: File; companyId: string; mapping?: Record<string, string>; rfpType?: string }) => {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("companyId", companyId);
       if (mapping) {
         formData.append("confirmedMapping", JSON.stringify(mapping));
+      }
+      if (rfpType) {
+        formData.append("rfpType", rfpType);
       }
       const response = await fetch("/api/rfps/upload", { method: "POST", body: formData });
       if (!response.ok) {
@@ -1276,6 +1287,7 @@ export default function RfpAwards() {
       setColumnMappingOpen(false);
       setColumnMappingData(null);
       setConfirmedMapping({});
+      setUploadRfpType("");
       const sheetInfo = data.sheetName ? ` (tab: "${data.sheetName}")` : "";
       const laneCount = data.analysis?.laneCount ?? 0;
       if (laneCount === 0) {
@@ -1628,6 +1640,7 @@ export default function RfpAwards() {
             setColumnMappingOpen(false);
             setColumnMappingData(null);
             setConfirmedMapping({});
+            setUploadRfpType("");
           }
         }}>
           <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="dialog-column-mapping">
@@ -1682,6 +1695,34 @@ export default function RfpAwards() {
                 </div>
               );
             })()}
+
+            {/* RFP Type Selection */}
+            <div className="p-3 rounded-md border border-border bg-muted/30">
+              <p className="text-sm font-medium mb-2">
+                RFP Type <span className="text-destructive">*</span>
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setUploadRfpType("mini_bid")}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-md border text-sm font-medium transition-colors ${uploadRfpType === "mini_bid" ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted text-muted-foreground"}`}
+                  data-testid="button-rfp-type-mini-bid"
+                >
+                  Mini Bid
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUploadRfpType("full_rfp")}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-md border text-sm font-medium transition-colors ${uploadRfpType === "full_rfp" ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted text-muted-foreground"}`}
+                  data-testid="button-rfp-type-full-rfp"
+                >
+                  Full RFP
+                </button>
+              </div>
+              {!uploadRfpType && (
+                <p className="text-xs text-destructive mt-1" data-testid="error-rfp-type-required">Please select a type to proceed.</p>
+              )}
+            </div>
 
             <div className="space-y-1">
               <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center text-xs font-medium text-muted-foreground px-1 pb-1">
@@ -1738,6 +1779,7 @@ export default function RfpAwards() {
                   setColumnMappingOpen(false);
                   setColumnMappingData(null);
                   setConfirmedMapping({});
+                  setUploadRfpType("");
                 }}
                 data-testid="button-cancel-mapping"
               >
@@ -1745,11 +1787,11 @@ export default function RfpAwards() {
               </Button>
               <Button
                 onClick={() => {
-                  if (pendingFile && uploadCompanyId) {
-                    uploadMutation.mutate({ file: pendingFile, companyId: uploadCompanyId, mapping: confirmedMapping });
+                  if (pendingFile && uploadCompanyId && uploadRfpType) {
+                    uploadMutation.mutate({ file: pendingFile, companyId: uploadCompanyId, mapping: confirmedMapping, rfpType: uploadRfpType });
                   }
                 }}
-                disabled={uploadMutation.isPending}
+                disabled={uploadMutation.isPending || !uploadRfpType}
                 data-testid="button-confirm-mapping"
               >
                 {uploadMutation.isPending ? (
