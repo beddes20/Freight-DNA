@@ -86,7 +86,7 @@ export function AppSidebar() {
       <SidebarHeader className="p-4 border-b border-sidebar-border">
         {/* Expanded sidebar header */}
         <div className="flex flex-col items-center justify-center py-1 gap-1 group-data-[collapsible=icon]:hidden">
-          {(user as any)?.organizationSlug === "demo" ? (
+          {user?.organizationSlug === "demo" ? (
             <div className="flex flex-col items-center gap-0.5">
               <svg viewBox="0 0 120 36" width="110" height="33" aria-label="Freight DNA">
                 {/* Stylized truck outline */}
@@ -140,7 +140,7 @@ export function AppSidebar() {
         </div>
         {/* Collapsed icon */}
         <div className="hidden group-data-[collapsible=icon]:flex justify-center py-1">
-          {(user as any)?.organizationSlug === "demo" ? (
+          {user?.organizationSlug === "demo" ? (
             <svg viewBox="0 0 24 24" width="24" height="24" aria-label="FD">
               <rect x="1" y="6" width="14" height="10" rx="1.5" fill="none" stroke="#ffb400" strokeWidth="1.5"/>
               <rect x="15" y="9" width="8" height="7" rx="1" fill="none" stroke="#ffb400" strokeWidth="1.5"/>

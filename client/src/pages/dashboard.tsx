@@ -158,6 +158,22 @@ export default function Dashboard() {
   const [ptoBannerDismissed, setPtoBannerDismissed] = useState(false);
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
   const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") === "true");
+  const [lmCheckInCollapsed, setLmCheckInCollapsed] = useState<Record<string, boolean>>(() => {
+    try {
+      const stored = localStorage.getItem("dash_lm_checkin_collapsed");
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
+  });
+  const toggleLmCheckIn = (lmId: string) => {
+    setLmCheckInCollapsed(prev => {
+      const next = { ...prev, [lmId]: !(prev[lmId] ?? true) };
+      localStorage.setItem("dash_lm_checkin_collapsed", JSON.stringify(next));
+      return next;
+    });
+  };
+  const isLmCheckInCollapsed = (lmId: string) => lmCheckInCollapsed[lmId] ?? true;
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -1658,18 +1674,36 @@ export default function Dashboard() {
           <>
             {lmDirectReports.map(lm => (
               <div key={lm.id} className="space-y-2">
-                <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-                  Daily Check-In — {lm.name}
-                </h3>
-                <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={true} />
+                <button
+                  className="flex items-center gap-2 text-left w-full"
+                  onClick={() => toggleLmCheckIn(lm.id)}
+                  data-testid={`button-toggle-lm-checkin-${lm.id}`}
+                >
+                  <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+                    Daily Check-In — {lm.name}
+                  </h3>
+                  {isLmCheckInCollapsed(lm.id) ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                </button>
+                {!isLmCheckInCollapsed(lm.id) && (
+                  <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={true} />
+                )}
               </div>
             ))}
             {chainLms.map(lm => (
               <div key={lm.id} className="space-y-2">
-                <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-                  Daily Check-In — {lm.name}
-                </h3>
-                <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={false} />
+                <button
+                  className="flex items-center gap-2 text-left w-full"
+                  onClick={() => toggleLmCheckIn(lm.id)}
+                  data-testid={`button-toggle-lm-checkin-${lm.id}`}
+                >
+                  <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+                    Daily Check-In — {lm.name}
+                  </h3>
+                  {isLmCheckInCollapsed(lm.id) ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                </button>
+                {!isLmCheckInCollapsed(lm.id) && (
+                  <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={false} />
+                )}
               </div>
             ))}
           </>

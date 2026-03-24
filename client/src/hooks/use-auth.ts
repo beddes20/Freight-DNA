@@ -5,6 +5,7 @@ import type { User } from "@shared/schema";
 export type SafeUser = Omit<User, "password"> & {
   isImpersonating?: boolean;
   impersonatingAdminName?: string | null;
+  organizationSlug?: string;
 };
 
 export function useAuth() {
