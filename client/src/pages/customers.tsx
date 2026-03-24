@@ -189,7 +189,7 @@ export default function Customers() {
 
   const addContactMutation = useMutation({
     mutationFn: (data: { companyId: string; name: string; title?: string; email?: string; phone?: string }) =>
-      apiRequest("POST", "/api/contacts", { ...data, createdAt: new Date().toISOString().slice(0, 10) }),
+      apiRequest("POST", `/api/companies/${data.companyId}/contacts`, { ...data, createdAt: new Date().toISOString().slice(0, 10) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
       toast({ title: "Contact added!" });

@@ -86,7 +86,7 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
 
   const addContact = useMutation({
     mutationFn: (contact: ZoomInfoContact) =>
-      apiRequest("POST", "/api/contacts", {
+      apiRequest("POST", `/api/companies/${companyId}/contacts`, {
         companyId,
         name: `${contact.firstName} ${contact.lastName}`.trim(),
         title: contact.jobTitle || null,
@@ -96,7 +96,7 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
       }),
     onSuccess: (_data, contact) => {
       setAddedIds((prev) => new Set(prev).add(contact.id));
-      queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/contacts`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
       toast({ title: "Contact added", description: `${contact.firstName} ${contact.lastName} added to org chart` });
     },

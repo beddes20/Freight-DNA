@@ -315,14 +315,14 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Salesperson</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value || ""}>
+                    <Select onValueChange={(v) => field.onChange(v === "__none__" ? "" : v)} value={field.value || "__none__"}>
                       <FormControl>
                         <SelectTrigger data-testid="select-salesperson">
                           <SelectValue placeholder="— None —" />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="">— None —</SelectItem>
+                        <SelectItem value="__none__">— None —</SelectItem>
                         {salesUsers.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => (
                           <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                         ))}
