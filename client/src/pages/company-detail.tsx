@@ -89,12 +89,19 @@ import {
   Brain,
   Copy,
   Search,
+  MoreHorizontal,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip,
   ResponsiveContainer, ComposedChart, Line, Legend,
 } from "recharts";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { CompanyDialog } from "@/components/company-dialog";
 import { ContactDialog } from "@/components/contact-dialog";
 import { ResearchLaneDialog } from "@/components/research-lane-dialog";
@@ -1044,15 +1051,6 @@ export default function CompanyDetail() {
             </Button>
           )}
 
-          {claimsConfig?.url && (
-            <a href={claimsConfig.url} target="_blank" rel="noopener noreferrer" data-testid="button-claims-portal">
-              <Button variant="outline">
-                <FileText className="h-4 w-4 mr-2" />
-                Claims
-              </Button>
-            </a>
-          )}
-
           <div className="relative inline-flex">
             <Button variant="outline" onClick={() => navigate("/rfp-awards")} data-testid="button-rfp-awards">
               <Trophy className="h-4 w-4 mr-2" />
@@ -1073,31 +1071,60 @@ export default function CompanyDetail() {
             <TrendingUp className="h-4 w-4 mr-2" />
             Trends
           </Button>
-          {canReassign && (
-            <Button variant="outline" onClick={() => { setTransferTo(company.assignedTo || ""); setTransferOpen(true); }} data-testid="button-transfer-account">
-              <UserCheck className="h-4 w-4 mr-2" />
-              Transfer Account
-            </Button>
-          )}
-          <Button variant="outline" onClick={() => setEditCompanyOpen(true)} data-testid="button-edit-company">
-            <Pencil className="h-4 w-4 mr-2" />
-            Edit
-          </Button>
-          {company.archivedAt ? (
-            <Button variant="outline" onClick={() => unarchiveMutation.mutate()} disabled={unarchiveMutation.isPending} data-testid="button-unarchive-company">
-              <ArchiveX className="h-4 w-4 mr-2" />
-              {unarchiveMutation.isPending ? "Restoring..." : "Restore"}
-            </Button>
-          ) : (
-            <Button variant="outline" onClick={() => setArchiveDialogOpen(true)} data-testid="button-archive-company">
-              <Archive className="h-4 w-4 mr-2" />
-              Archive
-            </Button>
-          )}
-          <Button variant="outline" onClick={() => setDeleteDialogOpen(true)} data-testid="button-delete-company">
-            <Trash2 className="h-4 w-4 mr-2" />
-            Delete
-          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" data-testid="button-more-actions">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {claimsConfig?.url && (
+                <DropdownMenuItem asChild data-testid="dropdown-item-claims">
+                  <a href={claimsConfig.url} target="_blank" rel="noopener noreferrer" className="flex items-center cursor-pointer">
+                    <FileText className="h-4 w-4 mr-2" />
+                    Claims
+                  </a>
+                </DropdownMenuItem>
+              )}
+              {canReassign && (
+                <DropdownMenuItem
+                  onClick={() => { setTransferTo(company.assignedTo || ""); setTransferOpen(true); }}
+                  data-testid="dropdown-item-transfer-account"
+                >
+                  <UserCheck className="h-4 w-4 mr-2" />
+                  Transfer Account
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={() => setEditCompanyOpen(true)} data-testid="dropdown-item-edit">
+                <Pencil className="h-4 w-4 mr-2" />
+                Edit
+              </DropdownMenuItem>
+              {company.archivedAt ? (
+                <DropdownMenuItem
+                  onClick={() => unarchiveMutation.mutate()}
+                  disabled={unarchiveMutation.isPending}
+                  data-testid="dropdown-item-restore"
+                >
+                  <ArchiveX className="h-4 w-4 mr-2" />
+                  {unarchiveMutation.isPending ? "Restoring..." : "Restore"}
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onClick={() => setArchiveDialogOpen(true)} data-testid="dropdown-item-archive">
+                  <Archive className="h-4 w-4 mr-2" />
+                  Archive
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                onClick={() => setDeleteDialogOpen(true)}
+                data-testid="dropdown-item-delete"
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
