@@ -952,38 +952,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* KPI Stats Row — only for non-director roles */}
-      {!isDirector && (
-        <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
-          {stats.map((stat) => (
-            <Card key={stat.title} className="overflow-hidden">
-              <CardContent className="p-4 sm:p-6">
-                {isLoading ? (
-                  <Skeleton className="h-16 w-full" />
-                ) : (
-                  <div className="flex flex-col gap-3">
-                    <div className="flex items-center justify-between">
-                      <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bg}`}>
-                        <stat.icon className={`h-4 w-4 ${stat.color}`} />
-                      </div>
-                      <TrendingUp className="h-3 w-3 text-green-500" />
-                    </div>
-                    <div>
-                      <div className="text-xl sm:text-2xl font-bold" data-testid={`text-stat-${stat.title.toLowerCase().replace(/\s/g, "-")}`}>
-                        {stat.value}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {stat.description}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
       {/* ── Director/Admin Portlets ─────────────────────────────────────────── */}
       {isDirector && (
         <>
