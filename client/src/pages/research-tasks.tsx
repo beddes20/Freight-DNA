@@ -79,9 +79,9 @@ export default function ResearchTasks() {
 
   const filteredTasks = tasks?.filter((task) => {
     const matchesSearch =
-      task.lane.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      task.rfpTitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      companiesMap.get(task.companyId)?.name.toLowerCase().includes(searchQuery.toLowerCase());
+      (task.lane ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (task.rfpTitle ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (companiesMap.get(task.companyId)?.name ?? "").toLowerCase().includes(searchQuery.toLowerCase());
 
     const matchesCustomer = filterCustomer === "all" || task.companyId === filterCustomer;
 
