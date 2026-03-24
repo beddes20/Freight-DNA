@@ -226,6 +226,16 @@ export default function TopOpportunities() {
                                 {match.rfpTitle}
                               </span>
                             </div>
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <Building2 className="h-3 w-3 text-primary/60 shrink-0" />
+                              <span
+                                className="text-xs text-primary/80 hover:text-primary hover:underline cursor-pointer font-medium"
+                                onClick={() => goToAccount(group.companyId)}
+                                data-testid={`text-match-company-${group.companyId}-${mIdx}`}
+                              >
+                                {group.companyName}
+                              </span>
+                            </div>
                             <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
                               <span className="font-medium text-foreground">{match.lane}</span>
                               <span className="text-muted-foreground/50 mx-1">·</span>
