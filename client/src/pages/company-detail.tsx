@@ -710,6 +710,7 @@ export default function CompanyDetail() {
       const existingLanes: string[] = contact.lanes || [];
       if (!existingLanes.includes(laneToAdd)) {
         await apiRequest("PATCH", `/api/contacts/${contactId}`, {
+          ...contact,
           lanes: [...existingLanes, laneToAdd],
         });
       }
