@@ -89,6 +89,46 @@ function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummar
   return agg;
 }
 
+function getCompanyFinancials(company: Company, accountSummary: AccountSummaryRow[]): AccountSummaryRow | null {
+  const aliases = (company as any).financialAlias
+    ? (company as any).financialAlias.split(',').map((a: string) => a.trim()).filter(Boolean)
+    : [];
+
+  const partials: AccountSummaryRow[] = [];
+  for (const alias of aliases) {
+    const match = matchFinancials(alias, accountSummary);
+    if (match) partials.push(match);
+  }
+
+  if (!partials.length) return matchFinancials(company.name, accountSummary);
+  if (partials.length === 1) return partials[0];
+
+  const agg: AccountSummaryRow = {
+    customerName: partials[0].customerName,
+    totalLoads: 0,
+    spotLoads: 0,
+    totalMargin: 0,
+    totalRevenue: 0,
+    byMonth: {},
+  };
+  for (const m of partials) {
+    agg.totalLoads += m.totalLoads;
+    agg.spotLoads += m.spotLoads;
+    agg.totalMargin += m.totalMargin;
+    agg.totalRevenue = (agg.totalRevenue ?? 0) + (m.totalRevenue ?? 0);
+    if (m.byMonth) {
+      for (const [mo, bucket] of Object.entries(m.byMonth)) {
+        if (!agg.byMonth![mo]) agg.byMonth![mo] = { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
+        agg.byMonth![mo].totalLoads += bucket.totalLoads;
+        agg.byMonth![mo].spotLoads += bucket.spotLoads;
+        agg.byMonth![mo].totalMargin += bucket.totalMargin;
+        agg.byMonth![mo].totalRevenue = (agg.byMonth![mo].totalRevenue ?? 0) + (bucket.totalRevenue ?? 0);
+      }
+    }
+  }
+  return agg;
+}
+
 export default function Customers() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
@@ -308,7 +348,7 @@ export default function Customers() {
     });
 
     const getFinVal = (company: Company, key: "totalLoads" | "totalMargin" | "marginPct") => {
-      const fin = (company.financialAlias ? matchFinancials(company.financialAlias, accountSummary) : null) || matchFinancials(company.name, accountSummary);
+      const fin = getCompanyFinancials(company, accountSummary);
       if (!fin) return -1;
       if (key === "marginPct") return fin.totalRevenue && fin.totalRevenue > 0 ? fin.totalMargin / fin.totalRevenue : -1;
       return fin[key];
@@ -543,7 +583,7 @@ export default function Customers() {
           {displayList.map((company) => {
             const contacts = contactsByCompany.get(company.id) || [];
             const openTasks = openTasksByCompany.get(company.id) || 0;
-            const fin = (company.financialAlias ? matchFinancials(company.financialAlias, accountSummary) : null) || matchFinancials(company.name, accountSummary);
+            const fin = getCompanyFinancials(company, accountSummary);
             const tps = tpSummary[company.id] || { week: 0, month: 0 };
             return (
               <Link key={company.id} href={`/companies/${company.id}`}>
