@@ -406,6 +406,17 @@ export async function runMigrations() {
     client2.release();
   }
 
+  // goals status column (for goal completion tracking)
+  const clientGoals = await pool.connect();
+  try {
+    await clientGoals.query(`ALTER TABLE goals ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active'`);
+    console.log("[migrations] goals status column ensured");
+  } catch (err) {
+    console.error("[migrations] goals status migration error:", err);
+  } finally {
+    clientGoals.release();
+  }
+
   // lm_daily_checks table (Task #61)
   const clientLm = await pool.connect();
   try {

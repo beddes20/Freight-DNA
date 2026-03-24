@@ -133,7 +133,7 @@ export function setupAuth(app: any) {
     const admin = await storage.getUser(adminId);
     if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin only" });
 
-    const target = await storage.getUser(req.params.userId);
+    const target = await storage.getUser(req.params.userId as string);
     if (!target) return res.status(404).json({ error: "User not found" });
     if (target.role === "admin") return res.status(400).json({ error: "Cannot impersonate another admin" });
     if (target.organizationId !== admin.organizationId) return res.status(403).json({ error: "Cannot impersonate user from a different organization" });

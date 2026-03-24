@@ -366,6 +366,7 @@ export const goals = pgTable("goals", {
   endDate: text("end_date").notNull(),
   createdAt: text("created_at").notNull(),
   createdById: varchar("created_by_id").notNull().references(() => users.id),
+  status: text("status").notNull().default("active"),
 });
 
 export const insertGoalSchema = createInsertSchema(goals).omit({ id: true });

@@ -87,7 +87,7 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
     allRfps.forEach(r => {
       const company = allCompanies.find(co => co.id === r.companyId);
       const rep = allUsers.find(u => u.id === company?.assignedTo);
-      ctx += `- ${r.name} @ ${company?.name || "Unknown"} [Rep: ${rep?.name || "?"}] | Due: ${r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "No due date"}\n`;
+      ctx += `- ${r.title} @ ${company?.name || "Unknown"} [Rep: ${rep?.name || "?"}] | Due: ${r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "No due date"}\n`;
     });
 
     ctx += `\n=== OPEN TASKS (${allTasks.length}) ===\n`;
@@ -256,7 +256,7 @@ export function registerChatbotRoutes(app: Express): void {
   app.delete("/api/chatbot/conversations/:id", async (req: Request, res: Response) => {
     if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(req.params.id as string);
       await db.delete(chatMessages).where(eq(chatMessages.conversationId, id));
       await db.delete(chatConversations).where(and(
         eq(chatConversations.id, id),
@@ -272,7 +272,7 @@ export function registerChatbotRoutes(app: Express): void {
     if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
     try {
       const msgs = await db.select().from(chatMessages)
-        .where(eq(chatMessages.conversationId, parseInt(req.params.id)))
+        .where(eq(chatMessages.conversationId, parseInt(req.params.id as string)))
         .orderBy(chatMessages.id);
       res.json(msgs);
     } catch (err) {
@@ -285,7 +285,7 @@ export function registerChatbotRoutes(app: Express): void {
     const { content, scope = "my_team" } = req.body;
     if (!content?.trim()) return res.status(400).json({ error: "Message content required" });
 
-    const conversationId = parseInt(req.params.id);
+    const conversationId = parseInt(req.params.id as string);
     try {
       await db.insert(chatMessages).values({
         conversationId,

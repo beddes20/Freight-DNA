@@ -665,6 +665,7 @@ export class DatabaseStorage implements IStorage {
       managerId: users.managerId,
       lastLoginAt: users.lastLoginAt,
       financialRepId: users.financialRepId,
+      createdAt: users.createdAt,
     }).from(users).where(
       and(
         eq(users.organizationId, organizationId),
@@ -1261,7 +1262,7 @@ export class DatabaseStorage implements IStorage {
     if (teamUserIds && teamUserIds.length > 0) {
       companiesResult = await db.select().from(companies).where(inArray(companies.assignedTo, teamUserIds));
     } else if (assignedToUserId) {
-      companiesResult = await db.select().from(companies).where(eq(companies.assignedTo, assignedToUserId));
+      companiesResult = await db.select().from(companies).where(eq(companies.assignedTo, assignedToUserId!));
     } else {
       companiesResult = await db.select().from(companies);
     }
@@ -1274,6 +1275,7 @@ export class DatabaseStorage implements IStorage {
 
     const tpByContact = new Map<string, Touchpoint[]>();
     for (const tp of allTouchpoints) {
+      if (!tp.contactId) continue;
       const arr = tpByContact.get(tp.contactId) ?? [];
       arr.push(tp);
       tpByContact.set(tp.contactId, arr);
@@ -1309,7 +1311,7 @@ export class DatabaseStorage implements IStorage {
     if (teamUserIds && teamUserIds.length > 0) {
       companiesResult = await db.select().from(companies).where(inArray(companies.assignedTo, teamUserIds));
     } else if (assignedToUserId) {
-      companiesResult = await db.select().from(companies).where(eq(companies.assignedTo, assignedToUserId));
+      companiesResult = await db.select().from(companies).where(eq(companies.assignedTo, assignedToUserId!));
     } else {
       companiesResult = await db.select().from(companies);
     }
@@ -1324,6 +1326,7 @@ export class DatabaseStorage implements IStorage {
 
     const lastMeaningfulByContact = new Map<string, string>();
     for (const tp of meaningfulTps) {
+      if (!tp.contactId || !tp.date) continue;
       const existing = lastMeaningfulByContact.get(tp.contactId);
       if (!existing || tp.date > existing) lastMeaningfulByContact.set(tp.contactId, tp.date);
     }

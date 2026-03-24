@@ -9,7 +9,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 
@@ -449,7 +449,7 @@ function analyzeRfpSpreadsheetWithMapping(workbook: XLSX.WorkBook, confirmedMapp
   const rawAll: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
   if (rawAll.length === 0) {
-    return { rows: [], headers: [], highVolumeLanes: [], sheetName, analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0, isWeeklyVolume: false } };
+    return { rows: [], headers: [], highVolumeLanes: [], sheetName, analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0, isWeeklyVolume: false, isMonthlyVolume: false, volumeColumn: null, rateColumn: null, originColumn: null, destinationColumn: null } };
   }
 
   // Detect header row using same heuristic
@@ -482,7 +482,7 @@ function analyzeRfpSpreadsheetWithMapping(workbook: XLSX.WorkBook, confirmedMapp
   }
 
   if (rows.length === 0) {
-    return { rows: [], headers: [], highVolumeLanes: [], sheetName, analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0, isWeeklyVolume: false } };
+    return { rows: [], headers: [], highVolumeLanes: [], sheetName, analysis: { laneCount: 0, totalVolume: "0", originStates: [], destinationStates: [], highVolumeLaneCount: 0, isWeeklyVolume: false, isMonthlyVolume: false, volumeColumn: null, rateColumn: null, originColumn: null, destinationColumn: null } };
   }
 
   // Build reverse lookup: fieldType -> column header
@@ -849,7 +849,7 @@ export async function registerRoutes(
           skipped.push(name);
           continue;
         }
-        await storage.createUser({ organizationId: req.session.organizationId!, username: email, password: hashedPassword, name, role, managerId: null });
+        await storage.createUser({ organizationId: req.session.organizationId!, username: email, password: hashedPassword, name, role: (role as any), managerId: null });
         created.push(name);
       }
 
@@ -869,7 +869,7 @@ export async function registerRoutes(
       }
       if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-        if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
+        if (!teamIds.includes((req.params.id as string)) || (req.params.id as string) === currentUser.id) {
           return res.status(403).json({ error: "Cannot edit this user" });
         }
       }
@@ -888,7 +888,7 @@ export async function registerRoutes(
         if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
         if (req.body.financialRepId !== undefined) data.financialRepId = req.body.financialRepId || null;
       }
-      const user = await storage.updateUser(req.params.id, currentUser.organizationId, data);
+      const user = await storage.updateUser((req.params.id as string), currentUser.organizationId, data);
       if (!user) return res.status(404).json({ error: "User not found" });
       const { password: _, ...safeUser } = user;
       res.json(safeUser);
@@ -906,14 +906,14 @@ export async function registerRoutes(
       }
       if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-        if (!teamIds.includes(req.params.id) || req.params.id === currentUser.id) {
+        if (!teamIds.includes((req.params.id as string)) || (req.params.id as string) === currentUser.id) {
           return res.status(403).json({ error: "Cannot delete this user" });
         }
       }
-      if (req.params.id === currentUser.id) {
+      if ((req.params.id as string) === currentUser.id) {
         return res.status(400).json({ error: "Cannot delete yourself" });
       }
-      const deleted = await storage.deleteUser(req.params.id, currentUser.organizationId);
+      const deleted = await storage.deleteUser((req.params.id as string), currentUser.organizationId);
       if (!deleted) return res.status(404).json({ error: "User not found" });
       res.status(204).send();
     } catch (error) {
@@ -946,7 +946,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), currentUser.organizationId);
       if (!company) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -1071,7 +1071,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const parsed = insertCompanySchema.safeParse(req.body);
@@ -1082,7 +1082,7 @@ export async function registerRoutes(
       if (currentUser.role !== "admin") {
         delete (data as any).assignedTo;
       }
-      const company = await storage.updateCompany(req.params.id, currentUser.organizationId, data);
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, data);
       if (!company) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -1097,11 +1097,11 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { financialAlias } = req.body;
-      const company = await storage.updateCompany(req.params.id, currentUser.organizationId, { financialAlias: financialAlias || null } as any);
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { financialAlias: financialAlias || null } as any);
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);
     } catch (error) {
@@ -1113,11 +1113,11 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { salesPersonId } = req.body;
-      const company = await storage.updateCompany(req.params.id, currentUser.organizationId, { salesPersonId: salesPersonId || null } as any);
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { salesPersonId: salesPersonId || null } as any);
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);
     } catch (error) {
@@ -1129,7 +1129,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
       if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
@@ -1143,9 +1143,9 @@ export async function registerRoutes(
           return res.status(403).json({ error: "Can only assign to team members" });
         }
       }
-      const existing = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      const existing = await storage.getCompanyInOrg((req.params.id as string), currentUser.organizationId);
       if (!existing) return res.status(404).json({ error: "Company not found" });
-      const company = await storage.updateCompany(req.params.id, currentUser.organizationId, { ...existing, assignedTo });
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { ...existing, assignedTo });
       if (!company) return res.status(404).json({ error: "Company not found" });
       // Notify the new assignee if they're different from the actor
       if (assignedTo !== currentUser.id && assignedTo !== existing.assignedTo) {
@@ -1169,10 +1169,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteCompany(req.params.id, currentUser.organizationId);
+      const deleted = await storage.deleteCompany((req.params.id as string), currentUser.organizationId);
       if (!deleted) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -1187,10 +1187,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.archiveCompany(req.params.id, currentUser.organizationId);
+      const updated = await storage.archiveCompany((req.params.id as string), currentUser.organizationId);
       if (!updated) return res.status(404).json({ error: "Company not found" });
       res.json(updated);
     } catch (error) {
@@ -1202,10 +1202,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.unarchiveCompany(req.params.id, currentUser.organizationId);
+      const updated = await storage.unarchiveCompany((req.params.id as string), currentUser.organizationId);
       if (!updated) return res.status(404).json({ error: "Company not found" });
       res.json(updated);
     } catch (error) {
@@ -1233,10 +1233,10 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.companyId))) {
+      if (!(await canAccessCompany(currentUser, (req.params.companyId as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const contacts = await storage.getContactsByCompany(req.params.companyId);
+      const contacts = await storage.getContactsByCompany((req.params.companyId as string));
       res.json(contacts);
     } catch (error) {
       console.error("Error fetching contacts:", error);
@@ -1248,12 +1248,12 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.companyId))) {
+      if (!(await canAccessCompany(currentUser, (req.params.companyId as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const contactData = {
         ...req.body,
-        companyId: req.params.companyId,
+        companyId: (req.params.companyId as string),
         createdAt: new Date().toISOString(),
         createdBy: currentUser.id,
       };
@@ -1263,12 +1263,12 @@ export async function registerRoutes(
       }
       const contact = await storage.createContact(parsed.data);
       const _orgIdForFanOut1 = req.session.organizationId!;
-      storage.getCompanyInOrg(req.params.companyId, _orgIdForFanOut1).then(co => {
+      storage.getCompanyInOrg((req.params.companyId as string), _orgIdForFanOut1).then(co => {
         fanOutCelebration(
           "new_contact",
           `🎉 New contact: ${contact.name}`,
           `${currentUser.name} added ${contact.name}${contact.title ? ` (${contact.title})` : ""} at ${co?.name ?? "an account"}.`,
-          `/companies/${req.params.companyId}`,
+          `/companies/${(req.params.companyId as string)}`,
           contact.id,
           currentUser.id,
           _orgIdForFanOut1
@@ -1285,7 +1285,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.companyId))) {
+      if (!(await canAccessCompany(currentUser, (req.params.companyId as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const rows: any[] = req.body.contacts;
@@ -1294,7 +1294,7 @@ export async function registerRoutes(
       }
       const now = new Date().toISOString();
       const toInsert = rows.map(r => ({
-        companyId: req.params.companyId,
+        companyId: (req.params.companyId as string),
         name: (r.name || "").trim(),
         title: r.title?.trim() || null,
         email: r.email?.trim() || null,
@@ -1317,7 +1317,7 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getContact(req.params.id);
+      const existing = await storage.getContact((req.params.id as string));
       if (!existing) {
         return res.status(404).json({ error: "Contact not found" });
       }
@@ -1344,14 +1344,14 @@ export async function registerRoutes(
               `🎉 Relationship advanced: ${parsed.data.name ?? existing.name}`,
               `${currentUser.name} moved ${parsed.data.name ?? existing.name} at ${co?.name ?? "an account"} from ${existing.relationshipBase ?? "no base"} → ${parsed.data.relationshipBase}.`,
               `/companies/${existing.companyId}`,
-              req.params.id,
+              (req.params.id as string),
               currentUser.id,
               _orgIdForFanOut2
             );
           }).catch(() => {});
         }
       }
-      const contact = await storage.updateContact(req.params.id, parsed.data);
+      const contact = await storage.updateContact((req.params.id as string), parsed.data);
       res.json(contact);
     } catch (error) {
       console.error("Error updating contact:", error);
@@ -1363,14 +1363,14 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getContact(req.params.id);
+      const existing = await storage.getContact((req.params.id as string));
       if (!existing) {
         return res.status(404).json({ error: "Contact not found" });
       }
       if (!(await canAccessCompany(currentUser, existing.companyId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteContact(req.params.id);
+      const deleted = await storage.deleteContact((req.params.id as string));
       if (!deleted) {
         return res.status(404).json({ error: "Contact not found" });
       }
@@ -1587,7 +1587,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           const confirmedMapping: ConfirmedColumnMapping = typeof confirmedMappingRaw === "string"
             ? JSON.parse(confirmedMappingRaw)
             : confirmedMappingRaw;
-          result = analyzeRfpSpreadsheetWithMapping(workbook, confirmedMapping);
+          result = analyzeRfpSpreadsheetWithMapping(workbook, confirmedMapping) as any;
         } catch {
           result = analyzeRfpSpreadsheet(workbook);
         }
@@ -1620,7 +1620,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.patch("/api/rfps/:id", async (req, res) => {
     try {
-      const existing = await storage.getRfp(req.params.id);
+      const existing = await storage.getRfp((req.params.id as string));
       if (!existing) {
         return res.status(404).json({ error: "RFP not found" });
       }
@@ -1628,7 +1628,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      const rfp = await storage.updateRfp(req.params.id, parsed.data);
+      const rfp = await storage.updateRfp((req.params.id as string), parsed.data);
       res.json(rfp);
     } catch (error) {
       console.error("Error updating RFP:", error);
@@ -1638,12 +1638,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.patch("/api/rfps/:id/lanes/:laneIndex/status", async (req, res) => {
     try {
-      const rfp = await storage.getRfp(req.params.id);
+      const rfp = await storage.getRfp((req.params.id as string));
       if (!rfp) {
         return res.status(404).json({ error: "RFP not found" });
       }
 
-      const laneIndex = parseInt(req.params.laneIndex);
+      const laneIndex = parseInt((req.params.laneIndex as string));
       if (isNaN(laneIndex) || laneIndex < 0) {
         return res.status(400).json({ error: "Invalid lane index" });
       }
@@ -1663,7 +1663,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         fileData.highVolumeLanes[laneIndex].contactId = contactId;
       }
 
-      const updated = await storage.updateRfp(req.params.id, { ...rfp, fileData } as any);
+      const updated = await storage.updateRfp((req.params.id as string), { ...rfp, fileData } as any);
       res.json(updated);
     } catch (error) {
       console.error("Error updating lane status:", error);
@@ -1718,7 +1718,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/companies/:id/lane-patterns", async (req, res) => {
     try {
-      const companyId = req.params.id;
+      const companyId = (req.params.id as string);
       const allRfps = await storage.getRfps();
 
       const corridorMap = new Map<string, {
@@ -1860,7 +1860,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/companies/:id/facility-coverage", async (req, res) => {
     try {
-      const companyId = req.params.id;
+      const companyId = (req.params.id as string);
       const allRfps = await storage.getRfps();
       const contacts = await storage.getContactsByCompany(companyId);
 
@@ -1975,7 +1975,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.delete("/api/rfps/:id", async (req, res) => {
     try {
-      const deleted = await storage.deleteRfp(req.params.id);
+      const deleted = await storage.deleteRfp((req.params.id as string));
       if (!deleted) {
         return res.status(404).json({ error: "RFP not found" });
       }
@@ -2018,7 +2018,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.patch("/api/awards/:id", async (req, res) => {
     try {
-      const existing = await storage.getAward(req.params.id);
+      const existing = await storage.getAward((req.params.id as string));
       if (!existing) {
         return res.status(404).json({ error: "Award not found" });
       }
@@ -2026,7 +2026,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      const award = await storage.updateAward(req.params.id, parsed.data);
+      const award = await storage.updateAward((req.params.id as string), parsed.data);
       res.json(award);
     } catch (error) {
       console.error("Error updating award:", error);
@@ -2036,7 +2036,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.delete("/api/awards/:id", async (req, res) => {
     try {
-      const deleted = await storage.deleteAward(req.params.id);
+      const deleted = await storage.deleteAward((req.params.id as string));
       if (!deleted) {
         return res.status(404).json({ error: "Award not found" });
       }
@@ -2053,7 +2053,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const entries = await storage.getMarketShareEntries(req.params.id);
+      const entries = await storage.getMarketShareEntries((req.params.id as string));
       res.json(entries);
     } catch (error) {
       console.error("Error fetching market share:", error);
@@ -2066,7 +2066,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg(req.params.id, user.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const customerName = (company.financialAlias || company.name).toLowerCase().trim();
@@ -2122,7 +2122,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const entry = await storage.createMarketShareEntry({
         ...req.body,
-        companyId: req.params.id,
+        companyId: (req.params.id as string),
         createdAt: new Date().toISOString(),
         createdBy: user.id,
       });
@@ -2174,7 +2174,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         const totalMarketLoads = totalStr ? parseInt(totalStr.replace(/,/g, ""), 10) || null : null;
 
         const entry = await storage.createMarketShareEntry({
-          companyId: req.params.id,
+          companyId: (req.params.id as string),
           entryType: entryType === "rfp_cycle" ? "rfp_cycle" : "monthly",
           periodLabel,
           periodStart: periodStart || null,
@@ -2201,7 +2201,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const updated = await storage.updateMarketShareEntry(req.params.id, req.body);
+      const updated = await storage.updateMarketShareEntry((req.params.id as string), req.body);
       if (!updated) return res.status(404).json({ error: "Entry not found" });
       res.json(updated);
     } catch (error) {
@@ -2214,7 +2214,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deleteMarketShareEntry(req.params.id);
+      const deleted = await storage.deleteMarketShareEntry((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Entry not found" });
       res.status(204).send();
     } catch (error) {
@@ -2321,10 +2321,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(user, req.params.companyId))) {
+      if (!(await canAccessCompany(user, (req.params.companyId as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const companyTasks = await storage.getTasksByCompany(req.params.companyId);
+      const companyTasks = await storage.getTasksByCompany((req.params.companyId as string));
       const counts = await storage.getTaskCommentCounts(companyTasks.map(t => t.id));
       res.json(companyTasks.map(t => ({ ...t, commentCount: counts[t.id] ?? 0 })));
     } catch (error) {
@@ -2408,7 +2408,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTask(req.params.id);
+      const existing = await storage.getTask((req.params.id as string));
       if (!existing) return res.status(404).json({ error: "Task not found" });
       if (existing.assignedTo !== user.id && existing.assignedBy !== user.id && user.role !== "admin") {
         return res.status(403).json({ error: "Not authorized to edit this task" });
@@ -2436,7 +2436,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (req.body.assignedTo !== undefined) {
         data.assignedTo = req.body.assignedTo;
       }
-      const task = await storage.updateTask(req.params.id, data);
+      const task = await storage.updateTask((req.params.id as string), data);
       // Notify new assignee if reassigned to someone else
       if (data.assignedTo && data.assignedTo !== existing.assignedTo && data.assignedTo !== user.id) {
         storage.createNotification({
@@ -2486,12 +2486,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTask(req.params.id);
+      const existing = await storage.getTask((req.params.id as string));
       if (!existing) return res.status(404).json({ error: "Task not found" });
       if (existing.assignedBy !== user.id && user.role !== "admin") {
         return res.status(403).json({ error: "Only the creator or admin can delete tasks" });
       }
-      await storage.deleteTask(req.params.id);
+      await storage.deleteTask((req.params.id as string));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete task" });
@@ -2504,7 +2504,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const comments = await storage.getTaskComments(req.params.id);
+      const comments = await storage.getTaskComments((req.params.id as string));
       res.json(comments);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch comments" });
@@ -2517,17 +2517,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { content, parentId } = req.body;
       if (!content?.trim()) return res.status(400).json({ error: "Content is required" });
-      const task = await storage.getTask(req.params.id);
+      const task = await storage.getTask((req.params.id as string));
       if (!task) return res.status(404).json({ error: "Task not found" });
       const comment = await storage.createTaskComment({
-        taskId: req.params.id,
+        taskId: (req.params.id as string),
         authorId: user.id,
         content: content.trim(),
         createdAt: new Date().toISOString(),
         parentId: parentId || null,
       });
       // Notify task assignee, creator, and anyone who has previously commented (thread following)
-      const existingComments = await storage.getTaskComments(req.params.id);
+      const existingComments = await storage.getTaskComments((req.params.id as string));
       const threadParticipants = existingComments.map(c => c.authorId);
       const notifyIds = [...new Set([task.assignedTo, task.assignedBy, ...threadParticipants])].filter(
         (id): id is string => !!id && id !== user.id
@@ -2553,7 +2553,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const task = await storage.getTask(req.params.id);
+      const task = await storage.getTask((req.params.id as string));
       if (!task) return res.status(404).json({ error: "Task not found" });
       if (task.assignedBy !== user.id) return res.status(403).json({ error: "Only the task creator can send a reminder" });
       if (task.status === "completed") return res.status(400).json({ error: "Task is already completed" });
@@ -2581,13 +2581,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const comments = await storage.getTaskComments(req.params.taskId);
-      const comment = comments.find(c => c.id === req.params.commentId);
+      const comments = await storage.getTaskComments((req.params.taskId as string));
+      const comment = comments.find(c => c.id === (req.params.commentId as string));
       if (!comment) return res.status(404).json({ error: "Comment not found" });
       if (comment.authorId !== user.id && user.role !== "admin") {
         return res.status(403).json({ error: "Not authorized" });
       }
-      await storage.deleteTaskComment(req.params.commentId);
+      await storage.deleteTaskComment((req.params.commentId as string));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete comment" });
@@ -2620,10 +2620,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(user, req.params.companyId))) {
+      if (!(await canAccessCompany(user, (req.params.companyId as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const companyCallouts = await storage.getCalloutsByCompany(req.params.companyId);
+      const companyCallouts = await storage.getCalloutsByCompany((req.params.companyId as string));
       res.json(companyCallouts);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch company callouts" });
@@ -2696,12 +2696,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const callout = await storage.getCallout(req.params.id);
+      const callout = await storage.getCallout((req.params.id as string));
       if (!callout) return res.status(404).json({ error: "Callout not found" });
       if (callout.authorId !== user.id && user.role !== "admin") {
         return res.status(403).json({ error: "Only the author or admin can delete callouts" });
       }
-      await storage.deleteCallout(req.params.id);
+      await storage.deleteCallout((req.params.id as string));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete callout" });
@@ -2820,12 +2820,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const post = await storage.getFeedPost(req.params.id);
+      const post = await storage.getFeedPost((req.params.id as string));
       if (!post) return res.status(404).json({ error: "Post not found" });
       if (post.authorId !== user.id && user.role !== "admin") {
         return res.status(403).json({ error: "Only the author or admin can delete posts" });
       }
-      await storage.deleteFeedPost(req.params.id);
+      await storage.deleteFeedPost((req.params.id as string));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete feed post" });
@@ -2838,9 +2838,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const canPin = ["admin", "director", "national_account_manager", "sales_director"].includes(user.role);
       if (!canPin) return res.status(403).json({ error: "Only admins and managers can pin posts" });
-      const post = await storage.getFeedPost(req.params.id);
+      const post = await storage.getFeedPost((req.params.id as string));
       if (!post) return res.status(404).json({ error: "Post not found" });
-      const updated = await storage.pinFeedPost(req.params.id, !!req.body.pinned);
+      const updated = await storage.pinFeedPost((req.params.id as string), !!req.body.pinned);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to pin post" });
@@ -2890,7 +2890,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const isLeadership = user.role === "admin" || user.role === "director";
       if (!isLeadership) return res.status(403).json({ error: "Only admins and directors can delete posts" });
-      await storage.deleteInternalPost(req.params.id);
+      await storage.deleteInternalPost((req.params.id as string));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete internal post" });
@@ -2941,9 +2941,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!emoji || !validEmojis.includes(emoji)) {
         return res.status(400).json({ error: "Invalid emoji" });
       }
-      const callout = await storage.getCallout(req.params.id);
+      const callout = await storage.getCallout((req.params.id as string));
       if (!callout) return res.status(404).json({ error: "Callout not found" });
-      const result = await storage.toggleReaction(req.params.id, user.id, emoji);
+      const result = await storage.toggleReaction((req.params.id as string), user.id, emoji);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to toggle reaction" });
@@ -2983,7 +2983,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!emoji || !validEmojis.includes(emoji)) {
         return res.status(400).json({ error: "Invalid emoji" });
       }
-      const post = await storage.getFeedPost(req.params.id);
+      const post = await storage.getFeedPost((req.params.id as string));
       if (!post) return res.status(404).json({ error: "Feed post not found" });
       if (post.parentId) return res.status(400).json({ error: "Reactions are only allowed on top-level posts" });
 
@@ -2992,7 +2992,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const result = await storage.toggleFeedPostReaction(req.params.id, user.id, emoji);
+      const result = await storage.toggleFeedPostReaction((req.params.id as string), user.id, emoji);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to toggle feed reaction" });
@@ -3025,7 +3025,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const { text, tag } = req.body;
       if (!text?.trim()) return res.status(400).json({ error: "Text required" });
       const topic = await storage.createTopic({
-        sessionId: req.params.id,
+        sessionId: (req.params.id as string),
         addedById: user.id,
         text: text.trim(),
         tag: tag || "fyi",
@@ -3044,7 +3044,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { status } = req.body;
       if (!status) return res.status(400).json({ error: "Status required" });
-      const updated = await storage.updateTopicStatus(req.params.id, status);
+      const updated = await storage.updateTopicStatus((req.params.id as string), status);
       if (!updated) return res.status(404).json({ error: "Topic not found" });
       res.json(updated);
     } catch (error) {
@@ -3056,7 +3056,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deleteTopic(req.params.id);
+      const deleted = await storage.deleteTopic((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Topic not found" });
       res.status(204).send();
     } catch (error) {
@@ -3068,7 +3068,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const newSession = await storage.closeSession(req.params.id);
+      const newSession = await storage.closeSession((req.params.id as string));
       res.json(newSession);
     } catch (error) {
       res.status(500).json({ error: "Failed to close session" });
@@ -3102,12 +3102,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { meetingDate } = req.body;
-      const session = await storage.getSession(req.params.id);
+      const session = await storage.getSession((req.params.id as string));
       if (!session) return res.status(404).json({ error: "Session not found" });
       const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
       const isInvolved = user.id === session.namId || user.id === session.amId;
       if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
-      const updated = await storage.updateSessionMeetingDate(req.params.id, meetingDate || null);
+      const updated = await storage.updateSessionMeetingDate((req.params.id as string), meetingDate || null);
       if (!updated) return res.status(404).json({ error: "Session not found" });
       res.json(updated);
     } catch (error) {
@@ -3139,12 +3139,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         }
         normalizedLink = trimmed;
       }
-      const session = await storage.getSession(req.params.id);
+      const session = await storage.getSession((req.params.id as string));
       if (!session) return res.status(404).json({ error: "Session not found" });
       const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
       const isInvolved = user.id === session.namId || user.id === session.amId;
       if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
-      const updated = await storage.updateSessionMeetingLink(req.params.id, normalizedLink);
+      const updated = await storage.updateSessionMeetingLink((req.params.id as string), normalizedLink);
       if (!updated) return res.status(404).json({ error: "Session not found" });
       res.json(updated);
     } catch (error) {
@@ -3158,13 +3158,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { notes } = req.body;
       if (typeof notes !== "string") return res.status(400).json({ error: "Notes must be a string" });
-      const session = await storage.getSession(req.params.id);
+      const session = await storage.getSession((req.params.id as string));
       if (!session) return res.status(404).json({ error: "Session not found" });
       if (session.status !== "active") return res.status(400).json({ error: "Cannot update notes on an archived session" });
       const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
       const isInvolved = user.id === session.namId || user.id === session.amId;
       if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
-      const updated = await storage.updateSessionNotes(req.params.id, notes);
+      const updated = await storage.updateSessionNotes((req.params.id as string), notes);
       if (!updated) return res.status(404).json({ error: "Session not found" });
       res.json(updated);
     } catch (error) {
@@ -3260,7 +3260,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const { lmId } = req.params;
+      const { lmId } = req.params as Record<string, string>;
       const lm = await storage.getUser(lmId);
       if (!lm) return res.status(404).json({ error: "User not found" });
       const managerId = lm.managerId;
@@ -3288,7 +3288,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const { lmId } = req.params;
+      const { lmId } = req.params as Record<string, string>;
       const lm = await storage.getUser(lmId);
       if (!lm) return res.status(404).json({ error: "User not found" });
       const managerId = lm.managerId;
@@ -3569,7 +3569,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      const upload = uploads.find(u => u.id === req.params.id);
+      const upload = uploads.find(u => u.id === (req.params.id as string));
       if (!upload) return res.status(404).json({ error: "Upload not found" });
 
       const wb = XLSX.utils.book_new();
@@ -3605,7 +3605,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
    * "Salesperson" column (col AB).  Only users with role "sales" or "sales_director"
    * are candidates.  Matching uses financialRepId first, then normalised name.
    */
-  async function linkSalespersonsFromRows(rows: any[]) {
+  async function linkSalespersonsFromRows(rows: any[], organizationId: string) {
     if (!rows || rows.length === 0) return;
     const cols = resolveColumns(rows);
 
@@ -3624,7 +3624,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     if (customerSalesMap.size === 0) return;
 
     // Load sales users
-    const allUsers = await storage.getUsers(req.session.organizationId!);
+    const allUsers = await storage.getUsers(organizationId);
     const salesUsers = allUsers.filter(u => u.role === "sales" || u.role === "sales_director");
     if (salesUsers.length === 0) return;
 
@@ -3644,7 +3644,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
 
     // Load companies
-    const allCompanies = await storage.getCompanies(req.session.organizationId!);
+    const allCompanies = await storage.getCompanies(organizationId);
 
     for (const company of allCompanies) {
       const alias = (company.financialAlias || "").toLowerCase().trim();
@@ -3675,7 +3675,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!matched) continue;
       // Update only if changed
       if (company.salesPersonId !== matched.id) {
-        await storage.updateCompany(company.id, req.session.organizationId!, { salesPersonId: matched.id });
+        await storage.updateCompany(company.id, organizationId, { salesPersonId: matched.id });
         console.log(`[salesperson-link] ${company.name} → ${matched.name} (${bestSp})`);
       }
     }
@@ -3727,7 +3727,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       await storage.setSetting("monthly_sync_failed_error", "");
 
       // Auto-link companies to salesperson users based on col AB
-      linkSalespersonsFromRows(sheets.rows).catch(err =>
+      linkSalespersonsFromRows(sheets.rows, req.session.organizationId!).catch(err =>
         console.error("[salesperson-link] auto-link error:", err)
       );
 
@@ -4220,10 +4220,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       await storage.setSetting("monthly_sync_failed_error", "");
 
       // Auto-link companies to salesperson users from synced data
-      storage.getFinancialUploadsForOrg(req.session.organizationId!).then(uploads => {
+      const orgId = req.session.organizationId!;
+      storage.getFinancialUploadsForOrg(orgId).then(uploads => {
         if (uploads.length === 0) return;
         const latest = uploads[uploads.length - 1];
-        linkSalespersonsFromRows((latest.rows as any[]) || []).catch(err =>
+        linkSalespersonsFromRows((latest.rows as any[]) || [], orgId).catch(err =>
           console.error("[salesperson-link] sync auto-link error:", err)
         );
       }).catch(() => {});
@@ -4466,7 +4467,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const company = await storage.getCompanyInOrg(req.params.id, user.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
@@ -4638,7 +4639,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Lane Matching (company-specific: our history vs their RFP lanes) ─────────
   app.get("/api/companies/:id/lane-matching", requireAuth, async (req, res) => {
     try {
-      const companyId = req.params.id;
+      const companyId = (req.params.id as string);
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const allRfps = await storage.getRfps();
 
@@ -4879,11 +4880,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           const otherUser = safeUsers.find(u => u.id === otherId);
           const addedByUser = safeUsers.find(u => u.id === topic.addedById);
           results.push({
-            id: topic.id,
+            id: topic.id!,
             text: topic.text,
-            tag: topic.tag,
+            tag: topic.tag ?? "",
             status: topic.status,
-            createdAt: topic.createdAt instanceof Date ? topic.createdAt.toISOString() : String(topic.createdAt),
+            createdAt: String(topic.createdAt),
             sessionId: session.id,
             addedById: topic.addedById,
             namId,
@@ -5058,12 +5059,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTopic(req.params.id);
+      const existing = await storage.getTopic((req.params.id as string));
       if (!existing) return res.status(404).json({ error: "Topic not found" });
       if (!(await canAccessSession(currentUser, existing.sessionId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const topic = await storage.toggleTopicStatus(req.params.id);
+      const topic = await storage.toggleTopicStatus((req.params.id as string));
       if (!topic) return res.status(404).json({ error: "Topic not found" });
       res.json(topic);
     } catch (error) {
@@ -5075,12 +5076,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTopic(req.params.id);
+      const existing = await storage.getTopic((req.params.id as string));
       if (!existing) return res.status(404).json({ error: "Topic not found" });
       if (!(await canAccessSession(currentUser, existing.sessionId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteTopic(req.params.id);
+      const deleted = await storage.deleteTopic((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Topic not found" });
       res.status(204).send();
     } catch (error) {
@@ -5093,9 +5094,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const topic = await storage.getTopic(req.params.id);
+      const topic = await storage.getTopic((req.params.id as string));
       if (!topic) return res.status(404).json({ error: "Topic not found" });
-      const replies = await storage.getTopicReplies(req.params.id);
+      const replies = await storage.getTopicReplies((req.params.id as string));
       res.json(replies);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch replies" });
@@ -5106,12 +5107,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const topic = await storage.getTopic(req.params.id);
+      const topic = await storage.getTopic((req.params.id as string));
       if (!topic) return res.status(404).json({ error: "Topic not found" });
       const { text } = req.body;
       if (!text?.trim()) return res.status(400).json({ error: "Text required" });
       const reply = await storage.addTopicReply({
-        topicId: req.params.id,
+        topicId: (req.params.id as string),
         authorId: currentUser.id,
         text: text.trim(),
         createdAt: new Date().toISOString(),
@@ -5142,7 +5143,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deleteTopicReply(req.params.id);
+      const deleted = await storage.deleteTopicReply((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Reply not found" });
       res.status(204).send();
     } catch (error) {
@@ -5154,11 +5155,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessSession(currentUser, req.params.id))) {
+      if (!(await canAccessSession(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const closedSession = await storage.getSession(req.params.id);
-      const newSession = await storage.closeSession(req.params.id);
+      const closedSession = await storage.getSession((req.params.id as string));
+      const newSession = await storage.closeSession((req.params.id as string));
       if (!newSession) return res.status(404).json({ error: "Session not found" });
       // Notify the other party that the session was closed
       if (closedSession) {
@@ -5220,7 +5221,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      await storage.markNotificationRead(req.params.id);
+      await storage.markNotificationRead((req.params.id as string));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to mark notification read" });
@@ -5281,7 +5282,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deletePersonalAlert(req.params.id, user.id);
+      const deleted = await storage.deletePersonalAlert((req.params.id as string), user.id);
       if (!deleted) return res.status(404).json({ error: "Alert not found" });
       res.status(204).send();
     } catch (error) {
@@ -5294,7 +5295,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const activity = await storage.getCompanyActivity(req.params.id);
+      const activity = await storage.getCompanyActivity((req.params.id as string));
       res.json(activity);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch activity" });
@@ -5420,7 +5421,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const { userId } = req.params;
+      const { userId } = req.params as Record<string, string>;
       const period = (req.body?.period as string) === "monthly" ? "monthly" : "weekly";
       const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
       if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
@@ -5519,7 +5520,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const { userId } = req.params;
+      const { userId } = req.params as Record<string, string>;
       const period = (req.query.period as string) === "monthly" ? "monthly" : "weekly";
       const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
       if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
@@ -5537,7 +5538,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const { userId } = req.params;
+      const { userId } = req.params as Record<string, string>;
       const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
       if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
@@ -5563,7 +5564,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const { userId } = req.params;
+      const { userId } = req.params as Record<string, string>;
       const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
       if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
@@ -5857,7 +5858,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getGoal(req.params.id);
+      const existing = await storage.getGoal((req.params.id as string));
       if (!existing) return res.status(404).json({ error: "Goal not found" });
       let canEdit = user.role === "admin" || existing.namId === user.id || existing.amId === user.id;
       if (!canEdit && (user.role === "director" || user.role === "sales_director")) {
@@ -5871,7 +5872,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         }
       }
       if (!canEdit) return res.status(403).json({ error: "Access denied" });
-      const updated = await storage.updateGoal(req.params.id, req.body);
+      const updated = await storage.updateGoal((req.params.id as string), req.body);
       // Notify the other party about goal updates
       const isProgressUpdate = req.body.currentValue !== undefined && Object.keys(req.body).length === 1;
       if (isProgressUpdate && existing.namId !== user.id) {
@@ -5902,7 +5903,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         const newVal = parseFloat(req.body.currentValue || "0");
         const tgt = parseFloat(existing.target || "0");
         if (tgt > 0 && newVal >= tgt) {
-          await storage.updateGoal(req.params.id, { status: "completed" }).catch(() => {});
+          await storage.updateGoal((req.params.id as string), { status: "completed" }).catch(() => {});
           const goalTitle = existing.title || `${existing.metric.replace(/_/g, " ")} goal`;
           if (existing.namId !== user.id) {
             storage.createNotification({
@@ -5938,10 +5939,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getGoal(req.params.id);
+      const existing = await storage.getGoal((req.params.id as string));
       if (!existing) return res.status(404).json({ error: "Goal not found" });
       if (user.role !== "admin" && existing.namId !== user.id) return res.status(403).json({ error: "Access denied" });
-      await storage.deleteGoal(req.params.id);
+      await storage.deleteGoal((req.params.id as string));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete goal" });
@@ -5952,7 +5953,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const comments = await storage.getGoalComments(req.params.id);
+      const comments = await storage.getGoalComments((req.params.id as string));
       res.json(comments);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch comments" });
@@ -5963,14 +5964,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const goal = await storage.getGoal(req.params.id);
+      const goal = await storage.getGoal((req.params.id as string));
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       const canComment = user.role === "admin" || goal.namId === user.id || goal.amId === user.id;
       if (!canComment) return res.status(403).json({ error: "Access denied" });
       const body = (req.body.body || req.body.text || "").trim();
       if (!body) return res.status(400).json({ error: "Comment body is required" });
       const comment = await storage.createGoalComment({
-        goalId: req.params.id,
+        goalId: (req.params.id as string),
         authorId: user.id,
         body,
         createdAt: new Date().toISOString(),
@@ -6000,7 +6001,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      await storage.deleteGoalComment(req.params.id);
+      await storage.deleteGoalComment((req.params.id as string));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete comment" });
@@ -6011,7 +6012,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const goal = await storage.getGoal(req.params.id);
+      const goal = await storage.getGoal((req.params.id as string));
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       let autoValue: number | null = null;
       const allUsers = await storage.getUsers(req.session.organizationId!);
@@ -6116,7 +6117,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // Margin trend: last 6 months of actual margin for the rep tied to a goal
   app.get("/api/goals/:id/margin-trend", requireAuth, async (req, res) => {
     try {
-      const goal = await storage.getGoal(req.params.id);
+      const goal = await storage.getGoal((req.params.id as string));
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       const allUsers = await storage.getUsers(req.session.organizationId!);
       const amUser = allUsers.find(u => u.id === goal.amId);
@@ -6156,7 +6157,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const tps = await storage.getTouchpointsByContact(req.params.id);
+      const tps = await storage.getTouchpointsByContact((req.params.id as string));
       res.json(tps);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch touchpoints" });
@@ -6167,11 +6168,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const contact = await storage.getContact(req.params.id);
+      const contact = await storage.getContact((req.params.id as string));
       if (!contact) return res.status(404).json({ error: "Contact not found" });
       const now = new Date();
       const tp = await storage.createTouchpoint({
-        contactId: req.params.id,
+        contactId: (req.params.id as string),
         companyId: contact.companyId,
         type: req.body.type || "call",
         date: req.body.date || now.toISOString().split("T")[0],
@@ -6191,7 +6192,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      await storage.deleteTouchpoint(req.params.id);
+      await storage.deleteTouchpoint((req.params.id as string));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete touchpoint" });
@@ -6204,9 +6205,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const [company, touchpoints, contacts, allRfps, allAwards, uploads] = await Promise.all([
-        storage.getCompanyInOrg(req.params.id, user.organizationId),
-        storage.getTouchpointsByCompany(req.params.id),
-        storage.getContactsByCompany(req.params.id),
+        storage.getCompanyInOrg((req.params.id as string), user.organizationId),
+        storage.getTouchpointsByCompany((req.params.id as string)),
+        storage.getContactsByCompany((req.params.id as string)),
         storage.getRfps(),
         storage.getAwards(),
         storage.getFinancialUploadsForOrg(req.session.organizationId!),
@@ -6252,8 +6253,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       else if (contactCount === 1) contactScore = 5;
 
       // Factor 4: Active RFP or Award (15 pts)
-      const companyRfps = allRfps.filter(r => r.companyId === req.params.id);
-      const companyAwards = allAwards.filter(a => a.companyId === req.params.id);
+      const companyRfps = allRfps.filter(r => r.companyId === (req.params.id as string));
+      const companyAwards = allAwards.filter(a => a.companyId === (req.params.id as string));
       const activeRfp = companyRfps.find(r => r.status === "open" || r.status === "pending");
       const hasAward = companyAwards.length > 0;
       const rfpScore = activeRfp ? 10 : 0;
@@ -6312,7 +6313,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const tps = await storage.getTouchpointsByCompany(req.params.id);
+      const tps = await storage.getTouchpointsByCompany((req.params.id as string));
       res.json(tps);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch company touchpoints" });
@@ -6323,10 +6324,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(user, req.params.id))) return res.status(403).json({ error: "Access denied" });
-      const tps = await storage.getTouchpointsByCompany(req.params.id);
+      if (!(await canAccessCompany(user, (req.params.id as string)))) return res.status(403).json({ error: "Access denied" });
+      const tps = await storage.getTouchpointsByCompany((req.params.id as string));
       const allUsers = await storage.getUsers(req.session.organizationId!);
-      const contactsList = await storage.getContactsByCompany(req.params.id);
+      const contactsList = await storage.getContactsByCompany((req.params.id as string));
       const enriched = tps.map(tp => ({
         ...tp,
         loggedByName: allUsers.find(u => u.id === tp.loggedById)?.name || "Unknown",
@@ -6517,9 +6518,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const filtered = teamIds === null ? thisWeek : thisWeek.filter(t => t.loggedById && (teamIds.includes(t.loggedById) || t.loggedById === user.id));
 
       const byUser: Record<string, { userId: string; name: string; total: number; call: number; email: number; text: number; site_visit: number; meaningful: number }> = {};
-      const allUsers = await storage.getUsers();
+      const allUsers = await storage.getUsers(user.organizationId);
       const userMap: Record<string, string> = {};
-      for (const u of allUsers) userMap[u.id] = `${u.firstName} ${u.lastName}`.trim() || u.username;
+      for (const u of allUsers) userMap[u.id] = u.name || u.username;
 
       for (const tp of filtered) {
         if (!tp.loggedById) continue;
@@ -6540,7 +6541,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  async function canAccessAttachmentEntity(user: { id: string; role: string; managerId: string | null }, entityType: string, entityId: string): Promise<boolean> {
+  async function canAccessAttachmentEntity(user: { id: string; role: string; managerId: string | null; organizationId: string }, entityType: string, entityId: string): Promise<boolean> {
     try {
       if (entityType === "feed_post") {
         const post = await storage.getFeedPost(entityId);
@@ -6561,18 +6562,19 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         const tp = await storage.getTouchpoint(entityId);
         if (!tp) return false;
         if (user.role === "admin") return true;
+        if (!tp.contactId) return false;
         const contact = await storage.getContact(tp.contactId);
         if (!contact) return false;
-        return canAccessCompany(user, contact.companyId);
+        return canAccessCompany(user as any, contact.companyId);
       }
       if (entityType === "one_on_one_topic") {
         const topic = await storage.getTopic(entityId);
         if (!topic) return false;
-        return canAccessSession(user, topic.sessionId);
+        return canAccessSession(user, topic.sessionId as string);
       }
       if (entityType === "scorecard") {
         if (user.role === "admin") return true;
-        return canAccessCompany(user, entityId);
+        return canAccessCompany(user as any, entityId);
       }
       if (entityType === "internal_post") {
         return user.role === "admin" || user.role === "director";
@@ -6659,7 +6661,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const att = await storage.getAttachment(req.params.id);
+      const att = await storage.getAttachment((req.params.id as string));
       if (!att) return res.status(404).json({ error: "Attachment not found" });
       if (!(await canAccessAttachmentEntity(user, att.entityType, att.entityId))) {
         return res.status(403).json({ error: "Access denied" });
@@ -6678,12 +6680,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const att = await storage.getAttachment(req.params.id);
+      const att = await storage.getAttachment((req.params.id as string));
       if (!att) return res.status(404).json({ error: "Attachment not found" });
       if (!(await canAccessAttachmentEntity(user, att.entityType, att.entityId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      await storage.deleteAttachment(req.params.id);
+      await storage.deleteAttachment((req.params.id as string));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete attachment" });
@@ -6694,10 +6696,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const rows = await storage.getVendorRoutedByCompany(req.params.id);
+      const rows = await storage.getVendorRoutedByCompany((req.params.id as string));
       const keys = rows.map(r => r.rowKey);
       res.json(keys);
     } catch (error) {
@@ -6709,14 +6711,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { rowKey } = req.body;
       if (!rowKey || typeof rowKey !== "string") {
         return res.status(400).json({ error: "rowKey is required" });
       }
-      const result = await storage.toggleVendorRouted(req.params.id, rowKey);
+      const result = await storage.toggleVendorRouted((req.params.id as string), rowKey);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to toggle vendor routed" });
@@ -6787,12 +6789,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff(req.params.id);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
       if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.updatePtoPassoff(req.params.id, req.body);
+      const updated = await storage.updatePtoPassoff((req.params.id as string), req.body);
       // Notify new covering person if coveringUserId changed
       const newCovering = req.body.coveringUserId;
       if (newCovering && newCovering !== passoff.coveringUserId && newCovering !== currentUser.id) {
@@ -6830,12 +6832,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff(req.params.id);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
       if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
       }
-      await storage.deletePtoPassoff(req.params.id);
+      await storage.deletePtoPassoff((req.params.id as string));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete PTO passoff" });
@@ -6846,13 +6848,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff(req.params.id);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
       if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
       }
       const item = await storage.createPtoPassoffItem({
-        passoffId: req.params.id,
+        passoffId: (req.params.id as string),
         companyId: req.body.companyId || null,
         priority: req.body.priority || "medium",
         spotFreightHandler: req.body.spotFreightHandler || null,
@@ -6872,7 +6874,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff(req.params.id);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
       const isCovering = passoff.coveringUserId === currentUser.id;
       const isOwner = passoff.createdById === currentUser.id;
@@ -6880,13 +6882,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!isOwner && !isCovering && !isAdmin) return res.status(403).json({ error: "Access denied" });
       // Covering user can only update acknowledged field
       const allowedFields = isOwner || isAdmin ? req.body : { acknowledged: req.body.acknowledged };
-      const updated = await storage.updatePtoPassoffItem(req.params.itemId, allowedFields);
+      const updated = await storage.updatePtoPassoffItem((req.params.itemId as string), allowedFields);
       // Notify passoff owner when covering person acknowledges an account
       const justAcknowledged = req.body.acknowledged === true && isCovering && !isOwner;
       if (justAcknowledged && passoff.createdById !== currentUser.id) {
         (async () => {
-          const items = await storage.getPtoPassoffItems(req.params.id);
-          const item = items.find(i => i.id === req.params.itemId);
+          const items = await storage.getPtoPassoffItems((req.params.id as string));
+          const item = items.find(i => i.id === (req.params.itemId as string));
           let body = "Account acknowledged in your passoff";
           if (item?.companyId) {
             const company = await storage.getCompanyInOrg(item.companyId, currentUser.organizationId);
@@ -6913,12 +6915,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff(req.params.id);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
       if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
       }
-      await storage.deletePtoPassoffItem(req.params.itemId);
+      await storage.deletePtoPassoffItem((req.params.itemId as string));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete passoff item" });
@@ -7539,16 +7541,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
-      const { fromRole, toRole } = req.params;
+      const { fromRole, toRole } = req.params as Record<string, string>;
       const validRoles = ["logistics_manager", "account_manager", "national_account_manager"];
       if (!validRoles.includes(fromRole) || !validRoles.includes(toRole)) {
         return res.status(400).json({ error: "Invalid role" });
       }
       const { minLoadCount, minMarginPct, minTouchpoints, minTenureMonths, notes } = req.body;
       const safeNum = (v: any) => (v != null && v !== "" ? Number(v) : null);
+      const safeMarginPct = safeNum(minMarginPct);
       const data = {
         minLoadCount: safeNum(minLoadCount),
-        minMarginPct: safeNum(minMarginPct),
+        minMarginPct: safeMarginPct !== null ? String(safeMarginPct) : null,
         minTouchpoints: safeNum(minTouchpoints),
         minTenureMonths: safeNum(minTenureMonths),
         notes: typeof notes === "string" ? notes : null,
@@ -7566,7 +7569,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
-      const deleted = await storage.deletePromotionCriteria(req.params.id);
+      const deleted = await storage.deletePromotionCriteria((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Criteria not found" });
       res.json({ success: true });
     } catch (err) {
@@ -7616,10 +7619,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      if (user.id !== req.params.nomineeId && !nominationAllowedRoles.includes(user.role)) {
+      if (user.id !== (req.params.nomineeId as string) && !nominationAllowedRoles.includes(user.role)) {
         return res.status(403).json({ error: "Not authorized" });
       }
-      const nominations = await storage.getNominationsByNominee(req.params.nomineeId);
+      const nominations = await storage.getNominationsByNominee((req.params.nomineeId as string));
       res.json(nominations);
     } catch (err) {
       res.status(500).json({ error: "Failed to load nominations" });
@@ -7666,7 +7669,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (status && ["active", "approved", "declined"].includes(status)) allowedFields.status = status;
       if (typeof notes === "string") allowedFields.notes = notes;
       if (Object.keys(allowedFields).length === 0) return res.status(400).json({ error: "No valid fields to update" });
-      const updated = await storage.updatePromotionNomination(req.params.id, allowedFields);
+      const updated = await storage.updatePromotionNomination((req.params.id as string), allowedFields);
       if (!updated) return res.status(404).json({ error: "Nomination not found" });
       res.json(updated);
     } catch (err) {
@@ -7679,7 +7682,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       if (!nominationAllowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
-      const deleted = await storage.deletePromotionNomination(req.params.id);
+      const deleted = await storage.deletePromotionNomination((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Nomination not found" });
       res.json({ success: true });
     } catch (err) {
@@ -7724,7 +7727,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Forbidden" });
-      const link = await storage.updateToolLink(req.params.id, req.body);
+      const link = await storage.updateToolLink((req.params.id as string), req.body);
       if (!link) return res.status(404).json({ error: "Not found" });
       res.json(link);
     } catch (error) {
@@ -7737,7 +7740,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Forbidden" });
-      await storage.deleteToolLink(req.params.id);
+      await storage.deleteToolLink((req.params.id as string));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete tool link" });
@@ -7749,12 +7752,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg(req.params.id, user.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const now = new Date();
       const tp = await storage.createTouchpoint({
         contactId: req.body.contactId || null,
-        companyId: req.params.id,
+        companyId: (req.params.id as string),
         type: req.body.type || "call",
         date: req.body.date || now.toISOString().split("T")[0],
         notes: req.body.notes || null,
@@ -7864,7 +7867,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const { lmUserId } = req.params;
+      const { lmUserId } = req.params as Record<string, string>;
       const lmUser = await storage.getUser(lmUserId);
       if (!lmUser || lmUser.organizationId !== user.organizationId) {
         return res.status(404).json({ error: "User not found" });
@@ -7896,7 +7899,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const { lmUserId } = req.params;
+      const { lmUserId } = req.params as Record<string, string>;
       const lmUser = await storage.getUser(lmUserId);
       if (!lmUser || lmUser.organizationId !== user.organizationId) {
         return res.status(404).json({ error: "User not found" });
