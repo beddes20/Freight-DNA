@@ -134,8 +134,6 @@ export function AppSidebar() {
                 <line x1="74" y1="5" x2="74" y2="41" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
                 <line x1="69" y1="23" x2="122" y2="23" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
                 <polygon points="116,17 124,23 116,29" fill="#ffb400"/>
-                <path d="M 63,23 L 58,17 L 54,23" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M 63,23 L 58,29 L 54,23" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
               </g>
             </svg>
           </div>
