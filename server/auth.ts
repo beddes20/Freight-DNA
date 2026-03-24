@@ -11,6 +11,7 @@ declare module "express-session" {
   interface SessionData {
     userId: string;
     organizationId: string;
+    organizationSlug?: string;
     impersonatingAdminId?: string;
   }
 }
@@ -90,10 +91,12 @@ export function setupAuth(app: any) {
 
       req.session.userId = user.id;
       req.session.organizationId = user.organizationId;
+      const org = await storage.getOrganizationById(user.organizationId);
+      req.session.organizationSlug = org?.slug ?? "";
       const now = new Date().toISOString();
       await storage.updateUser(user.id, user.organizationId, { lastLoginAt: now });
       const { password: _, ...safeUser } = user;
-      res.json({ ...safeUser, lastLoginAt: now });
+      res.json({ ...safeUser, lastLoginAt: now, organizationSlug: req.session.organizationSlug });
     } catch (error) {
       console.error("Login error:", error);
       res.status(500).json({ error: "Login failed" });
@@ -121,7 +124,7 @@ export function setupAuth(app: any) {
       const admin = await storage.getUser(req.session.impersonatingAdminId!);
       if (admin) impersonatingAdminName = admin.name;
     }
-    res.json({ ...safeUser, isImpersonating, impersonatingAdminName });
+    res.json({ ...safeUser, isImpersonating, impersonatingAdminName, organizationSlug: req.session.organizationSlug ?? "" });
   });
 
   app.post("/api/admin/impersonate/:userId", async (req: Request, res: Response) => {

@@ -431,7 +431,7 @@ async function main() {
         name: "Summit Frozen Foods",
         industry: "Food & Beverage",
         assignedToKey: "am1",
-        financialAlias: "SUMMFOIL",
+        financialAlias: "Summit Frozen Foods",
         tenderStyle: "EDI tender with 2-hour accept window; rejects go to spot board",
         spotProcess: "Posts spot loads to DAT with a 90-minute bid window; prefers flat rates",
         accountQuirks: "Very sensitive to on-time pickup — one miss triggers an escalation call with their VP",
@@ -443,7 +443,7 @@ async function main() {
         name: "Heartland Building Products",
         industry: "Building Materials",
         assignedToKey: "am1",
-        financialAlias: "HEARTBPIL",
+        financialAlias: "Heartland Building Products",
         tenderStyle: "Manual tender via email; no EDI, reply expected within 4 hours",
         spotProcess: "Uses Truckstop for spot; multiple carriers bid and they pick lowest cost",
         accountQuirks: "Always wants drop trailers at their Elgin facility — non-negotiable",
@@ -455,7 +455,7 @@ async function main() {
         name: "Riverview Chemical",
         industry: "Chemical",
         assignedToKey: "am2",
-        financialAlias: "RIVRCHIL",
+        financialAlias: "Riverview Chemical",
         tenderStyle: "Dedicated carrier program for contracted lanes; spot only for overflow",
         spotProcess: "Internal spot board — carrier must be pre-approved for hazmat",
         accountQuirks: "Requires HAZMAT-certified drivers; will not use brokers who can't confirm in writing",
@@ -467,7 +467,7 @@ async function main() {
         name: "Pacific Coast Produce",
         industry: "Agriculture",
         assignedToKey: "am2",
-        financialAlias: "PACIPCCA",
+        financialAlias: "Pacific Coast Produce",
         tenderStyle: "Spot-heavy; RFP for core lanes, everything else goes to DAT daily",
         spotProcess: "Bids open at 6 AM daily; carriers have 45 minutes to respond before they move on",
         accountQuirks: "Extremely time-sensitive — produce goes from cold storage to destination, no delays tolerated",
@@ -479,7 +479,7 @@ async function main() {
         name: "Great Plains Distribution",
         industry: "Third-Party Logistics",
         assignedToKey: "am3",
-        financialAlias: "GREATPDNE",
+        financialAlias: "Great Plains Distribution",
         tenderStyle: "Mixed: some EDI for large retail customers, rest is manual",
         spotProcess: "Uses a broker portal for spot; rate must beat their internal benchmark by 5%",
         accountQuirks: "Pays net-60; slow invoicing process — always follow up on outstanding AR",
@@ -491,7 +491,7 @@ async function main() {
         name: "MidAmerica Steel Works",
         industry: "Manufacturing",
         assignedToKey: "am3",
-        financialAlias: "MIDAMSTMO",
+        financialAlias: "MidAmerica Steel Works",
         tenderStyle: "Dedicated lanes with quarterly rate reviews; no spot except emergencies",
         spotProcess: "Only uses spot for emergency overflow — calls directly and needs same-day coverage",
         accountQuirks: "Heavy freight — most loads are 42k–44k lbs; carrier must have air-ride or specialty equipment for coils",
@@ -503,7 +503,7 @@ async function main() {
         name: "Bayshore Consumer Brands",
         industry: "Consumer Packaged Goods",
         assignedToKey: "am4",
-        financialAlias: "BAYSHCPFL",
+        financialAlias: "Bayshore Consumer Brands",
         tenderStyle: "RFP-driven with 12-month lanes; spot for overflow during promo windows",
         spotProcess: "Quotes via email; broker has 2 hours to respond with a rate and carrier",
         accountQuirks: "Heavy on compliance — all carriers must complete their carrier onboarding packet before first load",
@@ -515,7 +515,7 @@ async function main() {
         name: "Northstar Lumber Co.",
         industry: "Forest Products",
         assignedToKey: "am5",
-        financialAlias: "NORTHLCMN",
+        financialAlias: "Northstar Lumber Co.",
         tenderStyle: "Manual email tender with a 3-hour window; sometimes calls directly for urgent loads",
         spotProcess: "Posts to DAT and Truckstop simultaneously; takes first carrier that matches their rate",
         accountQuirks: "Backhaul-friendly — loads returning from their MN facilities are easy capacity wins",
@@ -527,7 +527,7 @@ async function main() {
         name: "Keystone Pharma Logistics",
         industry: "Pharmaceutical",
         assignedToKey: "am5",
-        financialAlias: "KEYSTPLPA",
+        financialAlias: "Keystone Pharma Logistics",
         tenderStyle: "Highly controlled — all tenders go through their 3PL partner (CTSI); no direct contact",
         spotProcess: "No open spot market; all overflow routes through CTSI pre-approved carrier list",
         accountQuirks: "Temperature excursion = automatic claim; requires GPS tracking on every load",
@@ -539,7 +539,7 @@ async function main() {
         name: "Laredo Cross-Border Trading",
         industry: "Import/Export",
         assignedToKey: "am6",
-        financialAlias: "LAREDOCBTX",
+        financialAlias: "Laredo Cross-Border Trading",
         tenderStyle: "Spot-first for cross-border; dedicated for domestic legs",
         spotProcess: "Cross-border bids posted on their internal system at 7 AM; 1-hour response window",
         accountQuirks: "Mexico-domiciled loads need a drayage partner at the border; they'll ask us to coordinate",
@@ -655,6 +655,15 @@ async function main() {
         else if (i >= 2 && dirId) reportsToId = dirId;
         else if (i >= 2 && vpId) reportsToId = vpId;
 
+        // Spread contact creation dates: last 1-2 per company are recent (March 2026)
+        const contactCreatedAt =
+          i === defs.length - 1 ? dateStr(2026, 3, randomBetween(21, 24)) :
+          i === defs.length - 2 ? dateStr(2026, 3, randomBetween(10, 18)) :
+          dateStr(2025, randomBetween(10, 11), randomBetween(1, 28));
+
+        // ~50% of contacts had their relationship base advanced in March 2026
+        const baseAdvancedAt = i % 2 === 0 ? dateStr(2026, 3, randomBetween(1, 23)) : null;
+
         const [contact] = await db.insert(contacts).values({
           companyId: co.id,
           name: cd.name,
@@ -669,8 +678,9 @@ async function main() {
           spotBiddingProcess: cd.spot,
           interests: cd.interests,
           notes: null,
-          createdAt: dateStr(2025, 11, randomBetween(1, 28)),
+          createdAt: contactCreatedAt,
           createdBy: amUserId,
+          baseAdvancedAt,
         }).returning();
 
         if (i === 0) vpId = contact.id;
@@ -695,6 +705,14 @@ async function main() {
         "Rick reached out about a 53' reefer spot load Chicago→Atlanta for Friday — confirmed coverage at $2.25/mi",
         "Tanya shared their spring produce schedule — reefer needs spike April through June",
         "Email follow-up with Owen on Birmingham loads — he's scheduling out 2 weeks now, asked to pre-book",
+        "Called Gloria ahead of Q2 planning — she's excited about our service consistency numbers",
+        "Text with Rick confirming 4 loads out of Chicago Monday — he appreciated the quick confirm",
+        "Emailed Tanya reefer options for next week including weekend loads — she responded same hour",
+        "Rick called with 2 emergency loads Friday night — we covered both, earned serious goodwill",
+        "Quarterly check-in with Gloria — she mentioned we're their #2 broker by volume now",
+        "Caught Tanya at her desk, walked through March load plan together — she locked in 18 loads with us",
+        "Owen mentioned Birmingham DC is expanding — flagged for future opportunity",
+        "Rick connected me with their new Nashville DC manager — big opportunity developing",
       ],
       "Heartland Building Products": [
         "Spoke with Carmen about drop trailer program at Elgin — she wants at least 3 trailers staged by Feb 15",
@@ -703,6 +721,13 @@ async function main() {
         "Bill wants a quarterly review — scheduled for March 10 at their office in Elgin",
         "Covered 2 emergency flatbed loads when their primary carrier no-showed on a Monday morning",
         "Aaron confirmed they're adding a Nashville distribution point starting March 1 — big volume opportunity",
+        "Texted Carmen about weekend flatbed availability — she confirmed 3 loads on Saturday",
+        "Called Bill ahead of QBR to prep the agenda — he wants to see carrier performance by lane",
+        "Aaron mentioned their Columbus volume is up 20% this spring — big opportunity to grow",
+        "Emailed Carmen the drop trailer staging plan — she approved it immediately",
+        "Bill's QBR went great — he's signing a 6-month flatbed commitment starting April",
+        "Aaron asked about step deck options for oversized pallets — quoted and booked same day",
+        "Called Carmen to confirm March staging is on track — she said we're the only broker she trusts",
       ],
       "Riverview Chemical": [
         "Emailed Steve on HAZMAT overflow capacity — he forwarded our cert to their compliance team",
@@ -712,6 +737,12 @@ async function main() {
         "Nadia requested updated insurance certs — sent same day",
         "Site visit to Riverview's Elgin facility with Steve — walked the loading dock, met the dock manager",
         "Steve confirmed our QBR is April 15 — he wants a carrier performance deep-dive",
+        "Monica called about 3 urgent tanker loads — covered all of them within 4 hours",
+        "Earl texted about Midwest lane changes — updated our routing matrix",
+        "Checked in with Nadia on compliance calendar — we're audit-ready on all carriers",
+        "Steve mentioned they're expanding to a new Gulf Coast terminal — could add 8 loads/week",
+        "Called Janet Liu's office to introduce our dedicated chemical program — assistant said she'd pass it on",
+        "Monica shared that they're renewing our contract — we're their #1 HAZMAT carrier relationship",
       ],
       "Pacific Coast Produce": [
         "Called Lisa on daily reefer availability — she's been burned by no-shows, emphasized our 98% tender acceptance",
@@ -721,6 +752,13 @@ async function main() {
         "Emailed Carlos a competitive rate analysis on their LA→Phoenix core lane",
         "Covered a weekend emergency move from Fresno to Las Vegas — temperature-controlled, no excursion",
         "Caught up with Sandra on their Pacific Northwest volume — she's adding Portland to the program in March",
+        "Jake texted confirming 5 spot loads out of Fresno Monday — we've got them covered",
+        "Called Lisa after the produce summit — she wants to expand our coverage to Portland",
+        "Carlos reached out praising our weekend team — best service he's had all year",
+        "Sandra confirmed the Portland lane is live — 8 loads per week starting mid-March",
+        "Called Lisa on Q2 capacity planning — she's locking in 60% of volume with us through June",
+        "Jake confirmed backhaul program from Phoenix is delivering — saving them $1.10/mi",
+        "Carlos invited us to their annual carrier awards dinner — we're up for 'Most Reliable'",
       ],
       "Great Plains Distribution": [
         "Called Rachel to introduce our new carrier performance dashboard — she wants a demo",
@@ -731,6 +769,12 @@ async function main() {
         "Owen confirmed 12 Wichita–Sioux Falls loads for February — steady dry van volume",
         "Followed up on AR issue — invoice 10842 is 45 days out; Trevor said finance is backed up",
         "Howard's team is evaluating TMS integrations — positioned our API capabilities",
+        "Rachel loved the carrier dashboard demo — asked us to present to her leadership team",
+        "AR issue resolved — Trevor confirmed payment processed, relationship back on solid ground",
+        "Cassandra called about flatbed expansion for the Denver route — wants to add 3 more lanes",
+        "Owen flagged that Wichita volume is growing — confirmed capacity through April",
+        "Howard connected us with their IT director to discuss TMS integration — big strategic win",
+        "Called Rachel after the leadership presentation — they're voting on preferred carrier status",
       ],
       "MidAmerica Steel Works": [
         "Dana called for emergency coil move from St. Louis to Pittsburgh — covered same afternoon",
@@ -739,6 +783,12 @@ async function main() {
         "Patricia asked about Nashville capacity — we have consistent carriers running that lane",
         "Covered 3 emergency loads when their primary flatbed carrier had equipment issues",
         "Dana appreciated the same-day coverage last week — said she'll 'remember that'",
+        "Mike texted about a last-minute coil move — covered within 90 minutes",
+        "Frank agreed to pilot the 5-lane dedicated program — signing the agreement next week",
+        "Dana reached out about adding a Cleveland lane — confirmed capacity immediately",
+        "Called Patricia to follow up on Nashville route expansion — she's ready to move forward",
+        "Frank signed the dedicated lane agreement — 5 lanes locked in through Q3",
+        "Mike confirmed the Pittsburgh carrier is doing great — zero claims this quarter",
       ],
       "Bayshore Consumer Brands": [
         "Called Tom on drop trailer availability at their Tampa DC — confirmed 2 staged for Feb",
@@ -747,6 +797,12 @@ async function main() {
         "Dillon confirmed they're adding a New York DC in Q2 — big dry van volume coming",
         "Angela's team completed our carrier onboarding — fully compliant now",
         "Tom wants bi-weekly check-ins — set up recurring Friday calls",
+        "Shana confirmed spring promo loads starting April — 15+ reefer loads per week",
+        "Tom called after our Friday check-in — he's our biggest advocate inside the company",
+        "Angela asked for a case study on our compliance process — sent it and she shared with her team",
+        "Dillon confirmed NY DC plans — we're first call for all volume out of that location",
+        "Called Tom about the Charlotte lane rate adjustment — he appreciated the transparency",
+        "Shana texted confirming Q2 reefer coverage — she said we're the easiest broker they use",
       ],
       "Northstar Lumber Co.": [
         "Called Wendy on flatbed availability for Seattle runs — she's been using us 3 loads per week",
@@ -755,6 +811,12 @@ async function main() {
         "Brad confirmed 4 Milwaukee–Grand Rapids loads for February",
         "Wendy shared that their primary carrier raised rates 8% — positioned us as a better value",
         "Glen wants to discuss a dedicated lane program for their top 5 routes — set meeting for Feb 20",
+        "Dedicated lane meeting with Glen was productive — he wants a proposal by March 1",
+        "Sent Glen the dedicated lane proposal — 5 lanes, 90-day trial, fixed rates",
+        "Brad texted that Milwaukee volume is picking up — added 2 more loads this week",
+        "Glen called back excited about the proposal — he's taking it to his CFO",
+        "Wendy mentioned Boise runs are their most consistent lane — we're covering 100% of them now",
+        "Glen's CFO approved the dedicated lane trial — contract starts April 1",
       ],
       "Keystone Pharma Logistics": [
         "Called Nathan to confirm our GPS tracking is CTSI-compliant — verified and documented",
@@ -764,6 +826,11 @@ async function main() {
         "Patricia reviewed our Q1 performance data — 100% on-time, zero excursions",
         "CTSI portal updated with our carrier additions — all cleared for Keystone lanes",
         "Greg confirmed West Coast volume doubles in Q2 — need to plan capacity now",
+        "Called Nathan with Q2 capacity plan — he said we're exactly what they need",
+        "Allison confirmed we've now handled 50 loads with zero excursions — company record",
+        "Patricia asked for a meeting with our cold chain director — setting that up",
+        "Greg's team added us to 3 more West Coast lanes — validation of our reliability",
+        "Nathan confirmed annual contract renewal — they're expanding our scope by 40%",
       ],
       "Laredo Cross-Border Trading": [
         "Called Hector about drayage partner options at the Laredo border crossing — shared 3 options",
@@ -774,8 +841,42 @@ async function main() {
         "Carla asked for documentation on our Mexico cross-border SOP — sent the deck",
         "Ana called about spot reefer from Monterrey to San Antonio — covered within 2 hours",
         "Hector wants a sit-down with Sofia and Brianna to talk about Q2 capacity strategy",
+        "Strategic Q2 call with Sofia and Hector — they want us as primary cross-border partner",
+        "Ana confirmed 3 new lanes added for March — Houston, Dallas, San Antonio",
+        "Marco praised our customs timing — fastest clearance they've had in 6 months",
+        "Hector texted that Sofia approved us as preferred cross-border partner — huge win",
+        "Called Sofia to confirm Q2 lane structure — she's ready to sign a formal agreement",
+        "Carla asked for updated compliance docs — sent same day, she confirmed receipt",
       ],
     };
+
+    // "Current week" meaningful touchpoints (March 23-28, 2026) with substantive notes
+    const currentWeekTouchpoints: Array<{
+      companyName: string;
+      amKey: keyof AmMap;
+      contactIdx: number;
+      type: string;
+      date: string;
+      notes: string;
+      meaningful: boolean;
+    }> = [
+      { companyName: "Summit Frozen Foods", amKey: "am1", contactIdx: 1, type: "call", date: "2026-03-24", notes: "Spoke with Rick about locking in Q2 reefer volume — he confirmed 45 loads per month, real freight need. This is a $180K incremental margin opportunity if we execute.", meaningful: true },
+      { companyName: "Summit Frozen Foods", amKey: "am1", contactIdx: 0, type: "email", date: "2026-03-23", notes: "Sent Gloria our Q1 performance report — 99.2% tender acceptance, zero temp excursions. She replied saying we're their top-ranked broker.", meaningful: false },
+      { companyName: "Heartland Building Products", amKey: "am1", contactIdx: 1, type: "call", date: "2026-03-24", notes: "Called Carmen post-QBR to recap commitments — she's signing the 6-month flatbed agreement. Confirmed rates and start date of April 7.", meaningful: true },
+      { companyName: "Riverview Chemical", amKey: "am2", contactIdx: 1, type: "call", date: "2026-03-24", notes: "Steve called with news — they're expanding to Port Arthur, TX with 6 loads/week. We're first on the list if we can confirm HAZMAT capability. This is a $90K/month opportunity.", meaningful: true },
+      { companyName: "Riverview Chemical", amKey: "am2", contactIdx: 2, type: "email", date: "2026-03-23", notes: "Emailed Monica with updated Gulf Coast capacity plan for Q2 — she confirmed it looks strong.", meaningful: false },
+      { companyName: "Pacific Coast Produce", amKey: "am2", contactIdx: 1, type: "call", date: "2026-03-25", notes: "Called Lisa on April produce season — she wants 80 reefer loads committed before April 1. Discussed rates, service levels, and the Portland expansion. Real strategic conversation.", meaningful: true },
+      { companyName: "Pacific Coast Produce", amKey: "am2", contactIdx: 2, type: "text", date: "2026-03-23", notes: "Jake texted confirming 8 Monday loads — covered all, zero issues.", meaningful: false },
+      { companyName: "Great Plains Distribution", amKey: "am3", contactIdx: 1, type: "call", date: "2026-03-24", notes: "Rachel called after her leadership team meeting — we've been approved for preferred carrier status. This opens up an additional $300K in annual volume for us to compete for.", meaningful: true },
+      { companyName: "Great Plains Distribution", amKey: "am3", contactIdx: 2, type: "email", date: "2026-03-23", notes: "Trevor confirmed the AR balance is cleared — relationship back on good terms.", meaningful: false },
+      { companyName: "MidAmerica Steel Works", amKey: "am3", contactIdx: 1, type: "call", date: "2026-03-25", notes: "Dana called to discuss adding 2 more dedicated lanes — St. Louis to Cleveland and Pittsburgh to Indianapolis. She says Frank is fully behind it. Real opportunity.", meaningful: true },
+      { companyName: "Bayshore Consumer Brands", amKey: "am4", contactIdx: 1, type: "call", date: "2026-03-24", notes: "Tom confirmed they're expanding to the New York DC a month early — June 1 instead of July. This brings forward ~20 dry van loads/week. Locked in our capacity commitment.", meaningful: true },
+      { companyName: "Bayshore Consumer Brands", amKey: "am4", contactIdx: 2, type: "email", date: "2026-03-23", notes: "Shana emailed confirming spring promo reefer loads — 18/week confirmed for April through May.", meaningful: false },
+      { companyName: "Northstar Lumber Co.", amKey: "am5", contactIdx: 0, type: "call", date: "2026-03-24", notes: "Glen called to say the CFO signed off on the dedicated lane agreement — 5 lanes, April 1 start, fixed rates. Biggest new commitment we've had this year.", meaningful: true },
+      { companyName: "Keystone Pharma Logistics", amKey: "am5", contactIdx: 1, type: "call", date: "2026-03-25", notes: "Nathan called with great news — Keystone is renewing our contract and expanding scope by 40%. They're adding 4 more lanes including two high-value West Coast routes.", meaningful: true },
+      { companyName: "Laredo Cross-Border Trading", amKey: "am6", contactIdx: 0, type: "call", date: "2026-03-24", notes: "Sofia confirmed preferred cross-border partner agreement — formalizing in writing next week. This locks in $2.2M in annual freight volume with us as primary.", meaningful: true },
+      { companyName: "Laredo Cross-Border Trading", amKey: "am6", contactIdx: 2, type: "email", date: "2026-03-23", notes: "Ana confirmed 6 Houston→Dallas loads for this week — all covered same day.", meaningful: false },
+    ];
 
     const touchpointTypes = ["call", "email", "visit", "call", "email", "call"];
 
@@ -785,42 +886,59 @@ async function main() {
       const assignedUserId = amMap[def.assignedToKey].id;
       const compContacts = contactsByCompanyId.get(co.id) ?? [];
 
-      const lastTouchDate =
-        def.assignedToKey === "am1" || def.assignedToKey === "am3" || def.assignedToKey === "am4"
-          ? dateStr(2026, 2, randomBetween(20, 25))
-          : def.assignedToKey === "am2" || def.assignedToKey === "am5"
-          ? dateStr(2026, 2, randomBetween(5, 12))
-          : dateStr(2026, 1, randomBetween(10, 20));
-
-      const janCount = Math.ceil(notes.length / 2);
+      // Distribute dates across Dec 2025, Jan 2026, Feb 2026, early March 2026
+      const decCount = Math.floor(notes.length * 0.15);
+      const janCount = Math.floor(notes.length * 0.35);
+      const febCount = Math.floor(notes.length * 0.30);
+      const marchCount = notes.length - decCount - janCount - febCount;
       const tpDates: string[] = [];
-      for (let i = 0; i < janCount; i++) {
-        tpDates.push(dateStr(2026, 1, randomBetween(3, 28)));
-      }
-      for (let i = 0; i < notes.length - janCount - 1; i++) {
-        tpDates.push(dateStr(2026, 2, randomBetween(3, 18)));
-      }
-      tpDates.push(lastTouchDate);
+      for (let i = 0; i < decCount; i++) tpDates.push(dateStr(2025, 12, randomBetween(3, 28)));
+      for (let i = 0; i < janCount; i++) tpDates.push(dateStr(2026, 1, randomBetween(3, 28)));
+      for (let i = 0; i < febCount; i++) tpDates.push(dateStr(2026, 2, randomBetween(3, 24)));
+      for (let i = 0; i < marchCount; i++) tpDates.push(dateStr(2026, 3, randomBetween(3, 20)));
       tpDates.sort();
 
       for (let i = 0; i < notes.length; i++) {
         const contactId = compContacts.length > 0
-          ? compContacts[Math.min(i, compContacts.length - 1)].id
+          ? compContacts[i % compContacts.length].id
           : null;
         await db.insert(touchpoints).values({
           companyId: co.id,
           contactId,
           type: pick(touchpointTypes),
-          date: tpDates[i] ?? lastTouchDate,
+          date: tpDates[i],
           notes: notes[i],
           sentiment: pick(["positive", "positive", "neutral", "positive"]),
-          isMeaningful: i % 3 === 0,
+          isMeaningful: i % 4 === 0,
           loggedById: assignedUserId,
-          createdAt: ts(new Date(tpDates[i] ?? lastTouchDate)),
+          createdAt: ts(new Date(tpDates[i])),
         });
       }
-      console.log(`  [${def.name}] Created ${notes.length} touchpoints`);
+      console.log(`  [${def.name}] Created ${notes.length} historical touchpoints`);
     }
+
+    // Insert current-week meaningful touchpoints
+    let weeklyTouchCount = 0;
+    for (const wt of currentWeekTouchpoints) {
+      const co = companyByName.get(wt.companyName);
+      if (!co) continue;
+      const assignedUserId = amMap[wt.amKey].id;
+      const compContacts = contactsByCompanyId.get(co.id) ?? [];
+      const contactId = compContacts.length > wt.contactIdx ? compContacts[wt.contactIdx].id : (compContacts[0]?.id ?? null);
+      await db.insert(touchpoints).values({
+        companyId: co.id,
+        contactId,
+        type: wt.type,
+        date: wt.date,
+        notes: wt.notes,
+        sentiment: "positive",
+        isMeaningful: wt.meaningful,
+        loggedById: assignedUserId,
+        createdAt: ts(new Date(wt.date + "T14:00:00.000Z")),
+      });
+      weeklyTouchCount++;
+    }
+    console.log(`  Created ${weeklyTouchCount} current-week touchpoints (including meaningful conversations)`);
 
     // ─── STEP 5: FINANCIAL DATA ───────────────────────────────────────────────
     console.log("\nStep 5: Creating financial uploads…");
@@ -950,31 +1068,25 @@ async function main() {
       return ((seed * 2654435761) >>> 0) % (range * 2 + 1) - range;
     }
 
-    function makeTransactionRows(month: "January" | "February"): TxRow[] {
-      const isJan = month === "January";
+    function makeTransactionRows(month: "January" | "February" | "March"): TxRow[] {
+      const monthNum = month === "January" ? 1 : month === "February" ? 2 : 3;
+      const daysInMonth = month === "January" ? 31 : month === "February" ? 28 : 24; // March up to 24th
       const year = 2026;
-      const monthNum = isJan ? 1 : 2;
-      const daysInMonth = isJan ? 31 : 28;
       const rows: TxRow[] = [];
-      let orderSeq = isJan ? 100000 : 102000;
+      let orderSeq = month === "January" ? 100000 : month === "February" ? 102000 : 104000;
+      // Growth multipliers: Jan = base, Feb = +18%, March = +28% (strong Q1 close)
+      const baseMult = month === "January" ? 1.0 : month === "February" ? 1.18 : 1.28;
 
       for (let ci = 0; ci < companyTemplates.length; ci++) {
         const tmpl = companyTemplates[ci];
-        // Feb is always exactly 18% more loads than Jan — no noise on load count
-        const loadsThisMonth = isJan
-          ? tmpl.baseLoadsPerMonth
-          : Math.ceil(tmpl.baseLoadsPerMonth * 1.18);
+        const loadsThisMonth = Math.ceil(tmpl.baseLoadsPerMonth * baseMult);
         for (let i = 0; i < loadsThisMonth; i++) {
           const lane = tmpl.lanes[i % tmpl.lanes.length];
           const isSpot = (i % Math.round(1 / Math.max(tmpl.spotFraction, 0.01))) === 0 && tmpl.spotFraction > 0;
-          // Spread loads evenly across the month
           const day = Math.min(daysInMonth, Math.floor((i / loadsThisMonth) * daysInMonth) + 1);
           const dateStr2 = `${year}-${String(monthNum).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-          // Deterministic per-load margin/revenue noise — always within +/-5% of base
-          const margNoise = deterministicNoise(ci * 10000 + i, Math.floor(tmpl.baseMarginPerLoad * 0.04));
-          const revNoise = deterministicNoise(ci * 20000 + i, Math.floor(tmpl.baseRevenuePerLoad * 0.04));
-          // Feb base is 18% higher — enforces monotonic growth in aggregates
-          const baseMult = isJan ? 1.0 : 1.18;
+          const margNoise = deterministicNoise(ci * 10000 + i + (monthNum * 50000), Math.floor(tmpl.baseMarginPerLoad * 0.04));
+          const revNoise = deterministicNoise(ci * 20000 + i + (monthNum * 50000), Math.floor(tmpl.baseRevenuePerLoad * 0.04));
           const margin = Math.round(tmpl.baseMarginPerLoad * baseMult + margNoise);
           const revenue = Math.round(tmpl.baseRevenuePerLoad * baseMult + revNoise);
           orderSeq++;
@@ -999,7 +1111,9 @@ async function main() {
 
     const janRows = makeTransactionRows("January");
     const febRows = makeTransactionRows("February");
+    const marchRows = makeTransactionRows("March");
 
+    // Jan-only upload (historical)
     const [janUpload] = await db.insert(financialUploads).values({
       fileName: `${DEMO_FILE_PREFIX}January_2026.xlsx`,
       uploadedAt: "2026-02-03T09:00:00.000Z",
@@ -1029,6 +1143,24 @@ async function main() {
       dailyAcquisition: [],
     }).returning();
     console.log(`  Created February financial upload: ${febRows.length} transaction rows`);
+
+    // March upload = ALL 3 months combined — this is the "latest" upload the trending endpoint reads.
+    // By including Jan + Feb + March rows, trending can compare Feb vs March and show growth/decline.
+    const allRows = [...janRows, ...febRows, ...marchRows];
+    const [marchUpload] = await db.insert(financialUploads).values({
+      fileName: `${DEMO_FILE_PREFIX}March_2026.xlsx`,
+      uploadedAt: "2026-03-24T09:00:00.000Z",
+      uploadedBy: admin.id,
+      rowCount: allRows.length,
+      rows: allRows,
+      summaryRows: [],
+      bestDealDaysSpot: [],
+      bestDealDaysAll: [],
+      trendAnalysis: [],
+      averagesData: [],
+      dailyAcquisition: [],
+    }).returning();
+    console.log(`  Created March financial upload: ${allRows.length} total rows (Jan + Feb + March — used for trending)`);
 
     // ─── STEP 6: RFPs ────────────────────────────────────────────────────────
     console.log("\nStep 6: Creating RFPs…");

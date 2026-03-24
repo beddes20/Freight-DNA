@@ -127,6 +127,7 @@ export interface RepReportData {
 
 export interface IStorage {
   getDefaultOrganization(): Promise<Organization | undefined>;
+  getOrganizationById(id: string): Promise<Organization | undefined>;
 
   /** Auth-only lookup by PK — trusted IDs only (session, FK chains). No org filter. */
   getUser(id: string): Promise<User | undefined>;
@@ -348,6 +349,11 @@ const db = drizzle(pool);
 export class DatabaseStorage implements IStorage {
   async getDefaultOrganization(): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, "valuetruck"));
+    return org;
+  }
+
+  async getOrganizationById(id: string): Promise<Organization | undefined> {
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, id));
     return org;
   }
 
