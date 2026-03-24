@@ -26,6 +26,7 @@ import {
   ListTodo, Plus, Circle, PlayCircle, CheckCircle2, Calendar, Trash2,
   ChevronDown, ChevronUp, Bell, BellRing, Loader2, MessageSquare,
   List, ChevronLeft, ChevronRight as ChevronRightIcon, Plane,
+  AlertTriangle, Users, User as UserIcon, StickyNote,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -71,7 +72,6 @@ function TaskCalendarView({
 
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-  // Group tasks by due date string (YYYY-MM-DD)
   const tasksByDay = new Map<number, TaskWithCount[]>();
   tasks.forEach(t => {
     if (!t.dueDate) return;
@@ -83,7 +83,6 @@ function TaskCalendarView({
     }
   });
 
-  // Active PTO passoffs that overlap this month
   const activePassoffs = passoffs.filter(p => {
     const start = new Date(p.startDate + "T00:00:00");
     const end = new Date(p.endDate + "T00:00:00");
@@ -119,7 +118,6 @@ function TaskCalendarView({
 
   return (
     <div className="space-y-4" data-testid="task-calendar-view">
-      {/* Month nav */}
       <div className="flex items-center justify-between">
         <button onClick={prevMonth} className="p-1 rounded hover:bg-muted transition-colors" data-testid="button-prev-month">
           <ChevronLeft className="h-5 w-5" />
@@ -130,7 +128,6 @@ function TaskCalendarView({
         </button>
       </div>
 
-      {/* Legend */}
       {activePassoffs.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap text-xs text-muted-foreground">
           <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-violet-200 dark:bg-violet-900 inline-block" /> PTO Coverage</span>
@@ -140,7 +137,6 @@ function TaskCalendarView({
         </div>
       )}
 
-      {/* Calendar grid */}
       <div className="border rounded-lg overflow-hidden">
         <div className="grid grid-cols-7 bg-muted/50">
           {dayNames.map(d => (
@@ -158,9 +154,6 @@ function TaskCalendarView({
             const isSelected = day === selectedDay;
             const dayTasks = tasksByDay.get(day) || [];
             const ptos = ptoOnDay(day);
-            const openCount = dayTasks.filter(t => t.status === "open").length;
-            const ipCount = dayTasks.filter(t => t.status === "in_progress").length;
-            const doneCount = dayTasks.filter(t => t.status === "completed").length;
 
             return (
               <div
@@ -179,7 +172,6 @@ function TaskCalendarView({
                   </span>
                   {ptos.length > 0 && <Plane className="h-3 w-3 text-violet-500 shrink-0" />}
                 </div>
-                {/* Task dots */}
                 {dayTasks.length > 0 && (
                   <div className="flex flex-wrap gap-0.5 mt-0.5">
                     {dayTasks.slice(0, 4).map(t => (
@@ -190,7 +182,6 @@ function TaskCalendarView({
                     )}
                   </div>
                 )}
-                {/* Task titles (compact) */}
                 {dayTasks.slice(0, 2).map(t => (
                   <p key={t.id} className="text-[10px] leading-tight text-muted-foreground truncate mt-0.5">{t.title}</p>
                 ))}
@@ -203,7 +194,6 @@ function TaskCalendarView({
         </div>
       </div>
 
-      {/* Selected day task list */}
       {selectedDay && (
         <Card data-testid="card-selected-day-tasks">
           <CardHeader className="pb-2 pt-3 px-4">
@@ -243,8 +233,6 @@ function TaskCalendarView({
                 })}
               </div>
             )}
-
-            {/* PTO for selected day */}
             {ptoOnDay(selectedDay).map(p => (
               <div key={p.id} className="flex items-center gap-2 p-2 rounded bg-violet-50 dark:bg-violet-950/30 mt-2">
                 <Plane className="h-3.5 w-3.5 text-violet-500 shrink-0" />
@@ -278,6 +266,13 @@ function dueDateBadge(dueDate: string | null) {
       {label}
     </span>
   );
+}
+
+function isOverdue(task: TaskWithCount) {
+  if (!task.dueDate || task.status === "completed") return false;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const due = new Date(task.dueDate + "T00:00:00");
+  return due < today;
 }
 
 const statusIcon = (status: string) => {
@@ -407,11 +402,14 @@ export default function TasksPage() {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskWithCount | undefined>();
   const [focusComments, setFocusComments] = useState(false);
-  const [showCompleted, setShowCompleted] = useState(true);
+  const [showCompleted, setShowCompleted] = useState(false);
   const [showAlerts, setShowAlerts] = useState(true);
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const [showMyTasksOnly, setShowMyTasksOnly] = useState(true);
   const markRead = useMarkNotificationsRead(TASK_NOTIFICATION_TYPES);
+
+  const isAdminRole = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
 
   useEffect(() => {
     if (currentUser) {
@@ -450,14 +448,17 @@ export default function TasksPage() {
     queryKey: ["/api/alerts"],
   });
 
-  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
-
-  const myTasks = isAdmin
+  // Filter tasks: admins can toggle between My Tasks / All Tasks
+  const scopedTasks = (isAdminRole && !showMyTasksOnly)
     ? allTasks
-    : allTasks.filter(t => t.assignedTo === currentUser?.id);
+    : allTasks.filter(t => t.assignedTo === currentUser?.id || t.assignedBy === currentUser?.id);
 
-  const openTasks = myTasks
-    .filter(t => t.status !== "completed")
+  const openTasks = scopedTasks.filter(t => t.status !== "completed");
+  const overdueTasks = openTasks
+    .filter(t => isOverdue(t))
+    .sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
+  const onTimeTasks = openTasks
+    .filter(t => !isOverdue(t))
     .sort((a, b) => {
       if (a.status === "in_progress" && b.status !== "in_progress") return -1;
       if (a.status !== "in_progress" && b.status === "in_progress") return 1;
@@ -467,7 +468,7 @@ export default function TasksPage() {
       return a.dueDate.localeCompare(b.dueDate);
     });
 
-  const completedTasks = myTasks
+  const completedTasks = scopedTasks
     .filter(t => t.status === "completed")
     .sort((a, b) => {
       if (!a.createdAt && !b.createdAt) return 0;
@@ -483,8 +484,14 @@ export default function TasksPage() {
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
       await apiRequest("PATCH", `/api/tasks/${id}`, { status });
     },
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      if (vars.status === "completed") {
+        toast({
+          title: "Task completed! ✓",
+          description: "Nice work — keep it moving.",
+        });
+      }
     },
   });
 
@@ -523,25 +530,54 @@ export default function TasksPage() {
   const getUserName = (userId: string) => teamMembers.find(u => u.id === userId)?.name || "";
   const getCompanyName = (companyId: string | null) => companyId ? companies?.find(c => c.id === companyId)?.name || "" : "";
 
-  const renderTaskRow = (task: TaskWithCount, isCompleted = false) => {
+  const renderTaskRow = (task: TaskWithCount, isCompleted = false, urgent = false) => {
     const companyName = getCompanyName(task.companyId);
     const assigneeName = getUserName(task.assignedTo);
     const assignerName = getUserName(task.assignedBy);
+    const isMyTask = task.assignedTo === currentUser?.id;
+
     return (
       <div
         key={task.id}
-        className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group cursor-pointer ${isCompleted ? "opacity-60" : ""}`}
+        className={`flex items-center gap-3 p-3 rounded-lg border transition-all group cursor-pointer
+          ${urgent
+            ? "border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/10 hover:bg-red-50 dark:hover:bg-red-950/20"
+            : "border-transparent hover:border-border hover:bg-muted/50"}
+          ${isCompleted ? "opacity-60" : ""}`}
         data-testid={`task-row-${task.id}`}
         onClick={() => { setEditingTask(task); setFocusComments(false); setTaskDialogOpen(true); }}
       >
+        {/* Quick-complete checkbox */}
         <button
-          onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }}
-          className="shrink-0 hover:scale-110 transition-transform"
-          title={`Status: ${task.status}. Click to change.`}
-          data-testid={`button-toggle-status-${task.id}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            const newStatus = task.status === "completed" ? "open" : "completed";
+            toggleStatusMutation.mutate({ id: task.id, status: newStatus });
+          }}
+          className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all hover:scale-110
+            ${task.status === "completed"
+              ? "bg-green-500 border-green-500 text-white"
+              : urgent
+                ? "border-red-400 hover:border-red-500 hover:bg-red-100 dark:hover:bg-red-900/20"
+                : "border-muted-foreground/40 hover:border-primary hover:bg-primary/10"}`}
+          title={task.status === "completed" ? "Mark as open" : "Mark as complete"}
+          data-testid={`button-complete-${task.id}`}
         >
-          {statusIcon(task.status)}
+          {task.status === "completed" && <CheckCircle2 className="h-3.5 w-3.5" />}
         </button>
+
+        {/* Status cycle button */}
+        {!isCompleted && (
+          <button
+            onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }}
+            className="shrink-0 hover:scale-110 transition-transform"
+            title={`Status: ${task.status}. Click to advance.`}
+            data-testid={`button-toggle-status-${task.id}`}
+          >
+            {statusIcon(task.status)}
+          </button>
+        )}
+
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-medium truncate ${isCompleted ? "line-through text-muted-foreground" : ""}`}
              data-testid={`text-task-title-${task.id}`}>
@@ -553,8 +589,8 @@ export default function TasksPage() {
                 {companyName}
               </Link>
             )}
-            {isAdmin && assigneeName && (
-              <span className="text-xs text-muted-foreground" data-testid={`text-task-assignee-${task.id}`}>assigned to {assigneeName}</span>
+            {isAdminRole && !showMyTasksOnly && assigneeName && (
+              <span className="text-xs text-muted-foreground" data-testid={`text-task-assignee-${task.id}`}>→ {assigneeName}</span>
             )}
             {assignerName && task.assignedBy !== currentUser?.id && (
               <span className="text-xs text-muted-foreground">from {assignerName}</span>
@@ -567,18 +603,34 @@ export default function TasksPage() {
           </div>
           <FileAttachmentList entityType="task" entityIds={[task.id]} />
         </div>
+
         {!isCompleted && dueDateBadge(task.dueDate)}
+
         {(task.commentCount ?? 0) > 0 && (
           <button
             onClick={(e) => { e.stopPropagation(); setEditingTask(task); setFocusComments(true); setTaskDialogOpen(true); }}
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary shrink-0 transition-colors"
-            title="View collaboration notes"
+            title="View notes"
             data-testid={`badge-task-comments-${task.id}`}
           >
             <MessageSquare className="h-3 w-3" />
             {task.commentCount}
           </button>
         )}
+
+        {/* Quick note button — visible on hover when no comments yet */}
+        {(task.commentCount ?? 0) === 0 && !isCompleted && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setEditingTask(task); setFocusComments(true); setTaskDialogOpen(true); }}
+            className="shrink-0 text-muted-foreground hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Add a note"
+            data-testid={`button-add-note-${task.id}`}
+          >
+            <StickyNote className="h-3.5 w-3.5" />
+          </button>
+        )}
+
+        {/* Bump reminder */}
         {(() => {
           if (isCompleted || task.assignedBy !== currentUser?.id || !task.dueDate) return null;
           const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -596,6 +648,7 @@ export default function TasksPage() {
             </button>
           );
         })()}
+
         <button
           onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }}
           className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
@@ -687,9 +740,27 @@ export default function TasksPage() {
               <ListTodo className="h-6 w-6 text-blue-600 dark:text-blue-400" />
               Tasks
             </h1>
-            <p className="text-sm text-muted-foreground mt-1" data-testid="text-tasks-subtitle">
-              {isAdmin ? "All team tasks" : "Your tasks in one place"}
-            </p>
+            {/* My Tasks / All Tasks toggle for admin roles */}
+            {isAdminRole && (
+              <div className="flex items-center gap-1 mt-2 p-0.5 rounded-lg bg-muted w-fit" data-testid="toggle-task-scope">
+                <button
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors
+                    ${showMyTasksOnly ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                  onClick={() => setShowMyTasksOnly(true)}
+                  data-testid="button-my-tasks"
+                >
+                  <UserIcon className="h-3 w-3" /> My Tasks
+                </button>
+                <button
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors
+                    ${!showMyTasksOnly ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                  onClick={() => setShowMyTasksOnly(false)}
+                  data-testid="button-all-tasks"
+                >
+                  <Users className="h-3 w-3" /> All Tasks
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex gap-2 flex-wrap">
             <Button
@@ -712,7 +783,7 @@ export default function TasksPage() {
 
       {viewMode === "calendar" && (
         <TaskCalendarView
-          tasks={myTasks}
+          tasks={scopedTasks}
           companies={companies}
           teamMembers={teamMembers}
           currentUser={currentUser ?? null}
@@ -721,13 +792,33 @@ export default function TasksPage() {
       )}
       {viewMode === "list" && (
       <>
+      {/* Overdue section — urgent red card */}
+      {overdueTasks.length > 0 && (
+        <Card className="border-red-200 dark:border-red-900/50" data-testid="card-overdue-tasks">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2 text-red-600 dark:text-red-400">
+              <AlertTriangle className="h-4 w-4" />
+              Overdue
+              <Badge className="ml-1 font-normal bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-0">
+                {overdueTasks.length}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-1">
+              {overdueTasks.map(task => renderTaskRow(task, false, true))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card data-testid="card-open-tasks">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Circle className="h-4 w-4 text-muted-foreground" />
-            Open Tasks
-            {!tasksLoading && openTasks.length > 0 && (
-              <Badge variant="secondary" className="ml-1 font-normal">{openTasks.length}</Badge>
+            {overdueTasks.length > 0 ? "Upcoming" : "Open Tasks"}
+            {!tasksLoading && onTimeTasks.length > 0 && (
+              <Badge variant="secondary" className="ml-1 font-normal">{onTimeTasks.length}</Badge>
             )}
           </CardTitle>
         </CardHeader>
@@ -736,9 +827,13 @@ export default function TasksPage() {
             <div className="space-y-3">
               {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
-          ) : openTasks.length > 0 ? (
+          ) : onTimeTasks.length > 0 ? (
             <div className="space-y-1">
-              {openTasks.map(task => renderTaskRow(task))}
+              {onTimeTasks.map(task => renderTaskRow(task))}
+            </div>
+          ) : overdueTasks.length > 0 ? (
+            <div className="text-center py-6 text-muted-foreground">
+              <p className="text-sm">No upcoming tasks</p>
             </div>
           ) : (
             <div className="text-center py-8 text-muted-foreground">
@@ -759,7 +854,7 @@ export default function TasksPage() {
           >
             <CardTitle className="text-base flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-green-500" />
-              Completed Tasks
+              Completed
               {!tasksLoading && completedTasks.length > 0 && (
                 <Badge variant="secondary" className="ml-1 font-normal">{completedTasks.length}</Badge>
               )}
