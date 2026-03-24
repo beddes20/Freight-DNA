@@ -283,7 +283,7 @@ export function CrmChatbot() {
         onClick={() => setOpen((v) => !v)}
         className={cn(
           "fixed bottom-6 right-6 z-50 h-14 w-14 rounded-full shadow-lg flex items-center justify-center transition-all duration-200",
-          "bg-[#001AB3] hover:bg-[#044ad3] text-white",
+          "bg-primary hover:bg-primary/90 text-primary-foreground",
           open && "scale-90 opacity-80"
         )}
         data-testid="chatbot-toggle"
@@ -299,13 +299,13 @@ export function CrmChatbot() {
           "animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
         )}>
           {/* Header */}
-          <div className="flex items-center gap-3 px-4 py-3 border-b bg-[#001AB3] text-white rounded-t-2xl">
+          <div className="flex items-center gap-3 px-4 py-3 border-b bg-sidebar text-sidebar-foreground rounded-t-2xl">
             <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
               <Bot className="h-4 w-4" />
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold leading-none">DNA Guru</p>
-              <p className="text-xs text-white/70 mt-0.5">
+              <p className="text-xs text-sidebar-foreground/70 mt-0.5">
                 {isAdminOrDirector ? "Viewing: All Teams" : "Your CRM assistant"}
               </p>
             </div>
@@ -380,7 +380,7 @@ export function CrmChatbot() {
                   </div>
                   <div className="flex flex-col gap-2 w-full max-w-[200px]">
                     <Button
-                      className="w-full bg-[#001AB3] hover:bg-[#044ad3] gap-2"
+                      className="w-full bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
                       onClick={() => { resetSuggest(); navigate("/tasks"); setOpen(false); }}
                       data-testid="suggestion-view-tasks-btn"
                     >
@@ -442,7 +442,7 @@ export function CrmChatbot() {
                         <input
                           type="text"
                           placeholder="e.g. Company detail page, RFP upload, Dashboard…"
-                          className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-[#001AB3]/40"
+                          className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
                           value={bugPage}
                           onChange={(e) => setBugPage(e.target.value)}
                           data-testid="bug-page-input"
@@ -489,7 +489,7 @@ export function CrmChatbot() {
                   )}
 
                   <Button
-                    className="w-full bg-[#001AB3] hover:bg-[#044ad3]"
+                    className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
                     disabled={!canSubmit || submitSuggestion.isPending}
                     onClick={() => submitSuggestion.mutate(buildSubmitContent())}
                     data-testid="suggestion-submit"
@@ -537,7 +537,7 @@ export function CrmChatbot() {
                   />
                 </div>
                 <Button
-                  className="w-full bg-[#001AB3] hover:bg-[#044ad3] gap-2"
+                  className="w-full bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
                   disabled={!taskTitle.trim() || createTask.isPending}
                   onClick={() => createTask.mutate(taskTitle.trim())}
                   data-testid="chatbot-task-submit"
@@ -592,7 +592,7 @@ export function CrmChatbot() {
                 )}
               </ScrollArea>
               <div className="p-3 border-t">
-                <Button className="w-full bg-[#001AB3] hover:bg-[#044ad3]" onClick={() => { createConvo.mutate(); setShowConvoList(false); }}>
+                <Button className="w-full bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => { createConvo.mutate(); setShowConvoList(false); }}>
                   <Plus className="h-4 w-4 mr-2" /> New Chat
                 </Button>
               </div>
@@ -605,8 +605,8 @@ export function CrmChatbot() {
               {isEmpty && (
                 <div className="space-y-4">
                   <div className="flex gap-3">
-                    <div className="h-7 w-7 rounded-full bg-[#001AB3]/10 flex items-center justify-center shrink-0 mt-0.5">
-                      <Bot className="h-4 w-4 text-[#001AB3]" />
+                    <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                      <Bot className="h-4 w-4 text-primary" />
                     </div>
                     <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[290px]">
                       <p className="text-sm">
@@ -623,7 +623,7 @@ export function CrmChatbot() {
                       <button
                         key={s}
                         onClick={() => sendMessage(s)}
-                        className="block w-full text-left text-xs px-3 py-2 rounded-xl border border-border hover:border-[#001AB3]/40 hover:bg-[#001AB3]/5 transition-colors text-muted-foreground hover:text-foreground"
+                        className="block w-full text-left text-xs px-3 py-2 rounded-xl border border-border hover:border-primary/40 hover:bg-primary/5 transition-colors text-muted-foreground hover:text-foreground"
                       >
                         {s}
                       </button>
@@ -635,14 +635,14 @@ export function CrmChatbot() {
               {allMessages.map((msg) => (
                 <div key={msg.id} className={cn("flex gap-3", msg.role === "user" && "flex-row-reverse")}>
                   {msg.role === "assistant" && (
-                    <div className="h-7 w-7 rounded-full bg-[#001AB3]/10 flex items-center justify-center shrink-0 mt-0.5">
-                      <Bot className="h-4 w-4 text-[#001AB3]" />
+                    <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                      <Bot className="h-4 w-4 text-primary" />
                     </div>
                   )}
                   <div className={cn(
                     "rounded-2xl px-3.5 py-2.5 max-w-[290px]",
                     msg.role === "user"
-                      ? "bg-[#001AB3] text-white rounded-tr-sm"
+                      ? "bg-primary text-primary-foreground rounded-tr-sm"
                       : "bg-muted rounded-tl-sm"
                   )}>
                     {msg.role === "assistant"
@@ -656,8 +656,8 @@ export function CrmChatbot() {
               {/* Streaming response */}
               {streamingContent && (
                 <div className="flex gap-3">
-                  <div className="h-7 w-7 rounded-full bg-[#001AB3]/10 flex items-center justify-center shrink-0 mt-0.5">
-                    <Bot className="h-4 w-4 text-[#001AB3]" />
+                  <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                    <Bot className="h-4 w-4 text-primary" />
                   </div>
                   <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[290px]">
                     <MarkdownText content={streamingContent} />
@@ -668,8 +668,8 @@ export function CrmChatbot() {
               {/* Loading dots */}
               {isStreaming && !streamingContent && (
                 <div className="flex gap-3">
-                  <div className="h-7 w-7 rounded-full bg-[#001AB3]/10 flex items-center justify-center shrink-0">
-                    <Bot className="h-4 w-4 text-[#001AB3]" />
+                  <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                    <Bot className="h-4 w-4 text-primary" />
                   </div>
                   <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-3 flex items-center gap-1">
                     <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
@@ -690,8 +690,8 @@ export function CrmChatbot() {
                 className={cn(
                   "flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors",
                   scope === "my_team"
-                    ? "bg-[#001AB3] text-white border-[#001AB3]"
-                    : "text-muted-foreground border-border hover:border-[#001AB3]/40 hover:text-foreground"
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "text-muted-foreground border-border hover:border-primary/40 hover:text-foreground"
                 )}
                 data-testid="scope-my-team"
               >
@@ -702,8 +702,8 @@ export function CrmChatbot() {
                 className={cn(
                   "flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors",
                   scope === "everyone"
-                    ? "bg-[#001AB3] text-white border-[#001AB3]"
-                    : "text-muted-foreground border-border hover:border-[#001AB3]/40 hover:text-foreground"
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "text-muted-foreground border-border hover:border-primary/40 hover:text-foreground"
                 )}
                 data-testid="scope-everyone"
               >
@@ -732,7 +732,7 @@ export function CrmChatbot() {
               />
               <Button
                 size="icon"
-                className="h-9 w-9 rounded-xl bg-[#001AB3] hover:bg-[#044ad3] shrink-0"
+                className="h-9 w-9 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground shrink-0"
                 onClick={() => sendMessage(input)}
                 disabled={!input.trim() || isStreaming}
                 data-testid="chatbot-send"
