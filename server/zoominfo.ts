@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 const ZOOMINFO_API_BASE = "https://api.zoominfo.com";
 
 const TRANSPORTATION_JOB_TITLES = [

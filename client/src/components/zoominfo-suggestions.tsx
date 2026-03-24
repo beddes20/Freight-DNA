@@ -24,9 +24,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  ClipboardList,
 } from "lucide-react";
-import { TaskDialog } from "@/components/task-dialog";
 
 interface ZoomInfoContact {
   id: string;
@@ -70,8 +68,6 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
   const { toast } = useToast();
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [taskContact, setTaskContact] = useState<ZoomInfoContact | null>(null);
-
   const { data, isLoading, error } = useQuery<{ contacts: ZoomInfoContact[] }>({
     queryKey: ["/api/zoominfo/search-contacts", companyName],
     queryFn: () =>
@@ -226,19 +222,6 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
                             <><UserPlus className="h-3 w-3" /> Add</>
                           )}
                         </Button>
-                        {isAdded && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs gap-1 border-blue-400/50 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/30"
-                            onClick={() => setTaskContact(c)}
-                            data-testid={`button-assign-task-${c.id}`}
-                            title="Create intro task"
-                          >
-                            <ClipboardList className="h-3 w-3" />
-                            Task
-                          </Button>
-                        )}
                       </div>
                     </div>
 
