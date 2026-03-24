@@ -167,14 +167,20 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
   };
 }
 
-async function getVisibleFeedAuthorIds(user: { id: string; role: string; managerId: string | null; organizationId: string }): Promise<string[] | undefined> {
-  if (user.role === "admin") return undefined;
+async function getVisibleFeedAuthorIds(user: { id: string; role: string; managerId: string | null; organizationId: string }): Promise<string[]> {
+  if (user.role === "admin") {
+    const orgUsers = await storage.getUsers(user.organizationId);
+    return orgUsers.map(u => u.id);
+  }
   if (user.role === "director" || user.role === "sales_director") {
-    return storage.getTeamMemberIds(user.id, user.organizationId);
+    const ids = await storage.getTeamMemberIds(user.id, user.organizationId);
+    ids.push(user.id);
+    return ids;
   }
   if (user.role === "national_account_manager" || user.role === "sales") {
     const ids = await storage.getTeamMemberIds(user.id, user.organizationId);
     if (user.managerId) ids.push(user.managerId);
+    ids.push(user.id);
     return ids;
   }
   const ids = new Set<string>([user.id]);
@@ -2862,7 +2868,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const posts = await storage.getInternalPosts(user.id, user.role);
+      const orgUsers = await storage.getUsers(user.organizationId);
+      const orgUserIds = orgUsers.map(u => u.id);
+      const posts = await storage.getInternalPosts(user.id, user.role, orgUserIds);
       res.json(posts);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch internal posts" });

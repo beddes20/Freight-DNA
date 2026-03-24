@@ -304,7 +304,7 @@ export interface IStorage {
   updatePtoPassoffItem(id: string, data: Partial<InsertPtoPassoffItem>): Promise<PtoPassoffItem | undefined>;
   deletePtoPassoffItem(id: string): Promise<boolean>;
 
-  getInternalPosts(userId: string, role: string): Promise<any[]>;
+  getInternalPosts(userId: string, role: string, orgUserIds: string[]): Promise<any[]>;
   createInternalPost(data: { content: string; authorId: string; recipientIds: string[]; parentId?: string | null; createdAt: string }): Promise<any>;
   deleteInternalPost(id: string): Promise<boolean>;
 
@@ -1786,10 +1786,13 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  async getInternalPosts(userId: string, role: string): Promise<any[]> {
+  async getInternalPosts(userId: string, role: string, orgUserIds: string[]): Promise<any[]> {
     const isLeadership = role === "admin" || role === "director";
     if (isLeadership) {
-      return db.select().from(internalPosts).orderBy(desc(internalPosts.createdAt));
+      if (!orgUserIds.length) return [];
+      return db.select().from(internalPosts)
+        .where(inArray(internalPosts.authorId, orgUserIds))
+        .orderBy(desc(internalPosts.createdAt));
     }
     // Non-leadership: only see top-level posts where they are a recipient, plus all replies under those threads
     const topLevel = await db.select().from(internalPosts)
