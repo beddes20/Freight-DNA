@@ -6284,6 +6284,161 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  app.get("/api/contacts/:id/lane-intel", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const contact = await storage.getContact(req.params.id as string);
+      if (!contact) return res.status(404).json({ error: "Contact not found" });
+
+      // --- Build geography fingerprint from this contact ---
+      const ownedLanes: string[] = contact.lanes || [];
+      const ownedRegions: string[] = contact.regions || [];
+
+      // Parse state abbreviations from title (e.g. "Manager, Southeast", "Dir. of Trans - GA/TN")
+      const stateAbbrevs = new Set<string>();
+      const US_STATES: Record<string, string[]> = {
+        "southeast": ["GA", "TN", "NC", "SC", "AL", "MS", "FL"],
+        "midwest": ["IL", "IN", "OH", "MI", "WI", "MN", "IA", "MO"],
+        "northeast": ["NY", "NJ", "CT", "MA", "PA", "VT", "NH", "ME"],
+        "southwest": ["TX", "AZ", "NM", "OK", "AR", "LA"],
+        "west": ["CA", "WA", "OR", "NV", "UT", "CO", "ID", "MT", "WY"],
+        "great plains": ["KS", "NE", "SD", "ND"],
+        "mid-atlantic": ["VA", "MD", "DE", "DC", "WV"],
+        "northwest": ["WA", "OR", "ID", "MT"],
+      };
+      const STATE_ABBREV_LIST = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
+      const titleLower = (contact.title || "").toLowerCase();
+      for (const [region, states] of Object.entries(US_STATES)) {
+        if (titleLower.includes(region)) states.forEach(s => stateAbbrevs.add(s));
+      }
+      // Extract 2-letter state abbreviations from title
+      const titleUpper = (contact.title || "").toUpperCase();
+      const abbrevMatches = titleUpper.match(/\b([A-Z]{2})\b/g) || [];
+      for (const m of abbrevMatches) {
+        if (STATE_ABBREV_LIST.includes(m)) stateAbbrevs.add(m);
+      }
+      // Also parse from regions array
+      for (const r of ownedRegions) {
+        const ru = r.toUpperCase().trim();
+        if (STATE_ABBREV_LIST.includes(ru)) stateAbbrevs.add(ru);
+        for (const [region, states] of Object.entries(US_STATES)) {
+          if (r.toLowerCase().includes(region)) states.forEach(s => stateAbbrevs.add(s));
+        }
+      }
+
+      // If no geographic signal at all, return hasData: false
+      const hasGeoSignal = ownedLanes.length > 0 || ownedRegions.length > 0 || stateAbbrevs.size > 0;
+
+      if (!hasGeoSignal) {
+        const recentTps = (await storage.getTouchpointsByContact(contact.id))
+          .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+        return res.json({
+          contact,
+          hasData: false,
+          ownedLanes: [],
+          ownedRegions: [],
+          matchedRfpLanes: [],
+          relatedLanes: [],
+          recentTouchpoints: recentTps,
+          openTasks: [],
+        });
+      }
+
+      // --- Get company RFPs and extract lane rows from fileData ---
+      const allRfpsForIntel = await storage.getRfps();
+      const companyRfps = allRfpsForIntel.filter(r => r.companyId === contact.companyId);
+      type ExtractedLane = { lane: string; origin: string; originState: string; destination: string; destState: string; volume: number; rfpTitle: string; rfpId: string };
+      const allExtractedLanes: ExtractedLane[] = [];
+
+      for (const rfp of companyRfps) {
+        const fd = rfp.fileData as any;
+        if (!fd) continue;
+        // Support both single-sheet and multi-sheet stored formats
+        const sheetsToCheck: any[] = Array.isArray(fd) ? fd : (fd.sheets ? fd.sheets : [fd]);
+        for (const sheet of sheetsToCheck) {
+          const hvl: any[] = sheet.highVolumeLanes || sheet.lanes || [];
+          for (const row of hvl) {
+            const origin = String(row.origin || row.originCity || "").trim();
+            const originState = String(row.originState || row.origin_state || "").trim().toUpperCase();
+            const destination = String(row.destination || row.destCity || "").trim();
+            const destState = String(row.destState || row.dest_state || "").trim().toUpperCase();
+            const lane = row.lane || `${origin} → ${destination}`;
+            const volume = parseFloat(String(row.volume || row.loads || "0").replace(/[^0-9.]/g, "")) || 0;
+            allExtractedLanes.push({ lane, origin, originState, destination, destState, volume, rfpTitle: rfp.title, rfpId: rfp.id });
+          }
+        }
+      }
+
+      // --- Match lanes to this contact's geography ---
+      const laneKeySet = new Set(ownedLanes.map(l => l.toLowerCase().trim()));
+      const regionKeySet = new Set(ownedRegions.map(r => r.toLowerCase().trim()));
+
+      const matchedRfpLanes: ExtractedLane[] = [];
+      const relatedLanes: ExtractedLane[] = [];
+      const seenLanes = new Set<string>();
+
+      for (const el of allExtractedLanes) {
+        const laneStr = el.lane.toLowerCase();
+        const originL = el.origin.toLowerCase();
+        const destL = el.destination.toLowerCase();
+        const originStateU = el.originState.toUpperCase();
+        const destStateU = el.destState.toUpperCase();
+        const key = `${originL}|${destL}`;
+        if (seenLanes.has(key)) continue;
+
+        // Check explicit lane match
+        const laneHit = ownedLanes.some(ol => {
+          const olL = ol.toLowerCase();
+          return laneStr.includes(olL) || olL.includes(originL) || olL.includes(destL);
+        });
+        // Check region match
+        const regionHit = ownedRegions.some(r => {
+          const rL = r.toLowerCase();
+          return originL.includes(rL) || destL.includes(rL) || rL.includes(originL) || rL.includes(destL);
+        });
+        // Check state abbreviation match
+        const stateHit = stateAbbrevs.has(originStateU) || stateAbbrevs.has(destStateU);
+
+        if (laneHit || regionHit) {
+          matchedRfpLanes.push(el);
+          seenLanes.add(key);
+        } else if (stateHit) {
+          // "Related" — in the right state but not explicitly owned
+          relatedLanes.push(el);
+          seenLanes.add(key);
+        }
+      }
+
+      // Sort by volume desc, cap at 10 each
+      matchedRfpLanes.sort((a, b) => b.volume - a.volume);
+      relatedLanes.sort((a, b) => b.volume - a.volume);
+
+      // Touchpoints and tasks
+      const recentTps = (await storage.getTouchpointsByContact(contact.id))
+        .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+
+      const allTasks = await storage.getTasksByCompany(contact.companyId);
+      const openTasks = allTasks.filter(t => t.contactId === contact.id && t.status !== "completed");
+
+      res.json({
+        contact,
+        hasData: true,
+        ownedLanes,
+        ownedRegions,
+        stateHints: Array.from(stateAbbrevs),
+        matchedRfpLanes: matchedRfpLanes.slice(0, 10),
+        relatedLanes: relatedLanes.slice(0, 8),
+        recentTouchpoints: recentTps,
+        openTasks,
+      });
+    } catch (error) {
+      console.error("Lane intel error:", error);
+      res.status(500).json({ error: "Failed to fetch lane intel" });
+    }
+  });
+
   app.get("/api/contacts/:id/touchpoints", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

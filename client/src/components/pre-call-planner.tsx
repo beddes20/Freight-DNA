@@ -29,6 +29,7 @@ import {
 import { apiRequest } from "@/lib/queryClient";
 import { fmtMoney } from "@/lib/rep-utils";
 import type { Company, Contact, Touchpoint, Rfp, Award } from "@shared/schema";
+import { ContactIntelModal } from "@/components/contact-intel-modal";
 
 type TaskLike = { id: string | number; title: string; status: string; dueDate?: string | null };
 type FinancialSummary = { totalLoads: number; totalMargin: number; totalRevenue?: number } | null;
@@ -79,6 +80,7 @@ export function PreCallPlanner({
   const printRef = useRef<HTMLDivElement>(null);
   const [talkingPoints, setTalkingPoints] = useState<string[]>([]);
   const [loadingPoints, setLoadingPoints] = useState(false);
+  const [selectedContactForIntel, setSelectedContactForIntel] = useState<Contact | null>(null);
 
   const generateTalkingPoints = async () => {
     setLoadingPoints(true);
@@ -148,6 +150,7 @@ export function PreCallPlanner({
   const activeRfp = companyRfps.find(r => r.status === "open" || r.status === "pending");
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -284,18 +287,28 @@ export function PreCallPlanner({
                   const lastTp = touchpoints
                     .filter(t => t.contactId === c.id)
                     .sort((a, b) => b.date.localeCompare(a.date))[0];
+                  const hasGeo = (c.lanes && c.lanes.length > 0) || (c.regions && c.regions.length > 0);
                   return (
-                    <div key={c.id} className="flex items-start justify-between gap-2 text-sm border rounded-md px-3 py-2" data-testid={`precall-contact-${c.id}`}>
-                      <div>
-                        <div className="font-medium">{c.name}</div>
-                        <div className="text-xs text-muted-foreground">{c.title}{c.email && ` · ${c.email}`}{c.phone && ` · ${c.phone}`}</div>
-                      </div>
-                      {lastTp && (
-                        <div className="text-xs text-muted-foreground shrink-0">
-                          Last: {lastTp.date}
+                    <button
+                      key={c.id}
+                      onClick={() => setSelectedContactForIntel(c)}
+                      className="w-full text-left flex items-start justify-between gap-2 text-sm border rounded-md px-3 py-2 hover:bg-muted/50 hover:border-primary/40 transition-colors group"
+                      data-testid={`precall-contact-${c.id}`}
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium flex items-center gap-1.5">
+                          {c.name}
+                          {hasGeo && (
+                            <MapPin className="h-3 w-3 text-primary opacity-0 group-hover:opacity-100 transition-opacity" />
+                          )}
                         </div>
-                      )}
-                    </div>
+                        <div className="text-xs text-muted-foreground truncate">{c.title}{c.email && ` · ${c.email}`}{c.phone && ` · ${c.phone}`}</div>
+                      </div>
+                      <div className="text-xs text-muted-foreground shrink-0 text-right">
+                        {lastTp && <div>Last: {lastTp.date}</div>}
+                        <div className="text-primary opacity-0 group-hover:opacity-100 transition-opacity text-xs">View intel →</div>
+                      </div>
+                    </button>
                   );
                 })}
               </div>
@@ -418,5 +431,12 @@ export function PreCallPlanner({
         </div>
       </DialogContent>
     </Dialog>
+
+    <ContactIntelModal
+      contact={selectedContactForIntel}
+      open={!!selectedContactForIntel}
+      onClose={() => setSelectedContactForIntel(null)}
+    />
+    </>
   );
 }
