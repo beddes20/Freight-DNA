@@ -8420,8 +8420,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
   });
 
   // ── ZoomInfo Contact Search ───────────────────────────────────────────────
-  app.get("/api/zoominfo/search-contacts", async (req, res) => {
-    const user = req.session?.user;
+  app.get("/api/zoominfo/search-contacts", requireAuth, async (req, res) => {
+    const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
 
     const companyName = req.query.companyName as string;
@@ -8441,8 +8441,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
-  app.get("/api/zoominfo/status", async (req, res) => {
-    const user = req.session?.user;
+  app.get("/api/zoominfo/status", requireAuth, async (req, res) => {
+    const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
     const configured = !!(process.env.ZOOMINFO_CLIENT_ID && process.env.ZOOMINFO_CLIENT_SECRET);
     res.json({ configured });
