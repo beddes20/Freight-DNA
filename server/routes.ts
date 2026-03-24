@@ -7966,6 +7966,20 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   // ─── Promotion Nominations ────────────────────────────────────────────────────
 
+  async function getNominationAlertChain(nominatorId: string, organizationId: string): Promise<string[]> {
+    const allUsers = await storage.getUsers(organizationId);
+    const usersById = Object.fromEntries(allUsers.map(u => [u.id, u]));
+    const seen = new Set<string>();
+    let current = usersById[nominatorId];
+    while (current && current.managerId && usersById[current.managerId]) {
+      const managerId = current.managerId;
+      if (!seen.has(managerId)) seen.add(managerId);
+      current = usersById[managerId];
+    }
+    allUsers.filter(u => u.role === "admin").forEach(u => seen.add(u.id));
+    return Array.from(seen);
+  }
+
   const nominationAllowedRoles = ["national_account_manager", "director", "admin", "sales_director"];
 
   app.get("/api/promotion/nominations", requireAuth, async (req, res) => {
@@ -8040,6 +8054,42 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         nominatedAt: new Date().toISOString(),
         status: "active",
       });
+
+      (async () => {
+        try {
+          const nominee = await storage.getUser(nomineeId);
+          const nomineeName = nominee?.name ?? "a team member";
+          const nominator = user;
+          const alertChain = (await getNominationAlertChain(nominator.id, nominator.organizationId))
+            .filter(id => id !== nomineeId);
+          const now = new Date().toISOString();
+          for (const recipientId of alertChain) {
+            await storage.createNotification({
+              userId: recipientId,
+              type: "promotion_nomination",
+              title: `${nominator.name} nominated ${nomineeName} for promotion`,
+              body: `Review the nomination and take action in Team Performance.`,
+              link: "/team-performance",
+              relatedId: nomination.id,
+              read: false,
+            });
+            await storage.createTask({
+              title: `Review nomination: ${nomineeName} (nominated by ${nominator.name})`,
+              notes: `${nominator.name} has nominated ${nomineeName} for promotion. Please review and take action.`,
+              status: "open",
+              dueDate: null,
+              assignedTo: recipientId,
+              assignedBy: nominator.id,
+              companyId: null,
+              contactId: null,
+              createdAt: now,
+            });
+          }
+        } catch (err) {
+          console.error("Failed to send nomination alert chain:", err);
+        }
+      })();
+
       res.json(nomination);
     } catch (err) {
       res.status(500).json({ error: "Failed to create nomination" });
