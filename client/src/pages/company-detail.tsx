@@ -2151,6 +2151,14 @@ export default function CompanyDetail() {
               onViewContact={setViewContact}
               onLogTouch={(c) => { setQuickTouchContactId(c.id); setQuickTouchOpen(true); }}
               onIntelClick={setIntelContact}
+              onCreateTask={(c) => {
+                setEditingTaskItem(undefined);
+                setForceLanePrefill({
+                  title: `Follow up with ${c.name}`,
+                  notes: `Contact: ${c.name}${c.title ? ` — ${c.title}` : ""}${c.email ? `\nEmail: ${c.email}` : ""}${c.phone ? `\nPhone: ${c.phone}` : ""}`,
+                });
+                setTaskDialogOpen(true);
+              }}
             />
           ) : (
             <div className="flex flex-col items-center justify-center py-8">

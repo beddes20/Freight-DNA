@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Pencil, MapPin, Route, DollarSign, FileText, PhoneCall, ListTodo, Brain } from "lucide-react";
+import { Pencil, MapPin, Route, DollarSign, FileText, PhoneCall, ListTodo, Brain, ClipboardList } from "lucide-react";
 import type { Contact, Touchpoint } from "@shared/schema";
 
 interface OrgChartProps {
@@ -13,6 +13,7 @@ interface OrgChartProps {
   onViewContact?: (contact: Contact) => void;
   onLogTouch?: (contact: Contact) => void;
   onIntelClick?: (contact: Contact) => void;
+  onCreateTask?: (contact: Contact) => void;
 }
 
 interface ContactNode {
@@ -84,10 +85,11 @@ interface ContactCardProps {
   onView?: (contact: Contact) => void;
   onLogTouch?: (contact: Contact) => void;
   onIntelClick?: (contact: Contact) => void;
+  onCreateTask?: (contact: Contact) => void;
   level: number;
 }
 
-function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, level }: ContactCardProps) {
+function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, onCreateTask, level }: ContactCardProps) {
   const initials = contact.name
     .split(" ")
     .map((n) => n[0])
@@ -180,6 +182,18 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, l
                     data-testid={`button-intel-org-${contact.id}`}
                   >
                     <Brain className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                {onCreateTask && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={(e) => { e.stopPropagation(); onCreateTask(contact); }}
+                    className="h-7 w-7 text-muted-foreground hover:text-blue-500"
+                    title="Create task for this contact"
+                    data-testid={`button-create-task-org-${contact.id}`}
+                  >
+                    <ClipboardList className="h-3.5 w-3.5" />
                   </Button>
                 )}
                 <Button
@@ -290,15 +304,16 @@ interface OrgNodeProps {
   onView?: (contact: Contact) => void;
   onLogTouch?: (contact: Contact) => void;
   onIntelClick?: (contact: Contact) => void;
+  onCreateTask?: (contact: Contact) => void;
   level: number;
 }
 
-function OrgNode({ node, tpMap, onEdit, onView, onLogTouch, onIntelClick, level }: OrgNodeProps) {
+function OrgNode({ node, tpMap, onEdit, onView, onLogTouch, onIntelClick, onCreateTask, level }: OrgNodeProps) {
   const tps = tpMap.get(node.contact.id) ?? [];
   return (
     <div className="flex flex-col items-center">
       <div className="w-72">
-        <ContactCard contact={node.contact} tps={tps} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} onIntelClick={onIntelClick} level={level} />
+        <ContactCard contact={node.contact} tps={tps} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} onIntelClick={onIntelClick} onCreateTask={onCreateTask} level={level} />
       </div>
       {node.children.length > 0 && (
         <>
@@ -314,7 +329,7 @@ function OrgNode({ node, tpMap, onEdit, onView, onLogTouch, onIntelClick, level 
               {node.children.map((child) => (
                 <div key={child.contact.id} className="flex flex-col items-center">
                   <div className="w-px h-6 bg-border" />
-                  <OrgNode node={child} tpMap={tpMap} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} onIntelClick={onIntelClick} level={level + 1} />
+                  <OrgNode node={child} tpMap={tpMap} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} onIntelClick={onIntelClick} onCreateTask={onCreateTask} level={level + 1} />
                 </div>
               ))}
             </div>
@@ -325,7 +340,7 @@ function OrgNode({ node, tpMap, onEdit, onView, onLogTouch, onIntelClick, level 
   );
 }
 
-export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewContact, onLogTouch, onIntelClick }: OrgChartProps) {
+export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewContact, onLogTouch, onIntelClick, onCreateTask }: OrgChartProps) {
   const tree = useMemo(() => buildOrgTree(contacts), [contacts]);
 
   const tpMap = useMemo(() => {
@@ -347,7 +362,7 @@ export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewCont
     <div className="overflow-x-auto pb-4">
       <div className="inline-flex flex-col items-center gap-4 min-w-max p-4">
         {tree.map((node) => (
-          <OrgNode key={node.contact.id} node={node} tpMap={tpMap} onEdit={onEditContact} onView={onViewContact} onLogTouch={onLogTouch} onIntelClick={onIntelClick} level={0} />
+          <OrgNode key={node.contact.id} node={node} tpMap={tpMap} onEdit={onEditContact} onView={onViewContact} onLogTouch={onLogTouch} onIntelClick={onIntelClick} onCreateTask={onCreateTask} level={0} />
         ))}
       </div>
     </div>

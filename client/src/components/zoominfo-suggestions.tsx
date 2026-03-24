@@ -24,7 +24,9 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  ClipboardList,
 } from "lucide-react";
+import { TaskDialog } from "@/components/task-dialog";
 
 interface ZoomInfoContact {
   id: string;
@@ -68,6 +70,7 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
   const { toast } = useToast();
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [taskContact, setTaskContact] = useState<ZoomInfoContact | null>(null);
 
   const { data, isLoading, error } = useQuery<{ contacts: ZoomInfoContact[] }>({
     queryKey: ["/api/zoominfo/search-contacts", companyName],
@@ -110,6 +113,7 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
   });
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col gap-0 p-0">
         <DialogHeader className="px-5 py-4 border-b shrink-0">
@@ -222,6 +226,19 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
                             <><UserPlus className="h-3 w-3" /> Add</>
                           )}
                         </Button>
+                        {isAdded && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1 border-blue-400/50 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/30"
+                            onClick={() => setTaskContact(c)}
+                            data-testid={`button-assign-task-${c.id}`}
+                            title="Create intro task"
+                          >
+                            <ClipboardList className="h-3 w-3" />
+                            Task
+                          </Button>
+                        )}
                       </div>
                     </div>
 
@@ -277,5 +294,18 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
         </div>
       </DialogContent>
     </Dialog>
+
+    {taskContact && (
+      <TaskDialog
+        open={!!taskContact}
+        onOpenChange={(v) => { if (!v) setTaskContact(null); }}
+        companyId={companyId}
+        prefillData={{
+          title: `Call and introduce yourself — ${taskContact.firstName} ${taskContact.lastName}`,
+          notes: `New contact added via ZoomInfo.\n\n${taskContact.firstName} ${taskContact.lastName} is ${taskContact.jobTitle || "a new contact"} at ${companyName}. Reach out to introduce yourself and learn about their freight needs.${taskContact.email ? `\n\nEmail: ${taskContact.email}` : ""}${taskContact.phone || taskContact.mobilePhone ? `\nPhone: ${taskContact.phone || taskContact.mobilePhone}` : ""}`,
+        }}
+      />
+    )}
+    </>
   );
 }
