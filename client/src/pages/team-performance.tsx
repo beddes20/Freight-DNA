@@ -971,7 +971,6 @@ export default function TeamPerformancePage() {
                           key={rep.userId}
                           className="hover:bg-muted/30 cursor-pointer transition-colors"
                           onClick={() => {
-                            const [, navigate2] = [null, (path: string) => window.location.href = path];
                             window.location.href = `/reps/${rep.userId}${period ? `?period=${period}` : ""}`;
                           }}
                           data-testid={`leaderboard-row-${rep.userId}`}

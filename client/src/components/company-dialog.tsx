@@ -39,6 +39,8 @@ const companySchema = z.object({
   notes: z.string().optional(),
   assignedTo: z.string().optional(),
   estimatedFreightSpend: z.string().optional(),
+  financialAlias: z.string().optional(),
+  salesPersonId: z.string().optional(),
 });
 
 type CompanyFormData = z.infer<typeof companySchema>;
@@ -57,6 +59,7 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
   const isAdmin = currentUser?.role === "admin";
   const isNAM = currentUser?.role === "national_account_manager" || currentUser?.role === "director" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
   const canAssign = isAdmin || isNAM;
+  const canEditSalesPerson = isAdmin || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales_director";
 
   const [shippingModes, setShippingModes] = useState<string[]>([]);
 
@@ -69,6 +72,12 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
     enabled: canAssign,
   });
 
+  const { data: allSalesUsers = [] } = useQuery<SafeUser[]>({
+    queryKey: ["/api/users/sales"],
+    enabled: canEditSalesPerson,
+  });
+  const salesUsers = allSalesUsers.filter(u => u.role === "sales" || u.role === "sales_director");
+
   const form = useForm<CompanyFormData>({
     resolver: zodResolver(companySchema),
     defaultValues: {
@@ -78,6 +87,8 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
       notes: company?.notes || "",
       assignedTo: company?.assignedTo || (currentUser?.id || ""),
       estimatedFreightSpend: company?.estimatedFreightSpend?.toString() || "",
+      financialAlias: company?.financialAlias || "",
+      salesPersonId: company?.salesPersonId || "",
     },
   });
 
@@ -90,6 +101,8 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
         notes: company?.notes || "",
         assignedTo: company?.assignedTo || (currentUser?.id || ""),
         estimatedFreightSpend: company?.estimatedFreightSpend?.toString() || "",
+        financialAlias: company?.financialAlias || "",
+        salesPersonId: company?.salesPersonId || "",
       });
       setShippingModes(company?.shippingModes ?? []);
     }
@@ -141,6 +154,8 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
       assignedTo: data.assignedTo || currentUser?.id || null,
       shippingModes: shippingModes.length > 0 ? shippingModes : [],
       estimatedFreightSpend: data.estimatedFreightSpend ? data.estimatedFreightSpend : null,
+      financialAlias: data.financialAlias || null,
+      salesPersonId: data.salesPersonId || null,
     };
 
     if (isEditing) {
@@ -271,6 +286,44 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
                       </FormControl>
                       <SelectContent>
                         {users.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => (
+                          <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
+            <FormField
+              control={form.control}
+              name="financialAlias"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Financial Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Alternate name used in financial data" {...field} data-testid="input-financial-alias" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            {canEditSalesPerson && (
+              <FormField
+                control={form.control}
+                name="salesPersonId"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Salesperson</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ""}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-salesperson">
+                          <SelectValue placeholder="— None —" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="">— None —</SelectItem>
+                        {salesUsers.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => (
                           <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                         ))}
                       </SelectContent>

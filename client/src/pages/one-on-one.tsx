@@ -683,7 +683,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const [reportPeriod, setReportPeriod] = useState<"weekly" | "monthly" | "both">("weekly");
   const [showGoals, setShowGoals] = useState(false);
 
-  type RepGoal = { id: string; metric: string; period: string; target: string; currentValue: string | null; startDate: string; endDate: string; customLabel?: string | null };
+  type RepGoal = { id: string; amId: string; metric: string; period: string; target: string; currentValue: string | null; startDate: string; endDate: string; customLabel?: string | null };
   const repGoalsKey = ["/api/goals", "for-rep", repId];
   const { data: repGoals = [] } = useQuery<RepGoal[]>({
     queryKey: repGoalsKey,
@@ -692,7 +692,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
       if (!res.ok) return [];
       const all: RepGoal[] = await res.json();
       const nowStr = new Date().toISOString().slice(0, 10);
-      return all.filter(g => (g as any).amId === repId && g.startDate <= nowStr && g.endDate >= nowStr);
+      return all.filter(g => g.amId === repId && g.startDate <= nowStr && g.endDate >= nowStr);
     },
     staleTime: 60000,
   });
