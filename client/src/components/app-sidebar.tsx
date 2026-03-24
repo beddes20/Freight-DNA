@@ -93,6 +93,34 @@ export function AppSidebar() {
             <span className="font-bold">N</span>ot{" "}
             <span className="font-bold">A</span>cross
           </p>
+          {/* Farmer → Hunter icon */}
+          <div className="flex flex-col items-center gap-0.5 mt-0.5" title="Farmer → Hunter">
+            <svg viewBox="0 0 174 50" width="116" height="34" aria-label="Farmer to Hunter">
+              {/* Rake */}
+              <line x1="19" y1="4" x2="19" y2="30" stroke="#ffb400" strokeWidth="2.5" strokeLinecap="round"/>
+              <line x1="6" y1="30" x2="34" y2="30" stroke="#ffb400" strokeWidth="3" strokeLinecap="round"/>
+              <line x1="8"  y1="30" x2="8"  y2="44" stroke="#ffb400" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="13" y1="30" x2="13" y2="44" stroke="#ffb400" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="19" y1="30" x2="19" y2="44" stroke="#ffb400" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="25" y1="30" x2="25" y2="44" stroke="#ffb400" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="30" y1="30" x2="30" y2="44" stroke="#ffb400" strokeWidth="2" strokeLinecap="round"/>
+              {/* Transition arrow */}
+              <line x1="44" y1="25" x2="60" y2="25" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              <polyline points="54,19 61,25 54,31" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+              {/* Bow arc — concave right, shoots right */}
+              <path d="M 90,4 Q 71,25 90,46" fill="none" stroke="#ffb400" strokeWidth="2.5" strokeLinecap="round"/>
+              {/* Bowstring */}
+              <line x1="90" y1="4" x2="90" y2="46" stroke="#ffb400" strokeWidth="1" strokeLinecap="round" opacity="0.55"/>
+              {/* Arrow shaft */}
+              <line x1="90" y1="25" x2="158" y2="25" stroke="#ffb400" strokeWidth="2" strokeLinecap="round"/>
+              {/* Arrowhead */}
+              <polygon points="151,19 160,25 151,31" fill="#ffb400"/>
+              {/* Fletching */}
+              <line x1="93" y1="25" x2="86" y2="18" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              <line x1="93" y1="25" x2="86" y2="32" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+            <p className="text-[8px] tracking-widest uppercase" style={{ color: "#ffb400", opacity: 0.5 }}>Farmer → Hunter</p>
+          </div>
         </div>
         <div className="hidden group-data-[collapsible=icon]:flex justify-center py-1">
           <img src={vtLogoWhite} alt="VT" className="h-6 w-6 object-contain" />
