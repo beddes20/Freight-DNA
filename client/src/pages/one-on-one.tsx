@@ -14,7 +14,7 @@ import {
   StickyNote, ClipboardList, CornerDownRight, CalendarClock, Pencil, X,
   BarChart2, Phone, Mail, MessageCircle, MapPin, Target, CheckCheck, Clock,
   Video, ExternalLink, Link, Lightbulb, Smile, Frown, Meh, Timer,
-  SendHorizonal, ArrowRight, Sparkles, Loader2,
+  SendHorizonal, ArrowRight, Sparkles, Loader2, AlertTriangle, Search,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -1641,9 +1641,59 @@ interface PairingListProps {
   selectedKey: string | null;
   onSelect: (key: string) => void;
   showNamLabel: boolean;
+  userRole: string;
 }
 
-function PairingList({ pairings, selectedKey, onSelect, showNamLabel }: PairingListProps) {
+function PairingRow({ p, isSelected, onSelect, showNamLabel }: { p: Pairing; isSelected: boolean; onSelect: (key: string) => void; showNamLabel: boolean }) {
+  const key = `${p.namId}::${p.amId}`;
+  const isUpward = p.section === "upward" || p.section === "my_manager";
+  const displayName = isUpward ? p.namName : p.amName;
+  const isOverdue = !isUpward && p.daysSinceClose != null && p.daysSinceClose >= 21;
+
+  return (
+    <button
+      key={key}
+      onClick={() => onSelect(key)}
+      className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 ${isSelected ? "bg-muted/60 border-r-2 border-r-indigo-600" : ""}`}
+      data-testid={`btn-select-pairing-${p.amId}`}
+    >
+      <div className={`h-8 w-8 rounded-full shrink-0 flex items-center justify-center text-white text-xs font-semibold ${avatarColor(displayName)}`}>
+        {initials(displayName)}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate">{displayName}</p>
+        {isUpward ? (
+          <p className="text-xs text-muted-foreground">My Manager</p>
+        ) : showNamLabel ? (
+          <p className="text-xs text-muted-foreground truncate">with {p.namName}</p>
+        ) : null}
+      </div>
+      {!isUpward && p.daysSinceClose != null && (
+        <span className={`shrink-0 flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ${
+          p.daysSinceClose <= 14 ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" :
+          p.daysSinceClose < 21 ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" :
+          "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+        }`} title={`Last session closed ${p.daysSinceClose}d ago`}>
+          {isOverdue && <AlertTriangle className="h-3 w-3 shrink-0" />}
+          {p.daysSinceClose}d
+        </span>
+      )}
+      {!isUpward && p.daysSinceClose == null && (
+        <span className="shrink-0 text-xs px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground" title="No sessions closed yet">
+          New
+        </span>
+      )}
+    </button>
+  );
+}
+
+function PairingList({ pairings, selectedKey, onSelect, showNamLabel, userRole }: PairingListProps) {
+  const [search, setSearch] = useState("");
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+
+  const isAdmin = userRole === "admin";
+  const isDirector = userRole === "director" || userRole === "sales_director";
+
   // Keep upward/manager pairing first, sort everything else alphabetically by display name
   const sortedPairings = [...pairings].sort((a, b) => {
     if (a.section === "upward" || a.section === "my_manager") return -1;
@@ -1653,61 +1703,131 @@ function PairingList({ pairings, selectedKey, onSelect, showNamLabel }: PairingL
     return nameA.localeCompare(nameB);
   });
 
+  const filterTerm = search.trim().toLowerCase();
+  const filteredPairings = filterTerm
+    ? sortedPairings.filter(p => {
+        const isUpward = p.section === "upward" || p.section === "my_manager";
+        const displayName = isUpward ? p.namName : p.amName;
+        return displayName.toLowerCase().includes(filterTerm) || p.namName.toLowerCase().includes(filterTerm);
+      })
+    : sortedPairings;
+
+  const toggleGroup = (groupKey: string) => {
+    setCollapsedGroups(prev => ({ ...prev, [groupKey]: !prev[groupKey] }));
+  };
+
+  const renderRow = (p: Pairing) => {
+    const key = `${p.namId}::${p.amId}`;
+    return (
+      <PairingRow
+        key={key}
+        p={p}
+        isSelected={selectedKey === key}
+        onSelect={onSelect}
+        showNamLabel={showNamLabel}
+      />
+    );
+  };
+
+  const renderEmpty = () => (
+    <div className="px-4 py-8 text-center text-muted-foreground">
+      <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
+      <p className="text-sm">{filterTerm ? "No matches found" : "No pairings found"}</p>
+    </div>
+  );
+
+  const renderAdminGrouped = () => {
+    if (filteredPairings.length === 0) return renderEmpty();
+    const groups: Record<string, Pairing[]> = {};
+    for (const p of filteredPairings) {
+      const groupKey = p.namId;
+      if (!groups[groupKey]) groups[groupKey] = [];
+      groups[groupKey].push(p);
+    }
+    return Object.entries(groups).map(([groupKey, groupPairings]) => {
+      const managerName = groupPairings[0].namName;
+      const isCollapsed = !!collapsedGroups[groupKey];
+      return (
+        <div key={groupKey}>
+          <button
+            onClick={() => toggleGroup(groupKey)}
+            className="w-full flex items-center justify-between px-4 py-2 text-left hover:bg-muted/40 transition-colors"
+            data-testid={`btn-group-${groupKey}`}
+          >
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide truncate">
+              {managerName} <span className="font-normal normal-case">({groupPairings.length})</span>
+            </span>
+            {isCollapsed ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" /> : <ChevronUp className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+          </button>
+          {!isCollapsed && groupPairings.map(p => renderRow(p))}
+        </div>
+      );
+    });
+  };
+
+  const renderDirectorDivided = () => {
+    if (filteredPairings.length === 0) return renderEmpty();
+    const upward = filteredPairings.filter(p => p.section === "upward" || p.section === "my_manager");
+    const downward = filteredPairings.filter(p => p.section !== "upward" && p.section !== "my_manager");
+    return (
+      <>
+        {upward.length > 0 && (
+          <>
+            <div className="px-4 py-1.5">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">My Manager</p>
+            </div>
+            {upward.map(p => renderRow(p))}
+          </>
+        )}
+        {downward.length > 0 && (
+          <>
+            <div className={`px-4 py-1.5 ${upward.length > 0 ? "mt-1 border-t" : ""}`}>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Direct Reports</p>
+            </div>
+            {downward.map(p => renderRow(p))}
+          </>
+        )}
+        {upward.length === 0 && downward.length === 0 && renderEmpty()}
+      </>
+    );
+  };
+
+  const renderFlat = () => {
+    if (filteredPairings.length === 0) return renderEmpty();
+    return filteredPairings.map(p => renderRow(p));
+  };
+
   return (
-    <div className="w-64 shrink-0 border-r flex flex-col bg-muted/10">
+    <div className="w-72 shrink-0 border-r flex flex-col bg-muted/10">
       <div className="px-4 py-3 border-b">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
           {showNamLabel ? "All Pairings" : "Direct Reports"}
         </p>
       </div>
+      <div className="px-3 py-2 border-b">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Filter by name…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full pl-8 pr-7 py-1.5 text-sm rounded-md border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            data-testid="input-pairing-search"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              data-testid="btn-clear-search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
       <div className="flex-1 overflow-y-auto py-2">
-        {sortedPairings.length === 0 ? (
-          <div className="px-4 py-8 text-center text-muted-foreground">
-            <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
-            <p className="text-sm">No pairings found</p>
-          </div>
-        ) : (
-          sortedPairings.map(p => {
-            const key = `${p.namId}::${p.amId}`;
-            const isSelected = selectedKey === key;
-            const isUpward = p.section === "upward";
-            const displayName = isUpward ? p.namName : p.amName;
-            return (
-              <button
-                key={key}
-                onClick={() => onSelect(key)}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 ${isSelected ? "bg-muted/60 border-r-2 border-r-indigo-600" : ""}`}
-                data-testid={`btn-select-pairing-${p.amId}`}
-              >
-                <div className={`h-8 w-8 rounded-full shrink-0 flex items-center justify-center text-white text-xs font-semibold ${avatarColor(displayName)}`}>
-                  {initials(displayName)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{displayName}</p>
-                  {isUpward ? (
-                    <p className="text-xs text-muted-foreground">My Manager</p>
-                  ) : showNamLabel ? (
-                    <p className="text-xs text-muted-foreground truncate">with {p.namName}</p>
-                  ) : null}
-                </div>
-                {!isUpward && p.daysSinceClose != null && (
-                  <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${
-                    p.daysSinceClose <= 14 ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" :
-                    p.daysSinceClose <= 21 ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" :
-                    "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                  }`} title={`Last session closed ${p.daysSinceClose}d ago`}>
-                    {p.daysSinceClose}d
-                  </span>
-                )}
-                {!isUpward && p.daysSinceClose == null && p.section !== "upward" && p.section !== "my_manager" && (
-                  <span className="shrink-0 text-xs px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground" title="No sessions closed yet">
-                    New
-                  </span>
-                )}
-              </button>
-            );
-          })
-        )}
+        {isAdmin ? renderAdminGrouped() : isDirector ? renderDirectorDivided() : renderFlat()}
       </div>
     </div>
   );
@@ -1796,6 +1916,7 @@ export default function OneOnOnePage() {
             selectedKey={activePairingKey}
             onSelect={setSelectedKey}
             showNamLabel={showNamLabel}
+            userRole={user.role}
           />
         )}
 
