@@ -5398,6 +5398,23 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  // ── Seed Demo Org ─────────────────────────────────────────────────────────
+  app.post("/api/admin/seed-demo", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer || viewer.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const { execSync } = await import("child_process");
+      const output = execSync("npx tsx scripts/seed-demo-org.ts", {
+        cwd: process.cwd(),
+        timeout: 120000,
+        env: { ...process.env },
+      });
+      res.json({ success: true, message: "Demo org seeded successfully", output: output.toString().slice(-500) });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message?.slice(0, 300) });
+    }
+  });
+
   // ── Rep Progress Report ───────────────────────────────────────────────────
   app.post("/api/report/rep/:userId/send-email", requireAuth, async (req, res) => {
     try {
