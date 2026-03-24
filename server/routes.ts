@@ -5250,7 +5250,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      await storage.markAllNotificationsRead(user.id);
+      const { types, ids } = req.body as { types?: string[]; ids?: string[] };
+      if (ids && Array.isArray(ids) && ids.length > 0) {
+        await storage.markNotificationsReadByIds(user.id, ids);
+      } else if (types && Array.isArray(types) && types.length > 0) {
+        await storage.markNotificationsReadByTypes(user.id, types);
+      } else {
+        await storage.markAllNotificationsRead(user.id);
+      }
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to mark all notifications read" });

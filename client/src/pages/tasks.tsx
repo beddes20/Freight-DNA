@@ -30,6 +30,7 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useMarkNotificationsRead, TASK_NOTIFICATION_TYPES } from "@/hooks/use-notifications";
 import { TaskDialog } from "@/components/task-dialog";
 import { FileAttachmentList } from "@/components/file-attachment";
 import type { Company, Task, User, PersonalAlert } from "@shared/schema";
@@ -410,6 +411,13 @@ export default function TasksPage() {
   const [showAlerts, setShowAlerts] = useState(true);
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const markRead = useMarkNotificationsRead(TASK_NOTIFICATION_TYPES);
+
+  useEffect(() => {
+    if (currentUser) {
+      markRead.mutate();
+    }
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (window.location.hash === "#completed") {

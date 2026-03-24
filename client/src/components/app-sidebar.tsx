@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2 } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, Bell } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -15,6 +15,7 @@ import {
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
+import { useNotificationCounts, useMarkNotificationsRead } from "@/hooks/use-notifications";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
@@ -58,14 +59,27 @@ const ROLE_LABELS: Record<string, string> = {
   logistics_coordinator: "Logistics Coordinator",
 };
 
-function NavLink({ item, isActive }: { item: { title: string; url: string; icon: React.ElementType }; isActive: boolean }) {
+function NotificationBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:-top-1 group-data-[collapsible=icon]:-right-1 group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:min-w-4 group-data-[collapsible=icon]:text-[9px]"
+      data-testid="badge-notification-count"
+    >
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+function NavLink({ item, isActive, badge }: { item: { title: string; url: string; icon: React.ElementType }; isActive: boolean; badge?: number }) {
   const Icon = item.icon;
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={isActive} tooltip={item.title}>
-        <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`}>
+        <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`} className="relative">
           <Icon className="h-4 w-4" />
           <span>{item.title}</span>
+          {badge !== undefined && <NotificationBadge count={badge} />}
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -73,8 +87,10 @@ function NavLink({ item, isActive }: { item: { title: string; url: string; icon:
 }
 
 export function AppSidebar() {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const { user, logout } = useAuth();
+  const { taskCount, otherCount, otherUnreadIds } = useNotificationCounts();
+  const markOtherRead = useMarkNotificationsRead();
 
   const isActive = (url: string) =>
     url === "/"
@@ -162,7 +178,14 @@ export function AppSidebar() {
             <SidebarMenu>
               {navItems
                 .filter(item => !('roles' in item) || (user?.role && (item as any).roles.includes(user.role)))
-                .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
+                .map(item => (
+                  <NavLink
+                    key={item.title}
+                    item={item}
+                    isActive={isActive(item.url)}
+                    badge={item.title === "Tasks" ? taskCount : undefined}
+                  />
+                ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -232,16 +255,36 @@ export function AppSidebar() {
               <p className="text-sm font-medium truncate" data-testid="text-current-user">{user.name}</p>
               <p className="text-xs text-sidebar-foreground/60">{ROLE_LABELS[user.role] || user.role}</p>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-              onClick={() => logout.mutate()}
-              data-testid="button-logout"
-              title="Log out"
-            >
-              <LogOut className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-1 shrink-0">
+              {otherCount > 0 && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="relative text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                  title={`${otherCount} unread notification${otherCount !== 1 ? "s" : ""}`}
+                  data-testid="button-notifications-bell"
+                  onClick={() => {
+                    markOtherRead.mutate(otherUnreadIds);
+                    navigate("/tasks");
+                  }}
+                >
+                  <Bell className="h-4 w-4" />
+                  <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold text-white" data-testid="badge-bell-count">
+                    {otherCount > 99 ? "99+" : otherCount}
+                  </span>
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                onClick={() => logout.mutate()}
+                data-testid="button-logout"
+                title="Log out"
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         )}
         <div className="flex items-center justify-between group-data-[collapsible=icon]:hidden">

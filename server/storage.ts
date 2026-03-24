@@ -257,6 +257,8 @@ export interface IStorage {
   createNotification(data: import('../shared/schema').InsertNotification): Promise<import('../shared/schema').Notification>;
   markNotificationRead(id: string): Promise<void>;
   markAllNotificationsRead(userId: string): Promise<void>;
+  markNotificationsReadByTypes(userId: string, types: string[]): Promise<void>;
+  markNotificationsReadByIds(userId: string, ids: string[]): Promise<void>;
 
   getTouchpoint(id: string): Promise<Touchpoint | undefined>;
   getTouchpoints(): Promise<Touchpoint[]>;
@@ -1185,6 +1187,19 @@ export class DatabaseStorage implements IStorage {
 
   async markAllNotificationsRead(userId: string): Promise<void> {
     await db.update(notifications).set({ read: true }).where(eq(notifications.userId, userId));
+  }
+
+  async markNotificationsReadByTypes(userId: string, types: string[]): Promise<void> {
+    await db.update(notifications).set({ read: true }).where(
+      and(eq(notifications.userId, userId), inArray(notifications.type, types))
+    );
+  }
+
+  async markNotificationsReadByIds(userId: string, ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await db.update(notifications).set({ read: true }).where(
+      and(eq(notifications.userId, userId), inArray(notifications.id, ids))
+    );
   }
 
   async getGoals(filter: { namId?: string; amId?: string }): Promise<Goal[]> {
