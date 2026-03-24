@@ -2087,15 +2087,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
-      const customerName = (company.financialAlias || company.name).toLowerCase().trim();
+      const customerAliases = company.financialAlias
+        ? company.financialAlias.split(',').map((a: string) => a.trim().toLowerCase()).filter(Boolean)
+        : [company.name.toLowerCase().trim()];
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
 
       const msCols = resolveColumns(allRows);
-      // Filter rows matching this customer
+      // Filter rows matching this customer (checks all comma-separated aliases)
       const matchedRows = allRows.filter(r => {
         const cust = getCustomerFromRow(r, msCols).toLowerCase();
-        return cust === customerName || cust.includes(customerName) || customerName.includes(cust);
+        return customerAliases.some(alias => cust === alias || cust.includes(alias) || alias.includes(cust));
       });
 
       // Group by month
@@ -3837,15 +3839,25 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     const allCompanies = await storage.getCompanies(organizationId);
 
     for (const company of allCompanies) {
-      const alias = (company.financialAlias || "").toLowerCase().trim();
+      const aliases = company.financialAlias
+        ? company.financialAlias.split(',').map((a: string) => a.trim().toLowerCase()).filter(Boolean)
+        : [];
       const cname = company.name.toLowerCase().trim();
 
-      // Try exact match first, then substring match (handles cases like
-      // financial data key "gmccpomi - gmcca..." vs alias "gmccpomi")
-      let tally = customerSalesMap.get(alias) || customerSalesMap.get(cname);
-      if (!tally && alias.length >= 5) {
-        for (const [mapKey, mapVal] of customerSalesMap) {
-          if (mapKey.includes(alias) || alias.includes(mapKey)) { tally = mapVal; break; }
+      // Try exact match first across all aliases, then substring match
+      let tally = customerSalesMap.get(cname);
+      for (const alias of aliases) {
+        if (tally) break;
+        tally = customerSalesMap.get(alias);
+      }
+      if (!tally) {
+        for (const alias of (aliases.length ? aliases : [cname])) {
+          if (tally) break;
+          if (alias.length >= 5) {
+            for (const [mapKey, mapVal] of customerSalesMap) {
+              if (mapKey.includes(alias) || alias.includes(mapKey)) { tally = mapVal; break; }
+            }
+          }
         }
       }
       if (!tally && cname.length >= 5) {
@@ -4666,7 +4678,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       // Same normalize + nameMatches logic as the frontend
       const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
       const crmNorm = normalize(company.name);
-      const aliasNorm = company.financialAlias ? normalize(company.financialAlias) : null;
+      const aliasNorms = company.financialAlias
+        ? company.financialAlias.split(',').map((a: string) => normalize(a.trim())).filter(Boolean)
+        : [];
       const nameMatches = (crmToTest: string, excelNorm: string) => {
         if (excelNorm === crmToTest) return true;
         const shorter = crmToTest.length <= excelNorm.length ? crmToTest : excelNorm;
@@ -4676,7 +4690,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const rowMatchesCompany = (row: any) => {
         const custNorm = normalize(String(row["Customer"] || "").trim());
         if (!custNorm) return false;
-        if (aliasNorm && nameMatches(aliasNorm, custNorm)) return true;
+        if (aliasNorms.some((a: string) => nameMatches(a, custNorm))) return true;
         return nameMatches(crmNorm, custNorm);
       };
 
@@ -6663,14 +6677,16 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       // Factor 5: Financial data presence (10 pts)
       const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
       const crmNorm = normalize(company.name);
-      const aliasNorm = company.financialAlias ? normalize(company.financialAlias) : null;
+      const aliasNorms = company.financialAlias
+        ? company.financialAlias.split(',').map((a: string) => normalize(a.trim())).filter(Boolean)
+        : [];
       let hasFinancialData = false;
       let totalLoadsYtd = 0;
       for (const upload of uploads) {
         const rows = (upload.rows as any[]) || [];
         for (const row of rows) {
           const custName = normalize(String(row.customerName || ""));
-          if (custName === crmNorm || (aliasNorm && custName === aliasNorm)) {
+          if (custName === crmNorm || aliasNorms.some((a: string) => custName === a)) {
             totalLoadsYtd += Number(row.totalLoads || 0);
             hasFinancialData = true;
           }
@@ -7463,7 +7479,11 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     const s = new Set<string>();
     for (const c of companies) {
       s.add(normAlias(c.name));
-      if (c.financialAlias) s.add(normAlias(c.financialAlias));
+      if (c.financialAlias) {
+        for (const a of c.financialAlias.split(',').map((x: string) => x.trim()).filter(Boolean)) {
+          s.add(normAlias(a));
+        }
+      }
     }
     return s;
   }
@@ -7584,8 +7604,10 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const resolveCompanyName = (alias: string): string => {
         const norm = normAlias(alias);
         const match = allCompanies.find(c => {
-          const cn = normAlias(c.financialAlias || c.name);
-          return cn === norm || cn.includes(norm) || norm.includes(cn);
+          const cns = c.financialAlias
+            ? c.financialAlias.split(',').map((a: string) => normAlias(a.trim())).filter(Boolean)
+            : [normAlias(c.name)];
+          return cns.some((cn: string) => cn === norm || cn.includes(norm) || norm.includes(cn));
         });
         return match?.name || alias;
       };

@@ -422,7 +422,9 @@ export default function CompanyDetail() {
     // Normalize: lowercase, collapse whitespace, strip punctuation
     const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     const crmNorm = normalize(company.name);
-    const aliasNorm = company.financialAlias ? normalize(company.financialAlias) : null;
+    const aliasNorms = company.financialAlias
+      ? company.financialAlias.split(',').map(a => normalize(a.trim())).filter(Boolean)
+      : [];
     const nameMatches = (crmToTest: string, excelNorm: string) => {
       if (excelNorm === crmToTest) return true;
       const shorter = crmToTest.length <= excelNorm.length ? crmToTest : excelNorm;
@@ -431,7 +433,7 @@ export default function CompanyDetail() {
     };
     const matches = accountSummaryAll.filter(r => {
       const excelNorm = normalize(r.customerName);
-      if (aliasNorm && nameMatches(aliasNorm, excelNorm)) return true;
+      if (aliasNorms.some(a => nameMatches(a, excelNorm))) return true;
       return nameMatches(crmNorm, excelNorm);
     });
     if (!matches.length) return null;
@@ -1586,7 +1588,7 @@ export default function CompanyDetail() {
                       onChange={e => setFinancialAliasEdit(e.target.value)}
                       data-testid="input-financial-alias"
                     />
-                    <p className="text-[11px] text-muted-foreground">Alternate name used to match this account in uploaded financial data. Leave blank to use the account name.</p>
+                    <p className="text-[11px] text-muted-foreground">Alternate name(s) used to match this account in financial data. Use commas to add multiple, e.g. <span className="font-mono">BROOGLA1, BROOGLAZ</span>. Leave blank to use the account name.</p>
                   </div>
                   {canEditSalesPerson && (
                     <div className="space-y-1">
