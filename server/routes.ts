@@ -723,8 +723,8 @@ export async function registerRoutes(
       const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, allCompanies] = await Promise.all([
         storage.searchCompanies(q, req.session.organizationId!),
         storage.searchUsers(q, ["account_manager", "national_account_manager", "director", "sales"], req.session.organizationId!),
-        storage.searchContacts(q),
-        storage.searchRfps(q),
+        storage.searchContacts(q, req.session.organizationId!),
+        storage.searchRfps(q, req.session.organizationId!),
         storage.getCompanies(req.session.organizationId!),
       ]);
       const companyNameMap = new Map(allCompanies.map(c => [c.id, c.name]));
@@ -1218,6 +1218,9 @@ export async function registerRoutes(
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       let contacts = await storage.getContacts();
+      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+      contacts = contacts.filter(c => orgCompanyIds.has(c.companyId));
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         contacts = contacts.filter(c => visibleIds.includes(c.companyId));
@@ -1386,6 +1389,9 @@ export async function registerRoutes(
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       let rfps = await storage.getRfps();
+      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+      rfps = rfps.filter(r => orgCompanyIds.has(r.companyId));
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         rfps = rfps.filter(r => visibleIds.includes(r.companyId));
@@ -1991,6 +1997,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       let allAwards = await storage.getAwards();
+      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+      allAwards = allAwards.filter(a => orgCompanyIds.has(a.companyId));
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         allAwards = allAwards.filter(a => visibleIds.includes(a.companyId));
@@ -5662,7 +5671,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.json([]);
       const namId = user.role === "admin" ? undefined : user.id;
-      const missing = await storage.getAmsMissingMonthlyGoals(namId);
+      const missing = await storage.getAmsMissingMonthlyGoals(user.organizationId, namId);
       res.json(missing);
     } catch (error) {
       res.status(500).json({ error: "Failed to check monthly goals" });
@@ -6001,6 +6010,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const comment = await storage.getGoalComment((req.params.id as string));
+      if (!comment) return res.status(404).json({ error: "Comment not found" });
+      if (user.role !== "admin" && comment.authorId !== user.id) return res.status(403).json({ error: "Access denied" });
       await storage.deleteGoalComment((req.params.id as string));
       res.json({ ok: true });
     } catch (error) {
@@ -6342,6 +6354,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/touchpoints/company-summary", requireAuth, async (req, res) => {
     try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
       const now = new Date();
       const weekAgo = new Date(now);
       weekAgo.setDate(weekAgo.getDate() - 7);
@@ -6350,9 +6365,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const weekStr = weekAgo.toISOString().slice(0, 10);
       const monthStr = monthAgo.toISOString().slice(0, 10);
 
-      const all = await storage.getTouchpoints();
+      const [all, orgCompanies] = await Promise.all([
+        storage.getTouchpoints(),
+        storage.getCompanies(user.organizationId),
+      ]);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
       const summary: Record<string, { week: number; month: number }> = {};
       for (const tp of all) {
+        if (!orgCompanyIds.has(tp.companyId)) continue;
         if (!summary[tp.companyId]) summary[tp.companyId] = { week: 0, month: 0 };
         if (tp.date >= monthStr) summary[tp.companyId].month++;
         if (tp.date >= weekStr) summary[tp.companyId].week++;
@@ -6508,8 +6528,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       monday.setHours(0, 0, 0, 0);
       const weekStart = monday.toISOString().slice(0, 10);
 
-      const all = await storage.getTouchpoints();
-      const thisWeek = all.filter(t => t.date >= weekStart);
+      const [all, allUsers] = await Promise.all([
+        storage.getTouchpoints(),
+        storage.getUsers(user.organizationId),
+      ]);
+      const orgUserIds = new Set(allUsers.map(u => u.id));
+      const thisWeek = all.filter(t => t.date >= weekStart && t.loggedById && orgUserIds.has(t.loggedById));
 
       const teamIds: string[] | null = (user.role === "admin" || user.role === "director" || user.role === "sales_director")
         ? null
@@ -6518,7 +6542,6 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const filtered = teamIds === null ? thisWeek : thisWeek.filter(t => t.loggedById && (teamIds.includes(t.loggedById) || t.loggedById === user.id));
 
       const byUser: Record<string, { userId: string; name: string; total: number; call: number; email: number; text: number; site_visit: number; meaningful: number }> = {};
-      const allUsers = await storage.getUsers(user.organizationId);
       const userMap: Record<string, string> = {};
       for (const u of allUsers) userMap[u.id] = u.name || u.username;
 

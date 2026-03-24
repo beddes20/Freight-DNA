@@ -243,8 +243,8 @@ export interface IStorage {
   getActiveSessionsWithMeetingDate(): Promise<OneOnOneSession[]>;
   getActionItemsByPairing(namId: string, amId: string): Promise<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>;
 
-  searchContacts(query: string): Promise<Contact[]>;
-  searchRfps(query: string): Promise<Rfp[]>;
+  searchContacts(query: string, organizationId: string): Promise<Contact[]>;
+  searchRfps(query: string, organizationId: string): Promise<Rfp[]>;
 
   getCompanyActivity(companyId: string): Promise<Array<{ type: string; title: string; subtitle?: string; date: string; link?: string }>>;
   getTeamPerformance(managerIds: string[], startDate?: string, endDate?: string): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number; meaningfulTouchpoints: number }>>;
@@ -280,8 +280,9 @@ export interface IStorage {
   createGoal(goal: InsertGoal): Promise<Goal>;
   updateGoal(id: string, data: Partial<InsertGoal>): Promise<Goal | undefined>;
   deleteGoal(id: string): Promise<boolean>;
-  getAmsMissingMonthlyGoals(namId?: string): Promise<Array<{ amId: string; amName: string }>>;
+  getAmsMissingMonthlyGoals(organizationId: string, namId?: string): Promise<Array<{ amId: string; amName: string }>>;
   getGoalComments(goalId: string): Promise<GoalComment[]>;
+  getGoalComment(id: string): Promise<GoalComment | undefined>;
   createGoalComment(comment: InsertGoalComment): Promise<GoalComment>;
   deleteGoalComment(id: string): Promise<boolean>;
   getContactsAddedByAm(amId: string, startDate: string, endDate: string): Promise<number>;
@@ -1068,14 +1069,23 @@ export class DatabaseStorage implements IStorage {
     return results;
   }
 
-  async searchContacts(query: string): Promise<Contact[]> {
+  async searchContacts(query: string, organizationId: string): Promise<Contact[]> {
+    const orgCompanyIds = db.select({ id: companies.id }).from(companies)
+      .where(eq(companies.organizationId, organizationId));
     return db.select().from(contacts).where(
-      or(ilike(contacts.name, `%${query}%`), ilike(contacts.title, `%${query}%`))
+      and(
+        inArray(contacts.companyId, orgCompanyIds),
+        or(ilike(contacts.name, `%${query}%`), ilike(contacts.title, `%${query}%`))
+      )
     ).limit(8);
   }
 
-  async searchRfps(query: string): Promise<Rfp[]> {
-    return db.select().from(rfps).where(ilike(rfps.title, `%${query}%`)).limit(6);
+  async searchRfps(query: string, organizationId: string): Promise<Rfp[]> {
+    const orgCompanyIds = db.select({ id: companies.id }).from(companies)
+      .where(eq(companies.organizationId, organizationId));
+    return db.select().from(rfps).where(
+      and(inArray(rfps.companyId, orgCompanyIds), ilike(rfps.title, `%${query}%`))
+    ).limit(6);
   }
 
   async getCompanyActivity(companyId: string): Promise<Array<{ type: string; title: string; subtitle?: string; date: string; link?: string }>> {
@@ -1186,7 +1196,7 @@ export class DatabaseStorage implements IStorage {
     return (result.rowCount ?? 0) > 0;
   }
 
-  async getAmsMissingMonthlyGoals(namId?: string): Promise<Array<{ amId: string; amName: string }>> {
+  async getAmsMissingMonthlyGoals(organizationId: string, namId?: string): Promise<Array<{ amId: string; amName: string }>> {
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
@@ -1196,7 +1206,10 @@ export class DatabaseStorage implements IStorage {
         .filter(g => g.period === "monthly" && g.startDate >= firstDay && g.startDate <= lastDay)
         .map(g => g.amId)
     );
-    const conditions: ReturnType<typeof eq>[] = [eq(users.role, "account_manager")];
+    const conditions: ReturnType<typeof eq>[] = [
+      eq(users.role, "account_manager"),
+      eq(users.organizationId, organizationId),
+    ];
     if (namId) conditions.push(eq(users.managerId, namId));
     const ams = await db.select({ id: users.id, name: users.name })
       .from(users)
@@ -1208,6 +1221,11 @@ export class DatabaseStorage implements IStorage {
 
   async getGoalComments(goalId: string): Promise<GoalComment[]> {
     return db.select().from(goalComments).where(eq(goalComments.goalId, goalId)).orderBy(goalComments.createdAt);
+  }
+
+  async getGoalComment(id: string): Promise<GoalComment | undefined> {
+    const [comment] = await db.select().from(goalComments).where(eq(goalComments.id, id));
+    return comment;
   }
 
   async createGoalComment(comment: InsertGoalComment): Promise<GoalComment> {
