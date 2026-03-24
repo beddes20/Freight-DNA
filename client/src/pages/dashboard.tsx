@@ -158,22 +158,14 @@ export default function Dashboard() {
   const [ptoBannerDismissed, setPtoBannerDismissed] = useState(false);
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
   const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") === "true");
-  const [lmCheckInCollapsed, setLmCheckInCollapsed] = useState<Record<string, boolean>>(() => {
-    try {
-      const stored = localStorage.getItem("dash_lm_checkin_collapsed");
-      return stored ? JSON.parse(stored) : {};
-    } catch {
-      return {};
-    }
-  });
-  const toggleLmCheckIn = (lmId: string) => {
-    setLmCheckInCollapsed(prev => {
-      const next = { ...prev, [lmId]: !(prev[lmId] ?? true) };
-      localStorage.setItem("dash_lm_checkin_collapsed", JSON.stringify(next));
+  const [lmCheckInsGroupCollapsed, setLmCheckInsGroupCollapsed] = useState(() => localStorage.getItem("dash_lm_checkins_group_collapsed") === "true");
+  const toggleLmCheckInsGroup = () => {
+    setLmCheckInsGroupCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem("dash_lm_checkins_group_collapsed", String(next));
       return next;
     });
   };
-  const isLmCheckInCollapsed = (lmId: string) => lmCheckInCollapsed[lmId] ?? true;
 
   const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -1668,45 +1660,35 @@ export default function Dashboard() {
       {(() => {
         if (!currentUser || currentUser.role === "logistics_manager" || currentUser.role === "director" || currentUser.role === "sales_director") return null;
         const directReportIds = new Set(lmDirectReports.map(lm => lm.id));
-        // All LMs in management chain (from teamMembers for directors/NAMs/admins)
         const chainLms = teamMembers.filter(m => m.role === "logistics_manager" && !directReportIds.has(m.id));
+        const allLms = [
+          ...lmDirectReports.map(lm => ({ lm, canEdit: true })),
+          ...chainLms.map(lm => ({ lm, canEdit: false })),
+        ];
+        if (allLms.length === 0) return null;
         return (
-          <>
-            {lmDirectReports.map(lm => (
-              <div key={lm.id} className="space-y-2">
-                <button
-                  className="flex items-center gap-2 text-left w-full"
-                  onClick={() => toggleLmCheckIn(lm.id)}
-                  data-testid={`button-toggle-lm-checkin-${lm.id}`}
-                >
-                  <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-                    Daily Check-In — {lm.name}
-                  </h3>
-                  {isLmCheckInCollapsed(lm.id) ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                </button>
-                {!isLmCheckInCollapsed(lm.id) && (
-                  <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={true} />
-                )}
-              </div>
-            ))}
-            {chainLms.map(lm => (
-              <div key={lm.id} className="space-y-2">
-                <button
-                  className="flex items-center gap-2 text-left w-full"
-                  onClick={() => toggleLmCheckIn(lm.id)}
-                  data-testid={`button-toggle-lm-checkin-${lm.id}`}
-                >
-                  <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-                    Daily Check-In — {lm.name}
-                  </h3>
-                  {isLmCheckInCollapsed(lm.id) ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                </button>
-                {!isLmCheckInCollapsed(lm.id) && (
-                  <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={false} />
-                )}
-              </div>
-            ))}
-          </>
+          <Card data-testid="card-lm-daily-checkins-group">
+            <CardHeader className="pb-3">
+              <button
+                className="flex items-center gap-2 text-left w-full"
+                onClick={toggleLmCheckInsGroup}
+                data-testid="button-toggle-lm-checkins-group"
+              >
+                <CardTitle className="text-base">LM Daily Check-Ins</CardTitle>
+                {lmCheckInsGroupCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground ml-auto" /> : <ChevronDown className="h-4 w-4 text-muted-foreground ml-auto" />}
+              </button>
+            </CardHeader>
+            {!lmCheckInsGroupCollapsed && (
+              <CardContent className="space-y-6 pt-0">
+                {allLms.map(({ lm, canEdit }) => (
+                  <div key={lm.id} className="space-y-2" data-testid={`section-lm-checkin-${lm.id}`}>
+                    <h3 className="text-sm font-semibold text-muted-foreground">{lm.name}</h3>
+                    <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={canEdit} />
+                  </div>
+                ))}
+              </CardContent>
+            )}
+          </Card>
         );
       })()}
 
