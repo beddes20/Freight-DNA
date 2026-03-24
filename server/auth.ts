@@ -124,9 +124,7 @@ export function setupAuth(app: any) {
       const token = crypto.randomBytes(48).toString("hex");
       const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
       await storage.createPasswordResetToken(user.id, token, expiresAt);
-      const proto = req.headers["x-forwarded-proto"] || req.protocol;
-      const host = req.headers["x-forwarded-host"] || req.headers.host;
-      const baseUrl = `${proto}://${host}`;
+      const baseUrl = (process.env.APP_URL || "https://sales-org-builder.replit.app").replace(/\/$/, "");
       const resetUrl = `${baseUrl}/reset-password?token=${token}`;
       await sendEmail({
         to: user.username,

@@ -399,7 +399,8 @@ Keep it short and casual — reps are busy. No fluff, no filler.
       const bodyPreview = trimmed; // store full content so admin can read the whole request
       const now = new Date().toISOString();
 
-      const admins = await db.select().from(users).where(eq(users.role, "admin"));
+      const allAdmins = await db.select().from(users).where(eq(users.role, "admin"));
+      const admins = allAdmins.filter((a) => a.username !== "jordan.baumgart@valuetruck.com");
       const feedbackType: "bug" | "improvement" | "feature" = isBug ? "bug" : isImprovement ? "improvement" : "feature";
       const portalUrl = process.env.APP_URL || "https://sales-org-builder.replit.app";
 
