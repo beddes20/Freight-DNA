@@ -129,12 +129,14 @@ export function AppSidebar() {
               <path d="M 9,22 Q 14,37 24,41" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
               <line x1="44" y1="23" x2="53" y2="23" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
               <polyline points="49,18 54,23 49,28" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M 74,5 C 108,5 108,41 74,41" fill="none" stroke="#ffb400" strokeWidth="2.5" strokeLinecap="round"/>
-              <line x1="74" y1="5" x2="74" y2="41" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
-              <line x1="60" y1="23" x2="122" y2="23" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
-              <polygon points="116,17 124,23 116,29" fill="#ffb400"/>
-              <path d="M 70,23 L 65,17 L 61,23" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M 70,23 L 65,29 L 61,23" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <g transform="rotate(-12, 92, 23)">
+                <path d="M 74,5 C 108,5 108,41 74,41" fill="none" stroke="#ffb400" strokeWidth="2.5" strokeLinecap="round"/>
+                <line x1="74" y1="5" x2="74" y2="41" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+                <line x1="69" y1="23" x2="122" y2="23" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+                <polygon points="116,17 124,23 116,29" fill="#ffb400"/>
+                <path d="M 63,23 L 58,17 L 54,23" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M 63,23 L 58,29 L 54,23" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </g>
             </svg>
           </div>
         </div>
