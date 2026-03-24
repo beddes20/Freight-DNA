@@ -417,6 +417,14 @@ export default function LandingPage() {
       >
         <span data-testid="text-footer-wordmark">freight · dna</span>
         <span>Sales intelligence for freight brokers.</span>
+        <a
+          href="mailto:info@freight-dna.com"
+          data-testid="link-footer-email"
+          style={{ color: "rgba(255,255,255,0.2)" }}
+          className="hover:text-white transition-colors"
+        >
+          info@freight-dna.com
+        </a>
       </footer>
 
     </div>
