@@ -109,6 +109,7 @@ import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 import { MarketShareCard } from "@/components/market-share-card";
 import { PreCallPlanner } from "@/components/pre-call-planner";
+import { ContactIntelModal } from "@/components/contact-intel-modal";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
@@ -241,6 +242,7 @@ export default function CompanyDetail() {
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState("");
   const [viewContact, setViewContact] = useState<Contact | null>(null);
+  const [intelContact, setIntelContact] = useState<Contact | null>(null);
   const [expandedDeliveryGroups, setExpandedDeliveryGroups] = useState<Set<string>>(new Set());
   const [expandedDeliveryLanes, setExpandedDeliveryLanes] = useState<Set<string>>(new Set());
   const [expandedPickupGroups, setExpandedPickupGroups] = useState<Set<string>>(new Set());
@@ -2114,6 +2116,7 @@ export default function CompanyDetail() {
               onEditContact={handleEditContact}
               onViewContact={setViewContact}
               onLogTouch={(c) => { setQuickTouchContactId(c.id); setQuickTouchOpen(true); }}
+              onIntelClick={setIntelContact}
             />
           ) : (
             <div className="flex flex-col items-center justify-center py-8">
@@ -3547,6 +3550,14 @@ export default function CompanyDetail() {
         onClose={() => setViewContact(null)}
         onEdit={(c) => { setViewContact(null); handleEditContact(c); }}
       />
+
+      {intelContact && (
+        <ContactIntelModal
+          contact={intelContact}
+          open={!!intelContact}
+          onClose={() => setIntelContact(null)}
+        />
+      )}
 
       <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); setQuickTouchNote(""); setQuickTouchSentiment(""); setQuickTouchMeaningful(false); } }}>
         <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch-detail">

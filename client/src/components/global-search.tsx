@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
-import { Search, Building2, UserCircle, Crown, Contact, FileText } from "lucide-react";
+import { Search, Building2, UserCircle, Crown, Contact, FileText, ListTodo } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 interface SearchResults {
@@ -9,9 +9,10 @@ interface SearchResults {
   nationalAccountManagers: Array<{ id: string; name: string; username: string }>;
   contacts: Array<{ id: string; name: string; title?: string; companyId: string; companyName?: string }>;
   rfps: Array<{ id: string; title: string; companyId: string; status: string }>;
+  tasks: Array<{ id: string; title: string; status: string; companyId: string | null; companyName: string }>;
 }
 
-const emptyResults: SearchResults = { accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [] };
+const emptyResults: SearchResults = { accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [], tasks: [] };
 
 export function GlobalSearch({ navBar }: { navBar?: boolean }) {
   const [query, setQuery] = useState("");
@@ -107,7 +108,8 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
     results.accountManagers.length > 0 ||
     results.nationalAccountManagers.length > 0 ||
     results.contacts.length > 0 ||
-    results.rfps.length > 0;
+    results.rfps.length > 0 ||
+    (results.tasks?.length ?? 0) > 0;
   const showDropdown = open && query.trim().length > 0;
 
   return (
@@ -205,6 +207,30 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
                   <div className="flex-1 min-w-0">
                     <span className="truncate block">{rfp.title}</span>
                     <span className="text-xs text-muted-foreground capitalize">{rfp.status}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!loading && (results.tasks?.length ?? 0) > 0 && (
+            <div>
+              <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-tasks">
+                Tasks
+              </div>
+              {results.tasks.map((task) => (
+                <button
+                  key={task.id}
+                  data-testid={`search-result-task-${task.id}`}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent cursor-pointer text-left"
+                  onClick={() => handleSelect(task.companyId ? `/companies/${task.companyId}` : "/tasks")}
+                >
+                  <ListTodo className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <span className="truncate block">{task.title}</span>
+                    <span className="text-xs text-muted-foreground truncate block">
+                      {[task.companyName, task.status].filter(Boolean).join(" · ")}
+                    </span>
                   </div>
                 </button>
               ))}

@@ -249,6 +249,7 @@ export interface IStorage {
 
   searchContacts(query: string, organizationId: string): Promise<Contact[]>;
   searchRfps(query: string, organizationId: string): Promise<Rfp[]>;
+  searchTasks(query: string, organizationId: string): Promise<Task[]>;
 
   getCompanyActivity(companyId: string): Promise<Array<{ type: string; title: string; subtitle?: string; date: string; link?: string }>>;
   getTeamPerformance(managerIds: string[], startDate?: string, endDate?: string): Promise<Array<{ userId: string; openTasks: number; overdueTasks: number; completedTasks: number; companyCount: number; newContacts: number; callTouchpoints: number; textTouchpoints: number; emailTouchpoints: number; contactsTouched: number; baseAdvanced: number; meaningfulTouchpoints: number }>>;
@@ -1120,6 +1121,17 @@ export class DatabaseStorage implements IStorage {
       .where(eq(companies.organizationId, organizationId));
     return db.select().from(rfps).where(
       and(inArray(rfps.companyId, orgCompanyIds), ilike(rfps.title, `%${query}%`))
+    ).limit(6);
+  }
+
+  async searchTasks(query: string, organizationId: string): Promise<Task[]> {
+    const orgCompanyIds = db.select({ id: companies.id }).from(companies)
+      .where(eq(companies.organizationId, organizationId));
+    return db.select().from(tasks).where(
+      and(
+        inArray(tasks.companyId, orgCompanyIds),
+        ilike(tasks.title, `%${query}%`)
+      )
     ).limit(6);
   }
 

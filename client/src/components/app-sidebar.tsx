@@ -263,10 +263,7 @@ export function AppSidebar() {
                   className="relative text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
                   title={`${otherCount} unread notification${otherCount !== 1 ? "s" : ""}`}
                   data-testid="button-notifications-bell"
-                  onClick={() => {
-                    markOtherRead.mutate(otherUnreadIds);
-                    navigate("/tasks");
-                  }}
+                  onClick={() => navigate("/notifications")}
                 >
                   <Bell className="h-4 w-4" />
                   <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold text-white" data-testid="badge-bell-count">

@@ -36,6 +36,7 @@ import TrainingPage from "@/pages/training";
 import ToolsPage from "@/pages/tools";
 import RepReportPage from "@/pages/rep-report";
 import RepReportsRosterPage from "@/pages/rep-reports-roster";
+import NotificationsPage from "@/pages/notifications";
 
 function Router() {
   return (
@@ -60,6 +61,7 @@ function Router() {
       <Route path="/reports" component={RepReportsRosterPage} />
       <Route path="/report/me" component={RepReportPage} />
       <Route path="/report/:userId" component={RepReportPage} />
+      <Route path="/notifications" component={NotificationsPage} />
       <Route component={NotFound} />
     </Switch>
   );

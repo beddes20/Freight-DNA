@@ -14,7 +14,7 @@ import {
   StickyNote, ClipboardList, CornerDownRight, CalendarClock, Pencil, X,
   BarChart2, Phone, Mail, MessageCircle, MapPin, Target, CheckCheck, Clock,
   Video, ExternalLink, Link, Lightbulb, Smile, Frown, Meh, Timer,
-  SendHorizonal, ArrowRight,
+  SendHorizonal, ArrowRight, Sparkles, Loader2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -444,10 +444,29 @@ function CloseSessionDialog({ open, onClose, session, topics, currentUserId, isA
   const pendingActionItems = pendingTopics.filter(t => t.tag === "action_item");
   const otherPending = pendingTopics.filter(t => t.tag !== "action_item");
 
+  const { toast } = useToast();
   const [moraleScore, setMoraleScore] = useState<number | null>(null);
   const [carryIds, setCarryIds] = useState<Set<string>>(new Set(pendingTopics.map(t => t.id)));
   const [sessionSummary, setSessionSummary] = useState("");
   const [sendSummaryEmail, setSendSummaryEmail] = useState(false);
+  const [isSummarizing, setIsSummarizing] = useState(false);
+
+  const handleGenerateSummary = async () => {
+    setIsSummarizing(true);
+    try {
+      const res = await apiRequest("POST", `/api/one-on-one/sessions/${session.id}/generate-summary`, {});
+      const data = await res.json();
+      if (data.summary) {
+        setSessionSummary(data.summary);
+      } else {
+        toast({ title: "Couldn't generate summary", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to generate summary", variant: "destructive" });
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
 
   const toggleCarry = (id: string) => {
     setCarryIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
@@ -550,10 +569,27 @@ function CloseSessionDialog({ open, onClose, session, topics, currentUserId, isA
 
           {/* Session summary */}
           <div className="space-y-1.5">
-            <p className="text-sm font-semibold flex items-center gap-1.5">
-              <StickyNote className="h-4 w-4 text-amber-500" />
-              Session Summary <span className="font-normal text-muted-foreground text-xs">— optional</span>
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold flex items-center gap-1.5">
+                <StickyNote className="h-4 w-4 text-amber-500" />
+                Session Summary <span className="font-normal text-muted-foreground text-xs">— optional</span>
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs gap-1 text-amber-600 hover:text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-900/20 shrink-0"
+                onClick={handleGenerateSummary}
+                disabled={isSummarizing}
+                data-testid="btn-generate-summary"
+              >
+                {isSummarizing ? (
+                  <><Loader2 className="h-3 w-3 animate-spin" /> Generating...</>
+                ) : (
+                  <><Sparkles className="h-3 w-3" /> Generate</>
+                )}
+              </Button>
+            </div>
             <Textarea
               placeholder="Key takeaways, decisions made, what to watch next session..."
               value={sessionSummary}

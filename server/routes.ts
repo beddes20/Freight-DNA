@@ -725,12 +725,13 @@ export async function registerRoutes(
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const q = (req.query.q as string || "").trim();
-      if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [] });
-      const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, allCompanies] = await Promise.all([
+      if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [], tasks: [] });
+      const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, matchedTasks, allCompanies] = await Promise.all([
         storage.searchCompanies(q, req.session.organizationId!),
         storage.searchUsers(q, ["account_manager", "national_account_manager", "director", "sales"], req.session.organizationId!),
         storage.searchContacts(q, req.session.organizationId!),
         storage.searchRfps(q, req.session.organizationId!),
+        storage.searchTasks(q, req.session.organizationId!),
         storage.getCompanies(req.session.organizationId!),
       ]);
       const companyNameMap = new Map(allCompanies.map(c => [c.id, c.name]));
@@ -739,7 +740,8 @@ export async function registerRoutes(
       const nationalAccountManagers = matchedUsers.filter(u => u.role === "national_account_manager" || u.role === "director");
       const contacts = matchedContacts.map(c => ({ id: c.id, name: c.name, title: c.title, companyId: c.companyId, companyName: companyNameMap.get(c.companyId) || "" }));
       const rfps = matchedRfps.map(r => ({ id: r.id, title: r.title, companyId: r.companyId, status: r.status }));
-      res.json({ accounts, accountManagers, nationalAccountManagers, contacts, rfps });
+      const tasks = matchedTasks.map(t => ({ id: t.id, title: t.title, status: t.status, companyId: t.companyId || null, companyName: t.companyId ? (companyNameMap.get(t.companyId) || "") : "" }));
+      res.json({ accounts, accountManagers, nationalAccountManagers, contacts, rfps, tasks });
     } catch (error) {
       res.status(500).json({ error: "Search failed" });
     }
@@ -5371,6 +5373,50 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  app.post("/api/one-on-one/sessions/:id/generate-summary", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const session = await storage.getSession(req.params.id as string);
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      if (!(await canAccessSession(currentUser, req.params.id as string))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const topics = await storage.getTopicsBySession(req.params.id as string);
+      const discussed = topics.filter(t => t.status === "discussed");
+      const pending = topics.filter(t => t.status === "pending");
+      const notes = session.notes || "";
+
+      const topicLines = (arr: typeof topics) => arr.map(t => `- [${t.tag?.replace(/_/g, " ") || "topic"}] ${t.text}`).join("\n");
+
+      const prompt = `You are summarizing a 1:1 meeting between a manager and a sales rep.
+
+Discussed topics:
+${discussed.length > 0 ? topicLines(discussed) : "None"}
+
+Pending / carry-forward topics:
+${pending.length > 0 ? topicLines(pending) : "None"}
+
+Session notes:
+${notes || "None"}
+
+Write a concise 2–4 sentence summary capturing: key takeaways, any decisions made, and the most important action items. Write in plain prose, no bullet points. Keep it under 100 words.`;
+
+      const OpenAI = (await import("openai")).default;
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 200,
+      });
+      const summary = completion.choices[0]?.message?.content?.trim() || "";
+      res.json({ summary });
+    } catch (error) {
+      console.error("Error generating session summary:", error);
+      res.status(500).json({ error: "Failed to generate summary" });
+    }
+  });
+
   app.get("/api/one-on-one/archived", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
@@ -6771,7 +6817,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const companies = await storage.getCompanies(req.session.organizationId!);
+      const { rows: dismissedRows } = await storage.pool.query(
+        `SELECT company_id FROM opportunity_dismissals WHERE org_id = $1`,
+        [req.session.organizationId!]
+      );
+      const dismissedIds = new Set(dismissedRows.map((r: any) => r.company_id));
+
+      const companies = (await storage.getCompanies(req.session.organizationId!)).filter(c => !dismissedIds.has(c.id));
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
       const msCols = resolveColumns(allRows);
