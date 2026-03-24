@@ -3635,10 +3635,77 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const finalResults = Array.from(destMatchMap.values());
       finalResults.sort((a, b) => b.weeklyLoadCount - a.weeklyLoadCount);
 
-      res.json(finalResults);
+      // Filter out dismissed companies
+      const { rows: dismissalRows } = await storage.pool.query(
+        `SELECT company_id FROM opportunity_dismissals WHERE org_id = $1`,
+        [req.session.organizationId]
+      );
+      const dismissedIds = new Set(dismissalRows.map((r: any) => r.company_id));
+      const filtered = finalResults.map(opp => ({
+        ...opp,
+        matches: opp.matches.filter((m: any) => !dismissedIds.has(m.companyId)),
+      })).filter(opp => opp.matches.length > 0);
+
+      res.json(filtered);
     } catch (error) {
       console.error("Error computing opportunities:", error);
       res.status(500).json({ error: "Failed to compute opportunities" });
+    }
+  });
+
+  app.get("/api/opportunities/dismissals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const { rows } = await storage.pool.query(
+        `SELECT d.company_id, d.dismissed_by, d.dismissed_at, c.name as company_name
+         FROM opportunity_dismissals d
+         LEFT JOIN companies c ON c.id = d.company_id
+         WHERE d.org_id = $1 ORDER BY d.dismissed_at DESC`,
+        [req.session.organizationId]
+      );
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch dismissals" });
+    }
+  });
+
+  app.post("/api/opportunities/dismiss/:companyId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await storage.pool.query(
+        `INSERT INTO opportunity_dismissals (company_id, org_id, dismissed_by, dismissed_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (company_id, org_id) DO UPDATE SET dismissed_by = $3, dismissed_at = $4`,
+        [req.params.companyId, req.session.organizationId, user.id, new Date().toISOString()]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to dismiss opportunity" });
+    }
+  });
+
+  app.delete("/api/opportunities/dismiss/:companyId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await storage.pool.query(
+        `DELETE FROM opportunity_dismissals WHERE company_id = $1 AND org_id = $2`,
+        [req.params.companyId, req.session.organizationId]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to restore opportunity" });
     }
   });
 

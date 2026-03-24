@@ -1,14 +1,27 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useLocation } from "wouter";
 import { TaskDialog } from "@/components/task-dialog";
+import { useAuth } from "@/hooks/use-auth";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Truck, MapPin, Flame, Package, TrendingUp, Building2,
-  FileText, Zap, Plus, ExternalLink,
+  FileText, Zap, Plus, ExternalLink, Trash2, RotateCcw, EyeOff,
 } from "lucide-react";
 
 type OpportunityMatch = {
@@ -57,14 +70,45 @@ type TaskPrefill = {
   notes: string;
 };
 
+type Dismissal = { company_id: string; company_name: string; dismissed_at: string };
+
 export default function TopOpportunities() {
   const [, navigate] = useLocation();
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const canManage = ["admin", "director", "national_account_manager", "sales_director"].includes(user?.role || "");
+
   const { data: opportunities, isLoading } = useQuery<Opportunity[]>({
     queryKey: ["/api/opportunities"],
   });
 
+  const { data: dismissals = [] } = useQuery<Dismissal[]>({
+    queryKey: ["/api/opportunities/dismissals"],
+    enabled: canManage,
+  });
+
+  const [confirmDismiss, setConfirmDismiss] = useState<{ companyId: string; companyName: string } | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskPrefill, setTaskPrefill] = useState<TaskPrefill | null>(null);
+
+  const dismissMutation = useMutation({
+    mutationFn: (companyId: string) => apiRequest("POST", `/api/opportunities/dismiss/${companyId}`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/opportunities/dismissals"] });
+      toast({ title: "Opportunity removed", description: "It won't appear in the list. You can restore it below." });
+      setConfirmDismiss(null);
+    },
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: (companyId: string) => apiRequest("DELETE", `/api/opportunities/dismiss/${companyId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/opportunities/dismissals"] });
+      toast({ title: "Opportunity restored" });
+    },
+  });
 
   const byCompany = useMemo<CompanyGroup[]>(() => {
     if (!opportunities) return [];
@@ -195,6 +239,18 @@ export default function TopOpportunities() {
                       <Truck className="h-3 w-3 mr-1" />
                       {group.totalMatches} match{group.totalMatches !== 1 ? "es" : ""}
                     </Badge>
+                    {canManage && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                        onClick={() => setConfirmDismiss({ companyId: group.companyId, companyName: group.companyName })}
+                        data-testid={`btn-dismiss-opportunity-${group.companyId}`}
+                        title="Remove from list"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -284,6 +340,34 @@ export default function TopOpportunities() {
         </div>
       )}
 
+      {/* Dismissed companies section */}
+      {canManage && dismissals.length > 0 && (
+        <div className="border rounded-lg p-4 bg-muted/30 space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <EyeOff className="h-4 w-4" />
+            Removed from list ({dismissals.length})
+          </div>
+          <div className="space-y-1">
+            {dismissals.map(d => (
+              <div key={d.company_id} className="flex items-center justify-between gap-2 text-sm py-1 border-b last:border-0" data-testid={`row-dismissed-${d.company_id}`}>
+                <span className="text-muted-foreground">{d.company_name || d.company_id}</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs gap-1 text-primary hover:text-primary hover:bg-primary/10"
+                  onClick={() => restoreMutation.mutate(d.company_id)}
+                  disabled={restoreMutation.isPending}
+                  data-testid={`btn-restore-opportunity-${d.company_id}`}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Restore
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {taskPrefill && (
         <TaskDialog
           open={taskOpen}
@@ -298,6 +382,28 @@ export default function TopOpportunities() {
           }}
         />
       )}
+
+      <AlertDialog open={!!confirmDismiss} onOpenChange={v => { if (!v) setConfirmDismiss(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove from Top Opportunities?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{confirmDismiss?.companyName}</strong> will be hidden from this list. You can restore it at the bottom of the page.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="btn-cancel-dismiss">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => confirmDismiss && dismissMutation.mutate(confirmDismiss.companyId)}
+              disabled={dismissMutation.isPending}
+              data-testid="btn-confirm-dismiss"
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

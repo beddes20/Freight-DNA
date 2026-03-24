@@ -354,6 +354,8 @@ const pool = new Pool({
 const db = drizzle(pool);
 
 export class DatabaseStorage implements IStorage {
+  readonly pool = pool;
+
   async getDefaultOrganization(): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, "valuetruck"));
     return org;

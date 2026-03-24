@@ -491,4 +491,23 @@ export async function runMigrations() {
   } finally {
     client1on1.release();
   }
+
+  const clientDismiss = await pool.connect();
+  try {
+    await clientDismiss.query(`
+      CREATE TABLE IF NOT EXISTS opportunity_dismissals (
+        id serial PRIMARY KEY,
+        company_id varchar NOT NULL,
+        org_id varchar NOT NULL,
+        dismissed_by varchar NOT NULL,
+        dismissed_at text NOT NULL,
+        UNIQUE(company_id, org_id)
+      )
+    `);
+    console.log("[migrations] opportunity_dismissals table ensured");
+  } catch (err) {
+    console.error("[migrations] opportunity_dismissals error:", err);
+  } finally {
+    clientDismiss.release();
+  }
 }
