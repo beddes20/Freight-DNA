@@ -989,7 +989,7 @@ export default function Dashboard() {
         <>
           {/* Director filter toggle — admin only */}
           {isAdmin && (() => {
-            const directors = allUsers.filter(u => u.role === "director" || u.role === "sales_director");
+            const directors = allUsers.filter(u => u.role === "director");
             if (directors.length === 0) return null;
             return (
               <div className="flex items-center gap-2" data-testid="director-filter-toggle">
