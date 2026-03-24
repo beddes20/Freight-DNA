@@ -359,6 +359,13 @@ export async function runMigrations() {
     );
     console.log("[migrations] jordan.baumgart password reset applied");
 
+    // Ensure Ben Beddes (main admin) always has the correct password
+    await client.query(
+      `UPDATE users SET password = $1, role = 'admin' WHERE username = 'ben.beddes@valuetruck.com'`,
+      ['$2b$10$XV/Yel63VoBrjfAqW2doNeBoWm14rLfsxFDPN7m5kgXbTXvxH/y/e']
+    );
+    console.log("[migrations] ben.beddes admin password ensured");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {
