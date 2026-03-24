@@ -417,3 +417,79 @@ export function buildPasswordResetEmail(name: string, resetUrl: string): string 
 </div>
 </body></html>`;
 }
+
+export function build1on1SummaryEmail(data: {
+  session: { startDate: string; closedAt?: string | null; moraleScore?: number | null; sessionSummary?: string | null; notes?: string | null };
+  topics: Array<{ text: string; tag: string | null; status: string; addedById: string }>;
+  namName: string;
+  amName: string;
+}): string {
+  const { session, topics, namName, amName } = data;
+  const discussed = topics.filter(t => t.status === "discussed");
+  const pending = topics.filter(t => t.status === "pending");
+
+  const tagLabel: Record<string, string> = {
+    action_item: "Action Item", question: "Question", fyi: "FYI",
+    follow_up: "Follow-up", shoutout: "Shoutout", lets_work_on: "Let's Work On", career: "Career",
+  };
+
+  const moraleEmojis = ["", "😟", "😕", "😐", "🙂", "😊"];
+  const moraleLabel = session.moraleScore
+    ? `${moraleEmojis[session.moraleScore] || ""} ${session.moraleScore}/5`
+    : null;
+
+  const topicRow = (t: (typeof topics)[0]) =>
+    `<div style="display:flex;align-items:flex-start;gap:12px;padding:10px 14px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;">
+      <span style="margin-top:2px;font-size:16px;">${t.status === "discussed" ? "✅" : "○"}</span>
+      <div>
+        <div style="font-size:14px;font-weight:600;color:#111827;${t.status === "discussed" ? "text-decoration:line-through;color:#6b7280;" : ""}">${t.text}</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:3px;">${tagLabel[t.tag ?? "fyi"] ?? t.tag ?? ""}</div>
+      </div>
+    </div>`;
+
+  const body = `
+    <p style="font-size:15px;font-weight:700;color:#111827;margin:0 0 4px;">1:1 Session Recap</p>
+    <p style="font-size:13px;color:#6b7280;margin:0 0 20px;">${namName} &amp; ${amName} &bull; ${new Date(session.startDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</p>
+
+    <div style="display:flex;gap:12px;margin-bottom:20px;">
+      <div style="flex:1;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#16a34a;">${discussed.length}</div>
+        <div style="font-size:12px;color:#15803d;">Items Discussed</div>
+      </div>
+      <div style="flex:1;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:14px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#ea580c;">${pending.length}</div>
+        <div style="font-size:12px;color:#c2410c;">Carried Forward</div>
+      </div>
+      ${moraleLabel ? `<div style="flex:1;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:14px;text-align:center;">
+        <div style="font-size:20px;font-weight:700;color:#7c3aed;">${moraleLabel}</div>
+        <div style="font-size:12px;color:#6d28d9;">Morale Check-in</div>
+      </div>` : ""}
+    </div>
+
+    ${session.sessionSummary ? `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:20px;">
+      <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Session Summary</div>
+      <p style="font-size:14px;color:#374151;margin:0;white-space:pre-wrap;">${session.sessionSummary}</p>
+    </div>` : ""}
+
+    ${discussed.length > 0 ? `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Discussed</div>
+      ${discussed.map(topicRow).join("")}
+    </div>` : ""}
+
+    ${pending.length > 0 ? `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Carried to Next Session</div>
+      ${pending.map(topicRow).join("")}
+    </div>` : ""}
+
+    ${session.notes ? `
+    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:14px;margin-bottom:16px;">
+      <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px;">Session Notes</div>
+      <p style="font-size:13px;color:#78350f;margin:0;white-space:pre-wrap;">${session.notes}</p>
+    </div>` : ""}
+  `;
+
+  return baseEmailTemplate("1:1 Session Recap", body);
+}

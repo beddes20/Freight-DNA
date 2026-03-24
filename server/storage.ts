@@ -230,7 +230,7 @@ export interface IStorage {
   getSession(id: string): Promise<OneOnOneSession | undefined>;
   getSessionsByUser(userId: string): Promise<OneOnOneSession[]>;
   getAllSessions(): Promise<OneOnOneSession[]>;
-  closeSession(sessionId: string): Promise<OneOnOneSession | undefined>;
+  closeSession(sessionId: string, opts?: { carryForwardTopicIds?: string[]; moraleScore?: number; sessionSummary?: string }): Promise<OneOnOneSession | undefined>;
   getTopicsBySession(sessionId: string): Promise<OneOnOneTopic[]>;
   getTopic(id: string): Promise<OneOnOneTopic | undefined>;
   createTopic(topic: InsertOneOnOneTopic): Promise<OneOnOneTopic>;
@@ -932,29 +932,41 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(oneOnOneSessions);
   }
 
-  async closeSession(sessionId: string): Promise<OneOnOneSession | undefined> {
+  async closeSession(sessionId: string, opts?: { carryForwardTopicIds?: string[]; moraleScore?: number; sessionSummary?: string }): Promise<OneOnOneSession | undefined> {
     const [session] = await db.select().from(oneOnOneSessions).where(eq(oneOnOneSessions.id, sessionId));
     if (!session) return undefined;
 
-    const pendingTopics = await db.select().from(oneOnOneTopics).where(
+    const allPendingTopics = await db.select().from(oneOnOneTopics).where(
       and(
         eq(oneOnOneTopics.sessionId, sessionId),
         eq(oneOnOneTopics.status, "pending")
       )
     );
 
+    // If caller specified which IDs to carry forward, honour that; otherwise carry all pending
+    const topicsToCarry = opts?.carryForwardTopicIds
+      ? allPendingTopics.filter(t => opts.carryForwardTopicIds!.includes(t.id))
+      : allPendingTopics;
+
+    const closedAt = new Date().toISOString();
+
     await db.update(oneOnOneSessions)
-      .set({ status: "archived" })
+      .set({
+        status: "archived",
+        closedAt,
+        moraleScore: opts?.moraleScore ?? null,
+        sessionSummary: opts?.sessionSummary ?? null,
+      })
       .where(eq(oneOnOneSessions.id, sessionId));
 
     const [newSession] = await db.insert(oneOnOneSessions).values({
       namId: session.namId,
       amId: session.amId,
       status: "active",
-      startDate: new Date().toISOString(),
+      startDate: closedAt,
     }).returning();
 
-    for (const topic of pendingTopics) {
+    for (const topic of topicsToCarry) {
       await db.insert(oneOnOneTopics).values({
         sessionId: newSession.id,
         addedById: topic.addedById,

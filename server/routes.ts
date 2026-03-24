@@ -3086,7 +3086,30 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const newSession = await storage.closeSession((req.params.id as string));
+      const { carryForwardTopicIds, moraleScore, sessionSummary, sendSummaryEmail } = req.body || {};
+      const oldSession = await storage.getSession((req.params.id as string));
+      const newSession = await storage.closeSession((req.params.id as string), {
+        carryForwardTopicIds: Array.isArray(carryForwardTopicIds) ? carryForwardTopicIds : undefined,
+        moraleScore: typeof moraleScore === "number" ? moraleScore : undefined,
+        sessionSummary: typeof sessionSummary === "string" && sessionSummary.trim() ? sessionSummary.trim() : undefined,
+      });
+      // Optionally send summary email to both participants
+      if (sendSummaryEmail && oldSession) {
+        try {
+          const { build1on1SummaryEmail, sendEmail } = await import("./emailService");
+          const topics = await storage.getTopicsBySession((req.params.id as string));
+          const allUsers = await storage.getUsers();
+          const nam = allUsers.find(u => u.id === oldSession.namId);
+          const am = allUsers.find(u => u.id === oldSession.amId);
+          if (nam?.email && am?.email) {
+            const html = build1on1SummaryEmail({ session: { ...oldSession, moraleScore: moraleScore ?? null, sessionSummary: sessionSummary ?? null }, topics, namName: nam.name, amName: am.name });
+            await sendEmail({ to: nam.email, subject: `1:1 Session Recap — ${am.name}`, html });
+            await sendEmail({ to: am.email, subject: `1:1 Session Recap — with ${nam.name}`, html });
+          }
+        } catch (emailErr) {
+          console.error("[1on1] summary email error:", emailErr);
+        }
+      }
       res.json(newSession);
     } catch (error) {
       res.status(500).json({ error: "Failed to close session" });
@@ -3219,6 +3242,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const overview = await Promise.all(
         activeSessions.map(async (s) => {
           const topics = await storage.getTopicsBySession(s.id);
+          // Find the most recently archived session for cadence tracking
+          const archived = await storage.getArchivedSessions(managerId, s.amId);
+          const lastClosed = archived.length > 0
+            ? archived.sort((a, b) => new Date(b.closedAt || b.startDate).getTime() - new Date(a.closedAt || a.startDate).getTime())[0]
+            : null;
+          const daysSinceClose = lastClosed?.closedAt
+            ? Math.round((Date.now() - new Date(lastClosed.closedAt).getTime()) / 86400000)
+            : null;
           return {
             amId: s.amId,
             sessionId: s.id,
@@ -3226,12 +3257,84 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
             pendingCount: topics.filter(t => t.status === "pending").length,
             discussedCount: topics.filter(t => t.status === "discussed").length,
             totalCount: topics.length,
+            lastClosedAt: lastClosed?.closedAt ?? null,
+            daysSinceClose,
           };
         })
       );
       res.json(overview);
     } catch (error) {
       res.status(500).json({ error: "Failed to get manager overview" });
+    }
+  });
+
+  // ── Suggested topics for 1:1 based on rep's account data ──────────────────
+  app.get("/api/1on1/suggested-topics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { repId } = req.query as { repId?: string };
+      if (!repId) return res.status(400).json({ error: "repId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager";
+      const isSelf = user.id === repId;
+      if (!isAdmin && !isSelf) return res.status(403).json({ error: "Access denied" });
+
+      const suggestions: { type: string; text: string; account?: string }[] = [];
+      const today = new Date();
+      const todayStr = today.toISOString().split("T")[0];
+      const thirtyDaysAgo = new Date(today.getTime() - 30 * 86400000).toISOString();
+      const fourteenDaysFromNow = new Date(today.getTime() + 14 * 86400000).toISOString().split("T")[0];
+
+      // Get rep's org to look up companies
+      const repUser = await storage.getUser(repId);
+      if (!repUser) return res.status(404).json({ error: "User not found" });
+
+      const allCompanies = await storage.getCompanies(repUser.organizationId || "");
+      const repCompanies = allCompanies.filter(c => c.salesPersonId === repId || c.assignedTo === repId);
+
+      // 1. Accounts with no meaningful touch in 30+ days (up to 3)
+      const meaningfulTouchpoints = await storage.getTouchpointsByUser(repId, thirtyDaysAgo);
+      const recentMeaningfulIds = new Set(meaningfulTouchpoints.filter(tp => tp.meaningful).map(tp => tp.companyId).filter(Boolean));
+      const overdueAccounts = repCompanies.filter(c => !recentMeaningfulIds.has(c.id)).slice(0, 3);
+      for (const co of overdueAccounts) {
+        suggestions.push({
+          type: "attention",
+          text: `${co.name} hasn't had a meaningful conversation in 30+ days — what's the current status?`,
+          account: co.name,
+        });
+      }
+
+      // 2. Approaching RFP deadlines (within 14 days)
+      const allRfps = await storage.getRfps();
+      const repCompanyIds = new Set(repCompanies.map(c => c.id));
+      const urgentRfps = allRfps
+        .filter(r => repCompanyIds.has(r.companyId || "") && r.status === "open" && r.dueDate && r.dueDate <= fourteenDaysFromNow && r.dueDate >= todayStr)
+        .slice(0, 2);
+      for (const rfp of urgentRfps) {
+        const company = repCompanies.find(c => c.id === rfp.companyId);
+        const daysLeft = rfp.dueDate ? Math.round((new Date(rfp.dueDate + "T00:00:00").getTime() - today.getTime()) / 86400000) : null;
+        suggestions.push({
+          type: "rfp",
+          text: `RFP for ${company?.name ?? "an account"} is due in ${daysLeft !== null ? `${daysLeft} day${daysLeft !== 1 ? "s" : ""}` : "soon"} — are we ready to submit?`,
+          account: company?.name,
+        });
+      }
+
+      // 3. Overdue tasks
+      const allTasks = await storage.getTasks();
+      const overdueTasks = allTasks
+        .filter(t => t.assignedTo === repId && t.status !== "completed" && t.dueDate && t.dueDate < todayStr)
+        .slice(0, 3);
+      if (overdueTasks.length > 0) {
+        suggestions.push({
+          type: "tasks",
+          text: `You have ${overdueTasks.length} overdue task${overdueTasks.length > 1 ? "s" : ""} — let's pick one to close out this week`,
+        });
+      }
+
+      res.json(suggestions);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get suggested topics" });
     }
   });
 

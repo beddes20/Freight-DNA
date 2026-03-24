@@ -479,4 +479,16 @@ export async function runMigrations() {
   } finally {
     clientPTO.release();
   }
+
+  const client1on1 = await pool.connect();
+  try {
+    await client1on1.query(`ALTER TABLE one_on_one_sessions ADD COLUMN IF NOT EXISTS morale_score integer`);
+    await client1on1.query(`ALTER TABLE one_on_one_sessions ADD COLUMN IF NOT EXISTS session_summary text`);
+    await client1on1.query(`ALTER TABLE one_on_one_sessions ADD COLUMN IF NOT EXISTS closed_at text`);
+    console.log("[migrations] one_on_one_sessions morale_score + session_summary + closed_at ensured");
+  } catch (err) {
+    console.error("[migrations] one_on_one_sessions 1:1 columns error:", err);
+  } finally {
+    client1on1.release();
+  }
 }

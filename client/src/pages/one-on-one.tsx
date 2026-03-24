@@ -6,12 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   Users, Plus, CheckCircle2, Circle, Trash2, ChevronDown, ChevronUp,
   Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle,
   StickyNote, ClipboardList, CornerDownRight, CalendarClock, Pencil, X,
   BarChart2, Phone, Mail, MessageCircle, MapPin, Target, CheckCheck, Clock,
-  Video, ExternalLink, Link,
+  Video, ExternalLink, Link, Lightbulb, Smile, Frown, Meh, Timer,
+  SendHorizonal, ArrowRight,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -414,6 +417,247 @@ function ActionItemsPanel({ managerId, repId, allUsers }: ActionItemsPanelProps)
   );
 }
 
+// ─── Close Session Dialog ─────────────────────────────────────────────────────
+
+const MORALE_OPTIONS = [
+  { score: 1, emoji: "😟", label: "Rough week" },
+  { score: 2, emoji: "😕", label: "Bit of a grind" },
+  { score: 3, emoji: "😐", label: "Steady" },
+  { score: 4, emoji: "🙂", label: "Pretty good" },
+  { score: 5, emoji: "😊", label: "Fired up" },
+];
+
+interface CloseSessionDialogProps {
+  open: boolean;
+  onClose: () => void;
+  session: OneOnOneSession;
+  topics: OneOnOneTopic[];
+  currentUserId: string;
+  isAM: boolean;
+  onConfirm: (opts: { carryForwardTopicIds: string[]; moraleScore: number | null; sessionSummary: string; sendSummaryEmail: boolean }) => void;
+  isPending: boolean;
+}
+
+function CloseSessionDialog({ open, onClose, session, topics, currentUserId, isAM, onConfirm, isPending }: CloseSessionDialogProps) {
+  const pendingTopics = topics.filter(t => t.status === "pending");
+  const discussedTopics = topics.filter(t => t.status === "discussed");
+  const pendingActionItems = pendingTopics.filter(t => t.tag === "action_item");
+  const otherPending = pendingTopics.filter(t => t.tag !== "action_item");
+
+  const [moraleScore, setMoraleScore] = useState<number | null>(null);
+  const [carryIds, setCarryIds] = useState<Set<string>>(new Set(pendingTopics.map(t => t.id)));
+  const [sessionSummary, setSessionSummary] = useState("");
+  const [sendSummaryEmail, setSendSummaryEmail] = useState(false);
+
+  const toggleCarry = (id: string) => {
+    setCarryIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  };
+
+  const handleConfirm = () => {
+    onConfirm({ carryForwardTopicIds: [...carryIds], moraleScore, sessionSummary, sendSummaryEmail });
+  };
+
+  const TAG_CONFIG_LOCAL: Record<string, { label: string; color: string }> = {
+    action_item:   { label: "Action Item",   color: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" },
+    question:      { label: "Question",      color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
+    fyi:           { label: "FYI",           color: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" },
+    follow_up:     { label: "Follow-up",     color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
+    shoutout:      { label: "Shoutout",      color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
+    lets_work_on:  { label: "Let's Work On", color: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400" },
+    career:        { label: "Career",        color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400" },
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Archive className="h-5 w-5 text-indigo-500" />
+            Close This Session
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-5 py-1">
+          {/* Stats snapshot */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 text-center">
+              <p className="text-2xl font-bold text-green-700 dark:text-green-300">{discussedTopics.length}</p>
+              <p className="text-xs text-green-600 dark:text-green-400">Discussed</p>
+            </div>
+            <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3 text-center">
+              <p className="text-2xl font-bold text-orange-700 dark:text-orange-300">{pendingTopics.length}</p>
+              <p className="text-xs text-orange-600 dark:text-orange-400">Still Pending</p>
+            </div>
+          </div>
+
+          {/* Morale check-in (shown for AM; NAM can also fill it) */}
+          <div className="space-y-2">
+            <p className="text-sm font-semibold flex items-center gap-1.5">
+              <Smile className="h-4 w-4 text-indigo-500" />
+              How's the morale? <span className="font-normal text-muted-foreground text-xs">(AM check-in)</span>
+            </p>
+            <div className="flex gap-2 flex-wrap">
+              {MORALE_OPTIONS.map(opt => (
+                <button
+                  key={opt.score}
+                  onClick={() => setMoraleScore(moraleScore === opt.score ? null : opt.score)}
+                  className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg border-2 transition-all text-center min-w-[60px] ${moraleScore === opt.score ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30" : "border-border hover:border-indigo-300 hover:bg-muted/40"}`}
+                  data-testid={`btn-morale-${opt.score}`}
+                >
+                  <span className="text-xl">{opt.emoji}</span>
+                  <span className="text-[10px] text-muted-foreground leading-tight">{opt.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Pending items — carry or drop */}
+          {pendingTopics.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold flex items-center gap-1.5">
+                  <ArrowRight className="h-4 w-4 text-orange-500" />
+                  Carry forward to next session?
+                </p>
+                <div className="flex gap-2 text-xs">
+                  <button className="text-primary hover:underline" onClick={() => setCarryIds(new Set(pendingTopics.map(t => t.id)))}>All</button>
+                  <span className="text-muted-foreground">·</span>
+                  <button className="text-muted-foreground hover:underline" onClick={() => setCarryIds(new Set())}>None</button>
+                </div>
+              </div>
+              <div className="border rounded-lg divide-y max-h-48 overflow-y-auto">
+                {pendingTopics.map(topic => {
+                  const tag = TAG_CONFIG_LOCAL[topic.tag ?? "fyi"] ?? { label: topic.tag ?? "FYI", color: "bg-gray-100 text-gray-600" };
+                  return (
+                    <label key={topic.id} className="flex items-start gap-3 px-3 py-2.5 cursor-pointer hover:bg-muted/30" data-testid={`carry-item-${topic.id}`}>
+                      <Checkbox
+                        checked={carryIds.has(topic.id)}
+                        onCheckedChange={() => toggleCarry(topic.id)}
+                        className="mt-0.5 shrink-0"
+                        data-testid={`checkbox-carry-${topic.id}`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-foreground leading-snug">{topic.text}</p>
+                        <span className={`inline-flex items-center px-1.5 py-px rounded text-[10px] font-medium mt-1 ${tag.color}`}>{tag.label}</span>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground">{carryIds.size} of {pendingTopics.length} items will be carried forward</p>
+            </div>
+          )}
+
+          {/* Session summary */}
+          <div className="space-y-1.5">
+            <p className="text-sm font-semibold flex items-center gap-1.5">
+              <StickyNote className="h-4 w-4 text-amber-500" />
+              Session Summary <span className="font-normal text-muted-foreground text-xs">— optional</span>
+            </p>
+            <Textarea
+              placeholder="Key takeaways, decisions made, what to watch next session..."
+              value={sessionSummary}
+              onChange={e => setSessionSummary(e.target.value)}
+              rows={3}
+              className="text-sm resize-none"
+              data-testid="textarea-session-summary"
+            />
+          </div>
+
+          {/* Email toggle */}
+          <label className="flex items-center gap-3 cursor-pointer group" data-testid="label-send-recap-email">
+            <Checkbox
+              checked={sendSummaryEmail}
+              onCheckedChange={v => setSendSummaryEmail(!!v)}
+              data-testid="checkbox-send-recap-email"
+            />
+            <div>
+              <p className="text-sm font-medium">Email recap to both participants</p>
+              <p className="text-xs text-muted-foreground">Sends a summary with discussed items, carried items, and your summary note</p>
+            </div>
+          </label>
+        </div>
+
+        <DialogFooter className="mt-2">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2"
+            onClick={handleConfirm}
+            disabled={isPending}
+            data-testid="btn-confirm-close-session"
+          >
+            <Archive className="h-4 w-4" />
+            {isPending ? "Closing…" : "Close Session"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Suggested Topics Panel ───────────────────────────────────────────────────
+
+interface Suggestion { type: string; text: string; account?: string }
+
+function SuggestedTopicsPanel({
+  repId, sessionId, onAdd,
+}: {
+  repId: string;
+  sessionId: string;
+  onAdd: (text: string) => void;
+}) {
+  const [dismissed, setDismissed] = useState<Set<number>>(new Set());
+  const { data: suggestions = [], isLoading } = useQuery<Suggestion[]>({
+    queryKey: ["/api/1on1/suggested-topics", repId],
+    queryFn: () => apiRequest("GET", `/api/1on1/suggested-topics?repId=${repId}`).then(r => r.json()),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const visible = suggestions.filter((_, i) => !dismissed.has(i));
+  if (isLoading || visible.length === 0) return null;
+
+  const typeColor: Record<string, string> = {
+    attention: "text-amber-600 dark:text-amber-400",
+    rfp: "text-red-600 dark:text-red-400",
+    tasks: "text-blue-600 dark:text-blue-400",
+  };
+  const typeIcon: Record<string, string> = { attention: "⚠️", rfp: "📋", tasks: "✅" };
+
+  return (
+    <div className="mx-6 mb-3 border border-indigo-200 dark:border-indigo-800 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/30 p-3 space-y-2" data-testid="suggested-topics-panel">
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+        <Lightbulb className="h-3.5 w-3.5" />
+        Suggested Topics
+        <span className="ml-1 font-normal text-indigo-500">— tap to add to agenda</span>
+      </div>
+      {visible.map((s, i) => (
+        <div key={i} className="flex items-start gap-2 group" data-testid={`suggestion-${i}`}>
+          <span className="text-sm mt-0.5 shrink-0">{typeIcon[s.type] ?? "💡"}</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-foreground leading-snug">{s.text}</p>
+          </div>
+          <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={() => onAdd(s.text)}
+              className="text-[10px] px-2 py-0.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 font-medium"
+              data-testid={`btn-add-suggestion-${i}`}
+            >
+              Add
+            </button>
+            <button
+              onClick={() => setDismissed(prev => new Set([...prev, i]))}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground hover:bg-muted/70"
+              data-testid={`btn-dismiss-suggestion-${i}`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Session Panel ────────────────────────────────────────────────────────────
 
 interface SessionPanelProps {
@@ -536,17 +780,26 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
     },
   });
 
+  const [closingDialog, setClosingDialog] = useState(false);
+
   const closeMutation = useMutation({
-    mutationFn: async (sessionId: string) => {
-      const res = await apiRequest("POST", `/api/1on1/session/${sessionId}/close`, {});
+    mutationFn: async (opts: { sessionId: string; carryForwardTopicIds?: string[]; moraleScore?: number | null; sessionSummary?: string; sendSummaryEmail?: boolean }) => {
+      const res = await apiRequest("POST", `/api/1on1/session/${opts.sessionId}/close`, {
+        carryForwardTopicIds: opts.carryForwardTopicIds,
+        moraleScore: opts.moraleScore ?? undefined,
+        sessionSummary: opts.sessionSummary ?? undefined,
+        sendSummaryEmail: opts.sendSummaryEmail ?? false,
+      });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: sessionKey });
       queryClient.invalidateQueries({ queryKey: archivedKey });
       queryClient.invalidateQueries({ queryKey: overviewKey });
       queryClient.invalidateQueries({ queryKey: actionItemsKey });
-      toast({ title: "Session closed", description: "Unresolved topics carried over." });
+      setClosingDialog(false);
+      const carried = vars.carryForwardTopicIds?.length ?? 0;
+      toast({ title: "Session closed", description: carried > 0 ? `${carried} item${carried !== 1 ? "s" : ""} carried to next session.` : "All items resolved." });
     },
     onError: () => toast({ title: "Failed to close session", variant: "destructive" }),
   });
@@ -768,8 +1021,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
             variant="outline"
             size="sm"
             className="h-8 gap-1.5 text-xs"
-            onClick={() => closeMutation.mutate(session.id)}
-            disabled={closeMutation.isPending}
+            onClick={() => setClosingDialog(true)}
             data-testid="btn-close-session"
           >
             <Archive className="h-3.5 w-3.5" />
@@ -860,6 +1112,12 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
         <DevelopmentGoalsPanel managerId={managerId} repId={repId} />
       ) : activeTab === "topics" ? (
         <>
+          {/* Suggested Topics */}
+          <SuggestedTopicsPanel
+            repId={repId}
+            sessionId={session.id}
+            onAdd={(text) => { setNewText(text); }}
+          />
           {/* Add topic */}
           <div className="px-6 py-4 border-b space-y-2">
             <div className="flex gap-2">
@@ -992,6 +1250,19 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
         </>
       ) : (
         <ActionItemsPanel managerId={managerId} repId={repId} allUsers={allUsers} />
+      )}
+
+      {closingDialog && session && (
+        <CloseSessionDialog
+          open={closingDialog}
+          onClose={() => setClosingDialog(false)}
+          session={session}
+          topics={topics}
+          currentUserId={currentUserId}
+          isAM={["account_manager", "logistics_manager", "logistics_coordinator"].includes(allUsers.find(u => u.id === currentUserId)?.role ?? "")}
+          onConfirm={(opts) => closeMutation.mutate({ sessionId: session.id, ...opts })}
+          isPending={closeMutation.isPending}
+        />
       )}
     </div>
   );
@@ -1184,7 +1455,14 @@ function ArchivedSessionCard({ session, allUsers }: {
         onClick={() => setOpen(v => !v)}
       >
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium">{formatDate(session.startDate)}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium">{formatDate(session.startDate)}</p>
+            {session.moraleScore != null && (
+              <span className="text-base" title={`Morale: ${session.moraleScore}/5`}>
+                {["","😞","😐","🙂","😊","🤩"][session.moraleScore] ?? ""}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2 mt-1">
             <span className="text-xs text-muted-foreground">{session.topics.length} topic{session.topics.length !== 1 ? "s" : ""}</span>
             {session.topics.length > 0 && (
@@ -1194,6 +1472,12 @@ function ArchivedSessionCard({ session, allUsers }: {
                   <Progress value={pct} className="h-1 w-16" />
                   <span className="text-xs text-muted-foreground">{pct}% discussed</span>
                 </div>
+              </>
+            )}
+            {session.sessionSummary && (
+              <>
+                <span className="text-muted-foreground/40">·</span>
+                <span className="text-xs text-muted-foreground italic truncate max-w-[160px]">{session.sessionSummary}</span>
               </>
             )}
           </div>
@@ -1247,6 +1531,7 @@ interface Pairing {
   namName: string;
   amName: string;
   section?: string;
+  daysSinceClose?: number | null;
 }
 
 interface PairingListProps {
@@ -1303,6 +1588,20 @@ function PairingList({ pairings, selectedKey, onSelect, showNamLabel }: PairingL
                     <p className="text-xs text-muted-foreground truncate">with {p.namName}</p>
                   ) : null}
                 </div>
+                {!isUpward && p.daysSinceClose != null && (
+                  <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${
+                    p.daysSinceClose <= 14 ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" :
+                    p.daysSinceClose <= 21 ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" :
+                    "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                  }`} title={`Last session closed ${p.daysSinceClose}d ago`}>
+                    {p.daysSinceClose}d
+                  </span>
+                )}
+                {!isUpward && p.daysSinceClose == null && p.section !== "upward" && p.section !== "my_manager" && (
+                  <span className="shrink-0 text-xs px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground" title="No sessions closed yet">
+                    New
+                  </span>
+                )}
               </button>
             );
           })
@@ -1322,15 +1621,34 @@ export default function OneOnOnePage() {
     queryKey: ["/api/team-members"],
   });
 
-  const { data: pairings = [], isLoading: pairingsLoading } = useQuery<Pairing[]>({
+  const { data: rawPairings = [], isLoading: pairingsLoading } = useQuery<Pairing[]>({
     queryKey: ["/api/one-on-one/pairings"],
     refetchInterval: 180000,
   });
 
+  const isAM = user?.role === "account_manager" || user?.role === "logistics_manager" || user?.role === "logistics_coordinator";
+  const managerIdForOverview = user && !isAM ? user.id : null;
+
+  const { data: overviewData = [] } = useQuery<{ amId: string; daysSinceClose: number | null }[]>({
+    queryKey: ["/api/1on1/manager-overview", managerIdForOverview],
+    queryFn: async () => {
+      if (!managerIdForOverview) return [];
+      const res = await fetch(`/api/1on1/manager-overview?managerId=${managerIdForOverview}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!managerIdForOverview,
+  });
+
   if (!user) return null;
 
-  const isAM = user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator";
   const showNamLabel = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+
+  const cadenceMap = Object.fromEntries(overviewData.map(o => [o.amId, o.daysSinceClose]));
+  const pairings: Pairing[] = rawPairings.map(p => ({
+    ...p,
+    daysSinceClose: p.amId in cadenceMap ? cadenceMap[p.amId] : undefined,
+  }));
 
   const activePairingKey = selectedKey ?? (pairings.length > 0 ? `${pairings[0].namId}::${pairings[0].amId}` : null);
   const activePairing = pairings.find(p => `${p.namId}::${p.amId}` === activePairingKey) ?? pairings[0] ?? null;
