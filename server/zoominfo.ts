@@ -59,17 +59,17 @@ async function getAuthToken(): Promise<string> {
     return cachedToken;
   }
 
-  const clientId = process.env.ZOOMINFO_CLIENT_ID;
-  const clientSecret = process.env.ZOOMINFO_CLIENT_SECRET;
+  const username = process.env.ZOOMINFO_USERNAME || process.env.ZOOMINFO_CLIENT_ID;
+  const password = process.env.ZOOMINFO_PASSWORD || process.env.ZOOMINFO_CLIENT_SECRET;
 
-  if (!clientId || !clientSecret) {
+  if (!username || !password) {
     throw new Error("ZoomInfo credentials not configured");
   }
 
   const res = await fetch(`${ZOOMINFO_API_BASE}/authenticate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+    body: JSON.stringify({ username, password }),
   });
 
   if (!res.ok) {

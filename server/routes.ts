@@ -8427,7 +8427,11 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     const companyName = req.query.companyName as string;
     if (!companyName?.trim()) return res.status(400).json({ error: "companyName is required" });
 
-    if (!process.env.ZOOMINFO_CLIENT_ID || !process.env.ZOOMINFO_CLIENT_SECRET) {
+    const ziConfigured = !!(
+      (process.env.ZOOMINFO_USERNAME || process.env.ZOOMINFO_CLIENT_ID) &&
+      (process.env.ZOOMINFO_PASSWORD || process.env.ZOOMINFO_CLIENT_SECRET)
+    );
+    if (!ziConfigured) {
       return res.status(503).json({ error: "ZoomInfo integration not configured" });
     }
 
@@ -8444,7 +8448,10 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
   app.get("/api/zoominfo/status", requireAuth, async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
-    const configured = !!(process.env.ZOOMINFO_CLIENT_ID && process.env.ZOOMINFO_CLIENT_SECRET);
+    const configured = !!(
+      (process.env.ZOOMINFO_USERNAME || process.env.ZOOMINFO_CLIENT_ID) &&
+      (process.env.ZOOMINFO_PASSWORD || process.env.ZOOMINFO_CLIENT_SECRET)
+    );
     res.json({ configured });
   });
 
