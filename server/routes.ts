@@ -6919,8 +6919,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const isOwner = passoff.createdById === currentUser.id;
       const isAdmin = currentUser.role === "admin";
       if (!isOwner && !isCovering && !isAdmin) return res.status(403).json({ error: "Access denied" });
-      // Covering user can only update acknowledged field
-      const allowedFields = isOwner || isAdmin ? req.body : { acknowledged: req.body.acknowledged };
+      // Covering user can update acknowledged + coveringNotes; owner/admin can update all
+      const allowedFields = isOwner || isAdmin
+        ? req.body
+        : { acknowledged: req.body.acknowledged, coveringNotes: req.body.coveringNotes };
       const updated = await storage.updatePtoPassoffItem((req.params.itemId as string), allowedFields);
       // Notify passoff owner when covering person acknowledges an account
       const justAcknowledged = req.body.acknowledged === true && isCovering && !isOwner;
@@ -6963,6 +6965,27 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete passoff item" });
+    }
+  });
+
+  // Open tasks for the PTO rep (visible to covering person)
+  app.get("/api/pto-passoffs/:id/open-tasks", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
+      if (!passoff) return res.status(404).json({ error: "Not found" });
+      const isCovering = passoff.coveringUserId === currentUser.id;
+      const isOwner = passoff.createdById === currentUser.id;
+      const isAdmin = currentUser.role === "admin" || currentUser.role === "director";
+      if (!isCovering && !isOwner && !isAdmin) return res.status(403).json({ error: "Access denied" });
+      const allTasks = await storage.getTasks();
+      const openTasks = allTasks.filter(t =>
+        t.assignedTo === passoff.createdById && t.status !== "completed"
+      );
+      res.json(openTasks);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch passoff tasks" });
     }
   });
 

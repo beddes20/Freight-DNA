@@ -10,6 +10,7 @@ import { initDailyDigestScheduler } from "./dailyDigestScheduler";
 import { initRepReportScheduler } from "./repReportScheduler";
 import { initOneOnOneReminderScheduler } from "./oneOnOneReminderScheduler";
 import { initHealthAlertScheduler } from "./healthAlertScheduler";
+import { initPtoReturnScheduler } from "./ptoReturnScheduler";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
 
@@ -119,6 +120,7 @@ app.use((req, res, next) => {
       initRepReportScheduler();
       initOneOnOneReminderScheduler();
       initHealthAlertScheduler();
+      initPtoReturnScheduler();
     },
   );
 })();

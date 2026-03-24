@@ -468,4 +468,15 @@ export async function runMigrations() {
   } finally {
     clientPRT.release();
   }
+
+  const clientPTO = await pool.connect();
+  try {
+    await clientPTO.query(`ALTER TABLE pto_passoff_items ADD COLUMN IF NOT EXISTS covering_notes text`);
+    await clientPTO.query(`ALTER TABLE pto_passoff_items ADD COLUMN IF NOT EXISTS override_covering_user_id varchar`);
+    console.log("[migrations] pto_passoff_items covering_notes + override_covering_user_id ensured");
+  } catch (err) {
+    console.error("[migrations] pto_passoff_items covering columns error:", err);
+  } finally {
+    clientPTO.release();
+  }
 }

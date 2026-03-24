@@ -10,14 +10,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Plane, Plus, Trash2, ChevronDown, ChevronRight, Shield, Pencil,
   AlertTriangle, Phone, Users, ClipboardList, Briefcase, CheckCircle2,
-  FileText, Package, Clock, UserCheck, Mail, Database, TrendingUp
+  FileText, Package, Clock, UserCheck, Mail, Database, TrendingUp,
+  MessageSquare, ListTodo, Calendar, Circle, PlayCircle, UserCog,
 } from "lucide-react";
 import type { Company } from "@shared/schema";
 
@@ -37,6 +38,8 @@ type PtoPassoffItem = {
   spotBoardUpdated: boolean;
   avgWeeklySpotLoads: string | null;
   avgWeeklyTotalLoads: string | null;
+  coveringNotes: string | null;
+  overrideCoveringUserId: string | null;
 };
 
 type PassoffWithItems = {
@@ -54,10 +57,19 @@ type PassoffWithItems = {
 
 type SafeUser = { id: string; name: string; role: string };
 
+type OpenTask = {
+  id: string;
+  title: string;
+  status: string;
+  dueDate: string | null;
+  companyId: string | null;
+};
+
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
   active: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
   completed: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+  closed: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -70,11 +82,24 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+function dueBadge(dueDate: string | null) {
+  if (!dueDate) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const due = new Date(dueDate + "T00:00:00");
+  const diff = Math.round((due.getTime() - today.getTime()) / 86400000);
+  if (diff < 0) return <span className="text-xs text-red-600 dark:text-red-400">{Math.abs(diff)}d overdue</span>;
+  if (diff === 0) return <span className="text-xs text-amber-600">Today</span>;
+  return <span className="text-xs text-muted-foreground">{diff}d</span>;
+}
+
+function taskStatusIcon(status: string) {
+  if (status === "completed") return <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />;
+  if (status === "in_progress") return <PlayCircle className="h-3.5 w-3.5 text-blue-500" />;
+  return <Circle className="h-3.5 w-3.5 text-muted-foreground" />;
+}
+
 function PassoffDialog({
-  passoff,
-  users,
-  companies,
-  onClose,
+  passoff, users, companies, onClose,
 }: {
   passoff?: PassoffWithItems;
   users: SafeUser[];
@@ -93,70 +118,39 @@ function PassoffDialog({
   const [showAccountList, setShowAccountList] = useState(false);
 
   const sortedCompanies = [...companies].sort((a, b) => a.name.localeCompare(b.name));
-  const filteredCompanies = sortedCompanies.filter(c =>
-    c.name.toLowerCase().includes(accountSearch.toLowerCase())
-  );
+  const filteredCompanies = sortedCompanies.filter(c => c.name.toLowerCase().includes(accountSearch.toLowerCase()));
   const allSelected = sortedCompanies.length > 0 && sortedCompanies.every(c => selectedCompanyIds.has(c.id));
 
   const toggleCompany = (id: string) => {
-    setSelectedCompanyIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+    setSelectedCompanyIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   };
-
   const toggleAll = () => {
-    if (allSelected) {
-      setSelectedCompanyIds(new Set());
-    } else {
-      setSelectedCompanyIds(new Set(sortedCompanies.map(c => c.id)));
-    }
+    setSelectedCompanyIds(allSelected ? new Set() : new Set(sortedCompanies.map(c => c.id)));
   };
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
       const res = await apiRequest("POST", "/api/pto-passoffs", data);
       const created = await res.json();
-      if (selectedCompanyIds.size > 0) {
-        for (const companyId of selectedCompanyIds) {
-          await apiRequest("POST", `/api/pto-passoffs/${created.id}/items`, { companyId, priority: "medium" });
-        }
+      for (const companyId of selectedCompanyIds) {
+        await apiRequest("POST", `/api/pto-passoffs/${created.id}/items`, { companyId, priority: "medium" });
       }
       return created;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] });
-      toast({ title: "PTO passoff created" });
-      onClose();
-    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] }); toast({ title: "PTO passoff created" }); onClose(); },
     onError: () => toast({ title: "Error", description: "Failed to create passoff", variant: "destructive" }),
   });
 
   const updateMutation = useMutation({
     mutationFn: (data: any) => apiRequest("PATCH", `/api/pto-passoffs/${passoff!.id}`, data).then(r => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] });
-      toast({ title: "Passoff updated" });
-      onClose();
-    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] }); toast({ title: "Passoff updated" }); onClose(); },
     onError: () => toast({ title: "Error", description: "Failed to update passoff", variant: "destructive" }),
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!startDate || !endDate) {
-      toast({ title: "Please enter start and end dates", variant: "destructive" });
-      return;
-    }
-    const data = {
-      startDate,
-      endDate,
-      coveringUserId: coveringUserId === "none" ? null : coveringUserId,
-      emergencyContact: emergencyContact || null,
-      generalNotes: generalNotes || null,
-      status,
-    };
+    if (!startDate || !endDate) { toast({ title: "Please enter start and end dates", variant: "destructive" }); return; }
+    const data = { startDate, endDate, coveringUserId: coveringUserId === "none" ? null : coveringUserId, emergencyContact: emergencyContact || null, generalNotes: generalNotes || null, status };
     passoff ? updateMutation.mutate(data) : createMutation.mutate(data);
   };
 
@@ -167,23 +161,11 @@ function PassoffDialog({
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label>Start Date (Out)</Label>
-          <Input
-            type="date"
-            value={startDate}
-            onChange={e => setStartDate(e.target.value)}
-            required
-            data-testid="input-pto-start"
-          />
+          <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required data-testid="input-pto-start" />
         </div>
         <div className="space-y-1.5">
           <Label>End Date (Return)</Label>
-          <Input
-            type="date"
-            value={endDate}
-            onChange={e => setEndDate(e.target.value)}
-            required
-            data-testid="input-pto-end"
-          />
+          <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} required data-testid="input-pto-end" />
         </div>
       </div>
       <div className="space-y-1.5">
@@ -201,75 +183,36 @@ function PassoffDialog({
         </Select>
       </div>
       <div className="space-y-1.5">
-        <Label className="flex items-center gap-1.5">
-          <Phone className="w-3.5 h-3.5 text-muted-foreground" />
-          Emergency Contact (for urgent issues)
-        </Label>
-        <Input
-          placeholder="e.g. 480-555-1234 or email"
-          value={emergencyContact}
-          onChange={e => setEmergencyContact(e.target.value)}
-          data-testid="input-pto-emergency"
-        />
+        <Label className="flex items-center gap-1.5"><Phone className="w-3.5 h-3.5 text-muted-foreground" />Emergency Contact</Label>
+        <Input placeholder="e.g. 480-555-1234 or email" value={emergencyContact} onChange={e => setEmergencyContact(e.target.value)} data-testid="input-pto-emergency" />
       </div>
       <div className="space-y-1.5">
         <Label>General Notes</Label>
-        <Textarea
-          placeholder="Anything the covering person should know in general..."
-          value={generalNotes}
-          onChange={e => setGeneralNotes(e.target.value)}
-          rows={2}
-          data-testid="textarea-pto-notes"
-        />
+        <Textarea placeholder="Anything the covering person should know in general..." value={generalNotes} onChange={e => setGeneralNotes(e.target.value)} rows={2} data-testid="textarea-pto-notes" />
       </div>
 
       {!passoff && companies.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <Label className="flex items-center gap-1.5">
-              <Briefcase className="w-3.5 h-3.5 text-muted-foreground" />
-              Accounts to Include
-              {selectedCompanyIds.size > 0 && (
-                <Badge variant="secondary" className="ml-1 text-xs">{selectedCompanyIds.size} selected</Badge>
-              )}
+              <Briefcase className="w-3.5 h-3.5 text-muted-foreground" />Accounts to Include
+              {selectedCompanyIds.size > 0 && <Badge variant="secondary" className="ml-1 text-xs">{selectedCompanyIds.size} selected</Badge>}
             </Label>
-            <button
-              type="button"
-              onClick={toggleAll}
-              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-              data-testid="button-select-all-accounts"
-            >
+            <button type="button" onClick={toggleAll} className="text-xs text-blue-600 dark:text-blue-400 hover:underline" data-testid="button-select-all-accounts">
               {allSelected ? "Clear all" : "Select all"}
             </button>
           </div>
-          <Input
-            placeholder="Click to search accounts…"
-            value={accountSearch}
-            onChange={e => setAccountSearch(e.target.value)}
-            onFocus={() => setShowAccountList(true)}
-            className="h-8 text-sm"
-            data-testid="input-search-accounts"
-          />
+          <Input placeholder="Click to search accounts…" value={accountSearch} onChange={e => setAccountSearch(e.target.value)} onFocus={() => setShowAccountList(true)} className="h-8 text-sm" data-testid="input-search-accounts" />
           {showAccountList && (
             <div className="border rounded-md max-h-44 overflow-y-auto divide-y">
               {filteredCompanies.length === 0 ? (
                 <p className="text-xs text-muted-foreground text-center py-3 italic">No accounts match</p>
-              ) : (
-                filteredCompanies.map(c => (
-                  <label
-                    key={c.id}
-                    className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted/40 cursor-pointer text-sm"
-                    data-testid={`label-account-${c.id}`}
-                  >
-                    <Checkbox
-                      checked={selectedCompanyIds.has(c.id)}
-                      onCheckedChange={() => toggleCompany(c.id)}
-                      data-testid={`checkbox-account-${c.id}`}
-                    />
-                    <span className="truncate">{c.name}</span>
-                  </label>
-                ))
-              )}
+              ) : filteredCompanies.map(c => (
+                <label key={c.id} className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted/40 cursor-pointer text-sm" data-testid={`label-account-${c.id}`}>
+                  <Checkbox checked={selectedCompanyIds.has(c.id)} onCheckedChange={() => toggleCompany(c.id)} data-testid={`checkbox-account-${c.id}`} />
+                  <span className="truncate">{c.name}</span>
+                </label>
+              ))}
             </div>
           )}
         </div>
@@ -278,9 +221,7 @@ function PassoffDialog({
       <div className="space-y-1.5">
         <Label>Status</Label>
         <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger data-testid="select-pto-status">
-            <SelectValue />
-          </SelectTrigger>
+          <SelectTrigger data-testid="select-pto-status"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="draft">Draft – Still preparing</SelectItem>
             <SelectItem value="active">Active – I am out</SelectItem>
@@ -296,17 +237,14 @@ function PassoffDialog({
 }
 
 function AccountItemEditor({
-  item,
-  companyName,
-  passoffId,
-  isOwner,
-  isCovering,
+  item, companyName, passoffId, isOwner, isCovering, users,
 }: {
   item: PtoPassoffItem;
   companyName: string;
   passoffId: string;
   isOwner: boolean;
   isCovering: boolean;
+  users: SafeUser[];
 }) {
   const { toast } = useToast();
   const [editing, setEditing] = useState(false);
@@ -320,20 +258,18 @@ function AccountItemEditor({
   const [spotBoardUpdated, setSpotBoardUpdated] = useState(item.spotBoardUpdated);
   const [avgWeeklySpotLoads, setAvgWeeklySpotLoads] = useState(item.avgWeeklySpotLoads ?? "");
   const [avgWeeklyTotalLoads, setAvgWeeklyTotalLoads] = useState(item.avgWeeklyTotalLoads ?? "");
+  const [overrideCoveringUserId, setOverrideCoveringUserId] = useState(item.overrideCoveringUserId ?? "none");
+  const [coveringNotesEdit, setCoveringNotesEdit] = useState(item.coveringNotes ?? "");
+  const [editingCoveringNotes, setEditingCoveringNotes] = useState(false);
 
   const updateMutation = useMutation({
-    mutationFn: (data: any) =>
-      apiRequest("PATCH", `/api/pto-passoffs/${passoffId}/items/${item.id}`, data).then(r => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] });
-      setEditing(false);
-    },
+    mutationFn: (data: any) => apiRequest("PATCH", `/api/pto-passoffs/${passoffId}/items/${item.id}`, data).then(r => r.json()),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] }); setEditing(false); setEditingCoveringNotes(false); },
     onError: () => toast({ title: "Error saving", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () =>
-      apiRequest("DELETE", `/api/pto-passoffs/${passoffId}/items/${item.id}`).then(r => r.json()),
+    mutationFn: () => apiRequest("DELETE", `/api/pto-passoffs/${passoffId}/items/${item.id}`).then(r => r.json()),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] }),
     onError: () => toast({ title: "Error removing account", variant: "destructive" }),
   });
@@ -344,19 +280,18 @@ function AccountItemEditor({
       emailForwardingSet, spotBoardUpdated,
       avgWeeklySpotLoads: avgWeeklySpotLoads !== "" ? avgWeeklySpotLoads : null,
       avgWeeklyTotalLoads: avgWeeklyTotalLoads !== "" ? avgWeeklyTotalLoads : null,
+      overrideCoveringUserId: overrideCoveringUserId !== "none" ? overrideCoveringUserId : null,
     });
   };
 
-  const handleAck = (checked: boolean) => {
-    updateMutation.mutate({ acknowledged: checked });
-  };
-
+  const handleAck = (checked: boolean) => updateMutation.mutate({ acknowledged: checked });
   const handleToggle = (field: "emailForwardingSet" | "spotBoardUpdated", checked: boolean) => {
     updateMutation.mutate({ [field]: checked });
     if (field === "emailForwardingSet") setEmailForwardingSet(checked);
     else setSpotBoardUpdated(checked);
   };
 
+  const overrideCovering = users.find(u => u.id === item.overrideCoveringUserId);
   const priorityLabel = priority.charAt(0).toUpperCase() + priority.slice(1);
 
   return (
@@ -365,22 +300,22 @@ function AccountItemEditor({
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <Briefcase className="w-4 h-4 shrink-0" />
           <span className="font-semibold truncate">{companyName}</span>
-          <Badge variant="outline" className="text-xs shrink-0">{priorityLabel} Priority</Badge>
+          <Badge variant="outline" className="text-xs shrink-0">{priorityLabel}</Badge>
+          {overrideCovering && (
+            <Badge variant="outline" className="text-xs shrink-0 gap-1">
+              <UserCog className="w-3 h-3" />{overrideCovering.name}
+            </Badge>
+          )}
           {item.acknowledged && (
             <Badge className="bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 text-xs shrink-0">
-              <CheckCircle2 className="w-3 h-3 mr-1" />Acknowledged
+              <CheckCircle2 className="w-3 h-3 mr-1" />Reviewed
             </Badge>
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {isCovering && (
             <div className="flex items-center gap-1.5 mr-2">
-              <Checkbox
-                id={`ack-${item.id}`}
-                checked={item.acknowledged}
-                onCheckedChange={handleAck}
-                data-testid={`checkbox-ack-${item.id}`}
-              />
+              <Checkbox id={`ack-${item.id}`} checked={item.acknowledged} onCheckedChange={handleAck} data-testid={`checkbox-ack-${item.id}`} />
               <label htmlFor={`ack-${item.id}`} className="text-xs font-medium cursor-pointer">I've reviewed</label>
             </div>
           )}
@@ -389,13 +324,7 @@ function AccountItemEditor({
               <Button variant="ghost" size="icon" onClick={() => setEditing(!editing)} data-testid={`button-edit-item-${item.id}`}>
                 <Pencil className="w-3.5 h-3.5" />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-red-500 hover:text-red-700"
-                onClick={() => deleteMutation.mutate()}
-                data-testid={`button-delete-item-${item.id}`}
-              >
+              <Button variant="ghost" size="icon" className="text-red-500 hover:text-red-700" onClick={() => deleteMutation.mutate()} data-testid={`button-delete-item-${item.id}`}>
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
             </>
@@ -406,32 +335,18 @@ function AccountItemEditor({
       {isOwner && (
         <div className="flex flex-col sm:flex-row gap-2 pt-1 border-t border-black/10 dark:border-white/10">
           <div className="flex items-center gap-2 text-xs flex-1" data-testid={`label-email-fwd-${item.id}`}>
-            <Checkbox
-              checked={item.emailForwardingSet}
-              onCheckedChange={(v) => handleToggle("emailForwardingSet", !!v)}
-              data-testid={`checkbox-email-fwd-${item.id}`}
-            />
+            <Checkbox checked={item.emailForwardingSet} onCheckedChange={(v) => handleToggle("emailForwardingSet", !!v)} data-testid={`checkbox-email-fwd-${item.id}`} />
             <Mail className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-            <span
-              className={`cursor-pointer select-none ${item.emailForwardingSet ? "line-through text-muted-foreground" : ""}`}
-              onClick={() => handleToggle("emailForwardingSet", !item.emailForwardingSet)}
-            >
-              Autoforwarding emails to rep covering?
+            <span className={`cursor-pointer select-none ${item.emailForwardingSet ? "line-through text-muted-foreground" : ""}`} onClick={() => handleToggle("emailForwardingSet", !item.emailForwardingSet)}>
+              Autoforwarding emails?
             </span>
             {item.emailForwardingSet && <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />}
           </div>
           <div className="flex items-center gap-2 text-xs flex-1" data-testid={`label-spot-board-${item.id}`}>
-            <Checkbox
-              checked={item.spotBoardUpdated}
-              onCheckedChange={(v) => handleToggle("spotBoardUpdated", !!v)}
-              data-testid={`checkbox-spot-board-${item.id}`}
-            />
+            <Checkbox checked={item.spotBoardUpdated} onCheckedChange={(v) => handleToggle("spotBoardUpdated", !!v)} data-testid={`checkbox-spot-board-${item.id}`} />
             <Database className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-            <span
-              className={`cursor-pointer select-none ${item.spotBoardUpdated ? "line-through text-muted-foreground" : ""}`}
-              onClick={() => handleToggle("spotBoardUpdated", !item.spotBoardUpdated)}
-            >
-              Spot board/portal info up to date?
+            <span className={`cursor-pointer select-none ${item.spotBoardUpdated ? "line-through text-muted-foreground" : ""}`} onClick={() => handleToggle("spotBoardUpdated", !item.spotBoardUpdated)}>
+              Spot board up to date?
             </span>
             {item.spotBoardUpdated && <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />}
           </div>
@@ -441,24 +356,55 @@ function AccountItemEditor({
       {!isOwner && (
         <div className="flex flex-col sm:flex-row gap-3 pt-1 border-t border-black/10 dark:border-white/10 text-xs">
           <span className={`flex items-center gap-1.5 ${item.emailForwardingSet ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
-            <Mail className="w-3.5 h-3.5" />
-            Autoforward: {item.emailForwardingSet ? "✓ Set" : "Not set"}
+            <Mail className="w-3.5 h-3.5" />Autoforward: {item.emailForwardingSet ? "✓ Set" : "Not set"}
           </span>
           <span className={`flex items-center gap-1.5 ${item.spotBoardUpdated ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
-            <Database className="w-3.5 h-3.5" />
-            Spot board: {item.spotBoardUpdated ? "✓ Updated" : "Not updated"}
+            <Database className="w-3.5 h-3.5" />Spot board: {item.spotBoardUpdated ? "✓ Updated" : "Not updated"}
           </span>
         </div>
       )}
+
+      {/* Covering person notes — editable by covering person, read-only for owner */}
+      <div className="pt-1 border-t border-black/10 dark:border-white/10">
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+            <MessageSquare className="w-3 h-3" />Coverage Notes
+          </p>
+          {isCovering && !editingCoveringNotes && (
+            <button onClick={() => setEditingCoveringNotes(true)} className="text-xs text-primary hover:underline" data-testid={`button-edit-covering-notes-${item.id}`}>
+              {item.coveringNotes ? "Edit" : "+ Add note"}
+            </button>
+          )}
+        </div>
+        {isCovering && editingCoveringNotes ? (
+          <div className="space-y-2">
+            <Textarea
+              className="text-sm min-h-[60px]"
+              placeholder="What happened with this account? Any follow-ups the rep should know about when they return?"
+              value={coveringNotesEdit}
+              onChange={e => setCoveringNotesEdit(e.target.value)}
+              data-testid={`textarea-covering-notes-${item.id}`}
+            />
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => updateMutation.mutate({ coveringNotes: coveringNotesEdit })} disabled={updateMutation.isPending}>Save</Button>
+              <Button size="sm" variant="ghost" onClick={() => { setEditingCoveringNotes(false); setCoveringNotesEdit(item.coveringNotes ?? ""); }}>Cancel</Button>
+            </div>
+          </div>
+        ) : item.coveringNotes ? (
+          <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded p-2 text-sm whitespace-pre-wrap" data-testid={`text-covering-notes-${item.id}`}>
+            {item.coveringNotes}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground italic">{isCovering ? "No notes yet — add what you're seeing with this account." : "No coverage notes left."}</p>
+        )}
+      </div>
 
       {editing && isOwner ? (
         <div className="space-y-3 bg-background/70 rounded p-3 border">
           <div className="space-y-1">
             <Label className="text-xs">Priority</Label>
             <Select value={priority} onValueChange={setPriority}>
-              <SelectTrigger className="h-8 text-sm">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="high">🔴 High – Can't miss this one</SelectItem>
                 <SelectItem value="medium">🟡 Medium – Keep an eye on</SelectItem>
@@ -467,81 +413,45 @@ function AccountItemEditor({
             </Select>
           </div>
           <div className="space-y-1">
+            <Label className="text-xs flex items-center gap-1"><UserCog className="w-3 h-3" />Account-Specific Cover (overrides passoff default)</Label>
+            <Select value={overrideCoveringUserId} onValueChange={setOverrideCoveringUserId}>
+              <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Use passoff default</SelectItem>
+                {users.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
             <Label className="text-xs flex items-center gap-1"><Package className="w-3 h-3" />Who Handles Spot Freight</Label>
-            <Input
-              className="h-8 text-sm"
-              placeholder="e.g. Jason Allen or call dispatch"
-              value={spotFreightHandler}
-              onChange={e => setSpotFreightHandler(e.target.value)}
-            />
+            <Input className="h-8 text-sm" placeholder="e.g. Jason Allen or call dispatch" value={spotFreightHandler} onChange={e => setSpotFreightHandler(e.target.value)} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs flex items-center gap-1"><UserCheck className="w-3 h-3" />Key Customer Contact</Label>
-            <Input
-              className="h-8 text-sm"
-              placeholder="e.g. Karen Mitchell – VP of Logistics – 602-555-0198"
-              value={keyCustomerContact}
-              onChange={e => setKeyCustomerContact(e.target.value)}
-            />
+            <Input className="h-8 text-sm" placeholder="e.g. Karen Mitchell – VP of Logistics – 602-555-0198" value={keyCustomerContact} onChange={e => setKeyCustomerContact(e.target.value)} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs flex items-center gap-1"><ClipboardList className="w-3 h-3" />Open Items / Follow-Ups</Label>
-            <Textarea
-              className="text-sm"
-              placeholder="List any open items, pending callbacks, or things to follow up on..."
-              value={openItems}
-              onChange={e => setOpenItems(e.target.value)}
-              rows={3}
-            />
+            <Textarea className="text-sm" placeholder="List any open items, pending callbacks, or things to follow up on..." value={openItems} onChange={e => setOpenItems(e.target.value)} rows={3} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs flex items-center gap-1"><FileText className="w-3 h-3" />Process Notes / Account Quirks</Label>
-            <Textarea
-              className="text-sm"
-              placeholder="How does this customer like to operate? Anything special to know?"
-              value={processNotes}
-              onChange={e => setProcessNotes(e.target.value)}
-              rows={3}
-            />
+            <Textarea className="text-sm" placeholder="How does this customer like to operate? Anything special to know?" value={processNotes} onChange={e => setProcessNotes(e.target.value)} rows={3} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs flex items-center gap-1"><Briefcase className="w-3 h-3" />Active RFPs / Bids / Hot Deals</Label>
-            <Textarea
-              className="text-sm"
-              placeholder="Any open RFPs, bids in flight, or time-sensitive opportunities?"
-              value={activeDeals}
-              onChange={e => setActiveDeals(e.target.value)}
-              rows={2}
-            />
+            <Textarea className="text-sm" placeholder="Any open RFPs, bids in flight, or time-sensitive opportunities?" value={activeDeals} onChange={e => setActiveDeals(e.target.value)} rows={2} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs flex items-center gap-1"><TrendingUp className="w-3 h-3" />4-Week Avg Load Acquisition</Label>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-xs text-muted-foreground mb-1 block">Spot Loads / week</Label>
-                <Input
-                  className="h-8 text-sm"
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  placeholder="e.g. 4.5"
-                  value={avgWeeklySpotLoads}
-                  onChange={e => setAvgWeeklySpotLoads(e.target.value)}
-                  data-testid="input-avg-spot-loads"
-                />
+                <Input className="h-8 text-sm" type="number" min="0" step="0.1" placeholder="e.g. 4.5" value={avgWeeklySpotLoads} onChange={e => setAvgWeeklySpotLoads(e.target.value)} data-testid="input-avg-spot-loads" />
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground mb-1 block">Total Loads / week</Label>
-                <Input
-                  className="h-8 text-sm"
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  placeholder="e.g. 12"
-                  value={avgWeeklyTotalLoads}
-                  onChange={e => setAvgWeeklyTotalLoads(e.target.value)}
-                  data-testid="input-avg-total-loads"
-                />
+                <Input className="h-8 text-sm" type="number" min="0" step="0.1" placeholder="e.g. 12" value={avgWeeklyTotalLoads} onChange={e => setAvgWeeklyTotalLoads(e.target.value)} data-testid="input-avg-total-loads" />
               </div>
             </div>
           </div>
@@ -560,7 +470,7 @@ function AccountItemEditor({
           )}
           {item.keyCustomerContact && (
             <div>
-              <p className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-0.5"><UserCheck className="w-3 h-3" />Key Customer Contact</p>
+              <p className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-0.5"><UserCheck className="w-3 h-3" />Key Contact</p>
               <p>{item.keyCustomerContact}</p>
             </div>
           )}
@@ -584,9 +494,7 @@ function AccountItemEditor({
           )}
           {(item.avgWeeklySpotLoads || item.avgWeeklyTotalLoads) && (
             <div className="col-span-full border-t pt-2 mt-1">
-              <p className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-2">
-                <TrendingUp className="w-3 h-3" />4-Week Avg Load Acquisition
-              </p>
+              <p className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-2"><TrendingUp className="w-3 h-3" />4-Week Avg Load Acquisition</p>
               <div className="flex gap-4">
                 {item.avgWeeklySpotLoads && (
                   <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg px-3 py-2 text-center min-w-[80px]">
@@ -612,12 +520,99 @@ function AccountItemEditor({
   );
 }
 
+function HandbackSummaryDialog({
+  passoff, open, onClose, onConfirm, isPending,
+}: {
+  passoff: PassoffWithItems;
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  isPending: boolean;
+}) {
+  const acknowledged = passoff.items.filter(i => i.acknowledged).length;
+  const withNotes = passoff.items.filter(i => i.coveringNotes).length;
+  const unreviewed = passoff.items.filter(i => !i.acknowledged);
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-green-500" />
+            Handback Summary
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Review what happened while you were out. Once you close, accounts transfer back to you.
+          </p>
+
+          {/* Stats row */}
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-muted/50 rounded-lg p-3 text-center">
+              <p className="text-2xl font-bold">{passoff.items.length}</p>
+              <p className="text-xs text-muted-foreground">Accounts</p>
+            </div>
+            <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 text-center">
+              <p className="text-2xl font-bold text-green-700 dark:text-green-300">{acknowledged}</p>
+              <p className="text-xs text-green-600 dark:text-green-400">Reviewed</p>
+            </div>
+            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-center">
+              <p className="text-2xl font-bold text-blue-700 dark:text-blue-300">{withNotes}</p>
+              <p className="text-xs text-blue-600 dark:text-blue-400">With Notes</p>
+            </div>
+          </div>
+
+          {/* Coverage notes per account */}
+          {passoff.items.filter(i => i.coveringNotes).length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Coverage Notes from Your Cover</p>
+              {passoff.items.filter(i => i.coveringNotes).map(item => (
+                <div key={item.id} className="border rounded-lg p-3 space-y-1">
+                  <p className="text-xs font-semibold flex items-center gap-1">
+                    <Briefcase className="w-3 h-3" />
+                    {item.companyName || "Account"}
+                  </p>
+                  <p className="text-sm whitespace-pre-wrap text-muted-foreground">{item.coveringNotes}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Unreviewed accounts warning */}
+          {unreviewed.length > 0 && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg p-3">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1 mb-1">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                {unreviewed.length} account{unreviewed.length !== 1 ? "s" : ""} not reviewed by cover
+              </p>
+              <ul className="text-xs text-amber-800 dark:text-amber-300 space-y-0.5">
+                {unreviewed.map(i => <li key={i.id}>• {i.companyName || "Account"}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="mt-4">
+          <Button variant="outline" onClick={onClose}>Not Yet</Button>
+          <Button
+            className="bg-green-600 hover:bg-green-700 text-white"
+            onClick={onConfirm}
+            disabled={isPending}
+            data-testid="button-confirm-close-passoff"
+          >
+            <CheckCircle2 className="w-4 h-4 mr-2" />
+            {isPending ? "Closing…" : "Close & Return Accounts"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PassoffCard({
-  passoff,
-  users,
-  companies,
-  currentUserId,
-  isAdmin,
+  passoff, users, companies, currentUserId, isAdmin,
 }: {
   passoff: PassoffWithItems;
   users: SafeUser[];
@@ -629,6 +624,7 @@ function PassoffCard({
   const [open, setOpen] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
   const [addAccountId, setAddAccountId] = useState("none");
+  const [handbackOpen, setHandbackOpen] = useState(false);
 
   const isOwner = passoff.createdById === currentUserId;
   const isCovering = passoff.coveringUserId === currentUserId;
@@ -641,48 +637,36 @@ function PassoffCard({
   const acknowledged = passoff.items.filter(i => i.acknowledged).length;
   const total = passoff.items.length;
 
+  // Open tasks for this passoff (visible to covering person and owner)
+  const { data: openTasks = [] } = useQuery<OpenTask[]>({
+    queryKey: ["/api/pto-passoffs", passoff.id, "open-tasks"],
+    queryFn: () => apiRequest("GET", `/api/pto-passoffs/${passoff.id}/open-tasks`).then(r => r.json()),
+    enabled: (isCovering || isOwner || isAdmin) && passoff.status === "active",
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/pto-passoffs/${passoff.id}`).then(r => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] });
-      toast({ title: "Passoff deleted" });
-    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] }); toast({ title: "Passoff deleted" }); },
   });
 
   const closeMutation = useMutation({
     mutationFn: () => apiRequest("PATCH", `/api/pto-passoffs/${passoff.id}`, { status: "closed" }).then(r => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] });
-      toast({ title: "Passoff closed — accounts returned!" });
-    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] }); toast({ title: "Passoff closed — welcome back!" }); setHandbackOpen(false); },
     onError: () => toast({ title: "Failed to close passoff", variant: "destructive" }),
   });
 
   const addItemMutation = useMutation({
-    mutationFn: (companyId: string) =>
-      apiRequest("POST", `/api/pto-passoffs/${passoff.id}/items`, { companyId, priority: "medium" }).then(r => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] });
-      setAddAccountId("none");
-    },
+    mutationFn: (companyId: string) => apiRequest("POST", `/api/pto-passoffs/${passoff.id}/items`, { companyId, priority: "medium" }).then(r => r.json()),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] }); setAddAccountId("none"); },
     onError: () => toast({ title: "Error adding account", variant: "destructive" }),
   });
 
   const addAllMutation = useMutation({
-    mutationFn: async () => {
-      for (const c of availableCompanies) {
-        await apiRequest("POST", `/api/pto-passoffs/${passoff.id}/items`, { companyId: c.id, priority: "medium" });
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] });
-      toast({ title: `Added ${availableCompanies.length} accounts` });
-    },
+    mutationFn: async () => { for (const c of availableCompanies) { await apiRequest("POST", `/api/pto-passoffs/${passoff.id}/items`, { companyId: c.id, priority: "medium" }); } },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/pto-passoffs"] }); toast({ title: `Added ${availableCompanies.length} accounts` }); },
   });
 
-  const handleAddAccount = (cid: string) => {
-    if (cid && cid !== "none") addItemMutation.mutate(cid);
-  };
+  const otherUsers = users.filter(u => u.id !== currentUserId);
 
   return (
     <Card data-testid={`card-passoff-${passoff.id}`}>
@@ -696,30 +680,25 @@ function PassoffCard({
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <CardTitle className="text-base">
-                      {formatDate(passoff.startDate)} – {formatDate(passoff.endDate)}
-                    </CardTitle>
-                    <Badge className={`text-xs ${STATUS_COLORS[passoff.status]}`}>
+                    <CardTitle className="text-base">{formatDate(passoff.startDate)} – {formatDate(passoff.endDate)}</CardTitle>
+                    <Badge className={`text-xs ${STATUS_COLORS[passoff.status] || STATUS_COLORS.draft}`}>
                       {passoff.status.charAt(0).toUpperCase() + passoff.status.slice(1)}
                     </Badge>
-                    {total > 0 && (
-                      <Badge variant="outline" className="text-xs">
-                        {acknowledged}/{total} accounts reviewed
+                    {total > 0 && <Badge variant="outline" className="text-xs">{acknowledged}/{total} reviewed</Badge>}
+                    {openTasks.length > 0 && (
+                      <Badge variant="outline" className="text-xs gap-1 text-amber-600 border-amber-300">
+                        <ListTodo className="w-3 h-3" />{openTasks.length} open task{openTasks.length !== 1 ? "s" : ""}
                       </Badge>
                     )}
                   </div>
                   <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                    {!isOwner && creator && (
-                      <span className="flex items-center gap-1"><Users className="w-3 h-3" />Created by {creator.name}</span>
-                    )}
+                    {!isOwner && creator && <span className="flex items-center gap-1"><Users className="w-3 h-3" />Created by {creator.name}</span>}
                     {coveringUser ? (
                       <span className="flex items-center gap-1"><UserCheck className="w-3 h-3" />Covered by {coveringUser.name}</span>
                     ) : (
                       <span className="text-amber-600 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />No cover assigned</span>
                     )}
-                    {passoff.emergencyContact && (
-                      <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{passoff.emergencyContact}</span>
-                    )}
+                    {passoff.emergencyContact && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{passoff.emergencyContact}</span>}
                   </div>
                 </div>
               </div>
@@ -731,29 +710,16 @@ function PassoffCard({
                         variant="outline"
                         size="sm"
                         className="h-7 text-xs gap-1 border-green-500 text-green-700 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20"
-                        onClick={e => { e.stopPropagation(); closeMutation.mutate(); }}
-                        disabled={closeMutation.isPending}
+                        onClick={e => { e.stopPropagation(); setHandbackOpen(true); }}
                         data-testid={`button-close-passoff-${passoff.id}`}
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Close & Return Accounts
+                        <CheckCircle2 className="w-3.5 h-3.5" />Close & Return
                       </Button>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={e => { e.stopPropagation(); setEditOpen(true); }}
-                      data-testid={`button-edit-passoff-${passoff.id}`}
-                    >
+                    <Button variant="ghost" size="icon" onClick={e => { e.stopPropagation(); setEditOpen(true); }} data-testid={`button-edit-passoff-${passoff.id}`}>
                       <Pencil className="w-4 h-4" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-red-500 hover:text-red-700"
-                      onClick={e => { e.stopPropagation(); deleteMutation.mutate(); }}
-                      data-testid={`button-delete-passoff-${passoff.id}`}
-                    >
+                    <Button variant="ghost" size="icon" className="text-red-500 hover:text-red-700" onClick={e => { e.stopPropagation(); deleteMutation.mutate(); }} data-testid={`button-delete-passoff-${passoff.id}`}>
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </>
@@ -778,12 +744,34 @@ function PassoffCard({
             {total > 0 && (
               <div className="flex items-center gap-2">
                 <div className="flex-1 bg-muted rounded-full h-1.5">
-                  <div
-                    className="bg-green-500 h-1.5 rounded-full transition-all"
-                    style={{ width: `${total > 0 ? (acknowledged / total) * 100 : 0}%` }}
-                  />
+                  <div className="bg-green-500 h-1.5 rounded-full transition-all" style={{ width: `${total > 0 ? (acknowledged / total) * 100 : 0}%` }} />
                 </div>
                 <span className="text-xs text-muted-foreground">{acknowledged}/{total} reviewed</span>
+              </div>
+            )}
+
+            {/* Open tasks panel — for covering person and owner */}
+            {openTasks.length > 0 && (
+              <div className="border rounded-lg overflow-hidden">
+                <div className="bg-muted/50 px-3 py-2 flex items-center gap-2 border-b">
+                  <ListTodo className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    {isOwner ? "Your Open Tasks During PTO" : `${creator?.name || "Rep"}'s Open Tasks`}
+                  </span>
+                  <Badge variant="secondary" className="text-xs ml-auto">{openTasks.length}</Badge>
+                </div>
+                <div className="divide-y">
+                  {openTasks.map(task => (
+                    <div key={task.id} className="px-3 py-2 flex items-center gap-2 text-sm" data-testid={`task-row-passoff-${task.id}`}>
+                      {taskStatusIcon(task.status)}
+                      <span className="flex-1 truncate">{task.title}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {dueBadge(task.dueDate)}
+                        <Calendar className="w-3 h-3 text-muted-foreground" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -800,35 +788,27 @@ function PassoffCard({
                   companyName={item.companyName ?? companies.find(c => c.id === item.companyId)?.name ?? "Unknown Account"}
                   passoffId={passoff.id}
                   isOwner={isOwner || isAdmin}
-                  isCovering={isCovering}
+                  isCovering={isCovering || item.overrideCoveringUserId === currentUserId}
+                  users={otherUsers}
                 />
               ))}
             </div>
 
             {(isOwner || isAdmin) && availableCompanies.length > 0 && (
               <div className="flex gap-2 items-center pt-2 border-t">
-                <Select value={addAccountId} onValueChange={v => { setAddAccountId(v); handleAddAccount(v); }}>
+                <Select value={addAccountId} onValueChange={v => { setAddAccountId(v); if (v !== "none") addItemMutation.mutate(v); }}>
                   <SelectTrigger className="flex-1 h-8 text-sm" data-testid="select-add-account">
                     <SelectValue placeholder="+ Add an account…" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Select an account…</SelectItem>
-                    {availableCompanies
-                      .slice()
-                      .sort((a, b) => a.name.localeCompare(b.name))
-                      .map(c => (
-                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                      ))}
+                    {availableCompanies.slice().sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 {availableCompanies.length > 1 && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => addAllMutation.mutate()}
-                    disabled={addAllMutation.isPending}
-                    data-testid="button-add-all-accounts"
-                  >
+                  <Button size="sm" variant="outline" onClick={() => addAllMutation.mutate()} disabled={addAllMutation.isPending} data-testid="button-add-all-accounts">
                     Add All ({availableCompanies.length})
                   </Button>
                 )}
@@ -840,25 +820,27 @@ function PassoffCard({
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit PTO Passoff</DialogTitle>
-          </DialogHeader>
-          <PassoffDialog passoff={passoff} users={users} companies={[]} onClose={() => setEditOpen(false)} />
+          <DialogHeader><DialogTitle>Edit PTO Passoff</DialogTitle></DialogHeader>
+          <PassoffDialog passoff={passoff} users={otherUsers} companies={[]} onClose={() => setEditOpen(false)} />
         </DialogContent>
       </Dialog>
+
+      <HandbackSummaryDialog
+        passoff={passoff}
+        open={handbackOpen}
+        onClose={() => setHandbackOpen(false)}
+        onConfirm={() => closeMutation.mutate()}
+        isPending={closeMutation.isPending}
+      />
     </Card>
   );
 }
 
 export default function PtoPassoffPage() {
   const { user: currentUser } = useAuth();
-  const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
 
-  const { data: passoffs = [], isLoading } = useQuery<PassoffWithItems[]>({
-    queryKey: ["/api/pto-passoffs"],
-  });
-
+  const { data: passoffs = [], isLoading } = useQuery<PassoffWithItems[]>({ queryKey: ["/api/pto-passoffs"] });
   const { data: users = [] } = useQuery<SafeUser[]>({ queryKey: ["/api/users"] });
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
@@ -870,8 +852,7 @@ export default function PtoPassoffPage() {
   const coveringPassoffs = passoffs.filter(p => p.coveringUserId === currentUser.id && p.createdById !== currentUser.id);
 
   const activeCount = passoffs.filter(p => p.status === "active").length;
-  const myPendingAcks = coveringPassoffs.reduce((sum, p) =>
-    sum + p.items.filter(i => !i.acknowledged).length, 0);
+  const myPendingAcks = coveringPassoffs.reduce((sum, p) => sum + p.items.filter(i => !i.acknowledged).length, 0);
 
   const otherUsers = users.filter(u => u.id !== currentUser.id);
 
@@ -880,18 +861,11 @@ export default function PtoPassoffPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-pto-title">
-            <Plane className="w-6 h-6 text-blue-600" />
-            PTO Passoff
+            <Plane className="w-6 h-6 text-blue-600" />PTO Passoff
           </h1>
-          <p className="text-muted-foreground mt-1">
-            Ensure seamless account coverage when you're out
-          </p>
+          <p className="text-muted-foreground mt-1">Ensure seamless account coverage when you're out</p>
         </div>
-        <Button
-          className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
-          onClick={() => setCreateOpen(true)}
-          data-testid="button-create-passoff"
-        >
+        <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" onClick={() => setCreateOpen(true)} data-testid="button-create-passoff">
           <Plus className="w-4 h-4 mr-2" />New Passoff
         </Button>
       </div>
@@ -900,14 +874,12 @@ export default function PtoPassoffPage() {
         <div className="flex gap-3 flex-wrap">
           {activeCount > 0 && (
             <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-3 py-2 flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
-              <Clock className="w-4 h-4" />
-              {activeCount} active passoff{activeCount !== 1 ? "s" : ""} in progress
+              <Clock className="w-4 h-4" />{activeCount} active passoff{activeCount !== 1 ? "s" : ""} in progress
             </div>
           )}
           {myPendingAcks > 0 && (
             <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2 flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300">
-              <AlertTriangle className="w-4 h-4" />
-              You have {myPendingAcks} account{myPendingAcks !== 1 ? "s" : ""} to review
+              <AlertTriangle className="w-4 h-4" />You have {myPendingAcks} account{myPendingAcks !== 1 ? "s" : ""} to review
             </div>
           )}
         </div>
@@ -915,17 +887,9 @@ export default function PtoPassoffPage() {
 
       <Tabs defaultValue={coveringPassoffs.length > 0 ? "covering" : "mine"}>
         <TabsList>
-          <TabsTrigger value="mine" data-testid="tab-my-passoffs">
-            My Passoffs {myPassoffs.length > 0 && `(${myPassoffs.length})`}
-          </TabsTrigger>
-          <TabsTrigger value="covering" data-testid="tab-covering">
-            I'm Covering {coveringPassoffs.length > 0 && `(${coveringPassoffs.length})`}
-          </TabsTrigger>
-          {isAdmin && (
-            <TabsTrigger value="all" data-testid="tab-all-passoffs">
-              All Active
-            </TabsTrigger>
-          )}
+          <TabsTrigger value="mine" data-testid="tab-my-passoffs">My Passoffs {myPassoffs.length > 0 && `(${myPassoffs.length})`}</TabsTrigger>
+          <TabsTrigger value="covering" data-testid="tab-covering">I'm Covering {coveringPassoffs.length > 0 && `(${coveringPassoffs.length})`}</TabsTrigger>
+          {isAdmin && <TabsTrigger value="all" data-testid="tab-all-passoffs">All Active</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="mine" className="mt-4 space-y-4">
@@ -936,9 +900,7 @@ export default function PtoPassoffPage() {
               <CardContent className="text-center py-12">
                 <Plane className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
                 <p className="font-medium text-muted-foreground">No passoffs yet</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Create one before your next PTO to keep your accounts covered.
-                </p>
+                <p className="text-sm text-muted-foreground mt-1">Create one before your next PTO to keep your accounts covered.</p>
                 <Button className="mt-4" onClick={() => setCreateOpen(true)} data-testid="button-create-first-passoff">
                   <Plus className="w-4 h-4 mr-2" />Create Your First Passoff
                 </Button>
@@ -946,14 +908,7 @@ export default function PtoPassoffPage() {
             </Card>
           ) : (
             myPassoffs.map(p => (
-              <PassoffCard
-                key={p.id}
-                passoff={p}
-                users={users}
-                companies={companies.filter(c => c.assignedTo === currentUser.id)}
-                currentUserId={currentUser.id}
-                isAdmin={isAdmin}
-              />
+              <PassoffCard key={p.id} passoff={p} users={otherUsers} companies={companies.filter(c => c.assignedTo === currentUser.id)} currentUserId={currentUser.id} isAdmin={isAdmin} />
             ))
           )}
         </TabsContent>
@@ -964,28 +919,19 @@ export default function PtoPassoffPage() {
               <CardContent className="text-center py-12">
                 <Shield className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
                 <p className="font-medium text-muted-foreground">Not covering anyone right now</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  When a teammate sets you as their cover, their passoff will appear here.
-                </p>
+                <p className="text-sm text-muted-foreground mt-1">When a teammate sets you as their cover, their passoff will appear here.</p>
               </CardContent>
             </Card>
           ) : (
             coveringPassoffs.map(p => {
               const creator = users.find(u => u.id === p.createdById);
-              const creatorCompanies = companies.filter(c => c.assignedTo === p.createdById);
               return (
                 <div key={p.id} className="space-y-1">
                   <div className="flex items-center gap-2 text-xs text-muted-foreground px-1">
                     <Users className="w-3.5 h-3.5" />
                     Passoff from <span className="font-semibold text-foreground">{creator?.name ?? "Unknown"}</span>
                   </div>
-                  <PassoffCard
-                    passoff={p}
-                    users={users}
-                    companies={creatorCompanies}
-                    currentUserId={currentUser.id}
-                    isAdmin={isAdmin}
-                  />
+                  <PassoffCard passoff={p} users={otherUsers} companies={companies.filter(c => c.assignedTo === p.createdById)} currentUserId={currentUser.id} isAdmin={isAdmin} />
                 </div>
               );
             })
@@ -995,28 +941,17 @@ export default function PtoPassoffPage() {
         {isAdmin && (
           <TabsContent value="all" className="mt-4 space-y-4">
             {passoffs.length === 0 ? (
-              <Card>
-                <CardContent className="text-center py-12">
-                  <p className="text-muted-foreground">No passoffs in the system yet.</p>
-                </CardContent>
-              </Card>
+              <Card><CardContent className="text-center py-12"><p className="text-muted-foreground">No passoffs in the system yet.</p></CardContent></Card>
             ) : (
               passoffs.map(p => {
                 const creator = users.find(u => u.id === p.createdById);
-                const creatorCompanies = companies.filter(c => c.assignedTo === p.createdById);
                 return (
                   <div key={p.id} className="space-y-1">
                     <div className="flex items-center gap-2 text-xs text-muted-foreground px-1">
                       <Users className="w-3.5 h-3.5" />
                       <span className="font-semibold text-foreground">{creator?.name ?? "Unknown"}'s</span> passoff
                     </div>
-                    <PassoffCard
-                      passoff={p}
-                      users={users}
-                      companies={creatorCompanies}
-                      currentUserId={currentUser.id}
-                      isAdmin={isAdmin}
-                    />
+                    <PassoffCard passoff={p} users={otherUsers} companies={companies.filter(c => c.assignedTo === p.createdById)} currentUserId={currentUser.id} isAdmin={isAdmin} />
                   </div>
                 );
               })
@@ -1027,15 +962,10 @@ export default function PtoPassoffPage() {
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Create PTO Passoff</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Create PTO Passoff</DialogTitle></DialogHeader>
           <PassoffDialog
-            users={users}
-            companies={(() => {
-              const mine = companies.filter(c => c.assignedTo === currentUser.id);
-              return mine.length > 0 ? mine : companies;
-            })()}
+            users={otherUsers}
+            companies={(() => { const mine = companies.filter(c => c.assignedTo === currentUser.id); return mine.length > 0 ? mine : companies; })()}
             onClose={() => setCreateOpen(false)}
           />
         </DialogContent>
