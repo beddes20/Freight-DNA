@@ -1074,7 +1074,7 @@ export async function registerRoutes(
       if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const parsed = insertCompanySchema.safeParse(req.body);
+      const parsed = insertCompanySchema.omit({ organizationId: true }).partial().safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
