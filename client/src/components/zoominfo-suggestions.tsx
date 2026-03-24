@@ -118,7 +118,7 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
             <DialogTitle className="text-base">ZoomInfo Contact Suggestions</DialogTitle>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Transportation &amp; logistics contacts found at <span className="font-medium text-foreground">{companyName}</span>
+            Freight buyer contacts found at <span className="font-medium text-foreground">{companyName}</span> — load planners, logistics &amp; transportation coordinators, shipping supervisors, and distribution managers
           </p>
         </DialogHeader>
 
@@ -269,7 +269,7 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
 
         <div className="px-5 py-3 border-t bg-muted/30 shrink-0 flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
-            Data provided by <span className="font-medium">ZoomInfo</span> · Filtered to transportation &amp; logistics roles
+            Data provided by <span className="font-medium">ZoomInfo</span> · Filtered to freight buyer roles only
           </p>
           <Button variant="outline" size="sm" onClick={onClose} data-testid="button-close-zoominfo-dialog">
             Done
