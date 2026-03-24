@@ -95,27 +95,38 @@ export function AppSidebar() {
           </p>
           {/* Farmer → Hunter icon */}
           <div className="flex items-center justify-center mt-1" title="Farmer → Hunter">
-            <svg viewBox="0 0 122 42" width="82" height="28" aria-label="Farmer to Hunter">
-              {/* Rake — angled handle for natural feel */}
-              <line x1="17" y1="2" x2="10" y2="22" stroke="#ffb400" strokeWidth="2" strokeLinecap="round"/>
-              <line x1="3" y1="22" x2="22" y2="22" stroke="#ffb400" strokeWidth="2.5" strokeLinecap="round"/>
-              <line x1="5"  y1="22" x2="4"  y2="34" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
-              <line x1="10" y1="22" x2="9"  y2="34" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
-              <line x1="15" y1="22" x2="14" y2="34" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
-              <line x1="20" y1="22" x2="19" y2="34" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
-              {/* → */}
-              <line x1="30" y1="21" x2="40" y2="21" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
-              <polyline points="36,16 41,21 36,26" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
-              {/* Bow — tight D, tips at x=55 */}
-              <path d="M 55,3 Q 44,21 55,39" fill="none" stroke="#ffb400" strokeWidth="2" strokeLinecap="round"/>
-              <line x1="55" y1="3" x2="55" y2="39" stroke="#ffb400" strokeWidth="1" strokeLinecap="round" opacity="0.45"/>
-              {/* Arrow */}
-              <line x1="55" y1="21" x2="112" y2="21" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
-              {/* Diamond arrowhead */}
-              <polygon points="106,16 114,21 106,26 109,21" fill="#ffb400"/>
-              {/* Fletching */}
-              <line x1="58" y1="21" x2="52" y2="15" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
-              <line x1="58" y1="21" x2="52" y2="27" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+            <svg viewBox="0 0 134 46" width="90" height="30" aria-label="Farmer to Hunter">
+              {/* ── FAN RAKE ── */}
+              {/* Handle - diagonal, upper-right to ferrule */}
+              <line x1="38" y1="4" x2="24" y2="21" stroke="#ffb400" strokeWidth="2.5" strokeLinecap="round"/>
+              {/* Ferrule - thick collar perpendicular to handle */}
+              <line x1="21" y1="19" x2="28" y2="24" stroke="#ffb400" strokeWidth="4.5" strokeLinecap="butt"/>
+              {/* 6 fan tines radiating lower-left */}
+              <line x1="24" y1="22" x2="9"  y2="22" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              <line x1="24" y1="22" x2="10" y2="27" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              <line x1="24" y1="22" x2="12" y2="31" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              <line x1="24" y1="22" x2="15" y2="35" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              <line x1="24" y1="22" x2="19" y2="39" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              <line x1="24" y1="22" x2="24" y2="41" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              {/* Arc connecting tine tips */}
+              <path d="M 9,22 Q 14,37 24,41" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+
+              {/* ── TRANSITION ARROW → ── */}
+              <line x1="44" y1="23" x2="53" y2="23" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              <polyline points="49,18 54,23 49,28" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+
+              {/* ── BOW AND ARROW ── */}
+              {/* Kite/diamond bow body — wide recurve arc, tips top & bottom */}
+              <path d="M 74,5 C 108,5 108,41 74,41" fill="none" stroke="#ffb400" strokeWidth="2.5" strokeLinecap="round"/>
+              {/* Bowstring */}
+              <line x1="74" y1="5" x2="74" y2="41" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              {/* Arrow shaft — passes through bow center */}
+              <line x1="60" y1="23" x2="122" y2="23" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
+              {/* Arrowhead */}
+              <polygon points="116,17 124,23 116,29" fill="#ffb400"/>
+              {/* Fletching — two feather V shapes at tail */}
+              <path d="M 70,23 L 65,17 L 61,23" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M 70,23 L 65,29 L 61,23" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </div>
         </div>
