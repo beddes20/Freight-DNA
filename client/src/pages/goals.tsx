@@ -18,6 +18,7 @@ import {
   Target, Plus, MessageSquare, Trash2, ChevronDown, ChevronUp,
   TrendingUp, Users, Truck, DollarSign, CalendarDays, Pencil, Send,
   CheckCircle2, BarChart3, BellRing, X, Sliders, Percent, Heart, RefreshCw,
+  Copy, Flame, TrendingDown, Zap,
 } from "lucide-react";
 import { useConfetti } from "@/components/confetti";
 import type { Goal, GoalComment } from "@shared/schema";
@@ -110,6 +111,17 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
     : current;
   const displayPct = progressPct(displayCurrent, target);
 
+  // Pace indicator
+  const today = new Date();
+  const goalStart = new Date(goal.startDate);
+  const goalEnd = new Date(goal.endDate);
+  const totalDays = Math.max(1, (goalEnd.getTime() - goalStart.getTime()) / 86400000);
+  const daysPassed = Math.max(0, Math.min(totalDays, (today.getTime() - goalStart.getTime()) / 86400000));
+  const expectedPct = Math.min(100, Math.round((daysPassed / totalDays) * 100));
+  const paceGap = displayPct - expectedPct;
+  const goalExpired = today > goalEnd;
+  const goalNotStarted = today < goalStart;
+
   const updateProgress = useMutation({
     mutationFn: (value: string) => apiRequest("PATCH", `/api/goals/${goal.id}`, { currentValue: value }),
     onSuccess: () => {
@@ -146,11 +158,37 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
     }
   }, [displayPct, confettiFired, fireConfetti]);
 
+  const isAmView = userRole === "account_manager";
+  const ringR = 32;
+  const ringCirc = 2 * Math.PI * ringR;
+  const ringOffset = ringCirc * (1 - Math.min(displayPct, 100) / 100);
+  const ringColor = displayPct >= 100 ? "#16a34a" : displayPct >= 75 ? "#2563eb" : displayPct >= 40 ? "#d97706" : "#dc2626";
+
   return (
     <>
     {ConfettiOverlay && <ConfettiOverlay />}
     <Card className="border border-border" data-testid={`goal-card-${goal.id}`}>
       <CardContent className="p-4">
+        {isAmView && (
+          <div className="flex justify-center mb-3">
+            <div className="relative flex items-center justify-center" style={{ width: 88, height: 88 }}>
+              <svg width="88" height="88" className="-rotate-90">
+                <circle cx="44" cy="44" r={ringR} fill="none" stroke="hsl(var(--muted))" strokeWidth="7" />
+                <circle
+                  cx="44" cy="44" r={ringR} fill="none"
+                  stroke={ringColor} strokeWidth="7"
+                  strokeDasharray={ringCirc}
+                  strokeDashoffset={ringOffset}
+                  strokeLinecap="round"
+                  style={{ transition: "stroke-dashoffset 0.5s ease" }}
+                />
+              </svg>
+              <div className="absolute flex flex-col items-center justify-center leading-none">
+                <span className="text-lg font-bold tabular-nums" style={{ color: ringColor }}>{Math.min(displayPct, 100)}%</span>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="flex items-center gap-2 flex-wrap">
             <div className={`h-7 w-7 rounded-full ${metric.color} flex items-center justify-center shrink-0`}>
@@ -221,6 +259,30 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
               </span>
             )}
           </div>
+          {!goalExpired && !goalNotStarted && displayPct < 100 && (
+            <div className="flex items-center gap-1.5 mt-1">
+              {paceGap >= 5 ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 px-1.5 py-0.5 rounded-full" data-testid={`pace-ahead-${goal.id}`}>
+                  <Zap className="h-2.5 w-2.5" /> {paceGap}% ahead of pace
+                </span>
+              ) : paceGap <= -10 ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 px-1.5 py-0.5 rounded-full" data-testid={`pace-behind-${goal.id}`}>
+                  <TrendingDown className="h-2.5 w-2.5" /> {Math.abs(paceGap)}% behind pace
+                </span>
+              ) : paceGap < 0 ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-1.5 py-0.5 rounded-full" data-testid={`pace-slightly-behind-${goal.id}`}>
+                  <Flame className="h-2.5 w-2.5" /> Slightly behind — push now
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 px-1.5 py-0.5 rounded-full" data-testid={`pace-on-track-${goal.id}`}>
+                  <TrendingUp className="h-2.5 w-2.5" /> On pace
+                </span>
+              )}
+            </div>
+          )}
+          {goalExpired && displayPct < 100 && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full mt-1">Period ended — {displayPct}% achieved</span>
+          )}
         </div>
 
         {isFinancialTracked && marginTrend && marginTrend.months.length > 0 && (() => {
@@ -517,6 +579,46 @@ export default function GoalsPage() {
     onError: () => toast({ variant: "destructive", description: "Failed to create bulk goals." }),
   });
 
+  const copyLastMonth = useMutation({
+    mutationFn: async () => {
+      const now = new Date();
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastMonthKey = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, "0")}`;
+      const thisMonthFirst = toLocalDateString(new Date(now.getFullYear(), now.getMonth(), 1));
+      const thisMonthLast = toLocalDateString(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+      const lastMonthGoals = goals.filter(g => g.startDate && g.startDate.slice(0, 7) === lastMonthKey);
+      if (lastMonthGoals.length === 0) throw new Error("No goals found from last month.");
+      const today = now.toISOString().slice(0, 10);
+      const newGoals = lastMonthGoals.filter(g => {
+        const alreadyExists = goals.some(
+          eg => eg.amId === g.amId && eg.metric === g.metric && eg.startDate.slice(0, 7) === now.toISOString().slice(0, 7)
+        );
+        return !alreadyExists;
+      });
+      if (newGoals.length === 0) throw new Error("All last month goals already have this-month equivalents.");
+      for (const g of newGoals) {
+        await apiRequest("POST", "/api/goals", {
+          amId: g.amId,
+          metric: g.metric,
+          period: g.period,
+          target: g.target,
+          title: g.title || "",
+          customLabel: g.customLabel || "",
+          notes: g.notes || "",
+          startDate: thisMonthFirst,
+          endDate: thisMonthLast,
+        });
+      }
+      return newGoals.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/goals/monthly-check"] });
+      toast({ description: `Copied ${count} goal${count !== 1 ? "s" : ""} from last month.` });
+    },
+    onError: (err: any) => toast({ variant: "destructive", description: err?.message || "Failed to copy goals." }),
+  });
+
   // LM direct reports of this AM (AMs can set goals for their LM reports)
   const amLmReports = isAmRole
     ? allUsers.filter(u => u.managerId === user?.id && u.role === "logistics_manager")
@@ -586,6 +688,33 @@ export default function GoalsPage() {
     }
   }
 
+  // Hit rate per AM: past goals (endDate < today) where currentValue >= target
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const hitRateByAm: Record<string, { hit: number; total: number }> = {};
+  for (const g of goals) {
+    if (g.endDate >= todayStr) continue;
+    const amId = g.amId;
+    if (!hitRateByAm[amId]) hitRateByAm[amId] = { hit: 0, total: 0 };
+    hitRateByAm[amId].total++;
+    if (parseFloat(g.currentValue || "0") >= parseFloat(g.target || "1")) hitRateByAm[amId].hit++;
+  }
+
+  // Team goals summary for NAM view
+  const nowStr = new Date().toISOString().slice(0, 10);
+  const activeGoals = goals.filter(g => g.startDate <= nowStr && g.endDate >= nowStr);
+  const repsWithActiveGoals = [...new Set(activeGoals.map(g => g.amId))];
+  const repsOnTrack = repsWithActiveGoals.filter(amId => {
+    const repGoals = activeGoals.filter(g => g.amId === amId);
+    return repGoals.every(g => {
+      const pct = progressPct(parseFloat(g.currentValue || "0"), parseFloat(g.target || "1"));
+      const start = new Date(g.startDate); const end = new Date(g.endDate); const now2 = new Date();
+      const total = Math.max(1, (end.getTime() - start.getTime()) / 86400000);
+      const passed = Math.max(0, (now2.getTime() - start.getTime()) / 86400000);
+      const expected = Math.min(100, Math.round((passed / total) * 100));
+      return pct >= expected - 10;
+    });
+  });
+
   const goalsByMetric = METRICS.map(m => ({
     ...m,
     count: filteredGoals.filter(g => g.metric === m.value).length,
@@ -620,6 +749,19 @@ export default function GoalsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {isNam && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => copyLastMonth.mutate()}
+              disabled={copyLastMonth.isPending}
+              data-testid="button-copy-last-month"
+              title="Copy all last month's goals into this month (skips any that already exist)"
+            >
+              <Copy className="h-4 w-4 mr-2" />
+              {copyLastMonth.isPending ? "Copying…" : "Copy Last Month"}
+            </Button>
+          )}
           {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager") && uniqueAms.length > 1 && (
             <Button variant="outline" onClick={() => setBulkOpen(true)} data-testid="button-bulk-goals">
               <Users className="h-4 w-4 mr-2" />
@@ -634,6 +776,28 @@ export default function GoalsPage() {
           )}
         </div>
       </div>
+
+      {isNam && repsWithActiveGoals.length > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border bg-card p-3" data-testid="team-goals-summary">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-foreground">
+                Team Goal Pace —{" "}
+                <span className={repsOnTrack.length === repsWithActiveGoals.length ? "text-green-700 dark:text-green-400" : repsOnTrack.length >= repsWithActiveGoals.length / 2 ? "text-amber-700 dark:text-amber-400" : "text-red-700 dark:text-red-400"}>
+                  {repsOnTrack.length}/{repsWithActiveGoals.length} reps on track
+                </span>
+              </span>
+              <span className="text-xs text-muted-foreground">{activeGoals.length} active goals</span>
+            </div>
+            <div className="h-2 rounded-full bg-muted overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${repsOnTrack.length === repsWithActiveGoals.length ? "bg-green-500" : repsOnTrack.length >= repsWithActiveGoals.length / 2 ? "bg-amber-500" : "bg-red-500"}`}
+                style={{ width: `${repsWithActiveGoals.length > 0 ? Math.round((repsOnTrack.length / repsWithActiveGoals.length) * 100) : 0}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {isNam && !alertDismissed && missingMonthlyGoals.length > 0 && (
         <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-4" data-testid="banner-monthly-goal-alert">
@@ -706,14 +870,24 @@ export default function GoalsPage() {
           </button>
           {uniqueAms.map(p => {
             const count = goals.filter(g => g.amId === p.amId).length;
+            const hr = hitRateByAm[p.amId];
+            const hrPct = hr && hr.total > 0 ? Math.round((hr.hit / hr.total) * 100) : null;
             return (
               <button
                 key={p.amId}
                 onClick={() => setActiveTab(p.amId)}
-                className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${activeTab === p.amId ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground"}`}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${activeTab === p.amId ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground"}`}
                 data-testid={`tab-am-${p.amId}`}
               >
                 {p.amName} {count > 0 && `(${count})`}
+                {hrPct !== null && (
+                  <span
+                    className={`text-[10px] font-semibold px-1 py-0 rounded ${activeTab === p.amId ? "bg-white/20" : hrPct >= 75 ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" : hrPct >= 50 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"}`}
+                    title={`Historical hit rate: ${hr!.hit}/${hr!.total} past goals achieved`}
+                  >
+                    {hrPct}%
+                  </span>
+                )}
               </button>
             );
           })}

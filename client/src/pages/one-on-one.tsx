@@ -681,6 +681,21 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const linkCancelledRef = useRef(false);
   const [showReport, setShowReport] = useState(false);
   const [reportPeriod, setReportPeriod] = useState<"weekly" | "monthly" | "both">("weekly");
+  const [showGoals, setShowGoals] = useState(false);
+
+  type RepGoal = { id: string; metric: string; period: string; target: string; currentValue: string | null; startDate: string; endDate: string; customLabel?: string | null };
+  const repGoalsKey = ["/api/goals", "for-rep", repId];
+  const { data: repGoals = [] } = useQuery<RepGoal[]>({
+    queryKey: repGoalsKey,
+    queryFn: async () => {
+      const res = await fetch(`/api/goals`, { credentials: "include" });
+      if (!res.ok) return [];
+      const all: RepGoal[] = await res.json();
+      const nowStr = new Date().toISOString().slice(0, 10);
+      return all.filter(g => (g as any).amId === repId && g.startDate <= nowStr && g.endDate >= nowStr);
+    },
+    staleTime: 60000,
+  });
 
   const weeklyReportKey = ["/api/report/rep", repId, "weekly"];
   const monthlyReportKey = ["/api/report/rep", repId, "monthly"];
@@ -1070,6 +1085,57 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
           </div>
         </div>
       )}
+
+      {/* Goals sync pill */}
+      {repGoals.length > 0 && (() => {
+        const onTrack = repGoals.filter(g => {
+          const cur = parseFloat(g.currentValue || "0");
+          const tgt = parseFloat(g.target || "1");
+          const pct = tgt > 0 ? Math.round((cur / tgt) * 100) : 0;
+          const start = new Date(g.startDate); const end = new Date(g.endDate); const now2 = new Date();
+          const totalDays = Math.max(1, (end.getTime() - start.getTime()) / 86400000);
+          const passed = Math.max(0, (now2.getTime() - start.getTime()) / 86400000);
+          const expected = Math.min(100, Math.round((passed / totalDays) * 100));
+          return pct >= expected - 10;
+        }).length;
+        return (
+          <div className="border-b">
+            <button
+              className="flex items-center gap-2 w-full px-6 py-2 hover:bg-muted/40 transition-colors text-left"
+              onClick={() => setShowGoals(v => !v)}
+              data-testid="btn-toggle-goals-panel"
+            >
+              <Target className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-xs font-medium text-muted-foreground flex-1">Current Month Goals</span>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${onTrack === repGoals.length ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" : onTrack >= repGoals.length / 2 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"}`}>
+                {onTrack}/{repGoals.length} on track
+              </span>
+              {showGoals ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
+            </button>
+            {showGoals && (
+              <div className="px-6 pb-3 space-y-2 bg-muted/20">
+                {repGoals.map(g => {
+                  const cur = parseFloat(g.currentValue || "0");
+                  const tgt = parseFloat(g.target || "1");
+                  const pct = Math.min(100, tgt > 0 ? Math.round((cur / tgt) * 100) : 0);
+                  const label = g.metric === "custom" ? (g.customLabel || "Custom") : g.metric.replace(/_/g, " ");
+                  return (
+                    <div key={g.id} className="space-y-0.5" data-testid={`goal-pill-${g.id}`}>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="capitalize text-foreground font-medium">{label}</span>
+                        <span className={`font-semibold ${pct >= 100 ? "text-green-600" : pct >= 75 ? "text-blue-600" : pct >= 40 ? "text-amber-600" : "text-red-600"}`}>{pct}%</span>
+                      </div>
+                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${pct >= 100 ? "bg-green-500" : pct >= 75 ? "bg-blue-500" : pct >= 40 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Tab switcher */}
       <div className="flex border-b px-6">

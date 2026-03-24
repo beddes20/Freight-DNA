@@ -12,8 +12,10 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, TrendingDown, BarChart3,
   Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart, ArrowUpDown,
-  Send, Loader2, XCircle, Star, Award, ChevronDown, ChevronUp, CalendarClock, ShieldAlert, Download
+  Send, Loader2, XCircle, Star, Award, ChevronDown, ChevronUp, CalendarClock, ShieldAlert, Download,
+  Target, LayoutGrid, List, StickyNote, Lightbulb,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -252,7 +254,7 @@ function TrendBadge({ current, prev }: { current: number; prev: number }) {
   );
 }
 
-function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominations, canNominate, onNominate, period }: {
+function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominations, canNominate, onNominate, period, goalAttainment }: {
   rep: RepPerf;
   totalLoads?: number;
   totalMargin?: number;
@@ -262,8 +264,19 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
   canNominate?: boolean;
   onNominate?: (rep: RepPerf) => void;
   period?: string;
+  goalAttainment?: { onTrack: number; total: number };
 }) {
   const [, navigate] = useLocation();
+  const [showNote, setShowNote] = useState(false);
+  const [noteText, setNoteText] = useState(() => {
+    try { return localStorage.getItem(`coaching-note-${rep.userId}`) || ""; } catch { return ""; }
+  });
+
+  function saveNote(val: string) {
+    setNoteText(val);
+    try { localStorage.setItem(`coaching-note-${rep.userId}`, val); } catch {}
+  }
+
   const initials = rep.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
   const colors = ["bg-blue-500", "bg-green-500", "bg-purple-500", "bg-amber-500", "bg-red-500", "bg-cyan-500", "bg-pink-500", "bg-indigo-500"];
   const color = colors[rep.name.charCodeAt(0) % colors.length];
@@ -277,6 +290,14 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
     ? (totalMargin / totalRevenue) * 100
     : null;
   const hasFinancials = totalLoads != null || marginDisplay != null;
+
+  // Coaching priority: lagging on 2+ metrics
+  const laggingMetrics: string[] = [];
+  if (rep.callTouchpoints < 5) laggingMetrics.push("calls");
+  if ((rep.meaningfulTouchpoints ?? 0) < 3) laggingMetrics.push("meaningful");
+  if (rep.overdueTasks >= 3) laggingMetrics.push("overdue tasks");
+  if (rep.newContacts === 0) laggingMetrics.push("new contacts");
+  const needsAttention = laggingMetrics.length >= 2;
 
   return (
     <Card
@@ -295,13 +316,34 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
               {rep.role.replace(/_/g, " ")}
             </Badge>
           </div>
-          {rep.overdueTasks > 0 && (
-            <div className="shrink-0 flex items-center gap-1 text-red-600 text-xs font-medium" data-testid={`badge-overdue-${rep.userId}`}>
-              <AlertTriangle className="h-3.5 w-3.5" />
-              {rep.overdueTasks} overdue
-            </div>
-          )}
+          <div className="shrink-0 flex flex-col items-end gap-1">
+            {rep.overdueTasks > 0 && (
+              <div className="flex items-center gap-1 text-red-600 text-xs font-medium" data-testid={`badge-overdue-${rep.userId}`}>
+                <AlertTriangle className="h-3.5 w-3.5" />
+                {rep.overdueTasks} overdue
+              </div>
+            )}
+            {needsAttention && (
+              <div className="flex items-center gap-1 text-amber-700 dark:text-amber-400 text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-700 rounded-full px-1.5 py-0.5" title={`Lagging: ${laggingMetrics.join(", ")}`} data-testid={`badge-coaching-${rep.userId}`}>
+                <Lightbulb className="h-2.5 w-2.5" /> Needs Coaching
+              </div>
+            )}
+          </div>
         </div>
+        {goalAttainment !== undefined && goalAttainment.total > 0 && (
+          <div className="flex items-center gap-1.5 mb-3 px-0.5" data-testid={`goal-attainment-${rep.userId}`}>
+            <Target className="h-3 w-3 text-muted-foreground shrink-0" />
+            <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full ${goalAttainment.onTrack === goalAttainment.total ? "bg-green-500" : goalAttainment.onTrack >= goalAttainment.total / 2 ? "bg-amber-500" : "bg-red-500"}`}
+                style={{ width: `${goalAttainment.total > 0 ? Math.round((goalAttainment.onTrack / goalAttainment.total) * 100) : 0}%` }}
+              />
+            </div>
+            <span className={`text-[10px] font-semibold ${goalAttainment.onTrack === goalAttainment.total ? "text-green-700 dark:text-green-400" : goalAttainment.onTrack >= goalAttainment.total / 2 ? "text-amber-700 dark:text-amber-400" : "text-red-700 dark:text-red-400"}`}>
+              {goalAttainment.onTrack}/{goalAttainment.total} goals on track
+            </span>
+          </div>
+        )}
 
         {hasFinancials && (
           <div className={`grid gap-1.5 mb-2 ${marginPct !== null ? "grid-cols-3" : "grid-cols-2"}`}>
@@ -386,6 +428,16 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
             <FileBarChart2 className="h-3 w-3 mr-1.5" />
             View Report
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`text-xs h-7 gap-1 ${noteText ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}
+            data-testid={`button-coaching-note-${rep.userId}`}
+            onClick={(e) => { e.stopPropagation(); setShowNote(v => !v); }}
+            title="Coaching note (saved locally)"
+          >
+            <StickyNote className="h-3 w-3" />
+          </Button>
           {canNominate && nextLevelRole(rep.role) && onNominate && (
             <Button
               variant="outline"
@@ -399,6 +451,18 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
             </Button>
           )}
         </div>
+
+        {showNote && (
+          <div className="mt-2" onClick={e => e.stopPropagation()}>
+            <Textarea
+              placeholder="Private coaching notes for this rep (saved locally on this device)…"
+              value={noteText}
+              onChange={e => saveNote(e.target.value)}
+              className="text-xs min-h-0 h-20 resize-none"
+              data-testid={`textarea-coaching-note-${rep.userId}`}
+            />
+          </div>
+        )}
 
         {criteria && nominations && (
           <PromotionReadinessCard
@@ -519,6 +583,31 @@ export default function TeamPerformancePage() {
     queryKey: ["/api/promotion/nominations"],
     enabled: canNominateRole,
   });
+
+  const [viewMode, setViewMode] = useState<"grid" | "leaderboard">("grid");
+
+  type GoalShape = { id: string; amId: string; metric: string; startDate: string; endDate: string; currentValue: string | null; target: string };
+  const { data: goals = [] } = useQuery<GoalShape[]>({
+    queryKey: ["/api/goals"],
+    staleTime: 60000,
+  });
+
+  // Per-rep goal attainment: count active goals on track
+  const goalAttainmentMap: Record<string, { onTrack: number; total: number }> = {};
+  const nowStr2 = new Date().toISOString().slice(0, 10);
+  for (const g of goals) {
+    if (g.startDate > nowStr2 || g.endDate < nowStr2) continue;
+    if (!goalAttainmentMap[g.amId]) goalAttainmentMap[g.amId] = { onTrack: 0, total: 0 };
+    goalAttainmentMap[g.amId].total++;
+    const cur = parseFloat(g.currentValue || "0");
+    const tgt = parseFloat(g.target || "1");
+    const pct = tgt > 0 ? Math.round((cur / tgt) * 100) : 0;
+    const start = new Date(g.startDate); const end = new Date(g.endDate); const now3 = new Date();
+    const totalDays2 = Math.max(1, (end.getTime() - start.getTime()) / 86400000);
+    const daysPassed2 = Math.max(0, (now3.getTime() - start.getTime()) / 86400000);
+    const expectedPct2 = Math.min(100, Math.round((daysPassed2 / totalDays2) * 100));
+    if (pct >= expectedPct2 - 10) goalAttainmentMap[g.amId].onTrack++;
+  }
 
   const bulkSendMutation = useMutation({
     mutationFn: async () => {
@@ -671,6 +760,24 @@ export default function TeamPerformancePage() {
         </div>
         <div className="flex flex-col items-start sm:items-end gap-2">
           <div className="flex items-center gap-2">
+            <div className="flex items-center rounded-lg border bg-muted/40 p-0.5 gap-0.5" data-testid="toggle-view-mode">
+              <button
+                onClick={() => setViewMode("grid")}
+                data-testid="button-view-grid"
+                className={`p-1.5 rounded-md transition-all ${viewMode === "grid" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                title="Card grid view"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setViewMode("leaderboard")}
+                data-testid="button-view-leaderboard"
+                className={`p-1.5 rounded-md transition-all ${viewMode === "leaderboard" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                title="Leaderboard view"
+              >
+                <List className="h-3.5 w-3.5" />
+              </button>
+            </div>
             <Button
               size="sm"
               variant="outline"
@@ -826,7 +933,79 @@ export default function TeamPerformancePage() {
             )}
           </div>
 
-          {nams.length > 0 && (
+          {viewMode === "leaderboard" && (() => {
+            const allSortedReps = sortReps([...ams, ...nams, ...logisticsManagers, ...logisticsCoords], sortBy);
+            const getFinancials = (r: RepPerf) => {
+              const isLm = r.role === "logistics_manager" || r.role === "logistics_coordinator";
+              return isLm ? lmLoadsMap[r.userId] : repLoadsMap[r.userId];
+            };
+            return (
+              <div className="rounded-lg border overflow-hidden" data-testid="leaderboard-view">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 border-b">
+                    <tr>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-muted-foreground w-6">#</th>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-muted-foreground">Rep</th>
+                      <th className="text-center px-2 py-2 text-xs font-semibold text-muted-foreground">Calls</th>
+                      <th className="text-center px-2 py-2 text-xs font-semibold text-muted-foreground">Meaningful</th>
+                      <th className="text-center px-2 py-2 text-xs font-semibold text-muted-foreground">Accounts</th>
+                      <th className="text-center px-2 py-2 text-xs font-semibold text-muted-foreground">Overdue</th>
+                      <th className="text-center px-2 py-2 text-xs font-semibold text-muted-foreground">Loads</th>
+                      <th className="text-center px-2 py-2 text-xs font-semibold text-muted-foreground">Goals</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {allSortedReps.map((rep, idx) => {
+                      const fin = getFinancials(rep);
+                      const ga = goalAttainmentMap[rep.userId];
+                      const isLagging = (() => {
+                        let lc = 0;
+                        if (rep.callTouchpoints < 5) lc++;
+                        if ((rep.meaningfulTouchpoints ?? 0) < 3) lc++;
+                        if (rep.overdueTasks >= 3) lc++;
+                        if (rep.newContacts === 0) lc++;
+                        return lc >= 2;
+                      })();
+                      return (
+                        <tr
+                          key={rep.userId}
+                          className="hover:bg-muted/30 cursor-pointer transition-colors"
+                          onClick={() => {
+                            const [, navigate2] = [null, (path: string) => window.location.href = path];
+                            window.location.href = `/reps/${rep.userId}${period ? `?period=${period}` : ""}`;
+                          }}
+                          data-testid={`leaderboard-row-${rep.userId}`}
+                        >
+                          <td className="px-3 py-2 text-xs text-muted-foreground font-mono">{idx + 1}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-sm">{rep.name}</span>
+                              {isLagging && <Lightbulb className="h-3 w-3 text-amber-500 shrink-0" title="Needs coaching attention" />}
+                            </div>
+                            <span className="text-[10px] text-muted-foreground capitalize">{rep.role.replace(/_/g, " ")}</span>
+                          </td>
+                          <td className="px-2 py-2 text-center text-sm font-semibold text-blue-600 dark:text-blue-400">{rep.callTouchpoints}</td>
+                          <td className="px-2 py-2 text-center text-sm font-semibold text-rose-600 dark:text-rose-400">{rep.meaningfulTouchpoints ?? 0}</td>
+                          <td className="px-2 py-2 text-center text-sm">{rep.companyCount}</td>
+                          <td className={`px-2 py-2 text-center text-sm font-semibold ${rep.overdueTasks > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{rep.overdueTasks}</td>
+                          <td className="px-2 py-2 text-center text-sm">{fin ? fin.loads.toLocaleString() : "—"}</td>
+                          <td className="px-2 py-2 text-center">
+                            {ga && ga.total > 0 ? (
+                              <span className={`text-xs font-semibold ${ga.onTrack === ga.total ? "text-green-600" : ga.onTrack >= ga.total / 2 ? "text-amber-600" : "text-red-600"}`}>
+                                {ga.onTrack}/{ga.total}
+                              </span>
+                            ) : <span className="text-muted-foreground text-xs">—</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
+          {viewMode === "grid" && nams.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-muted-foreground" />
@@ -845,13 +1024,14 @@ export default function TeamPerformancePage() {
                     canNominate={canNominate}
                     onNominate={setNominationTarget}
                     period={period}
+                    goalAttainment={goalAttainmentMap[rep.userId]}
                   />
                 ))}
               </div>
             </div>
           )}
 
-          {ams.length > 0 && (
+          {viewMode === "grid" && ams.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Users className="h-4 w-4 text-muted-foreground" />
@@ -870,13 +1050,14 @@ export default function TeamPerformancePage() {
                     canNominate={canNominate}
                     onNominate={setNominationTarget}
                     period={period}
+                    goalAttainment={goalAttainmentMap[rep.userId]}
                   />
                 ))}
               </div>
             </div>
           )}
 
-          {logisticsManagers.length > 0 && (
+          {viewMode === "grid" && logisticsManagers.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Truck className="h-4 w-4 text-muted-foreground" />
@@ -895,13 +1076,14 @@ export default function TeamPerformancePage() {
                     canNominate={canNominate}
                     onNominate={setNominationTarget}
                     period={period}
+                    goalAttainment={goalAttainmentMap[rep.userId]}
                   />
                 ))}
               </div>
             </div>
           )}
 
-          {logisticsCoords.length > 0 && (
+          {viewMode === "grid" && logisticsCoords.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Truck className="h-4 w-4 text-muted-foreground" />
@@ -920,13 +1102,14 @@ export default function TeamPerformancePage() {
                     canNominate={canNominate}
                     onNominate={setNominationTarget}
                     period={period}
+                    goalAttainment={goalAttainmentMap[rep.userId]}
                   />
                 ))}
               </div>
             </div>
           )}
 
-          {salesReps.length > 0 && (
+          {viewMode === "grid" && salesReps.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <DollarSign className="h-4 w-4 text-muted-foreground" />
