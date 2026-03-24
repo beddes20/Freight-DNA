@@ -4710,7 +4710,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         // Normalise the customer field once per row (not via the full rowMatchesCompany wrapper)
         const custNorm = normalize(String(row[custCol] || "").trim());
         if (!custNorm) continue;
-        const matched = (aliasNorm && nameMatches(aliasNorm, custNorm)) || nameMatches(crmNorm, custNorm);
+        const matched = aliasNorms.some((a: string) => nameMatches(a, custNorm)) || nameMatches(crmNorm, custNorm);
         if (!matched) continue;
         const { destCity, destState, origCity, origState, monthKey, margin } = parseHistoricalRow(row, compCols);
         const orderType = String(row[compCols.orderType] || "").toLowerCase();
@@ -6883,9 +6883,15 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           : 0;
         const hasRfp = rfpVolume > 0;
 
-        const aliasNorm = normalize((company as any).financialAlias || company.name);
-        const fin = byCustomer[aliasNorm] ||
-          Object.entries(byCustomer).find(([k]) => k.includes(aliasNorm) || aliasNorm.includes(k))?.[1];
+        const aliasNorms = (company as any).financialAlias
+          ? (company as any).financialAlias.split(',').map((a: string) => normalize(a.trim())).filter(Boolean)
+          : [normalize(company.name)];
+        let fin: FinSummary | undefined;
+        for (const aliasNorm of aliasNorms) {
+          fin = byCustomer[aliasNorm] ||
+            Object.entries(byCustomer).find(([k]) => k.includes(aliasNorm) || aliasNorm.includes(k))?.[1];
+          if (fin) break;
+        }
 
         const ytdLoads = fin?.totalLoads || 0;
         const ytdMargin = fin?.totalMargin || 0;
