@@ -3,13 +3,13 @@ import { useLocation } from "wouter";
 import {
   TrendingUp, Network, FileSearch, MousePointerClick, BarChart3,
   Target, Map, Users, CheckCircle, ClipboardList, CalendarCheck,
-  BookOpen, Zap, ChevronRight,
+  BookOpen, Zap, ChevronRight, TrendingUp as CareerIcon,
 } from "lucide-react";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
 import sidebarImg from "@assets/image_1774288850565.png";
 
 const stats = [
-  { value: "6", label: "Core Modules" },
+  { value: "10+", label: "Platform Modules" },
   { value: "360°", label: "Account Visibility" },
   { value: "Real-time", label: "Data & Alerts" },
   { value: "Built for", label: "Freight Brokers" },
@@ -29,7 +29,7 @@ const features = [
   {
     icon: MousePointerClick,
     title: "Touchpoint Tracking",
-    description: "Log calls, emails, site visits, and texts in seconds. Surface contacts going cold with automated \"Needs Attention\" alerts.",
+    description: "Log a touchpoint in seconds from anywhere in the platform with the global Log Touch button. Calls, emails, texts, and site visits tracked in one click — automated \"Needs Attention\" alerts surface contacts going cold before it costs you freight.",
   },
   {
     icon: BarChart3,
@@ -46,6 +46,11 @@ const features = [
     title: "Lane Analytics",
     description: "Identify top-volume corridors, spot market gaps, and build targeted proposals backed by historical freight data.",
   },
+  {
+    icon: CareerIcon,
+    title: "Career Progression",
+    description: "Track talent development from day one. Career conversations, progression milestones, and historical performance logs give managers a complete picture of every rep's growth trajectory — not just last quarter's numbers.",
+  },
 ];
 
 const modules = [
@@ -57,6 +62,8 @@ const modules = [
   { icon: BookOpen, name: "PTO Passoff", desc: "Structured handoff documents so accounts never slip during out-of-office periods." },
   { icon: FileSearch, name: "RFP & Awards", desc: "Full pipeline management for bids, awards, and lane-level analysis." },
   { icon: Map, name: "Lane Analytics", desc: "Heat maps and corridor analysis from financial and RFP upload data." },
+  { icon: CareerIcon, name: "Career Progression", desc: "Career conversations, progression tracking, and performance history for every rep on your team." },
+  { icon: BookOpen, name: "Playbook & Buckets", desc: "External resource links, sales playbooks, and account segmentation buckets for structured selling." },
 ];
 
 const howItWorks = [
@@ -344,11 +351,12 @@ export default function LandingPage() {
 
       {/* Why Freight DNA highlight strip */}
       <div style={{ background: "#0d0d0d", borderTop: "1px solid rgba(255,180,0,0.12)", borderBottom: "1px solid rgba(255,180,0,0.12)" }}>
-        <div className="max-w-5xl mx-auto py-16 px-6 md:px-12 grid grid-cols-1 md:grid-cols-3 gap-10">
+        <div className="max-w-6xl mx-auto py-16 px-6 md:px-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10">
           {[
             { check: "Built for freight", body: "Not a generic CRM. Every field, workflow, and report is designed around how transportation brokers actually sell." },
             { check: "Replaces the spreadsheet", body: "Org charts, lane data, RFP history, touchpoints, and goals — all in one place instead of scattered across Excel files and email threads." },
-            { check: "Coaches your team", body: "NAMs get a live view of every AM's activity. Coaches replace guesswork with facts on touchpoints, pipeline, and account health." },
+            { check: "Develops your people", body: "1:1 meeting links, career conversations, and historical report card logs give managers the full development picture. The period toggle on Team Performance turns coaching sessions from opinions into evidence." },
+            { check: "Enterprise-ready", body: "Multi-team and multi-org support means Freight DNA scales with you — from a single brokerage desk to a national enterprise with dozens of teams operating independently under one platform." },
           ].map((item, i) => (
             <div key={i} className="flex flex-col gap-3" data-testid={`card-why-${i}`}>
               <div className="flex items-center gap-2">
