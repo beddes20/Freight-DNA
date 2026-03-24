@@ -12,6 +12,7 @@ import { NotificationToasts } from "@/components/notification-toasts";
 import { CrmChatbot } from "@/components/crm-chatbot";
 import { Button } from "@/components/ui/button";
 import { Loader2, UserX } from "lucide-react";
+import React from "react";
 import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -37,6 +38,35 @@ import ToolsPage from "@/pages/tools";
 import RepReportPage from "@/pages/rep-report";
 import RepReportsRosterPage from "@/pages/rep-reports-roster";
 import NotificationsPage from "@/pages/notifications";
+
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-screen gap-4 text-center px-4">
+          <h1 className="text-2xl font-semibold">Something went wrong</h1>
+          <p className="text-muted-foreground">An unexpected error occurred. Please reload the page to continue.</p>
+          <Button onClick={() => window.location.reload()} data-testid="button-error-reload">
+            Reload page
+          </Button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function Router() {
   return (
@@ -164,12 +194,14 @@ function AuthenticatedApp() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <AuthenticatedApp />
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <AuthenticatedApp />
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

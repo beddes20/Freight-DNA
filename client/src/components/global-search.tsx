@@ -104,11 +104,11 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
   };
 
   const hasResults =
-    results.accounts.length > 0 ||
-    results.accountManagers.length > 0 ||
-    results.nationalAccountManagers.length > 0 ||
-    results.contacts.length > 0 ||
-    results.rfps.length > 0 ||
+    (results.accounts?.length ?? 0) > 0 ||
+    (results.accountManagers?.length ?? 0) > 0 ||
+    (results.nationalAccountManagers?.length ?? 0) > 0 ||
+    (results.contacts?.length ?? 0) > 0 ||
+    (results.rfps?.length ?? 0) > 0 ||
     (results.tasks?.length ?? 0) > 0;
   const showDropdown = open && query.trim().length > 0;
 
@@ -148,7 +148,7 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
             </div>
           )}
 
-          {!loading && results.accounts.length > 0 && (
+          {!loading && (results.accounts?.length ?? 0) > 0 && (
             <div>
               <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-accounts">
                 Accounts
@@ -167,7 +167,7 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
             </div>
           )}
 
-          {!loading && results.contacts.length > 0 && (
+          {!loading && (results.contacts?.length ?? 0) > 0 && (
             <div>
               <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-contacts">
                 Contacts
@@ -191,7 +191,7 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
             </div>
           )}
 
-          {!loading && results.rfps.length > 0 && (
+          {!loading && (results.rfps?.length ?? 0) > 0 && (
             <div>
               <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-rfps">
                 RFPs
@@ -237,7 +237,7 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
             </div>
           )}
 
-          {!loading && results.accountManagers.length > 0 && (
+          {!loading && (results.accountManagers?.length ?? 0) > 0 && (
             <div>
               <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-account-managers">
                 Account Managers
@@ -256,7 +256,7 @@ export function GlobalSearch({ navBar }: { navBar?: boolean }) {
             </div>
           )}
 
-          {!loading && results.nationalAccountManagers.length > 0 && (
+          {!loading && (results.nationalAccountManagers?.length ?? 0) > 0 && (
             <div>
               <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30" data-testid="search-group-national-account-managers">
                 Directors & NAMs
