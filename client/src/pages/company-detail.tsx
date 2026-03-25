@@ -320,8 +320,9 @@ export default function CompanyDetail() {
     setAvgMarginOverride("");
   }, [companyId]);
 
-  const { data: company, isLoading: companyLoading } = useQuery<Company>({
+  const { data: company, isLoading: companyLoading, isError: companyError, refetch: refetchCompany } = useQuery<Company>({
     queryKey: ["/api/companies", companyId],
+    refetchOnMount: "always",
   });
 
   const { data: contacts, isLoading: contactsLoading } = useQuery<Contact[]>({
@@ -1015,6 +1016,25 @@ export default function CompanyDetail() {
           <Skeleton className="h-24" />
         </div>
         <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
+  if (companyError) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 p-12">
+        <Building2 className="h-12 w-12 text-muted-foreground/50" />
+        <h2 className="text-lg font-medium">Could not load company</h2>
+        <p className="text-sm text-muted-foreground">There was a problem loading this account.</p>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => refetchCompany()} data-testid="button-retry-company">
+            Try again
+          </Button>
+          <Button variant="ghost" onClick={() => navigate("/customers")}>
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to Customers
+          </Button>
+        </div>
       </div>
     );
   }
