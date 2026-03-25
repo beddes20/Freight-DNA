@@ -92,6 +92,7 @@ import {
   MoreHorizontal,
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import { InfoTooltip } from "@/components/info-tooltip";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip,
   ResponsiveContainer, ComposedChart, Line, Legend,
@@ -1031,13 +1032,20 @@ export default function CompanyDetail() {
                         <Activity className="h-3 w-3" />
                         {healthScore.grade} · {healthScore.score}/100
                       </button>
+                      <InfoTooltip
+                        text="Relationship health is a 0–100 score built from 5 factors: how recently and frequently you've touched the account, how many contacts you have, whether there's an active RFP, and whether financial data matches. Click the badge to see the full breakdown."
+                        side="bottom"
+                      />
                       <span
                         className={`text-sm font-bold ${momentumColor}`}
-                        title={healthScore.momentumLabel}
                         data-testid="badge-momentum"
                       >
                         {momentumIcon}
                       </span>
+                      <InfoTooltip
+                        text={`Momentum compares your touch count from the last 30 days vs the prior 30 days. ${healthScore.momentumLabel || ""} ↑ = engaging more, ↓ = dropping off, → = steady.`}
+                        side="bottom"
+                      />
                     </div>
                   );
                 })()}
@@ -1934,8 +1942,16 @@ export default function CompanyDetail() {
                 <div className="flex h-7 w-7 items-center justify-center rounded-md bg-green-100 dark:bg-green-900/40">
                   <DollarSign className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
                 </div>
-                <div>
-                  <p className="text-sm font-semibold">Wallet Share Calculator</p>
+                <div className="flex-1">
+                  <div className="flex items-center gap-1">
+                    <p className="text-sm font-semibold">Wallet Share Calculator</p>
+                    <InfoTooltip
+                      text={hasRfp
+                        ? "Uses the total load volume from their RFPs and your current financial data to estimate how much more margin you'd earn by capturing additional percentage points of their freight."
+                        : "Uses the estimated freight spend entered on this account to project how much more margin you could earn by winning a larger share of their business. Slide to see different scenarios."}
+                      side="top"
+                    />
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     {hasRfp ? `Based on ${rfpTotalVolume.toLocaleString()} loads across ${companyRfps.length} RFP${companyRfps.length !== 1 ? "s" : ""}` : `Based on $${estimatedSpend!.toLocaleString()} estimated freight spend`}
                   </p>
@@ -2547,6 +2563,7 @@ export default function CompanyDetail() {
                               <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/50 dark:border-blue-800/30 text-xs">
                                 <ArrowRightLeft className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
                                 <span><span className="font-medium text-blue-700 dark:text-blue-300">{multiRfpCount} corridor{multiRfpCount !== 1 ? "s" : ""}</span> appear in 2+ RFPs — highest priority for outreach.</span>
+                                <InfoTooltip text="When a lane shows up in multiple RFPs, it means they consistently need coverage there. These are your strongest conversion opportunities." side="right" />
                               </div>
                             )}
                             {(() => {
@@ -2562,22 +2579,29 @@ export default function CompanyDetail() {
                                 <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-green-50/70 dark:bg-green-950/20 border border-green-200/60 dark:border-green-800/40 text-xs">
                                   <span className="font-medium text-green-700 dark:text-green-400">✓ We ship {weShipCount} of {filteredCorridors.length} corridor{filteredCorridors.length !== 1 ? "s" : ""}</span>
                                   <span className="text-muted-foreground">— {filteredCorridors.length - weShipCount} still to win</span>
+                                  <InfoTooltip text="Corridors you're already covering through an awarded or partially-awarded RFP. The remaining ones are active opportunities." side="right" />
                                 </div>
                               )}
                               {topUnawarded.length > 0 && (
                                 <div className="rounded-md px-3 py-2 bg-amber-50/60 dark:bg-amber-950/15 border border-amber-200/50 dark:border-amber-800/30 text-xs space-y-2">
                                   <div className="flex items-center justify-between gap-2">
-                                    <p className="font-medium text-amber-700 dark:text-amber-400">Top unawarded lanes — high priority to win:</p>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-6 px-2 text-[11px] border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-400 shrink-0"
-                                      disabled={laneGapInsightsMutation.isPending}
-                                      onClick={() => laneGapInsightsMutation.mutate(topUnawarded.map(c => ({ lane: c.lane, totalVolume: c.totalVolume, originState: c.originState, destinationState: c.destinationState })))}
-                                      data-testid="button-generate-lane-insights"
-                                    >
-                                      {laneGapInsightsMutation.isPending ? "Generating…" : "✦ AI Talking Points"}
-                                    </Button>
+                                    <div className="flex items-center gap-1">
+                                      <p className="font-medium text-amber-700 dark:text-amber-400">Top unawarded lanes — high priority to win:</p>
+                                      <InfoTooltip text="These are the highest-volume lanes in their RFPs that you don't have an award on yet. The loads/yr figure comes from the RFP data they uploaded." side="top" />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-6 px-2 text-[11px] border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-400 shrink-0"
+                                        disabled={laneGapInsightsMutation.isPending}
+                                        onClick={() => laneGapInsightsMutation.mutate(topUnawarded.map(c => ({ lane: c.lane, totalVolume: c.totalVolume, originState: c.originState, destinationState: c.destinationState })))}
+                                        data-testid="button-generate-lane-insights"
+                                      >
+                                        {laneGapInsightsMutation.isPending ? "Generating…" : "✦ AI Talking Points"}
+                                      </Button>
+                                      <InfoTooltip text="Click to generate a specific, ready-to-use sales talking point for each unawarded lane — written by AI based on the lane volume and route." side="top" />
+                                    </div>
                                   </div>
                                   <div className="space-y-2">
                                     {topUnawarded.map((c, i) => (
@@ -2616,8 +2640,18 @@ export default function CompanyDetail() {
                                         <span>{c.totalVolume.toLocaleString()} loads/yr</span>
                                         {c.originState && c.destinationState && <span className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded">{c.originState} → {c.destinationState}</span>}
                                         {c.count > 1 && <span className="text-blue-600 dark:text-blue-400 font-medium">×{c.count}</span>}
-                                        {awardedRfpMatch && <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 text-[10px] px-1.5 py-0">✓ We Ship This</Badge>}
-                                        {c.appearsInMultipleRfps && !awardedRfpMatch && <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 text-[10px] px-1.5 py-0">Multi-RFP</Badge>}
+                                        {awardedRfpMatch && (
+                                          <span className="inline-flex items-center gap-0.5">
+                                            <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 text-[10px] px-1.5 py-0">✓ We Ship This</Badge>
+                                            <InfoTooltip text="You have an awarded or partially-awarded RFP that covers this shipping lane." side="top" />
+                                          </span>
+                                        )}
+                                        {c.appearsInMultipleRfps && !awardedRfpMatch && (
+                                          <span className="inline-flex items-center gap-0.5">
+                                            <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 text-[10px] px-1.5 py-0">Multi-RFP</Badge>
+                                            <InfoTooltip text="This lane appears in 2 or more of their RFPs — strongest indicator they need reliable capacity here. High priority to pursue." side="top" />
+                                          </span>
+                                        )}
                                       </div>
                                     </div>
                                   </div>

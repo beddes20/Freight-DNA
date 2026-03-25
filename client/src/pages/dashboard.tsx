@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import { InfoTooltip } from "@/components/info-tooltip";
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
@@ -2106,6 +2107,7 @@ export default function Dashboard() {
             <CardTitle className="flex items-center gap-2 text-base">
               <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
               Top Wallet Share Opportunities
+              <InfoTooltip text="Your accounts ranked by how much untapped margin potential they have. Calculated from their estimated freight spend or RFP volume vs what you're currently capturing." side="top" />
               <Badge variant="secondary" className="ml-auto font-normal">YTD</Badge>
             </CardTitle>
           </CardHeader>
@@ -2141,6 +2143,7 @@ export default function Dashboard() {
             <CardTitle className="flex items-center gap-2 text-base text-orange-700 dark:text-orange-400">
               <TrendingDown className="h-4 w-4" />
               Volume Drop Alert
+              <InfoTooltip text="Accounts where total load volume dropped 20% or more compared to last month (minimum 5 prior loads to qualify). Could signal competitor activity, operational changes, or reduced shipping needs — worth a quick call." side="top" />
               <Badge className="ml-auto bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300 font-normal border-orange-300">
                 {churnRisk.length} account{churnRisk.length !== 1 ? "s" : ""}
               </Badge>
@@ -2923,6 +2926,7 @@ export default function Dashboard() {
             <CardTitle className="text-base flex items-center gap-2">
               <PhoneCall className="h-4 w-4 text-amber-500" />
               Weekly Activity — This Week
+              <InfoTooltip text="Total touchpoints logged by each rep from Monday through today — calls, emails, texts, and site visits. Meaningful conversations are counted separately." side="top" />
               {weeklyData?.weekStart && (
                 <span className="ml-auto text-xs font-normal text-muted-foreground">
                   Week of {new Date(weeklyData.weekStart + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}
