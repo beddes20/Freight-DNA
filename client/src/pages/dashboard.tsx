@@ -283,7 +283,7 @@ export default function Dashboard() {
   const isAdmin = currentUser?.role === "admin";
   const directorFilterParam = isAdmin && selectedDirectorId ? `?directorId=${encodeURIComponent(selectedDirectorId)}` : "";
 
-  type TrendingAccount = { name: string; delta: number };
+  type TrendingAccount = { name: string; delta: number; isNew?: boolean };
   type TrendingResponse = { up: TrendingAccount[]; down: TrendingAccount[]; monthFraction?: number; isPartialMonth?: boolean; curMonthLabel?: string };
   const { data: trendingAccounts, isLoading: trendingLoading } = useQuery<TrendingResponse>({
     queryKey: ["/api/dashboard/trending-accounts", selectedDirectorId],
@@ -1140,6 +1140,7 @@ export default function Dashboard() {
                         <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-up-${idx}`}>
                           <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                           <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                          {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
                           <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
                             <ArrowUpRight className="h-3.5 w-3.5" />
                             ${Math.round(acct.delta).toLocaleString()} ahead
@@ -1184,6 +1185,7 @@ export default function Dashboard() {
                         <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-down-${idx}`}>
                           <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                           <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                          {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
                           <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
                             <ArrowDownRight className="h-3.5 w-3.5" />
                             ${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
@@ -1401,6 +1403,7 @@ export default function Dashboard() {
                     <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-up-${idx}`}>
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                      {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
                       <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
                         <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
                       </span>
@@ -1432,6 +1435,7 @@ export default function Dashboard() {
                     <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-down-${idx}`}>
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                      {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
                       <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
                         <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
                       </span>
@@ -1625,6 +1629,7 @@ export default function Dashboard() {
                     <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-up-${idx}`}>
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                      {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
                       <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
                         <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
                       </span>
@@ -1656,6 +1661,7 @@ export default function Dashboard() {
                     <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-down-${idx}`}>
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                      {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
                       <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
                         <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
                       </span>

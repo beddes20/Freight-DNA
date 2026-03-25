@@ -7969,6 +7969,9 @@ Respond with valid JSON only:
 
       // Compute margin by company alias, grouped by month
       const byCustomerMonth: Record<string, Record<string, number>> = {};
+      // Fallback display name for aliases not matched to a CRM company
+      // Strips the "ALIAS - " prefix to show a friendlier name
+      const aliasFallbackName: Record<string, string> = {};
       const allMonthKeys = new Set<string>();
       for (const row of rows) {
         if (isExcludedRow(row, cols)) continue;
@@ -7980,6 +7983,11 @@ Respond with valid JSON only:
         const key = normAlias(cust);
         if (!byCustomerMonth[key]) byCustomerMonth[key] = {};
         byCustomerMonth[key][monthKey] = (byCustomerMonth[key][monthKey] || 0) + margin;
+        // Store friendly display name: strip leading "CODE - " prefix if present
+        if (!aliasFallbackName[key]) {
+          const dashIdx = cust.indexOf(' - ');
+          aliasFallbackName[key] = dashIdx !== -1 ? cust.slice(dashIdx + 3).trim() : cust;
+        }
       }
 
       // Determine current month and the 3 prior months from the data, not calendar month
@@ -8004,16 +8012,17 @@ Respond with valid JSON only:
       const curMonthLabel = new Date(cmYr, cmMo - 1, 1).toLocaleString("en-US", { month: "long" });
 
       // Build delta list using prorated pace comparison vs 3-month average
-      const deltas: { alias: string; delta: number; curMargin: number; priorMargin: number }[] = [];
+      // New customers (no prior month data) are included with avgPrior = 0 and flagged isNew = true
+      const deltas: { alias: string; delta: number; curMargin: number; priorMargin: number; isNew: boolean }[] = [];
       for (const [alias, monthMap] of Object.entries(byCustomerMonth)) {
         const cur = monthMap[curMonthKey] ?? null;
         if (cur === null) continue;
         // Average margin across up to 3 prior months (only months where account has data)
         const priorValues = priorMonthKeys.map(m => monthMap[m]).filter((v): v is number => v !== undefined);
-        if (priorValues.length === 0) continue;
-        const avgPrior = priorValues.reduce((a, b) => a + b, 0) / priorValues.length;
+        const isNew = priorValues.length === 0;
+        const avgPrior = isNew ? 0 : priorValues.reduce((a, b) => a + b, 0) / priorValues.length;
         const paceExpected = avgPrior * monthFraction;
-        deltas.push({ alias, delta: cur - paceExpected, curMargin: cur, priorMargin: avgPrior });
+        deltas.push({ alias, delta: cur - paceExpected, curMargin: cur, priorMargin: avgPrior, isNew });
       }
 
       // Match to company names — optionally scoped
@@ -8047,7 +8056,8 @@ Respond with valid JSON only:
             : [normAlias(c.name)];
           return cns.some((cn: string) => cn === norm || cn.includes(norm) || norm.includes(cn));
         });
-        return match?.name || alias;
+        // Fall back to the friendly display name (alias prefix stripped) if not in CRM
+        return match?.name || aliasFallbackName[norm] || alias;
       };
 
       // Filter deltas by scope if applicable
@@ -8066,10 +8076,12 @@ Respond with valid JSON only:
       const up = filteredDeltas.filter(d => d.delta > 0).map(d => ({
         name: resolveCompanyName(d.alias),
         delta: d.delta,
+        isNew: d.isNew,
       }));
       const down = [...filteredDeltas].sort((a, b) => a.delta - b.delta).filter(d => d.delta < 0).map(d => ({
         name: resolveCompanyName(d.alias),
         delta: d.delta,
+        isNew: d.isNew,
       }));
 
       res.json({ up, down, monthFraction, isPartialMonth, curMonthLabel });
