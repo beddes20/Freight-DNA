@@ -139,7 +139,7 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
               <div>
                 <p className="text-sm font-medium text-foreground">Search unavailable</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {(error as any)?.error || "ZoomInfo API returned an error. Your app may still be pending approval from ZoomInfo."}
+                  {(error as any)?.error || "ZoomInfo API returned an error. Please try again later."}
                 </p>
               </div>
             </div>

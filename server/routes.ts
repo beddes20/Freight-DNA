@@ -8934,13 +8934,11 @@ Respond with valid JSON only:
     if (!companyName?.trim()) return res.status(400).json({ error: "companyName is required" });
 
     const ziConfigured = !!(
-      process.env.ZOOMINFO_USERNAME &&
-      process.env.ZOOMINFO_PASSWORD &&
       process.env.ZOOMINFO_CLIENT_ID &&
       process.env.ZOOMINFO_CLIENT_SECRET
     );
     if (!ziConfigured) {
-      return res.status(503).json({ error: "ZoomInfo integration not fully configured. ZOOMINFO_USERNAME and ZOOMINFO_PASSWORD are required in addition to the client credentials." });
+      return res.status(503).json({ error: "ZoomInfo integration not configured. ZOOMINFO_CLIENT_ID and ZOOMINFO_CLIENT_SECRET are required." });
     }
 
     try {
@@ -8957,14 +8955,10 @@ Respond with valid JSON only:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
     const configured = !!(
-      process.env.ZOOMINFO_USERNAME &&
-      process.env.ZOOMINFO_PASSWORD &&
       process.env.ZOOMINFO_CLIENT_ID &&
       process.env.ZOOMINFO_CLIENT_SECRET
     );
     const missing = [];
-    if (!process.env.ZOOMINFO_USERNAME) missing.push("ZOOMINFO_USERNAME");
-    if (!process.env.ZOOMINFO_PASSWORD) missing.push("ZOOMINFO_PASSWORD");
     if (!process.env.ZOOMINFO_CLIENT_ID) missing.push("ZOOMINFO_CLIENT_ID");
     if (!process.env.ZOOMINFO_CLIENT_SECRET) missing.push("ZOOMINFO_CLIENT_SECRET");
     res.json({ configured, missing });
