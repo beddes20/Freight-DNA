@@ -7996,13 +7996,28 @@ Respond with valid JSON only:
         return toMonthKey(priorDate);
       })();
 
-      // Build delta list
+      // Compute pace fraction: how far through the current month are we?
+      const today = new Date();
+      const calendarCurKey = toMonthKey(today);
+      let monthFraction = 1.0;
+      let isPartialMonth = false;
+      if (curMonthKey === calendarCurKey) {
+        const [yr, mo] = curMonthKey.split("-").map(Number);
+        const daysInMonth = new Date(yr, mo, 0).getDate();
+        monthFraction = Math.min(today.getDate() / daysInMonth, 1);
+        isPartialMonth = true;
+      }
+      const [cmYr, cmMo] = curMonthKey.split("-").map(Number);
+      const curMonthLabel = new Date(cmYr, cmMo - 1, 1).toLocaleString("en-US", { month: "long" });
+
+      // Build delta list using prorated pace comparison
       const deltas: { alias: string; delta: number; curMargin: number; priorMargin: number }[] = [];
       for (const [alias, monthMap] of Object.entries(byCustomerMonth)) {
         const cur = monthMap[curMonthKey] ?? null;
         const prior = monthMap[priorMonthKey] ?? null;
         if (cur === null || prior === null) continue;
-        deltas.push({ alias, delta: cur - prior, curMargin: cur, priorMargin: prior });
+        const paceExpected = prior * monthFraction;
+        deltas.push({ alias, delta: cur - paceExpected, curMargin: cur, priorMargin: prior });
       }
 
       // Match to company names — optionally scoped
@@ -8061,7 +8076,7 @@ Respond with valid JSON only:
         delta: d.delta,
       }));
 
-      res.json({ up, down });
+      res.json({ up, down, monthFraction, isPartialMonth, curMonthLabel });
     } catch (err) {
       console.error("Error computing trending accounts:", err);
       res.status(500).json({ error: "Failed to compute trending accounts" });

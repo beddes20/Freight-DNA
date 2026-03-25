@@ -284,7 +284,8 @@ export default function Dashboard() {
   const directorFilterParam = isAdmin && selectedDirectorId ? `?directorId=${encodeURIComponent(selectedDirectorId)}` : "";
 
   type TrendingAccount = { name: string; delta: number };
-  const { data: trendingAccounts, isLoading: trendingLoading } = useQuery<{ up: TrendingAccount[]; down: TrendingAccount[] }>({
+  type TrendingResponse = { up: TrendingAccount[]; down: TrendingAccount[]; monthFraction?: number; isPartialMonth?: boolean; curMonthLabel?: string };
+  const { data: trendingAccounts, isLoading: trendingLoading } = useQuery<TrendingResponse>({
     queryKey: ["/api/dashboard/trending-accounts", selectedDirectorId],
     queryFn: () => fetch(`/api/dashboard/trending-accounts${directorFilterParam}`).then(r => r.json()),
     enabled: isDirector,
@@ -292,13 +293,13 @@ export default function Dashboard() {
   });
 
   // NAM and AM each get their own scoped trending accounts query
-  const { data: namTrendingAccounts, isLoading: namTrendingLoading } = useQuery<{ up: TrendingAccount[]; down: TrendingAccount[] }>({
+  const { data: namTrendingAccounts, isLoading: namTrendingLoading } = useQuery<TrendingResponse>({
     queryKey: ["/api/dashboard/trending-accounts"],
     enabled: isNam,
     refetchOnWindowFocus: false,
   });
 
-  const { data: amTrendingAccounts, isLoading: amTrendingLoading } = useQuery<{ up: TrendingAccount[]; down: TrendingAccount[] }>({
+  const { data: amTrendingAccounts, isLoading: amTrendingLoading } = useQuery<TrendingResponse>({
     queryKey: ["/api/dashboard/trending-accounts"],
     enabled: isAm,
     refetchOnWindowFocus: false,
@@ -1122,7 +1123,9 @@ export default function Dashboard() {
                       Trending Accounts Up
                     </CardTitle>
                   </button>
-                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {trendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. prior month"}
+                  </span>
                 </div>
               </CardHeader>
               {!trendingUpCollapsed && (
@@ -1139,7 +1142,7 @@ export default function Dashboard() {
                           <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                           <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
                             <ArrowUpRight className="h-3.5 w-3.5" />
-                            ${Math.round(acct.delta).toLocaleString()}
+                            ${Math.round(acct.delta).toLocaleString()} ahead
                           </span>
                         </div>
                       ))}
@@ -1164,7 +1167,9 @@ export default function Dashboard() {
                       Trending Accounts Down
                     </CardTitle>
                   </button>
-                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {trendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. prior month"}
+                  </span>
                 </div>
               </CardHeader>
               {!trendingDownCollapsed && (
@@ -1181,7 +1186,7 @@ export default function Dashboard() {
                           <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                           <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
                             <ArrowDownRight className="h-3.5 w-3.5" />
-                            ${Math.round(Math.abs(acct.delta)).toLocaleString()}
+                            ${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
                           </span>
                         </div>
                       ))}
@@ -1383,7 +1388,9 @@ export default function Dashboard() {
                       Trending Accounts Up
                     </CardTitle>
                   </button>
-                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {namTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. prior month"}
+                  </span>
                 </div>
               </CardHeader>
               {!namTrendingUpCollapsed && (
@@ -1395,7 +1402,7 @@ export default function Dashboard() {
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                       <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
-                        <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()}
+                        <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
                       </span>
                     </div>
                   ))}</div>}
@@ -1412,7 +1419,9 @@ export default function Dashboard() {
                       Trending Accounts Down
                     </CardTitle>
                   </button>
-                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {namTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. prior month"}
+                  </span>
                 </div>
               </CardHeader>
               {!namTrendingDownCollapsed && (
@@ -1424,7 +1433,7 @@ export default function Dashboard() {
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                       <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
-                        <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()}
+                        <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
                       </span>
                     </div>
                   ))}</div>}
@@ -1603,7 +1612,9 @@ export default function Dashboard() {
                       My Trending Accounts Up
                     </CardTitle>
                   </button>
-                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {amTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. prior month"}
+                  </span>
                 </div>
               </CardHeader>
               {!amTrendingUpCollapsed && (
@@ -1615,7 +1626,7 @@ export default function Dashboard() {
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                       <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
-                        <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()}
+                        <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
                       </span>
                     </div>
                   ))}</div>}
@@ -1632,7 +1643,9 @@ export default function Dashboard() {
                       My Trending Accounts Down
                     </CardTitle>
                   </button>
-                  <span className="text-xs font-normal text-muted-foreground">vs. prior month</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {amTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. prior month"}
+                  </span>
                 </div>
               </CardHeader>
               {!amTrendingDownCollapsed && (
@@ -1644,7 +1657,7 @@ export default function Dashboard() {
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                       <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
-                        <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()}
+                        <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
                       </span>
                     </div>
                   ))}</div>}
