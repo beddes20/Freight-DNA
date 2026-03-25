@@ -6086,8 +6086,13 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       let goalsList;
       if (user.role === "admin") {
         goalsList = await storage.getGoals({});
-      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
+      } else if (user.role === "director" || user.role === "sales" || user.role === "sales_director") {
         goalsList = await storage.getGoals({ namId: user.id });
+      } else if (user.role === "national_account_manager") {
+        const setGoals = await storage.getGoals({ namId: user.id });
+        const assignedGoals = await storage.getGoals({ amId: user.id });
+        const seen = new Set<string>();
+        goalsList = [...setGoals, ...assignedGoals].filter(g => { if (seen.has(g.id)) return false; seen.add(g.id); return true; });
       } else if (user.role === "account_manager") {
         // AMs see their own goals AND any goals they've set for LM reports
         const ownGoals = await storage.getGoals({ amId: user.id });
