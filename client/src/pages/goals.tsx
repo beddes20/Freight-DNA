@@ -76,7 +76,8 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
   const [commentBody, setCommentBody] = useState("");
   const [updatingValue, setUpdatingValue] = useState(false);
   const [newValue, setNewValue] = useState("");
-  const [confettiFired, setConfettiFired] = useState(false);
+  const storageKey = `confetti-fired-goal-${goal.id}`;
+  const [confettiFired, setConfettiFired] = useState(() => localStorage.getItem(storageKey) === "1");
   const { fire: fireConfetti, ConfettiOverlay } = useConfetti();
 
   const metric = getMetric(goal.metric);
@@ -155,8 +156,9 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
     if (displayPct >= 100 && !confettiFired) {
       fireConfetti();
       setConfettiFired(true);
+      localStorage.setItem(storageKey, "1");
     }
-  }, [displayPct, confettiFired, fireConfetti]);
+  }, [displayPct, confettiFired, fireConfetti, storageKey]);
 
   const isAmView = userRole === "account_manager";
   const ringR = 32;
