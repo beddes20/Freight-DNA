@@ -1903,7 +1903,16 @@ export default function CompanyDetail() {
       {(() => {
         const ytd = accountPerf?.ytd;
         const hasFinancial = ytd && ytd.totalLoads > 0;
-        const avgMarginPerLoad = hasFinancial ? ytd.totalMargin / ytd.totalLoads : null;
+        // Default avg margin/load to current month first, then last month, then YTD
+        const thisMonthBucket = accountPerf?.thisMonth;
+        const lastMonthBucket = accountPerf?.lastMonth;
+        const avgMarginPerLoad = hasFinancial
+          ? (thisMonthBucket && thisMonthBucket.totalLoads > 0
+              ? thisMonthBucket.totalMargin / thisMonthBucket.totalLoads
+              : lastMonthBucket && lastMonthBucket.totalLoads > 0
+                ? lastMonthBucket.totalMargin / lastMonthBucket.totalLoads
+                : ytd.totalMargin / ytd.totalLoads)
+          : null;
         const avgRevenuePerLoad = hasFinancial && (ytd.totalRevenue ?? 0) > 0 ? (ytd.totalRevenue ?? 0) / ytd.totalLoads : null;
 
         // Total available market from RFPs
@@ -1998,7 +2007,18 @@ export default function CompanyDetail() {
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-muted-foreground">Avg margin/load</p>
+                  <p className="text-xs text-muted-foreground">
+                    Avg margin/load
+                    {avgMarginOverride === "" && (
+                      <span className="text-muted-foreground/60 ml-1">
+                        ({thisMonthBucket && thisMonthBucket.totalLoads > 0
+                          ? accountPerf?.thisMonthKey
+                          : lastMonthBucket && lastMonthBucket.totalLoads > 0
+                            ? accountPerf?.lastMonthKey
+                            : "YTD"})
+                      </span>
+                    )}
+                  </p>
                   <div className="flex items-center justify-end gap-0.5">
                     <span className="text-sm font-semibold">$</span>
                     <input
