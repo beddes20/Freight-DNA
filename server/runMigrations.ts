@@ -383,6 +383,17 @@ export async function runMigrations() {
     client3.release();
   }
 
+  // shared_reps JSONB column on companies
+  const clientSharedReps = await pool.connect();
+  try {
+    await clientSharedReps.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS shared_reps jsonb DEFAULT '[]'`);
+    console.log("[migrations] shared_reps column ensured");
+  } catch (err) {
+    console.error("[migrations] shared_reps migration error:", err);
+  } finally {
+    clientSharedReps.release();
+  }
+
   // demo_requests table (Task #53) — runs independently so earlier failures don't block it
   const client2 = await pool.connect();
   try {

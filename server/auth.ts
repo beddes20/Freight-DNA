@@ -5,7 +5,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { sendEmail, buildPasswordResetEmail } from "./emailService";
-import type { User } from "@shared/schema";
+import type { User, Company, SharedRep } from "@shared/schema";
 
 const PgStore = connectPgSimple(session);
 
@@ -243,18 +243,23 @@ export async function getVisibleCompanyIds(user: User): Promise<string[] | null>
 
   const allCompanies = await storage.getCompanies(user.organizationId);
 
+  const isSharedRep = (c: Company) => {
+    const reps = (c.sharedReps || []) as SharedRep[];
+    return reps.some(r => r.userId === user.id);
+  };
+
   // Directors and NAMs: see their whole team's accounts (assignedTo)
   if (user.role === "director" || user.role === "national_account_manager") {
     const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
     return allCompanies
-      .filter(c => c.assignedTo && (teamIds.includes(c.assignedTo) || c.assignedTo === user.id))
+      .filter(c => (c.assignedTo && (teamIds.includes(c.assignedTo) || c.assignedTo === user.id)) || isSharedRep(c))
       .map(c => c.id);
   }
 
   // Sales reps: see accounts where they are the linked salesperson
   if (user.role === "sales") {
     return allCompanies
-      .filter(c => (c as any).salesPersonId === user.id)
+      .filter(c => (c as any).salesPersonId === user.id || isSharedRep(c))
       .map(c => c.id);
   }
 
@@ -263,7 +268,7 @@ export async function getVisibleCompanyIds(user: User): Promise<string[] | null>
     const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
     const allIds = new Set([user.id, ...teamIds]);
     return allCompanies
-      .filter(c => (c as any).salesPersonId && allIds.has((c as any).salesPersonId))
+      .filter(c => ((c as any).salesPersonId && allIds.has((c as any).salesPersonId)) || isSharedRep(c))
       .map(c => c.id);
   }
 
@@ -276,9 +281,9 @@ export async function getVisibleCompanyIds(user: User): Promise<string[] | null>
     return getVisibleCompanyIds(manager);
   }
 
-  // Account managers and other roles: see only accounts assigned to them
+  // Account managers and other roles: see accounts assigned to them or where they are a shared rep
   return allCompanies
-    .filter(c => c.assignedTo === user.id)
+    .filter(c => c.assignedTo === user.id || isSharedRep(c))
     .map(c => c.id);
 }
 

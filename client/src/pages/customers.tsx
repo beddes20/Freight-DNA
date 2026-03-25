@@ -35,7 +35,7 @@ import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { fmtMoney } from "@/lib/rep-utils";
-import type { Company, Contact, User } from "@shared/schema";
+import type { Company, Contact, User, SharedRep } from "@shared/schema";
 
 type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number };
 type AccountSummaryRow = {
@@ -334,8 +334,9 @@ export default function Customers() {
         const q = searchQuery.toLowerCase();
         if (!company.name.toLowerCase().includes(q) && !company.industry?.toLowerCase().includes(q)) return false;
       }
-      if (isAdminOrDirector && repFilter === "all" && company.assignedTo && !namAmIds.has(company.assignedTo)) return false;
-      if (repFilter !== "all" && company.assignedTo !== repFilter) return false;
+      const sharedRepIds = ((company.sharedReps || []) as SharedRep[]).map(r => r.userId);
+      if (isAdminOrDirector && repFilter === "all" && company.assignedTo && !namAmIds.has(company.assignedTo) && !sharedRepIds.some(id => namAmIds.has(id))) return false;
+      if (repFilter !== "all" && company.assignedTo !== repFilter && !sharedRepIds.includes(repFilter)) return false;
       if (industryFilter !== "all" && company.industry !== industryFilter) return false;
       if (touchFilter !== "all") {
         const tps = tpSummary[company.id] || { week: 0, month: 0 };

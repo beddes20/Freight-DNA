@@ -9,7 +9,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
@@ -966,6 +966,71 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching company:", error);
       res.status(500).json({ error: "Failed to fetch company" });
+    }
+  });
+
+  app.get("/api/companies/:id/shared-reps", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      if (!(await canAccessCompany(currentUser, company.id))) return res.status(403).json({ error: "Access denied" });
+      const reps = (company.sharedReps || []) as SharedRep[];
+      const allUsers = await storage.getUsers(currentUser.organizationId);
+      const result = reps.map(r => {
+        const u = allUsers.find(u => u.id === r.userId);
+        return { userId: r.userId, territoryNote: r.territoryNote || "", name: u?.name || "Unknown" };
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch shared reps" });
+    }
+  });
+
+  app.post("/api/companies/:id/shared-reps", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Only admins and NAMs can manage shared reps" });
+      }
+      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const parsed = sharedRepSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+      const { userId, territoryNote } = parsed.data;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser || targetUser.organizationId !== currentUser.organizationId) {
+        return res.status(400).json({ error: "User not found in organization" });
+      }
+      const existing = (company.sharedReps || []) as SharedRep[];
+      if (existing.some(r => r.userId === userId)) {
+        return res.status(400).json({ error: "User is already a shared rep on this account" });
+      }
+      const updated = [...existing, { userId, territoryNote: territoryNote || "" }];
+      await storage.updateCompany(company.id, currentUser.organizationId, { sharedReps: updated });
+      res.json({ userId, territoryNote: territoryNote || "", name: targetUser.name });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to add shared rep" });
+    }
+  });
+
+  app.delete("/api/companies/:id/shared-reps/:userId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Only admins and NAMs can manage shared reps" });
+      }
+      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const existing = (company.sharedReps || []) as SharedRep[];
+      const updated = existing.filter(r => r.userId !== req.params.userId);
+      await storage.updateCompany(company.id, currentUser.organizationId, { sharedReps: updated });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to remove shared rep" });
     }
   });
 

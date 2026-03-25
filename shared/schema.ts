@@ -36,7 +36,14 @@ export const companies = pgTable("companies", {
   shippingModes: text("shipping_modes").array(),
   estimatedFreightSpend: decimal("estimated_freight_spend", { precision: 14, scale: 2 }),
   accountSummary: text("account_summary"),
+  sharedReps: jsonb("shared_reps").default([]),
 });
+
+export const sharedRepSchema = z.object({
+  userId: z.string(),
+  territoryNote: z.string().optional(),
+});
+export type SharedRep = z.infer<typeof sharedRepSchema>;
 
 export const insertCompanySchema = createInsertSchema(companies).omit({
   id: true,

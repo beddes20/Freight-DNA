@@ -654,6 +654,45 @@ export default function CompanyDetail() {
     queryKey: ["/api/users"],
     enabled: canReassign,
   });
+
+  const canManageSharedReps = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
+  type SharedRepEntry = { userId: string; territoryNote: string; name: string };
+  const { data: sharedReps = [] } = useQuery<SharedRepEntry[]>({
+    queryKey: ["/api/companies", companyId, "shared-reps"],
+    enabled: !!companyId,
+  });
+
+  const [addSharedRepOpen, setAddSharedRepOpen] = useState(false);
+  const [newSharedRepUserId, setNewSharedRepUserId] = useState("");
+  const [newSharedRepNote, setNewSharedRepNote] = useState("");
+
+  const addSharedRepMutation = useMutation({
+    mutationFn: async ({ userId, territoryNote }: { userId: string; territoryNote: string }) => {
+      const res = await apiRequest("POST", `/api/companies/${companyId}/shared-reps`, { userId, territoryNote });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "shared-reps"] });
+      setAddSharedRepOpen(false);
+      setNewSharedRepUserId("");
+      setNewSharedRepNote("");
+      toast({ title: "Shared rep added" });
+    },
+    onError: () => toast({ title: "Failed to add shared rep", variant: "destructive" }),
+  });
+
+  const removeSharedRepMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("DELETE", `/api/companies/${companyId}/shared-reps/${userId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "shared-reps"] });
+      toast({ title: "Shared rep removed" });
+    },
+    onError: () => toast({ title: "Failed to remove shared rep", variant: "destructive" }),
+  });
+
   const canEditSalesPerson = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales_director";
   const { data: allSalesUsers = [] } = useQuery<Omit<User, "password">[]>({
     queryKey: ["/api/users/sales"],
@@ -1851,6 +1890,103 @@ export default function CompanyDetail() {
           )}
         </CardContent>
       </Card>
+
+      {/* Shared Reps */}
+      <Card data-testid="card-shared-reps">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Users className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+              Shared Reps
+            </CardTitle>
+            {canManageSharedReps && (
+              <Button variant="ghost" size="sm" onClick={() => setAddSharedRepOpen(true)} data-testid="button-add-shared-rep">
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add Rep
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {sharedReps.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic">
+              No shared reps on this account.{canManageSharedReps ? " Click \"Add Rep\" to grant another rep co-ownership." : ""}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {sharedReps.map(rep => (
+                <div key={rep.userId} className="flex items-center justify-between gap-2 rounded-md border px-3 py-2" data-testid={`row-shared-rep-${rep.userId}`}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <UserCheck className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400 shrink-0" />
+                    <span className="text-sm font-medium truncate" data-testid={`text-shared-rep-name-${rep.userId}`}>{rep.name}</span>
+                    {rep.territoryNote && (
+                      <span className="text-xs text-muted-foreground truncate">— {rep.territoryNote}</span>
+                    )}
+                  </div>
+                  {canManageSharedReps && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive shrink-0"
+                      onClick={() => removeSharedRepMutation.mutate(rep.userId)}
+                      disabled={removeSharedRepMutation.isPending}
+                      data-testid={`button-remove-shared-rep-${rep.userId}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Add Shared Rep Dialog */}
+      <Dialog open={addSharedRepOpen} onOpenChange={setAddSharedRepOpen}>
+        <DialogContent data-testid="dialog-add-shared-rep">
+          <DialogHeader>
+            <DialogTitle>Add Shared Rep</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Rep</label>
+              <select
+                className="w-full border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                value={newSharedRepUserId}
+                onChange={e => setNewSharedRepUserId(e.target.value)}
+                data-testid="select-shared-rep-user"
+              >
+                <option value="">— Select a rep —</option>
+                {teamMembers.filter(u => !sharedReps.some(r => r.userId === u.id) && u.id !== company?.assignedTo).map(u => (
+                  <option key={u.id} value={u.id}>{u.name} ({u.role.replace(/_/g, " ")})</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Territory Note <span className="text-muted-foreground font-normal">(optional)</span></label>
+              <input
+                className="w-full border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                placeholder="e.g. Laredo, All other, Southeast region"
+                value={newSharedRepNote}
+                onChange={e => setNewSharedRepNote(e.target.value)}
+                data-testid="input-shared-rep-territory-note"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddSharedRepOpen(false)} data-testid="button-cancel-add-shared-rep">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => addSharedRepMutation.mutate({ userId: newSharedRepUserId, territoryNote: newSharedRepNote })}
+              disabled={!newSharedRepUserId || addSharedRepMutation.isPending}
+              data-testid="button-confirm-add-shared-rep"
+            >
+              {addSharedRepMutation.isPending ? "Adding..." : "Add Rep"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Customer Scorecard */}
       <Card data-testid="card-customer-scorecard">
