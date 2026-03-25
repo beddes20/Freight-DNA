@@ -7915,23 +7915,22 @@ Respond with valid JSON only:
     return s;
   }
 
-  // Returns the effective owner ID for a company: prefer salesPersonId (financial linkage), fall back to assignedTo (CRM assignment)
-  function companyOwnerId(c: any): string | null {
-    return c.salesPersonId || c.assignedTo || null;
+  // Check if a company belongs to a given set of user IDs — considers BOTH salesPersonId AND assignedTo
+  // so that a company isn't excluded just because salesPersonId points to a different person
+  function companyBelongsToAny(c: any, idSet: Set<string>): boolean {
+    return (c.salesPersonId && idSet.has(c.salesPersonId)) || (c.assignedTo && idSet.has(c.assignedTo));
   }
 
   function getNamTeamCompanies(namId: string, allUsers: any[], allCompanies: any[]): any[] {
     const directReportIds = new Set(allUsers.filter((u: any) => u.managerId === namId).map((u: any) => u.id));
     directReportIds.add(namId); // include companies directly assigned to the NAM
-    return allCompanies.filter((c: any) => {
-      const owner = companyOwnerId(c);
-      return owner && directReportIds.has(owner);
-    });
+    return allCompanies.filter((c: any) => companyBelongsToAny(c, directReportIds));
   }
 
-  // Helper: get companies owned by a specific AM
+  // Helper: get companies owned by a specific AM (checks both salesPersonId and assignedTo)
   function getAmCompanies(amId: string, allCompanies: any[]): any[] {
-    return allCompanies.filter((c: any) => companyOwnerId(c) === amId);
+    const idSet = new Set([amId]);
+    return allCompanies.filter((c: any) => companyBelongsToAny(c, idSet));
   }
 
   // Helper: get all companies within a director's vertical (director → NAMs → AMs → companies)
@@ -7945,10 +7944,7 @@ Respond with valid JSON only:
         if (u.managerId === namId) allScopedRepIds.add(u.id);
       }
     }
-    return allCompanies.filter((c: any) => {
-      const owner = companyOwnerId(c);
-      return owner && allScopedRepIds.has(owner);
-    });
+    return allCompanies.filter((c: any) => companyBelongsToAny(c, allScopedRepIds));
   }
 
   // Trending accounts — top 5 up, top 5 down by margin delta vs prior month
