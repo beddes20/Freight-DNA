@@ -266,6 +266,7 @@ export interface IStorage {
 
   getTouchpoint(id: string): Promise<Touchpoint | undefined>;
   getTouchpoints(): Promise<Touchpoint[]>;
+  getTouchpointsSince(since: string): Promise<Touchpoint[]>;
   getTouchpointsByContact(contactId: string): Promise<Touchpoint[]>;
   getTouchpointsByCompany(companyId: string): Promise<Touchpoint[]>;
   getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]>;
@@ -1313,6 +1314,10 @@ export class DatabaseStorage implements IStorage {
 
   async getTouchpoints(): Promise<Touchpoint[]> {
     return db.select().from(touchpoints).orderBy(desc(touchpoints.date));
+  }
+
+  async getTouchpointsSince(since: string): Promise<Touchpoint[]> {
+    return db.select().from(touchpoints).where(gte(touchpoints.date, since)).orderBy(desc(touchpoints.date));
   }
 
   async getTouchpointsByContact(contactId: string): Promise<Touchpoint[]> {

@@ -5279,12 +5279,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       }
 
-      let count = 0;
-      for (const { namId, amId } of pairs) {
+      const counts = await Promise.all(pairs.map(async ({ namId, amId }) => {
         const session = await storage.getOrCreateActiveSession(namId, amId);
         const topics = await storage.getTopicsBySession(session.id);
-        count += topics.filter(t => t.status === "pending").length;
-      }
+        return topics.filter(t => t.status === "pending").length;
+      }));
+      const count = counts.reduce((s, c) => s + c, 0);
       res.json({ count });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch pending count" });
@@ -5320,15 +5320,15 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         withUserName: string; addedByName: string;
       }> = [];
 
-      for (const { namId, amId } of pairs) {
+      const pairResults = await Promise.all(pairs.map(async ({ namId, amId }) => {
         const session = await storage.getOrCreateActiveSession(namId, amId);
         const topics = await storage.getTopicsBySession(session.id);
         const actionItems = topics.filter(t => t.status === "pending" && (t.tag === "action_item" || t.tag === "Action Item"));
-        for (const topic of actionItems) {
+        return actionItems.map(topic => {
           const otherId = user.id === namId ? amId : namId;
           const otherUser = safeUsers.find(u => u.id === otherId);
           const addedByUser = safeUsers.find(u => u.id === topic.addedById);
-          results.push({
+          return {
             id: topic.id!,
             text: topic.text,
             tag: topic.tag ?? "",
@@ -5340,9 +5340,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
             amId,
             withUserName: otherUser?.name ?? "Unknown",
             addedByName: addedByUser?.name ?? "Unknown",
-          });
-        }
-      }
+          };
+        });
+      }));
+      results.push(...pairResults.flat());
 
       results.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
       res.json(results);
@@ -7364,12 +7365,12 @@ Respond with valid JSON only:
       monday.setHours(0, 0, 0, 0);
       const weekStart = monday.toISOString().slice(0, 10);
 
-      const [all, allUsers] = await Promise.all([
-        storage.getTouchpoints(),
+      const [thisWeekAll, allUsers] = await Promise.all([
+        storage.getTouchpointsSince(weekStart),
         storage.getUsers(user.organizationId),
       ]);
       const orgUserIds = new Set(allUsers.map(u => u.id));
-      const thisWeek = all.filter(t => t.date >= weekStart && t.loggedById && orgUserIds.has(t.loggedById));
+      const thisWeek = thisWeekAll.filter(t => t.loggedById && orgUserIds.has(t.loggedById));
 
       const teamIds: string[] | null = (user.role === "admin" || user.role === "director" || user.role === "sales_director")
         ? null
