@@ -12,6 +12,7 @@ import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
+import { analyzeTouchpointNote } from "./aiTouchpoint";
 
 // Customer/ops-user codes that must never appear in any financial report, summary, or aggregation.
 const EXCLUDED_FINANCIAL_CODES = new Set(["valubuaz"]);
@@ -6584,18 +6585,26 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const contact = await storage.getContact((req.params.id as string));
       if (!contact) return res.status(404).json({ error: "Contact not found" });
       const now = new Date();
+      const notes: string | null = req.body.notes || null;
       const tp = await storage.createTouchpoint({
         contactId: (req.params.id as string),
         companyId: contact.companyId,
         type: req.body.type || "call",
         date: req.body.date || now.toISOString().split("T")[0],
-        notes: req.body.notes || null,
+        notes,
         sentiment: req.body.sentiment || null,
         isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true" ? true : false,
         loggedById: user.id,
         createdAt: now.toISOString(),
       });
-      res.json(tp);
+      const company = contact.companyId ? await storage.getCompanyInOrg(contact.companyId, user.organizationId) : null;
+      const aiInsights = await analyzeTouchpointNote(notes || "", contact.name, company?.name).catch(() => null);
+      let autoTask = null;
+      if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
+        const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+        autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: contact.companyId || null, contactId: contact.id, createdAt: now.toISOString() });
+      }
+      res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       res.status(500).json({ error: "Failed to create touchpoint" });
     }
@@ -6928,6 +6937,101 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     } catch (error) {
       console.error("Error computing opportunity leaderboard:", error);
       res.status(500).json({ error: "Failed to compute opportunity leaderboard" });
+    }
+  });
+
+  // Churn risk — companies whose load count dropped >20% current vs prior month
+  app.get("/api/dashboard/churn-risk", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json([]);
+
+      const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
+      const cols = resolveColumns(allRows);
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth(); // 0-indexed
+      const mk = (y: number, m: number) => `${y}-${String(m + 1).padStart(2, "0")}`;
+      const curKey = mk(curYear, curMonth);
+      const priorKey = curMonth === 0 ? mk(curYear - 1, 11) : mk(curYear, curMonth - 1);
+
+      type MonthLoads = Record<string, number>;
+      const byCustomer: Record<string, MonthLoads> = {};
+
+      for (const row of allRows) {
+        if (isExcludedRow(row, cols)) continue;
+        const cust = getCustomerFromRow(row, cols);
+        if (!cust) continue;
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (!monthKey || (monthKey !== curKey && monthKey !== priorKey)) continue;
+        const key = normalize(cust);
+        if (!byCustomer[key]) byCustomer[key] = {};
+        byCustomer[key][monthKey] = (byCustomer[key][monthKey] || 0) + 1;
+      }
+
+      const companies = await storage.getCompanies(req.session.organizationId!);
+
+      // Scope by role
+      let visibleCompanyIds: Set<string> | null = null;
+      if (user.role === "account_manager") {
+        const ids = await getVisibleCompanyIds(user);
+        visibleCompanyIds = new Set(ids);
+      } else if (user.role === "national_account_manager") {
+        const ids = await getVisibleCompanyIds(user);
+        visibleCompanyIds = new Set(ids);
+      }
+
+      const results: { companyId: string; companyName: string; repName: string | null; curLoads: number; priorLoads: number; dropPct: number }[] = [];
+
+      for (const company of companies) {
+        if (visibleCompanyIds && !visibleCompanyIds.has(company.id)) continue;
+        if ((company as any).archivedAt) continue;
+
+        const aliasNorms = (company as any).financialAlias
+          ? (company as any).financialAlias.split(",").map((a: string) => normalize(a.trim())).filter(Boolean)
+          : [normalize(company.name)];
+
+        let curLoads = 0, priorLoads = 0;
+        for (const alias of aliasNorms) {
+          const direct = byCustomer[alias];
+          if (direct) {
+            curLoads += direct[curKey] || 0;
+            priorLoads += direct[priorKey] || 0;
+          } else {
+            for (const [k, v] of Object.entries(byCustomer)) {
+              if (k.includes(alias) || alias.includes(k)) {
+                curLoads += v[curKey] || 0;
+                priorLoads += v[priorKey] || 0;
+                break;
+              }
+            }
+          }
+        }
+
+        if (priorLoads < 5) continue; // ignore low-volume accounts — noise
+        const dropPct = (priorLoads - curLoads) / priorLoads;
+        if (dropPct < 0.20) continue; // only show >20% drops
+
+        let repName: string | null = null;
+        const repId = (company as any).salesPersonId || (company as any).assignedTo;
+        if (repId) {
+          const rep = (await storage.getUsers(req.session.organizationId!)).find(u => u.id === repId);
+          repName = rep ? `${rep.firstName} ${rep.lastName}` : null;
+        }
+
+        results.push({ companyId: company.id, companyName: company.name, repName, curLoads, priorLoads, dropPct });
+      }
+
+      results.sort((a, b) => b.dropPct - a.dropPct);
+      res.json(results.slice(0, 8));
+    } catch (error) {
+      console.error("Churn risk error:", error);
+      res.status(500).json({ error: "Failed to compute churn risk" });
     }
   });
 
@@ -8272,18 +8376,27 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const now = new Date();
+      const notes: string | null = req.body.notes || null;
+      const contactId = req.body.contactId || null;
+      const contact = contactId ? await storage.getContact(contactId) : null;
       const tp = await storage.createTouchpoint({
-        contactId: req.body.contactId || null,
+        contactId,
         companyId: (req.params.id as string),
         type: req.body.type || "call",
         date: req.body.date || now.toISOString().split("T")[0],
-        notes: req.body.notes || null,
+        notes,
         sentiment: req.body.sentiment || null,
         isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true" ? true : false,
         loggedById: user.id,
         createdAt: now.toISOString(),
       });
-      res.json(tp);
+      const aiInsights = await analyzeTouchpointNote(notes || "", contact?.name, company.name).catch(() => null);
+      let autoTask = null;
+      if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
+        const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+        autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: req.params.id as string, contactId: contactId || null, createdAt: now.toISOString() });
+      }
+      res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       res.status(500).json({ error: "Failed to log touchpoint" });
     }
@@ -8303,18 +8416,26 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const company = await storage.getCompanyInOrg(companyId, user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const now = new Date();
+      const cleanNotes: string | null = typeof notes === "string" ? notes.slice(0, 2000) || null : null;
+      const contact = contactId ? await storage.getContact(contactId) : null;
       const tp = await storage.createTouchpoint({
         contactId: contactId || null,
         companyId,
         type: type || "call",
         date: now.toISOString().split("T")[0],
-        notes: typeof notes === "string" ? notes.slice(0, 2000) || null : null,
+        notes: cleanNotes,
         sentiment: sentiment || null,
         isMeaningful: isMeaningful === true || isMeaningful === "true" ? true : false,
         loggedById: user.id,
         createdAt: now.toISOString(),
       });
-      res.json(tp);
+      const aiInsights = await analyzeTouchpointNote(cleanNotes || "", contact?.name, company.name).catch(() => null);
+      let autoTask = null;
+      if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
+        const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+        autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(cleanNotes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId, contactId: contactId || null, createdAt: now.toISOString() });
+      }
+      res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       res.status(500).json({ error: "Failed to log touch" });
     }

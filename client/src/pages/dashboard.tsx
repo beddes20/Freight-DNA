@@ -188,6 +188,11 @@ export default function Dashboard() {
     refetchOnWindowFocus: false,
   });
 
+  const { data: churnRisk = [] } = useQuery<Array<{ companyId: string; companyName: string; repName: string | null; curLoads: number; priorLoads: number; dropPct: number }>>({
+    queryKey: ["/api/dashboard/churn-risk"],
+    refetchOnWindowFocus: false,
+  });
+
   const { data: allTasks = [], isLoading: tasksLoading } = useQuery<Task[]>({
     queryKey: ["/api/tasks"],
     refetchInterval: 180000,
@@ -2123,6 +2128,39 @@ export default function Dashboard() {
                     <p className="text-sm font-bold text-green-700 dark:text-green-400">+${Math.round(item.potentialMargin).toLocaleString()}</p>
                     <p className="text-xs text-muted-foreground">potential margin</p>
                   </div>
+                </div>
+              </Link>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {churnRisk.length > 0 && (
+        <Card className="border-orange-300 dark:border-orange-700" data-testid="card-churn-risk">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base text-orange-700 dark:text-orange-400">
+              <TrendingDown className="h-4 w-4" />
+              Volume Drop Alert
+              <Badge className="ml-auto bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300 font-normal border-orange-300">
+                {churnRisk.length} account{churnRisk.length !== 1 ? "s" : ""}
+              </Badge>
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">Loads down 20%+ vs last month — possible competitor activity</p>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-1">
+            {churnRisk.map((item) => (
+              <Link key={item.companyId} href={`/companies/${item.companyId}`}>
+                <div className="flex items-center justify-between gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer" data-testid={`churn-risk-row-${item.companyId}`}>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{item.companyName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {item.curLoads} loads this month vs {item.priorLoads} last month
+                      {item.repName ? ` · ${item.repName}` : ""}
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="shrink-0 text-orange-700 border-orange-400 dark:text-orange-300 dark:border-orange-600">
+                    −{Math.round(item.dropPct * 100)}%
+                  </Badge>
                 </div>
               </Link>
             ))}

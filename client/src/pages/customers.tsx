@@ -31,6 +31,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CompanyDialog } from "@/components/company-dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { fmtMoney } from "@/lib/rep-utils";
@@ -214,9 +215,11 @@ export default function Customers() {
   const logTouchMutation = useMutation({
     mutationFn: ({ contactId, type, notes, sentiment, isMeaningful }: { contactId: string; type: string; notes: string; sentiment?: string; isMeaningful?: boolean }) =>
       apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false }),
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       toast({ title: "Touch logged!" });
+      buildAiToasts(data?.aiInsights, data?.autoTask, toast);
       setQuickTouch(null);
       setQuickTouchContactId("");
       setQuickTouchType("call");
