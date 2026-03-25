@@ -546,4 +546,22 @@ export async function runMigrations() {
   } finally {
     clientOppLog.release();
   }
+
+  const clientSession = await pool.connect();
+  try {
+    await clientSession.query(`
+      CREATE TABLE IF NOT EXISTS "session" (
+        "sid" varchar NOT NULL COLLATE "default",
+        "sess" json NOT NULL,
+        "expire" timestamp(6) NOT NULL,
+        CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE
+      ) WITH (OIDS=FALSE)
+    `);
+    await clientSession.query(`CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")`);
+    console.log("[migrations] session table ensured");
+  } catch (err) {
+    console.error("[migrations] session table error:", err);
+  } finally {
+    clientSession.release();
+  }
 }
