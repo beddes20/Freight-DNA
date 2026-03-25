@@ -1124,7 +1124,7 @@ export default function Dashboard() {
                     </CardTitle>
                   </button>
                   <span className="text-xs font-normal text-muted-foreground">
-                    {trendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. prior month"}
+                    {trendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
                   </span>
                 </div>
               </CardHeader>
@@ -1168,7 +1168,7 @@ export default function Dashboard() {
                     </CardTitle>
                   </button>
                   <span className="text-xs font-normal text-muted-foreground">
-                    {trendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. prior month"}
+                    {trendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
                   </span>
                 </div>
               </CardHeader>
@@ -1389,7 +1389,7 @@ export default function Dashboard() {
                     </CardTitle>
                   </button>
                   <span className="text-xs font-normal text-muted-foreground">
-                    {namTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. prior month"}
+                    {namTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
                   </span>
                 </div>
               </CardHeader>
@@ -1420,7 +1420,7 @@ export default function Dashboard() {
                     </CardTitle>
                   </button>
                   <span className="text-xs font-normal text-muted-foreground">
-                    {namTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. prior month"}
+                    {namTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
                   </span>
                 </div>
               </CardHeader>
@@ -1613,7 +1613,7 @@ export default function Dashboard() {
                     </CardTitle>
                   </button>
                   <span className="text-xs font-normal text-muted-foreground">
-                    {amTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. prior month"}
+                    {amTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
                   </span>
                 </div>
               </CardHeader>
@@ -1644,7 +1644,7 @@ export default function Dashboard() {
                     </CardTitle>
                   </button>
                   <span className="text-xs font-normal text-muted-foreground">
-                    {amTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. prior month"}
+                    {amTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
                   </span>
                 </div>
               </CardHeader>

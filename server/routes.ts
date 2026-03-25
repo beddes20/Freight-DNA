@@ -7947,7 +7947,7 @@ Respond with valid JSON only:
     return allCompanies.filter((c: any) => companyBelongsToAny(c, allScopedRepIds));
   }
 
-  // Trending accounts — top 5 up, top 5 down by margin delta vs prior month
+  // Trending accounts — top 5 up, top 5 down by margin delta vs 3-month average
   // Roles: director/admin (org-wide), NAM (team-scoped), AM (own accounts)
   app.get("/api/dashboard/trending-accounts", requireAuth, async (req, res) => {
     try {
@@ -7982,15 +7982,12 @@ Respond with valid JSON only:
         byCustomerMonth[key][monthKey] = (byCustomerMonth[key][monthKey] || 0) + margin;
       }
 
-      // Determine current and prior month from the data, not calendar month
+      // Determine current month and the 3 prior months from the data, not calendar month
       const sortedMonthKeys = Array.from(allMonthKeys).sort();
       const curMonthKey = sortedMonthKeys.length > 0 ? sortedMonthKeys[sortedMonthKeys.length - 1] : toMonthKey(new Date());
-      const priorIdx = sortedMonthKeys.indexOf(curMonthKey) - 1;
-      const priorMonthKey = priorIdx >= 0 ? sortedMonthKeys[priorIdx] : (() => {
-        const [yr, mo] = curMonthKey.split("-").map(Number);
-        const priorDate = new Date(yr, mo - 2, 1);
-        return toMonthKey(priorDate);
-      })();
+      const curIdx = sortedMonthKeys.indexOf(curMonthKey);
+      // Up to 3 months before the current month (all available in the upload)
+      const priorMonthKeys = sortedMonthKeys.slice(Math.max(0, curIdx - 3), curIdx);
 
       // Compute pace fraction: how far through the current month are we?
       const today = new Date();
@@ -8006,14 +8003,17 @@ Respond with valid JSON only:
       const [cmYr, cmMo] = curMonthKey.split("-").map(Number);
       const curMonthLabel = new Date(cmYr, cmMo - 1, 1).toLocaleString("en-US", { month: "long" });
 
-      // Build delta list using prorated pace comparison
+      // Build delta list using prorated pace comparison vs 3-month average
       const deltas: { alias: string; delta: number; curMargin: number; priorMargin: number }[] = [];
       for (const [alias, monthMap] of Object.entries(byCustomerMonth)) {
         const cur = monthMap[curMonthKey] ?? null;
-        const prior = monthMap[priorMonthKey] ?? null;
-        if (cur === null || prior === null) continue;
-        const paceExpected = prior * monthFraction;
-        deltas.push({ alias, delta: cur - paceExpected, curMargin: cur, priorMargin: prior });
+        if (cur === null) continue;
+        // Average margin across up to 3 prior months (only months where account has data)
+        const priorValues = priorMonthKeys.map(m => monthMap[m]).filter((v): v is number => v !== undefined);
+        if (priorValues.length === 0) continue;
+        const avgPrior = priorValues.reduce((a, b) => a + b, 0) / priorValues.length;
+        const paceExpected = avgPrior * monthFraction;
+        deltas.push({ alias, delta: cur - paceExpected, curMargin: cur, priorMargin: avgPrior });
       }
 
       // Match to company names — optionally scoped
