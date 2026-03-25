@@ -702,7 +702,7 @@ export default function CompanyDetail() {
     queryKey: ["/api/users"],
     enabled: canEditSalesPerson,
   });
-  const salesUsers = allUsersForSales.filter(u => u.role === "sales" || u.role === "sales_director");
+  const salesUsers = allUsersForSales.filter(u => u.role === "sales" || u.role === "sales_director").sort((a, b) => a.name.localeCompare(b.name));
 
   const savePortalMutation = useMutation({
     mutationFn: async () => {
@@ -1977,7 +1977,7 @@ export default function CompanyDetail() {
                 data-testid="select-shared-rep-user"
               >
                 <option value="">— Select a rep —</option>
-                {teamMembers.filter(u => !sharedReps.some(r => r.userId === u.id) && u.id !== company?.assignedTo).map(u => (
+                {teamMembers.filter(u => !sharedReps.some(r => r.userId === u.id) && u.id !== company?.assignedTo).sort((a, b) => a.name.localeCompare(b.name)).map(u => (
                   <option key={u.id} value={u.id}>{u.name} ({u.role.replace(/_/g, " ")})</option>
                 ))}
               </select>
@@ -2238,7 +2238,7 @@ export default function CompanyDetail() {
                 <SelectValue placeholder="Select a user..." />
               </SelectTrigger>
               <SelectContent>
-                {assignableUsers.map(u => (
+                {[...assignableUsers].sort((a, b) => a.name.localeCompare(b.name)).map(u => (
                   <SelectItem key={u.id} value={u.id} data-testid={`option-transfer-${u.id}`}>
                     {u.name} ({u.role === "admin" ? "Admin" : u.role === "director" ? "Director" : u.role === "national_account_manager" ? "NAM" : u.role === "sales" ? "Sales" : "AM"})
                   </SelectItem>

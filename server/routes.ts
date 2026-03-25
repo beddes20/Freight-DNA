@@ -8321,9 +8321,12 @@ Respond with valid JSON only:
           });
       };
 
+      const namMetrics = isNamRole ? [] : buildMetrics(namRoles);
+      const amMetrics = buildMetrics(amRoles);
+      console.log(`[margin-metrics] role=${user.role} nams=${namMetrics.length} ams=${amMetrics.length} scopedUserIds=${scopedUserIds ? scopedUserIds.size : 'null'} byRepIdKeys=${Object.keys(byRepId).length} curMonthKey=${curMonthKey}`);
       res.json({
-        nams: isNamRole ? [] : buildMetrics(namRoles),
-        ams: buildMetrics(amRoles),
+        nams: namMetrics,
+        ams: amMetrics,
       });
     } catch (err) {
       console.error("Error loading margin metrics:", err);
