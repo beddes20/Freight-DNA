@@ -510,4 +510,29 @@ export async function runMigrations() {
   } finally {
     clientDismiss.release();
   }
+
+  const clientOppLog = await pool.connect();
+  try {
+    await clientOppLog.query(`
+      CREATE TABLE IF NOT EXISTS opportunity_logs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL,
+        rep_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        company_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        type text NOT NULL,
+        category text NOT NULL DEFAULT 'other',
+        title text NOT NULL,
+        description text,
+        estimated_loads integer,
+        estimated_value numeric,
+        logged_at text NOT NULL,
+        created_at text NOT NULL
+      )
+    `);
+    console.log("[migrations] opportunity_logs table ensured");
+  } catch (err) {
+    console.error("[migrations] opportunity_logs migration error:", err);
+  } finally {
+    clientOppLog.release();
+  }
 }

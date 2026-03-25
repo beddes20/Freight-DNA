@@ -19,7 +19,7 @@ import {
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
   Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search, MoreHorizontal,
   Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell, Pencil, ArrowUpRight, ArrowDownRight,
-  Activity, UserPlus, Repeat2,
+  Activity, UserPlus, Repeat2, Trophy,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -371,6 +371,18 @@ export default function Dashboard() {
     refetchInterval: 5 * 60 * 1000,
   });
   const weeklyResults = weeklyData?.results || [];
+
+  type OpportunityLog = { id: string; repId: string; companyId: string | null; type: string; category: string; title: string; description: string | null; estimatedLoads: number | null; estimatedValue: string | null; loggedAt: string; createdAt: string };
+  const recentWinsStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
+  const { data: recentWins = [] } = useQuery<OpportunityLog[]>({
+    queryKey: ["/api/opportunity-logs", "win", recentWinsStart],
+    queryFn: async () => {
+      const res = await fetch(`/api/opportunity-logs?type=win&startDate=${recentWinsStart}`, { credentials: "include" });
+      return res.json();
+    },
+    enabled: isDirector || isNam,
+    staleTime: 60000,
+  });
 
   const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string } | undefined>();
   const [prefillDialogOpen, setPrefillDialogOpen] = useState(false);
@@ -1253,6 +1265,39 @@ export default function Dashboard() {
               );
             })}
           </div>
+          {/* Recent Wins (Director view - MTD) */}
+          {recentWins.length > 0 && (
+            <Card data-testid="portlet-director-recent-wins">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Trophy className="h-4 w-4 text-amber-500" />
+                  Recent Wins — {new Date().toLocaleString("default", { month: "long" })}
+                  <Badge className="ml-1 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 font-semibold text-xs">{recentWins.length}</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {recentWins.slice(0, 15).map(win => {
+                    const rep = teamMembers.find(m => m.id === win.repId);
+                    return (
+                      <div key={win.id} className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40" data-testid={`director-win-${win.id}`}>
+                        <Trophy className="h-3.5 w-3.5 text-amber-500 mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{win.title}</p>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            {rep && <span className="text-xs text-muted-foreground">{rep.name}</span>}
+                            {win.estimatedLoads && <span className="text-xs text-muted-foreground">· {win.estimatedLoads} loads</span>}
+                            {win.estimatedValue && <span className="text-xs text-green-700 dark:text-green-400 font-medium">· ${Number(win.estimatedValue).toLocaleString()}</span>}
+                            <span className="text-xs text-muted-foreground ml-auto">{new Date(win.loggedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
 
@@ -1436,6 +1481,40 @@ export default function Dashboard() {
               </CardContent>
             )}
           </Card>
+
+          {/* Recent Wins (MTD) */}
+          {recentWins.length > 0 && (
+            <Card data-testid="portlet-recent-wins">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Trophy className="h-4 w-4 text-amber-500" />
+                  Recent Wins — {new Date().toLocaleString("default", { month: "long" })}
+                  <Badge className="ml-1 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 font-semibold text-xs">{recentWins.length}</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {recentWins.slice(0, 15).map(win => {
+                    const rep = teamMembers.find(m => m.id === win.repId);
+                    return (
+                      <div key={win.id} className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40" data-testid={`recent-win-${win.id}`}>
+                        <Trophy className="h-3.5 w-3.5 text-amber-500 mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{win.title}</p>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            {rep && <span className="text-xs text-muted-foreground">{rep.name}</span>}
+                            {win.estimatedLoads && <span className="text-xs text-muted-foreground">· {win.estimatedLoads} loads</span>}
+                            {win.estimatedValue && <span className="text-xs text-green-700 dark:text-green-400 font-medium">· ${Number(win.estimatedValue).toLocaleString()}</span>}
+                            <span className="text-xs text-muted-foreground ml-auto">{new Date(win.loggedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Row 4: My Personal Metrics */}
           <div className="space-y-1">

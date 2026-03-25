@@ -97,6 +97,9 @@ import {
   lmDailyChecks,
   type LmDailyCheck,
   type InsertLmDailyCheck,
+  opportunityLogs,
+  type OpportunityLog,
+  type InsertOpportunityLog,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -346,6 +349,11 @@ export interface IStorage {
 
   getLmDailyChecks(lmUserId: string): Promise<LmDailyCheck[]>;
   upsertLmDailyCheck(data: { organizationId: string; lmUserId: string; checkedByUserId: string; date: string; callsBeforeSevenThirty?: boolean | null; checkoutCompleted?: boolean | null }): Promise<LmDailyCheck>;
+
+  createOpportunityLog(data: InsertOpportunityLog & { createdAt: string }): Promise<OpportunityLog>;
+  getOpportunityLogs(orgId: string, filters?: { repId?: string; companyId?: string; type?: string; startDate?: string; endDate?: string }): Promise<OpportunityLog[]>;
+  deleteOpportunityLog(id: string): Promise<boolean>;
+  getOpportunityLogSummary(repIds: string[], startDate: string, endDate: string): Promise<Array<{ repId: string; opportunities: number; wins: number }>>;
 }
 
 const pool = new Pool({
@@ -2038,6 +2046,43 @@ export class DatabaseStorage implements IStorage {
       }).returning();
       return created;
     }
+  }
+
+  async createOpportunityLog(data: InsertOpportunityLog & { createdAt: string }): Promise<OpportunityLog> {
+    const [log] = await db.insert(opportunityLogs).values(data).returning();
+    return log;
+  }
+
+  async getOpportunityLogs(orgId: string, filters?: { repId?: string; companyId?: string; type?: string; startDate?: string; endDate?: string }): Promise<OpportunityLog[]> {
+    const conditions = [eq(opportunityLogs.organizationId, orgId)];
+    if (filters?.repId) conditions.push(eq(opportunityLogs.repId, filters.repId));
+    if (filters?.companyId) conditions.push(eq(opportunityLogs.companyId, filters.companyId));
+    if (filters?.type) conditions.push(eq(opportunityLogs.type, filters.type));
+    if (filters?.startDate) conditions.push(gte(opportunityLogs.loggedAt, filters.startDate));
+    if (filters?.endDate) conditions.push(lte(opportunityLogs.loggedAt, filters.endDate));
+    return db.select().from(opportunityLogs).where(and(...conditions)).orderBy(desc(opportunityLogs.loggedAt));
+  }
+
+  async deleteOpportunityLog(id: string): Promise<boolean> {
+    const result = await db.delete(opportunityLogs).where(eq(opportunityLogs.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getOpportunityLogSummary(repIds: string[], startDate: string, endDate: string): Promise<Array<{ repId: string; opportunities: number; wins: number }>> {
+    if (repIds.length === 0) return [];
+    const rows = await db.select().from(opportunityLogs)
+      .where(and(
+        inArray(opportunityLogs.repId, repIds),
+        gte(opportunityLogs.loggedAt, startDate),
+        lte(opportunityLogs.loggedAt, endDate)
+      ));
+    const summary: Record<string, { opportunities: number; wins: number }> = {};
+    for (const r of rows) {
+      if (!summary[r.repId]) summary[r.repId] = { opportunities: 0, wins: 0 };
+      if (r.type === "win") summary[r.repId].wins++;
+      else summary[r.repId].opportunities++;
+    }
+    return Object.entries(summary).map(([repId, s]) => ({ repId, ...s }));
   }
 }
 

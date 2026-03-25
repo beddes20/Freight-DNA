@@ -2729,6 +2729,111 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  // ── Opportunity / Win Logs ────────────────────────────────────────────────
+  app.get("/api/opportunity-logs", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { repId, companyId, type, startDate, endDate } = req.query as Record<string, string>;
+      const logs = await storage.getOpportunityLogs(req.session.organizationId!, {
+        repId: repId || undefined,
+        companyId: companyId || undefined,
+        type: type || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+      });
+      res.json(logs);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch opportunity logs" });
+    }
+  });
+
+  app.get("/api/opportunity-logs/summary", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { repIds, startDate, endDate } = req.query as Record<string, string>;
+      const ids = repIds ? repIds.split(",") : [];
+      const summary = await storage.getOpportunityLogSummary(
+        ids,
+        startDate || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`,
+        endDate || new Date().toISOString().split("T")[0]
+      );
+      res.json(summary);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch opportunity log summary" });
+    }
+  });
+
+  app.post("/api/opportunity-logs", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { type, category, title, description, companyId, estimatedLoads, estimatedValue, loggedAt } = req.body;
+      if (!type || !title) return res.status(400).json({ error: "type and title are required" });
+
+      const log = await storage.createOpportunityLog({
+        organizationId: req.session.organizationId!,
+        repId: user.id,
+        companyId: companyId || null,
+        type,
+        category: category || "other",
+        title,
+        description: description || null,
+        estimatedLoads: estimatedLoads != null ? Number(estimatedLoads) : null,
+        estimatedValue: estimatedValue != null ? String(estimatedValue) : null,
+        loggedAt: loggedAt || new Date().toISOString().split("T")[0],
+        createdAt: new Date().toISOString(),
+      });
+
+      // Auto-post to callouts feed when a win is logged
+      if (type === "win") {
+        const categoryLabels: Record<string, string> = {
+          spot_batch: "Spot Batch",
+          dedicated_contracted: "Dedicated/Contracted",
+          mini_bid: "Mini-Bid Lanes",
+          project: "Project Freight",
+          other: "Other",
+        };
+        const catLabel = categoryLabels[category] || category || "Win";
+        const parts = [`🏆 ${user.name} logged a win: ${title}`, `Category: ${catLabel}`];
+        if (description) parts.push(description);
+        const extras: string[] = [];
+        if (estimatedLoads) extras.push(`${estimatedLoads} loads`);
+        if (estimatedValue) extras.push(`$${Number(estimatedValue).toLocaleString()} est. value`);
+        if (extras.length) parts.push(extras.join(" · "));
+        await storage.createCallout({
+          title: `${user.name}: ${title}`,
+          body: parts.slice(1).join("\n"),
+          tag: "win",
+          companyId: companyId || null,
+          authorId: user.id,
+          parentId: null,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      res.status(201).json(log);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create opportunity log" });
+    }
+  });
+
+  app.delete("/api/opportunity-logs/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const logs = await storage.getOpportunityLogs(req.session.organizationId!);
+      const log = logs.find(l => l.id === req.params.id);
+      if (!log) return res.status(404).json({ error: "Not found" });
+      if (log.repId !== user.id && user.role !== "admin") return res.status(403).json({ error: "Not authorized" });
+      await storage.deleteOpportunityLog(req.params.id as string);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete opportunity log" });
+    }
+  });
+
   // ── Feed Posts (Trends / Growth / Ideas) ─────────────────────────────────
 
   app.get("/api/feed-posts", async (req, res) => {

@@ -638,6 +638,24 @@ export const passwordResetTokens = pgTable("password_reset_tokens", {
   createdAt: text("created_at").notNull(),
 });
 
+export const opportunityLogs = pgTable("opportunity_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  repId: varchar("rep_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  type: text("type").notNull(), // "opportunity" | "win"
+  category: text("category").notNull().default("other"),
+  title: text("title").notNull(),
+  description: text("description"),
+  estimatedLoads: integer("estimated_loads"),
+  estimatedValue: decimal("estimated_value"),
+  loggedAt: text("logged_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+export const insertOpportunityLogSchema = createInsertSchema(opportunityLogs).omit({ id: true, createdAt: true });
+export type InsertOpportunityLog = z.infer<typeof insertOpportunityLogSchema>;
+export type OpportunityLog = typeof opportunityLogs.$inferSelect;
+
 export const toolLinks = pgTable("tool_links", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),

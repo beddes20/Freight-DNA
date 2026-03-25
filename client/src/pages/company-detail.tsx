@@ -121,6 +121,7 @@ import { MarketShareCard } from "@/components/market-share-card";
 import { PreCallPlanner } from "@/components/pre-call-planner";
 import { ContactIntelModal } from "@/components/contact-intel-modal";
 import { ZoomInfoSuggestionsDialog } from "@/components/zoominfo-suggestions";
+import { OpportunityLogDialog } from "@/components/opportunity-log-dialog";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
@@ -282,6 +283,7 @@ export default function CompanyDetail() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [zoomInfoOpen, setZoomInfoOpen] = useState(false);
   const [preCallOpen, setPreCallOpen] = useState(false);
+  const [oppLogOpen, setOppLogOpen] = useState(false);
   const [touchLogCollapsed, setTouchLogCollapsed] = useState(false);
   const [laneGapInsights, setLaneGapInsights] = useState<Record<string, string>>({});
   const [importRows, setImportRows] = useState<any[]>([]);
@@ -1083,6 +1085,13 @@ export default function CompanyDetail() {
             >
               <PhoneCall className="h-4 w-4 mr-2" />
               Log Touch
+            </Button>
+          )}
+
+          {!company.archivedAt && (
+            <Button variant="outline" onClick={() => setOppLogOpen(true)} data-testid="button-log-opportunity" className="gap-1">
+              <Trophy className="h-4 w-4 text-amber-500" />
+              Log Win / Opp
             </Button>
           )}
 
@@ -3462,6 +3471,13 @@ export default function CompanyDetail() {
         companyId={companyId}
         parentId={calloutReplyTo?.id}
         parentTitle={calloutReplyTo?.title}
+      />
+
+      <OpportunityLogDialog
+        open={oppLogOpen}
+        onOpenChange={setOppLogOpen}
+        companyId={companyId}
+        companyName={company.name}
       />
 
       <CompanyDialog

@@ -13,7 +13,7 @@ import {
   Users, Building2, CheckCircle2, AlertTriangle, Clock, TrendingUp, TrendingDown, BarChart3,
   Phone, MessageSquare, Mail, UserPlus, UserCheck, ArrowUpRight, Package, DollarSign, Percent, FileBarChart2, Info, Truck, Heart, ArrowUpDown,
   Send, Loader2, XCircle, Star, Award, ChevronDown, ChevronUp, CalendarClock, ShieldAlert, Download,
-  Target, LayoutGrid, List, StickyNote, Lightbulb,
+  Target, LayoutGrid, List, StickyNote, Lightbulb, Trophy,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
@@ -254,7 +254,7 @@ function TrendBadge({ current, prev }: { current: number; prev: number }) {
   );
 }
 
-function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominations, canNominate, onNominate, period, goalAttainment, repeatCarrierLoads }: {
+function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominations, canNominate, onNominate, period, goalAttainment, repeatCarrierLoads, opportunityCount, winCount }: {
   rep: RepPerf;
   totalLoads?: number;
   totalMargin?: number;
@@ -266,6 +266,8 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
   period?: string;
   goalAttainment?: { onTrack: number; total: number };
   repeatCarrierLoads?: number;
+  opportunityCount?: number;
+  winCount?: number;
 }) {
   const [, navigate] = useLocation();
   const [showNote, setShowNote] = useState(false);
@@ -396,6 +398,24 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
               <span className="text-[10px] text-muted-foreground ml-1.5">repeat carrier loads</span>
             </div>
             <span className="text-[10px] text-muted-foreground">same carrier, same lane</span>
+          </div>
+        )}
+        {!isLmRole && (opportunityCount != null || winCount != null) && (
+          <div className="grid grid-cols-2 gap-1.5 mb-2" data-testid={`opp-wins-${rep.userId}`}>
+            <div className="flex items-center gap-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 px-2 py-1.5">
+              <Lightbulb className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-blue-600 dark:text-blue-400 leading-none">{opportunityCount ?? 0}</p>
+                <p className="text-[10px] text-muted-foreground">Opps Logged</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 px-2 py-1.5">
+              <Trophy className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-amber-600 dark:text-amber-400 leading-none">{winCount ?? 0}</p>
+                <p className="text-[10px] text-muted-foreground">Wins Logged</p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -615,6 +635,32 @@ export default function TeamPerformancePage() {
     queryKey: ["/api/goals"],
     staleTime: 60000,
   });
+
+  // Opportunity / Win summary for current period
+  const oppPeriodStart = (() => {
+    const now = new Date();
+    if (period === "weekly") { const d = new Date(now); d.setDate(d.getDate() - 7); return d.toISOString().split("T")[0]; }
+    if (period === "last") { const d = new Date(now.getFullYear(), now.getMonth() - 1, 1); return d.toISOString().split("T")[0]; }
+    if (period === "ytd") { return `${now.getFullYear()}-01-01`; }
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  })();
+  const oppPeriodEnd = period === "last"
+    ? (() => { const now = new Date(); return new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split("T")[0]; })()
+    : new Date().toISOString().split("T")[0];
+
+  const repIdsParam = reps.map(r => r.userId).join(",");
+  const { data: oppSummary = [] } = useQuery<Array<{ repId: string; opportunities: number; wins: number }>>({
+    queryKey: ["/api/opportunity-logs/summary", repIdsParam, oppPeriodStart, oppPeriodEnd],
+    queryFn: async () => {
+      if (!repIdsParam) return [];
+      const res = await fetch(`/api/opportunity-logs/summary?repIds=${repIdsParam}&startDate=${oppPeriodStart}&endDate=${oppPeriodEnd}`, { credentials: "include" });
+      return res.json();
+    },
+    enabled: reps.length > 0,
+    staleTime: 60000,
+  });
+  const oppSummaryMap: Record<string, { opportunities: number; wins: number }> = {};
+  for (const s of oppSummary) oppSummaryMap[s.repId] = s;
 
   // Per-rep goal attainment: count active goals on track
   const goalAttainmentMap: Record<string, { onTrack: number; total: number }> = {};
@@ -1063,6 +1109,8 @@ export default function TeamPerformancePage() {
                     onNominate={setNominationTarget}
                     period={period}
                     goalAttainment={goalAttainmentMap[rep.userId]}
+                    opportunityCount={oppSummaryMap[rep.userId]?.opportunities ?? 0}
+                    winCount={oppSummaryMap[rep.userId]?.wins ?? 0}
                   />
                 ))}
               </div>
@@ -1089,6 +1137,8 @@ export default function TeamPerformancePage() {
                     onNominate={setNominationTarget}
                     period={period}
                     goalAttainment={goalAttainmentMap[rep.userId]}
+                    opportunityCount={oppSummaryMap[rep.userId]?.opportunities ?? 0}
+                    winCount={oppSummaryMap[rep.userId]?.wins ?? 0}
                   />
                 ))}
               </div>
