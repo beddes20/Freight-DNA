@@ -23,7 +23,6 @@ export function useAuth() {
     },
     onSuccess: (userData: SafeUser) => {
       queryClient.setQueryData(["/api/auth/me"], userData);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     },
   });
 
@@ -34,7 +33,6 @@ export function useAuth() {
     },
     onSuccess: (userData: SafeUser) => {
       queryClient.setQueryData(["/api/auth/me"], userData);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     },
   });
 
