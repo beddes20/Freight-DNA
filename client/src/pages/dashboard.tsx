@@ -819,19 +819,19 @@ export default function Dashboard() {
                   {briefingData.dueTasks} task{briefingData.dueTasks !== 1 ? "s" : ""} due today
                 </span>
               )}
-              {/* Show real goal metrics if the NAM set goals for this rep, otherwise fall back to streak */}
-              {briefingData.goals && briefingData.goals.length > 0 ? (
+              {/* Daily streak — always shown, based on 5 touches/day goal */}
+              <span className="text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
+                <PhoneCall className="h-3.5 w-3.5" />
+                {briefingData.streakToday}/{briefingData.streakGoal} touches today
+              </span>
+              {/* Monthly goal metrics set by NAM — shown in addition to streak */}
+              {briefingData.goals && briefingData.goals.length > 0 && (
                 briefingData.goals.map(g => (
                   <span key={g.metric} className="text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
-                    <PhoneCall className="h-3.5 w-3.5" />
+                    <Target className="h-3.5 w-3.5" />
                     {g.current}/{g.target} {g.label} this month
                   </span>
                 ))
-              ) : (
-                <span className="text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
-                  <PhoneCall className="h-3.5 w-3.5" />
-                  {briefingData.streakToday}/{briefingData.streakGoal} touches today
-                </span>
               )}
               {(briefingData.streak ?? 0) > 0 && (
                 <span className="text-xs text-orange-600 dark:text-orange-400 font-semibold flex items-center gap-1">
