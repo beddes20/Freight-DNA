@@ -46,6 +46,7 @@ interface AccountSummaryRow {
   totalLoads: number;
   totalMargin: number;
   totalRevenue?: number;
+  spotLoads?: number;
   repName: string;
 }
 
@@ -490,11 +491,22 @@ export default function RepReportPage() {
   const { rep, period: p, goals, touchpoints: tp, contacts, tasks, topAccounts, accountsNeedingAttention, wins, teamMembers } = data;
 
   // Compute financial totals for this rep from account-summary data
-  const repFinancials = accountSummary
-    .filter(row => row.repName && matchRepName(row.repName, rep.name))
-    .reduce((acc, row) => ({ loads: acc.loads + row.totalLoads, margin: acc.margin + row.totalMargin }), { loads: 0, margin: 0 });
+  const repAccountRows = accountSummary
+    .filter(row => row.repName && matchRepName(row.repName, rep.name));
+  const repFinancials = repAccountRows
+    .reduce((acc, row) => ({
+      loads: acc.loads + row.totalLoads,
+      margin: acc.margin + row.totalMargin,
+      revenue: acc.revenue + (row.totalRevenue ?? 0),
+      spotLoads: acc.spotLoads + (row.spotLoads ?? 0),
+    }), { loads: 0, margin: 0, revenue: 0, spotLoads: 0 });
   const hasFinancials = accountSummary.length > 0;
   const marginDisplay = fmtMoney(repFinancials.margin);
+  const revenueDisplay = fmtMoney(repFinancials.revenue);
+  const marginPctDisplay = repFinancials.revenue > 0
+    ? `${((repFinancials.margin / repFinancials.revenue) * 100).toFixed(1)}%`
+    : "—";
+  const repAccountsSorted = [...repAccountRows].sort((a, b) => b.totalMargin - a.totalMargin);
   const initials = rep.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
   const roleLabel = rep.role.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
 
@@ -596,8 +608,10 @@ export default function RepReportPage() {
               { label: "Tasks Done", value: tasksDoneLabel, sub: `${tasks.overdue} overdue`, trend: tasks.overdue > 0 ? -1 : 0, icon: CheckSquare },
               { label: "Need Attention", value: String(accountsNeedingAttention), sub: "14+ days quiet", trend: accountsNeedingAttention > 0 ? -1 : 0, icon: AlertCircle },
               ...(hasFinancials ? [
-                { label: "Loads", value: repFinancials.loads.toLocaleString(), sub: "this month", trend: 0, icon: Package },
+                { label: "Loads", value: repFinancials.loads.toLocaleString(), sub: `${repFinancials.spotLoads} spot`, trend: 0, icon: Package },
+                { label: "Revenue", value: revenueDisplay, sub: "this month", trend: 0, icon: DollarSign },
                 { label: "Margin", value: marginDisplay, sub: "this month", trend: 0, icon: DollarSign },
+                { label: "Margin %", value: marginPctDisplay, sub: "of revenue", trend: 0, icon: TrendingUp },
               ] : []),
             ].map(({ label, value, sub, trend, icon: Icon }) => (
               <div key={label} className="bg-white/10 rounded-xl p-3 border border-white/10 backdrop-blur-sm" data-testid={`stat-${label.toLowerCase().replace(/\s/g, "-")}`}>
@@ -767,6 +781,69 @@ export default function RepReportPage() {
             </section>
           );
         })()}
+
+        {/* Financials by Account */}
+        {hasFinancials && repAccountsSorted.length > 0 && (
+          <section data-testid="section-financials-by-account">
+            <div className="flex items-center gap-2 mb-3">
+              <DollarSign className="h-4 w-4 text-primary" />
+              <h2 className="text-sm font-semibold">Financials by Account</h2>
+              <span className="text-xs text-muted-foreground ml-auto">{repAccountsSorted.length} account{repAccountsSorted.length !== 1 ? "s" : ""}</span>
+            </div>
+            <div className="rounded-xl border bg-card overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/30">
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Account</th>
+                      <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Loads</th>
+                      <th className="text-center px-3 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Spot</th>
+                      <th className="text-right px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Revenue</th>
+                      <th className="text-right px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Margin</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {repAccountsSorted.map((row, i) => (
+                      <tr key={i} className="hover:bg-muted/20 transition-colors" data-testid={`financials-account-row-${i}`}>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <div className="h-6 w-6 rounded bg-primary/10 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
+                              {row.customerName[0]}
+                            </div>
+                            <span className="text-sm font-medium text-foreground truncate max-w-[180px]">{row.customerName}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          <span className="text-sm font-semibold text-foreground">{row.totalLoads.toLocaleString()}</span>
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          <span className="text-sm text-muted-foreground">{(row.spotLoads ?? 0).toLocaleString()}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          <span className="text-sm text-foreground">{fmtMoney(row.totalRevenue ?? 0)}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          <span className={`text-sm font-semibold ${row.totalMargin >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
+                            {fmtMoney(row.totalMargin)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="border-t border-border bg-muted/20">
+                    <tr>
+                      <td className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total</td>
+                      <td className="px-3 py-2.5 text-center text-sm font-bold text-foreground">{repFinancials.loads.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-center text-sm text-muted-foreground">{repFinancials.spotLoads.toLocaleString()}</td>
+                      <td className="px-4 py-2.5 text-right text-sm font-bold text-foreground">{revenueDisplay}</td>
+                      <td className={`px-4 py-2.5 text-right text-sm font-bold ${repFinancials.margin >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>{marginDisplay}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          </section>
+        )}
 
         {/* 2-col layout */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
