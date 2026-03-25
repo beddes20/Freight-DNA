@@ -12,7 +12,7 @@ import { NotificationToasts } from "@/components/notification-toasts";
 import { CrmChatbot } from "@/components/crm-chatbot";
 import { Button } from "@/components/ui/button";
 import { Loader2, UserX } from "lucide-react";
-import React from "react";
+import React, { useEffect } from "react";
 import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -99,6 +99,18 @@ function Router() {
 
 function AuthenticatedApp() {
   const { user, isLoading } = useAuth();
+
+  useEffect(() => {
+    if (!user) return;
+    const prefetch = (key: string) =>
+      queryClient.prefetchQuery({ queryKey: [key] });
+    prefetch("/api/companies");
+    prefetch("/api/contacts");
+    prefetch("/api/users");
+    prefetch("/api/tasks");
+    prefetch("/api/notifications");
+    prefetch("/api/feed-posts");
+  }, [user?.id]);
 
   const stopImpersonatingMutation = useMutation({
     mutationFn: async () => {

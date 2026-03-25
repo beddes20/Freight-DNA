@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import compression from "compression";
 import { registerRoutes } from "./routes";
 import { setupAuth } from "./auth";
 import { serveStatic } from "./static";
@@ -16,6 +17,8 @@ import { storage } from "./storage";
 
 const app = express();
 const httpServer = createServer(app);
+
+app.use(compression());
 
 declare module "http" {
   interface IncomingMessage {
