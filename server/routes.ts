@@ -4147,6 +4147,80 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  // ── Repeat Carrier metric (for Logistics Managers) ─────────────────────────
+  app.get("/api/financials/repeat-carriers", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json([]);
+      const latest = uploads[uploads.length - 1];
+
+      const period = String(req.query.period || "current");
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth();
+      function mk(y: number, m: number) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+      let allowedMonths: Set<string> | null = null;
+      if (period === "current") {
+        allowedMonths = new Set([mk(curYear, curMonth)]);
+      } else if (period === "last") {
+        const lm = curMonth === 0 ? 11 : curMonth - 1;
+        const ly = curMonth === 0 ? curYear - 1 : curYear;
+        allowedMonths = new Set([mk(ly, lm)]);
+      } else if (period === "ytd") {
+        const keys = new Set<string>();
+        for (let m = 0; m <= curMonth; m++) keys.add(mk(curYear, m));
+        allowedMonths = keys;
+      }
+
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const cols = resolveColumns(txRows);
+
+      type DispData = {
+        dispatcherName: string;
+        totalLoads: number;
+        laneCarrierCounts: Map<string, number>;
+      };
+      const byDispatcher: Record<string, DispData> = {};
+
+      for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
+        const dispatcher = getDispatcherFromRow(row, cols);
+        if (!dispatcher) continue;
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || row["Total charges"] || 0);
+        if (revenue === 0) continue;
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
+
+        const carrier = String(row[cols.carrier] || "").trim().toLowerCase();
+        const origin = String(row[cols.shipperCity] || row[cols.origin] || "").trim().toLowerCase();
+        const dest = String(row[cols.consigneeCity] || row[cols.destination] || "").trim().toLowerCase();
+        const laneCarrierKey = `${origin}|${dest}||${carrier}`;
+
+        const key = dispatcher.toLowerCase().trim();
+        if (!byDispatcher[key]) byDispatcher[key] = { dispatcherName: dispatcher, totalLoads: 0, laneCarrierCounts: new Map() };
+        byDispatcher[key].totalLoads++;
+        byDispatcher[key].laneCarrierCounts.set(laneCarrierKey, (byDispatcher[key].laneCarrierCounts.get(laneCarrierKey) || 0) + 1);
+      }
+
+      const result = Object.values(byDispatcher).map(d => {
+        let repeatCarrierLoads = 0;
+        for (const count of d.laneCarrierCounts.values()) {
+          if (count > 1) repeatCarrierLoads += count - 1;
+        }
+        return {
+          dispatcherName: d.dispatcherName,
+          totalLoads: d.totalLoads,
+          repeatCarrierLoads,
+          repeatCarrierPct: d.totalLoads > 0 ? Math.round((repeatCarrierLoads / d.totalLoads) * 100) : 0,
+        };
+      });
+
+      return res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch repeat carrier data" });
+    }
+  });
+
   // ── Salesperson summary (for Sales roles) ──────────────────────────────────
   app.get("/api/financials/salesperson-summary", requireAuth, async (req, res) => {
     try {

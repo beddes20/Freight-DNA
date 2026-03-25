@@ -37,6 +37,7 @@ export interface FinancialCols {
   deliveryDate: string;
   marginDollar: string;
   tenderMethod: string;
+  carrier: string;
 }
 
 export function resolveColumns(rows: any[]): FinancialCols {
@@ -67,6 +68,7 @@ export function resolveColumns(rows: any[]): FinancialCols {
     deliveryDate:     find(/delivery.?date/i,                                           "Delivery date"),
     marginDollar:     find(/margin.?\$|^margin$/i,                                      "Margin $"),
     tenderMethod:     find(/tender/i,                                                   "Tender Method"),
+    carrier:          find(/^carrier$|^carrier.?name$|^scac$|^carrier.?scac$/i,         "Carrier"),
   };
 }
 

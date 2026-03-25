@@ -254,7 +254,7 @@ function TrendBadge({ current, prev }: { current: number; prev: number }) {
   );
 }
 
-function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominations, canNominate, onNominate, period, goalAttainment }: {
+function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominations, canNominate, onNominate, period, goalAttainment, repeatCarrierLoads }: {
   rep: RepPerf;
   totalLoads?: number;
   totalMargin?: number;
@@ -265,6 +265,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
   onNominate?: (rep: RepPerf) => void;
   period?: string;
   goalAttainment?: { onTrack: number; total: number };
+  repeatCarrierLoads?: number;
 }) {
   const [, navigate] = useLocation();
   const [showNote, setShowNote] = useState(false);
@@ -277,6 +278,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
     try { localStorage.setItem(`coaching-note-${rep.userId}`, val); } catch {}
   }
 
+  const isLmRole = rep.role === "logistics_manager" || rep.role === "logistics_coordinator";
   const initials = rep.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
   const colors = ["bg-blue-500", "bg-green-500", "bg-purple-500", "bg-amber-500", "bg-red-500", "bg-cyan-500", "bg-pink-500", "bg-indigo-500"];
   const color = colors[rep.name.charCodeAt(0) % colors.length];
@@ -291,12 +293,12 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
     : null;
   const hasFinancials = totalLoads != null || marginDisplay != null;
 
-  // Coaching priority: lagging on 2+ metrics
+  // Coaching priority: lagging on 2+ metrics (LMs don't track overdue/new contacts)
   const laggingMetrics: string[] = [];
   if (rep.callTouchpoints < 5) laggingMetrics.push("calls");
   if ((rep.meaningfulTouchpoints ?? 0) < 3) laggingMetrics.push("meaningful");
-  if (rep.overdueTasks >= 3) laggingMetrics.push("overdue tasks");
-  if (rep.newContacts === 0) laggingMetrics.push("new contacts");
+  if (!isLmRole && rep.overdueTasks >= 3) laggingMetrics.push("overdue tasks");
+  if (!isLmRole && rep.newContacts === 0) laggingMetrics.push("new contacts");
   const needsAttention = laggingMetrics.length >= 2;
 
   return (
@@ -317,7 +319,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
             </Badge>
           </div>
           <div className="shrink-0 flex flex-col items-end gap-1">
-            {rep.overdueTasks > 0 && (
+            {!isLmRole && rep.overdueTasks > 0 && (
               <div className="flex items-center gap-1 text-red-600 text-xs font-medium" data-testid={`badge-overdue-${rep.userId}`}>
                 <AlertTriangle className="h-3.5 w-3.5" />
                 {rep.overdueTasks} overdue
@@ -377,13 +379,25 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
           </div>
         )}
 
-        <div className="grid grid-cols-5 gap-1.5 mb-2">
-          <StatPill value={rep.openTasks} label="Open" color={rep.openTasks > 5 ? "text-amber-600" : "text-foreground"} />
-          <StatPill value={rep.overdueTasks} label="Overdue" color={rep.overdueTasks > 0 ? "text-red-600" : "text-foreground"} />
-          <StatPill value={rep.companyCount} label="Accounts" color="text-blue-600" />
-          <StatPill value={rep.newContacts} label="New Contacts" color="text-emerald-600" icon={<UserPlus className="h-3 w-3 text-emerald-500" />} />
-          <StatPill value={rep.baseAdvanced} label="Rel. Moved" color="text-teal-600" icon={<ArrowUpRight className="h-3 w-3 text-teal-500" />} />
-        </div>
+        {!isLmRole && (
+          <div className="grid grid-cols-5 gap-1.5 mb-2">
+            <StatPill value={rep.openTasks} label="Open" color={rep.openTasks > 5 ? "text-amber-600" : "text-foreground"} />
+            <StatPill value={rep.overdueTasks} label="Overdue" color={rep.overdueTasks > 0 ? "text-red-600" : "text-foreground"} />
+            <StatPill value={rep.companyCount} label="Accounts" color="text-blue-600" />
+            <StatPill value={rep.newContacts} label="New Contacts" color="text-emerald-600" icon={<UserPlus className="h-3 w-3 text-emerald-500" />} />
+            <StatPill value={rep.baseAdvanced} label="Rel. Moved" color="text-teal-600" icon={<ArrowUpRight className="h-3 w-3 text-teal-500" />} />
+          </div>
+        )}
+        {isLmRole && repeatCarrierLoads != null && (
+          <div className="flex items-center gap-1.5 mb-2 px-1 py-1.5 rounded-lg bg-violet-50 dark:bg-violet-900/20" data-testid={`repeat-carriers-${rep.userId}`}>
+            <Truck className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <span className="text-sm font-bold text-violet-600 dark:text-violet-400">{repeatCarrierLoads.toLocaleString()}</span>
+              <span className="text-[10px] text-muted-foreground ml-1.5">repeat carrier loads</span>
+            </div>
+            <span className="text-[10px] text-muted-foreground">same carrier, same lane</span>
+          </div>
+        )}
 
         <div className="grid grid-cols-5 gap-1.5 mb-1.5">
           <StatPill value={rep.callTouchpoints} label="Calls" color="text-blue-600" icon={<Phone className="h-3 w-3 text-blue-500" />} />
@@ -543,6 +557,16 @@ export default function TeamPerformancePage() {
     },
   });
 
+  type RepeatCarrierRow = { dispatcherName: string; totalLoads: number; repeatCarrierLoads: number; repeatCarrierPct: number };
+  const { data: repeatCarriersData = [] } = useQuery<RepeatCarrierRow[]>({
+    queryKey: ["/api/financials/repeat-carriers", period],
+    queryFn: async () => {
+      const res = await fetch(`/api/financials/repeat-carriers?period=${period}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
   type SalespersonSummaryRow = { salespersonName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
   const { data: salespersonSummary = [] } = useQuery<SalespersonSummaryRow[]>({
     queryKey: ["/api/financials/salesperson-summary", period],
@@ -668,6 +692,21 @@ export default function TeamPerformancePage() {
       lmLoadsMap[match.userId].loads += row.totalLoads;
       lmLoadsMap[match.userId].margin += row.totalMargin;
       lmLoadsMap[match.userId].revenue += row.totalRevenue ?? 0;
+    }
+  }
+
+  // Build repeat-carrier map for LMs — keyed by userId
+  const lmRepeatCarrierMap: Record<string, { repeatCarrierLoads: number; repeatCarrierPct: number }> = {};
+  for (const row of repeatCarriersData) {
+    if (!row.dispatcherName) continue;
+    const dispLower = row.dispatcherName.toLowerCase().trim();
+    const match = lmReps.find(r =>
+      (r.financialRepId && r.financialRepId.toLowerCase() === dispLower) ||
+      matchRepName(row.dispatcherName, r.name)
+    );
+    if (match) {
+      if (!lmRepeatCarrierMap[match.userId]) lmRepeatCarrierMap[match.userId] = { repeatCarrierLoads: 0, repeatCarrierPct: 0 };
+      lmRepeatCarrierMap[match.userId].repeatCarrierLoads += row.repeatCarrierLoads;
     }
   }
 
@@ -985,8 +1024,8 @@ export default function TeamPerformancePage() {
                           </td>
                           <td className="px-2 py-2 text-center text-sm font-semibold text-blue-600 dark:text-blue-400">{rep.callTouchpoints}</td>
                           <td className="px-2 py-2 text-center text-sm font-semibold text-rose-600 dark:text-rose-400">{rep.meaningfulTouchpoints ?? 0}</td>
-                          <td className="px-2 py-2 text-center text-sm">{rep.companyCount}</td>
-                          <td className={`px-2 py-2 text-center text-sm font-semibold ${rep.overdueTasks > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{rep.overdueTasks}</td>
+                          <td className="px-2 py-2 text-center text-sm text-muted-foreground">{(rep.role === "logistics_manager" || rep.role === "logistics_coordinator") ? "—" : rep.companyCount}</td>
+                          <td className={`px-2 py-2 text-center text-sm font-semibold ${rep.overdueTasks > 0 && rep.role !== "logistics_manager" && rep.role !== "logistics_coordinator" ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{(rep.role === "logistics_manager" || rep.role === "logistics_coordinator") ? "—" : rep.overdueTasks}</td>
                           <td className="px-2 py-2 text-center text-sm">{fin ? fin.loads.toLocaleString() : "—"}</td>
                           <td className="px-2 py-2 text-center">
                             {ga && ga.total > 0 ? (
@@ -1076,6 +1115,7 @@ export default function TeamPerformancePage() {
                     onNominate={setNominationTarget}
                     period={period}
                     goalAttainment={goalAttainmentMap[rep.userId]}
+                    repeatCarrierLoads={lmRepeatCarrierMap[rep.userId]?.repeatCarrierLoads}
                   />
                 ))}
               </div>
@@ -1102,6 +1142,7 @@ export default function TeamPerformancePage() {
                     onNominate={setNominationTarget}
                     period={period}
                     goalAttainment={goalAttainmentMap[rep.userId]}
+                    repeatCarrierLoads={lmRepeatCarrierMap[rep.userId]?.repeatCarrierLoads}
                   />
                 ))}
               </div>
