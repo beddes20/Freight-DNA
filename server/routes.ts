@@ -8073,7 +8073,7 @@ Respond with valid JSON only:
         scopedAliases = buildAliasSet(myCompanies);
       }
 
-      const resolveCompanyName = (alias: string): string => {
+      const resolveCompany = (alias: string): { name: string; companyId?: string } => {
         const norm = normAlias(alias);
         const match = allCompanies.find(c => {
           const cns = c.financialAlias
@@ -8082,7 +8082,7 @@ Respond with valid JSON only:
           return cns.some((cn: string) => cn === norm || cn.includes(norm) || norm.includes(cn));
         });
         // Fall back to the friendly display name (alias prefix stripped) if not in CRM
-        return match?.name || aliasFallbackName[norm] || alias;
+        return { name: match?.name || aliasFallbackName[norm] || alias, companyId: match?.id };
       };
 
       // Filter deltas by scope if applicable
@@ -8098,16 +8098,14 @@ Respond with valid JSON only:
         : deltas;
 
       filteredDeltas.sort((a, b) => b.delta - a.delta);
-      const up = filteredDeltas.filter(d => d.delta > 0).map(d => ({
-        name: resolveCompanyName(d.alias),
-        delta: d.delta,
-        isNew: d.isNew,
-      }));
-      const down = [...filteredDeltas].sort((a, b) => a.delta - b.delta).filter(d => d.delta < 0).map(d => ({
-        name: resolveCompanyName(d.alias),
-        delta: d.delta,
-        isNew: d.isNew,
-      }));
+      const up = filteredDeltas.filter(d => d.delta > 0).map(d => {
+        const { name, companyId } = resolveCompany(d.alias);
+        return { name, delta: d.delta, isNew: d.isNew, companyId };
+      });
+      const down = [...filteredDeltas].sort((a, b) => a.delta - b.delta).filter(d => d.delta < 0).map(d => {
+        const { name, companyId } = resolveCompany(d.alias);
+        return { name, delta: d.delta, isNew: d.isNew, companyId };
+      });
 
       res.json({ up, down, monthFraction, isPartialMonth, curMonthLabel });
     } catch (err) {

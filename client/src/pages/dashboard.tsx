@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -270,6 +270,8 @@ export default function Dashboard() {
   const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
   const isAm = currentUser?.role === "account_manager";
 
+  const [, setLocation] = useLocation();
+
   // Collapsible state for director/NAM portlets
   const [trendingUpCollapsed, setTrendingUpCollapsed] = useState(false);
   const [trendingDownCollapsed, setTrendingDownCollapsed] = useState(false);
@@ -283,7 +285,7 @@ export default function Dashboard() {
   const isAdmin = currentUser?.role === "admin";
   const directorFilterParam = isAdmin && selectedDirectorId ? `?directorId=${encodeURIComponent(selectedDirectorId)}` : "";
 
-  type TrendingAccount = { name: string; delta: number; isNew?: boolean };
+  type TrendingAccount = { name: string; delta: number; isNew?: boolean; companyId?: string };
   type TrendingResponse = { up: TrendingAccount[]; down: TrendingAccount[]; monthFraction?: number; isPartialMonth?: boolean; curMonthLabel?: string };
   const { data: trendingAccounts, isLoading: trendingLoading } = useQuery<TrendingResponse>({
     queryKey: ["/api/dashboard/trending-accounts", selectedDirectorId],
@@ -1138,7 +1140,7 @@ export default function Dashboard() {
                     <>
                       <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                         {trendingAccounts!.up.map((acct, idx) => (
-                          <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-up-${idx}`}>
+                          <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`trending-up-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
                             <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                             <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                             {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
@@ -1189,7 +1191,7 @@ export default function Dashboard() {
                     <>
                       <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                         {trendingAccounts!.down.map((acct, idx) => (
-                          <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-down-${idx}`}>
+                          <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`trending-down-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
                             <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                             <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                             {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
@@ -1413,7 +1415,7 @@ export default function Dashboard() {
                   : (namTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
                   : <>
                     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.up.map((acct, idx) => (
-                      <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-up-${idx}`}>
+                      <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`nam-trending-up-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
                         <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                         <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                         {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
@@ -1451,7 +1453,7 @@ export default function Dashboard() {
                   : (namTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
                   : <>
                     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.down.map((acct, idx) => (
-                      <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-down-${idx}`}>
+                      <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`nam-trending-down-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
                         <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                         <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                         {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
@@ -1651,7 +1653,7 @@ export default function Dashboard() {
                   : (amTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
                   : <>
                     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.up.map((acct, idx) => (
-                      <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-up-${idx}`}>
+                      <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`am-trending-up-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
                         <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                         <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                         {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
@@ -1689,7 +1691,7 @@ export default function Dashboard() {
                   : (amTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
                   : <>
                     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.down.map((acct, idx) => (
-                      <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-down-${idx}`}>
+                      <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`am-trending-down-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
                         <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                         <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
                         {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
