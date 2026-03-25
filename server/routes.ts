@@ -8308,8 +8308,8 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      // Management roles don't have individual daily touch targets — skip the banner
-      const mgmtRoles = ["director", "national_account_manager", "admin", "sales", "sales_director"];
+      // Management roles and LMs don't have individual daily touch targets — skip the banner
+      const mgmtRoles = ["director", "national_account_manager", "admin", "sales", "sales_director", "logistics_manager", "logistics_coordinator"];
       if (mgmtRoles.includes(user.role)) {
         return res.json({ skip: true });
       }

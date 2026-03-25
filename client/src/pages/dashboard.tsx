@@ -263,6 +263,7 @@ export default function Dashboard() {
   const { data: myGoals = [] } = useQuery<any[]>({
     queryKey: ["/api/goals"],
     refetchInterval: 120000,
+    enabled: !isLmRole,
   });
 
   const isDirector = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director";
@@ -2308,7 +2309,7 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {behindGoals.length > 0 && (
+      {behindGoals.length > 0 && !isLmRole && (
         <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goals-nudge">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
