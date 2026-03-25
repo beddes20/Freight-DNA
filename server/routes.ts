@@ -1040,11 +1040,11 @@ export async function registerRoutes(
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const parsed = insertCompanySchema.safeParse(req.body);
+      const parsed = insertCompanySchema.omit({ organizationId: true }).safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      const data: typeof parsed.data & { organizationId: string } = { ...parsed.data, organizationId: req.session.organizationId! };
+      const data = { ...parsed.data, organizationId: req.session.organizationId! };
       if (currentUser.role === "admin") {
         // admin can assign to anyone — leave assignedTo as-is
       } else if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
