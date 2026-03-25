@@ -144,7 +144,11 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, o
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h4 className="font-medium truncate" data-testid={`text-contact-name-${contact.id}`}>
+                  <h4
+                    className="font-medium truncate hover:underline cursor-pointer"
+                    data-testid={`text-contact-name-${contact.id}`}
+                    onClick={(e) => { e.stopPropagation(); onEdit(contact); }}
+                  >
                     {contact.name}
                   </h4>
                   {base && (
