@@ -1689,7 +1689,9 @@ function PairingRow({ p, isSelected, onSelect, showNamLabel }: { p: Pairing; isS
 
 function PairingList({ pairings, selectedKey, onSelect, showNamLabel, userRole }: PairingListProps) {
   const [search, setSearch] = useState("");
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(pairings.map(p => [p.namId, true]))
+  );
 
   const isAdmin = userRole === "admin";
   const isDirector = userRole === "director" || userRole === "sales_director";
