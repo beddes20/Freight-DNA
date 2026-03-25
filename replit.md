@@ -1,7 +1,7 @@
 # OrgChart CRM - Transportation Brokerage Sales Tool
 
 ## Overview
-OrgChart CRM is a mini CRM application designed for transportation brokerage sales teams. It enables sales representatives to build and manage organizational charts for customer accounts, track contacts, reporting structures, shipping lanes, managed regions, freight spend, and spot bidding. Key functionalities include dedicated RFP and Award management with Excel upload and data analysis, aiming to streamline sales workflows and enhance customer relationship management. The system incorporates robust role-based access control (RBAC) for admins, national account managers, and account managers. The business vision is to significantly improve sales efficiency, strategic account penetration, and ultimately increase market share and revenue for transportation brokers.
+OrgChart CRM is a mini CRM application for transportation brokerage sales teams. Its primary purpose is to empower sales representatives to efficiently manage customer accounts, build organizational charts, track contacts, and oversee shipping-related data such as lanes, regions, freight spend, and spot bidding. The system includes dedicated RFP and Award management with Excel upload and analytical capabilities. The overarching goal is to streamline sales workflows, enhance customer relationship management, and ultimately drive increased sales efficiency, strategic account penetration, and revenue growth for transportation brokers. It features robust role-based access control (RBAC) for various management levels.
 
 ## User Preferences
 I prefer clear and concise information. I like iterative development with regular updates. Please ask for my approval before implementing any major architectural changes or significant feature modifications. I value clean code and well-documented solutions.
@@ -9,87 +9,38 @@ I prefer clear and concise information. I like iterative development with regula
 ## System Architecture
 
 ### UI/UX Decisions
-The application uses React, TypeScript, and Tailwind CSS with `shadcn/ui` for a modern, responsive design. It supports dark/light modes, features blue and green accent colors, a gradient hero banner, and KPI stat cards on the dashboard. Navigation is via a responsive sidebar, and interactive elements like confetti animations enhance user experience.
+The application utilizes React, TypeScript, and Tailwind CSS with `shadcn/ui` to deliver a modern and responsive user interface. It incorporates dark/light mode switching, uses blue and green accent colors, features a gradient hero banner, and displays KPI stat cards on the dashboard. Navigation is managed through a responsive sidebar, complemented by interactive elements like confetti animations. The theme predominantly features a black sidebar/header with amber gold accents, specific branding elements like the Value Truck logo, and mantras displayed in the top header.
 
 ### Technical Implementations
-- **Frontend**: React with TypeScript, TanStack Query for data fetching, and Wouter for routing.
-- **Backend**: Express.js with TypeScript for API, authentication, and file processing.
-- **Database**: PostgreSQL with Drizzle ORM.
-- **Authentication**: Session-based authentication using `express-session`, `connect-pg-simple`, and `bcrypt` for password hashing. Role-based access control (RBAC) filters data visibility based on user roles (Admin, Director, National Account Manager, Account Manager). Directors oversee NAMs and AMs.
-- **File Processing**: `xlsx` (SheetJS) for Excel/CSV parsing and `multer` for file uploads.
-- **Mapping & Geocoding**: Leaflet for interactive maps (e.g., delivery heatmap), supported by custom server-side geocoding and Haversine distance calculations.
-- **Data Models**: Key entities include Users, Companies, Contacts, RFPs, Awards, and Tasks, supporting hierarchical relationships and specific transportation data.
+- **Frontend**: Built with React, TypeScript, TanStack Query for data fetching, and Wouter for routing.
+- **Backend**: An Express.js server developed with TypeScript handles API requests, authentication, and file processing.
+- **Database**: PostgreSQL is used as the primary data store, managed with Drizzle ORM.
+- **Authentication**: The system employs session-based authentication using `express-session`, `connect-pg-simple`, and `bcrypt` for secure password hashing. Role-based access control (RBAC) dynamically filters data visibility based on user roles (Admin, Director, National Account Manager, Account Manager, Logistics Manager, Logistics Coordinator).
+- **File Processing**: Excel and CSV parsing are handled by `xlsx` (SheetJS), while `multer` is used for file uploads.
+- **Mapping & Geocoding**: Interactive maps are powered by Leaflet, integrated with custom server-side geocoding and Haversine distance calculations for features like delivery heatmaps.
+- **Data Models**: Core entities include Users, Companies, Contacts, RFPs, Awards, and Tasks, designed to support hierarchical relationships and specific transportation industry data.
 - **Key Features**:
-    - **Company & Contact Management**: Full CRUD operations with transportation-specific fields and organizational chart visualization.
-    - **RFP & Award Management**: Modules for managing RFPs and awards, including Excel upload with AI-assisted column mapping (preview-headers endpoint uses OpenAI to suggest standard field mappings, user confirms via dialog before upload).
-    - **Lane Research & Assignment**: Identification and assignment of high-volume lanes from RFPs.
-    - **Analytical Features**: Facility coverage gap analysis, lane pattern analysis, historical data analysis, top opportunities identification, proximity matches, and a lane matching portlet.
-    - **User Management & Account Transfer**: Admin and NAM tools for user management, team hierarchy, and company reassignment.
-    - **Global Search**: Live, debounced search across companies and users.
-    - **OneDrive Sync**: Direct fetching of Excel files from OneDrive for financial data, eliminating manual uploads.
-    - **Task Assignment**: Creation, assignment, and tracking of tasks with status, due dates, and links to accounts.
-    - **Callouts / Trends Feed**: A shared communication feed for trends, callouts, and ideas, linkable to accounts and supporting threaded replies.
-    - **1:1 Topics / Discussions**: A dashboard portlet for NAM-AM pairings to manage discussion points, with support for topics, tags, and threaded replies.
-    - **Goals System**: NAMs set and track goals for AMs, including auto-tracked metrics (Contacts Added, Touchpoints) and manually updated ones (Load Count, Margin, Custom).
-    - **Touchpoints**: Logging of contact interactions (Call, Email, Text, Site Visit) with recency tracking and "Contacts Needing Attention" alerts.
-    - **PTO Passoff**: System for reps to create passoffs during PTO, detailing coverage, emergency contacts, and account-specific checklists for covering personnel.
-    - **Account Intelligence**: Dedicated fields within company profiles for portal credentials, financial aliases, tendering process, spot process, dispatch email, account quirks, and process notes.
-    - **Customer Scorecard**: Ability to upload and download scorecard documents directly on company profiles, secured by RBAC.
-    - **File Attachments**: Generic attachment system for various entities (posts, 1:1 topics, touchpoints, tasks, scorecards), storing files as base64 with download functionality.
-    - **Salesperson Linking**: Companies linked to sales users (`sales_person_id`), auto-populated from financial data uploads and manually overrideable.
-    - **Quick Log Touch**: Streamlined logging of contact touchpoints from customer lists and company detail pages.
-    - **Dashboard Alerts**: Contextual alerts for RFP deadlines, goal progress, missing goals, and pending 1:1 topics.
-    - **Task from Cold Contacts**: Direct task creation for contacts needing attention from the dashboard.
-    - **PTO Passoff Handback**: Functionality for PTO owners to close and return accounts upon their return.
-    - **Meaningful Touchpoints**: Toggle on quick-touch dialogs (both customer list and company detail) to flag a conversation as "meaningful" (freight needs, rates, real opportunity, strategy). Requires a note if marked meaningful. Last meaningful date shown as green badge on contact cards in the org chart.
-    - **Shipping Modes**: Company profile includes LTL/FTL/Drayage/IMDL checkboxes (stored as `shipping_modes text[]`). Modes display as blue outline badges near Industry on company detail header.
-    - **Wallet Share Calculator**: Panel below Market Share card on company detail. If RFP exists, uses RFP total volume + our financial data to project incremental margin from capturing X% more of freight. If no RFP, uses `estimated_freight_spend` (company field). Slider 1-25% with live calculation.
-    - **Awarded Lane Highlighting**: In RFP Intelligence Lane Patterns → Corridors tab, lanes that appear in an awarded/partially-awarded RFP are highlighted with a green "✓ We Ship This" badge and green border.
+    - **CRM Capabilities**: Comprehensive CRUD operations for company and contact management, including organizational chart visualization and transportation-specific fields.
+    - **RFP & Award Management**: Modules for managing RFPs and awards, featuring Excel upload with AI-assisted column mapping.
+    - **Analytical Tools**: Includes lane research, facility coverage gap analysis, lane pattern analysis, historical data analysis, top opportunities identification, and a lane matching portlet. Wallet share calculation is dynamically presented based on RFP data or estimated spend.
+    - **User and Team Management**: Tools for user administration, team hierarchy management, and company reassignment, along with features for PTO passoff and account handback.
+    - **Data Integration & Sync**: Global search functionality, OneDrive synchronization for financial data, and a system for attaching files to various entities.
+    - **Communication & Collaboration**: Task assignment and tracking, a shared callouts/trends feed, and 1:1 discussion topics between managers and their reports.
+    - **Goal Setting & Tracking**: A system for National Account Managers (NAMs) to set and track goals for Account Managers (AMs), including automated and manual metrics.
+    - **Customer Interaction Tracking**: Logging of contact touchpoints (calls, emails, texts, site visits) with recency tracking, "Contacts Needing Attention" alerts, and the ability to mark "meaningful" conversations.
+    - **Account Intelligence**: Dedicated fields within company profiles for critical operational and financial details, including portal credentials, tendering processes, and account quirks.
+    - **Customer Scorecard**: Secure upload and download of customer scorecard documents.
+    - **Dashboard Enhancements**: Contextual alerts for RFP deadlines, goal progress, and pending 1:1 topics, along with specialized dashboard portlets for LMs, AMs, and NAMs, providing role-specific insights and metrics.
+    - **AI-Powered Insights**: AI-generated talking points for lane gap insights, incorporating account context for enhanced daily brief emails and chatbot prompts.
+    - **Health and Momentum Scoring**: Automated calculation of company health and momentum scores based on various interaction and activity factors.
+    - **Shipping Mode Management**: Categorization and filtering of companies by shipping modes (LTL, FTL, Drayage, IMDL).
 
 ## External Dependencies
-- **PostgreSQL**: Database and session storage.
-- **xlsx (SheetJS)**: Excel/CSV parsing.
-- **multer**: File upload handling.
-- **Leaflet**: Interactive mapping.
-- **OneDrive API (Microsoft Graph API)**: Financial data synchronization.
-- **node-cron**: Scheduling recurring jobs.
-### Email
-- **Primary provider**: Resend (`RESEND_API_KEY` Replit Secret) — recommended; works from cloud hosting
-- **Fallback provider**: GoDaddy SMTP via `smtpout.secureserver.net:465` (SSL) — blocked by GoDaddy from cloud IPs; only works locally
-- **From address**: `info@freight-dna.com` (env: `SMTP_FROM`)
-- **Env vars**: `SMTP_HOST=smtpout.secureserver.net`, `SMTP_PORT=465`, `SMTP_FROM=info@freight-dna.com`, `SMTP_FROM_NAME` (all set in shared env)
-- **Secrets**: `SMTP_PASSWORD` (GoDaddy password — kept for fallback), `RESEND_API_KEY` (Resend API key — set this to fix email)
-- **Priority**: `emailService.ts` checks `RESEND_API_KEY` first; falls back to SMTP if not set
-- **Domain verification**: `freight-dna.com` must be verified in Resend dashboard (add DNS records in GoDaddy)
-- **Rep Report emails**: Weekly (Mon 7am cron) + Monthly (1st of month 7am cron) via `repReportScheduler.ts`
-- **Template**: Styled HTML matching brand colors; built in `emailService.ts` → `buildRepReportEmail()`
-- **Manual send**: `POST /api/report/rep/:userId/send-email` (button on report page)
-- **Email config test**: `POST /api/admin/smtp/test` — admin-only; UI panel at bottom of User Management page
-### Relationship Health & Pre-Call Planner
-- **Health Score**: `GET /api/companies/:id/health-score` — computes a 0–100 score from 5 factors: Touchpoint Recency (30), Engagement Frequency (25), Contact Depth (20), RFP/Award Activity (15), Financial Data (10). Returns grade (Excellent/Good/Fair/At Risk) and color. Badge renders next to company name on detail page; clicking opens Pre-Call Brief.
-- **Pre-Call Planner**: Modal (`client/src/components/pre-call-planner.tsx`) accessible from company detail header — shows financial snapshot, key contacts with last touch, last 5 touchpoints, open tasks, active RFPs/awards, account intelligence (quirks, spot process, tender style, DL email), full health score factor breakdown, shipping mode badges, and "Last Meaningful Conversation" green card. Includes print button.
-- **Claims Portal Button**: `GET /api/config/claims-url` returns the `CLAIMS_PORTAL_URL` env var. Claims button appears in company detail header only when the env var is set; opens the claims portal in a new tab.
-- **Meaningful Touchpoint Improvements**: `GET /api/dashboard/meaningful-overdue` returns contacts with no meaningful touch in 30+ days (shown as dashboard alert card). `meaningful_touchpoints` is a goal metric option (auto-tracked). 1:1 report card shows "X meaningful / Y total" breakdown. Customer list and pre-call planner show meaningful context.
-- **Shipping Mode Enhancements**: Customer list has LTL/FTL/Drayage/IMDL toggle filter chips. Pre-call planner shows mode badges in header. DNA Guru includes shipping modes in account context.
-- **RFP Corridors Improvements**: Corridors tab shows green "We ship X of Y corridors" summary bar and amber alert listing top-3 unawarded high-volume lanes.
-- **Wallet Share Enhancements**: "Copy as Talking Point" button on wallet share calculator generates a ready-to-use call prep sentence. Dashboard shows "Top Wallet Share Opportunities" leaderboard (top 5 accounts by untapped potential margin, via `GET /api/dashboard/opportunity-leaderboard`).
-
-### UI Theme
-- **Color scheme**: Black sidebar/header (#111 dark) with Value Truck amber gold (#ffb400) accents
-- **Sidebar**: Pure black background, white nav text, gold active indicator (left border + warm bg), real VT white logo from valuetruck.com, gold "DNA · Down, Not Across" tagline
-- **Top header**: Black, gold mantras centered ("Service Exceptionally · Move Fast · Build Relationships · Hunt Opportunities · Grow Relentlessly")
-- **Dashboard hero banner**: Black background, gold date/DNA text, VT logo in gold-outlined circle with glow
-- **Primary color**: `43 100% 50%` (HSL for #ffb400); primary-foreground dark (0 0% 5%) for dark text on gold buttons
-
-## Recently Added (Session)
-- **Account Summary**: `account_summary` text field on companies (DB migrated). Editable in company detail sidebar (Account Intelligence edit panel). Shows in view panel and as italic preview on customer list cards.
-- **Quick-Add Contact**: `UserPlus` button on every customer card opens a dialog to add a contact (name/title/email/phone) without navigating away. POSTs to `/api/contacts`.
-- **Weekly Touchpoint Leaderboard**: `/api/leaderboard/weekly-touchpoints` endpoint aggregates current-week touchpoints by rep (Mon–Sun), broken down by type (call/email/text/site_visit/meaningful). Card shown on dashboard for NAM/admin/director/sales_director roles.
-- **RFP Deadline Timeline**: Horizontal timeline section at the top of RFP & Awards page showing open/pending RFPs sorted by due date with urgency coloring (overdue=red, ≤7d=amber, ≤14d=yellow, beyond=normal). Shows up to 6 RFPs.
-- **Enhanced AI Talking Points**: Chatbot prompt now includes `accountSummary`, tender style, urgent RFPs (≤14d), open tasks, industry context; max tokens raised to 600.
-- **LM Sidebar Cleanup**: `logistics_manager` and `logistics_coordinator` roles no longer see Customers, Top Opportunities, or the Pipeline section (RFP & Awards, Research Tasks) in the sidebar. Only operationally-relevant nav items remain.
-- **LM Career Panel**: `client/src/components/lm-career-panel.tsx` — dashboard panel shown only for LMs with: (1) financial stat row (Loads This Month, Margin $, Margin % from account-summary or dispatcher-summary by `financialRepId`), (2) Path to Account Manager criteria progress from `promotionCriteria` table with pass/fail indicators, (3) Development Milestones checklist (LM can self-check).
-- **LM Development Milestones**: `GET /api/lm-milestones/:lmId` and `PUT /api/lm-milestones/:lmId` — stored as JSON in `developmentGoals` table (`content` field: `{milestones:[{id,text,completed}]}`). Managers add/delete milestones on the Goals page when viewing an LM's tab. LMs view and toggle completion on dashboard and goals page.
-- **NAM Dashboard Portlets**: NAMs now see a full director-style dashboard scoped to their team: (1) Team activity row (relationships moved, meaningful convos, new contacts, touches — all scoped to their AMs' accounts), (2) Trending accounts up/down (team-scoped), (3) AM Margin Metrics for their direct reports, (4) Personal metrics row (their own: relationships moved this month, meaningful today, contacts added today, touches today). All director endpoints now accept NAM role and auto-scope via `managerId` hierarchy.
-- **AM Dashboard Portlets**: AMs now see (1) Trending accounts up/down scoped to their own accounts (`salesPersonId === userId`), (2) Personal metrics row (relationships moved this month, meaningful today, contacts added today, touches today).
-- **Personal Metrics Endpoint**: `GET /api/dashboard/personal-metrics` — open to all roles. Returns `{ relationshipsMovedThisMonth, meaningfulToday, contactsAddedToday, touchesToday }` for the current user's personally-owned accounts.
+- **PostgreSQL**: Used for database management and session storage.
+- **xlsx (SheetJS)**: Employed for parsing Excel and CSV files.
+- **multer**: Handles file uploads.
+- **Leaflet**: Provides interactive mapping capabilities.
+- **OneDrive API (Microsoft Graph API)**: Facilitates synchronization of financial data.
+- **node-cron**: Used for scheduling recurring jobs, such as report generation and daily digest emails.
+- **Resend / GoDaddy SMTP**: For sending transactional and report emails, with Resend as the primary and GoDaddy SMTP as a fallback.
+- **OpenAI (GPT-4o-mini)**: Integrated for AI-assisted features like RFP column mapping suggestions, lane gap insights, and AI-generated "Priority for Today" in daily briefs.

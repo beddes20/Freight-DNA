@@ -35,7 +35,7 @@ type TaskLike = { id: string | number; title: string; status: string; dueDate?: 
 type FinancialSummary = { totalLoads: number; totalMargin: number; totalRevenue?: number } | null;
 
 interface HealthFactor { name: string; score: number; max: number; label: string }
-interface HealthScore { score: number; grade: string; color: string; factors: HealthFactor[] }
+interface HealthScore { score: number; grade: string; color: string; momentum?: "up" | "flat" | "down"; momentumLabel?: string; factors: HealthFactor[] }
 
 interface PreCallPlannerProps {
   open: boolean;
@@ -410,6 +410,17 @@ export function PreCallPlanner({
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground border-b pb-1 mb-2 flex items-center gap-1.5">
                 <Activity className="h-3.5 w-3.5" /> Relationship Health — {healthScore.grade} ({healthScore.score}/100)
+                {healthScore.momentum && (
+                  <span
+                    className={`ml-1 text-sm font-bold ${healthScore.momentum === "up" ? "text-green-600" : healthScore.momentum === "down" ? "text-red-500" : "text-muted-foreground"}`}
+                    title={healthScore.momentumLabel}
+                  >
+                    {healthScore.momentum === "up" ? "↑" : healthScore.momentum === "down" ? "↓" : "→"}
+                  </span>
+                )}
+                {healthScore.momentumLabel && (
+                  <span className="text-[11px] font-normal normal-case text-muted-foreground">({healthScore.momentumLabel})</span>
+                )}
               </h3>
               <div className="space-y-1.5">
                 {healthScore.factors.map(f => (

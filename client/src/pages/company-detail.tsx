@@ -282,6 +282,7 @@ export default function CompanyDetail() {
   const [zoomInfoOpen, setZoomInfoOpen] = useState(false);
   const [preCallOpen, setPreCallOpen] = useState(false);
   const [touchLogCollapsed, setTouchLogCollapsed] = useState(false);
+  const [laneGapInsights, setLaneGapInsights] = useState<Record<string, string>>({});
   const [importRows, setImportRows] = useState<any[]>([]);
   const [importFileName, setImportFileName] = useState("");
   const [detailTab, setDetailTab] = useState<string>(() => {
@@ -382,6 +383,18 @@ export default function CompanyDetail() {
     },
   });
 
+  const laneGapInsightsMutation = useMutation({
+    mutationFn: async (corridors: Array<{ lane: string; totalVolume: number; originState?: string; destinationState?: string }>) => {
+      const res = await apiRequest("POST", `/api/companies/${companyId}/lane-gap-insights`, { corridors });
+      return res.json() as Promise<{ insights: Array<{ lane: string; talkingPoint: string }> }>;
+    },
+    onSuccess: (data) => {
+      const map: Record<string, string> = {};
+      for (const item of data.insights) map[item.lane] = item.talkingPoint;
+      setLaneGapInsights(map);
+    },
+  });
+
   const { data: companyTasks = [] } = useQuery<TaskWithCount[]>({
     queryKey: ["/api/tasks/company", companyId],
     refetchInterval: 60000,
@@ -406,7 +419,7 @@ export default function CompanyDetail() {
   });
 
   type HealthFactor = { name: string; score: number; max: number; label: string };
-  type HealthScore = { score: number; grade: string; color: string; factors: HealthFactor[] };
+  type HealthScore = { score: number; grade: string; color: string; momentum: "up" | "flat" | "down"; momentumLabel: string; factors: HealthFactor[] };
   const { data: healthScore } = useQuery<HealthScore>({
     queryKey: ["/api/companies", companyId, "health-score"],
     enabled: !!companyId,
@@ -1005,16 +1018,27 @@ export default function CompanyDetail() {
                     amber: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800",
                     red:   "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 border-red-200 dark:border-red-800",
                   };
+                  const momentumIcon = healthScore.momentum === "up" ? "↑" : healthScore.momentum === "down" ? "↓" : "→";
+                  const momentumColor = healthScore.momentum === "up" ? "text-green-600 dark:text-green-400" : healthScore.momentum === "down" ? "text-red-500 dark:text-red-400" : "text-muted-foreground";
                   return (
-                    <button
-                      onClick={() => setPreCallOpen(true)}
-                      className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${colorMap[healthScore.color] ?? colorMap.amber}`}
-                      title="Click to open Pre-Call Brief"
-                      data-testid="badge-health-score"
-                    >
-                      <Activity className="h-3 w-3" />
-                      {healthScore.grade} · {healthScore.score}/100
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setPreCallOpen(true)}
+                        className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${colorMap[healthScore.color] ?? colorMap.amber}`}
+                        title="Click to open Pre-Call Brief"
+                        data-testid="badge-health-score"
+                      >
+                        <Activity className="h-3 w-3" />
+                        {healthScore.grade} · {healthScore.score}/100
+                      </button>
+                      <span
+                        className={`text-sm font-bold ${momentumColor}`}
+                        title={healthScore.momentumLabel}
+                        data-testid="badge-momentum"
+                      >
+                        {momentumIcon}
+                      </span>
+                    </div>
                   );
                 })()}
               </div>
@@ -2541,11 +2565,41 @@ export default function CompanyDetail() {
                                 </div>
                               )}
                               {topUnawarded.length > 0 && (
-                                <div className="rounded-md px-3 py-2 bg-amber-50/60 dark:bg-amber-950/15 border border-amber-200/50 dark:border-amber-800/30 text-xs space-y-0.5">
-                                  <p className="font-medium text-amber-700 dark:text-amber-400">Top unawarded lanes — high priority to win:</p>
-                                  {topUnawarded.map((c, i) => (
-                                    <p key={i} className="text-muted-foreground pl-1">· {c.lane} ({c.totalVolume.toLocaleString()} loads/yr)</p>
-                                  ))}
+                                <div className="rounded-md px-3 py-2 bg-amber-50/60 dark:bg-amber-950/15 border border-amber-200/50 dark:border-amber-800/30 text-xs space-y-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="font-medium text-amber-700 dark:text-amber-400">Top unawarded lanes — high priority to win:</p>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-6 px-2 text-[11px] border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-400 shrink-0"
+                                      disabled={laneGapInsightsMutation.isPending}
+                                      onClick={() => laneGapInsightsMutation.mutate(topUnawarded.map(c => ({ lane: c.lane, totalVolume: c.totalVolume, originState: c.originState, destinationState: c.destinationState })))}
+                                      data-testid="button-generate-lane-insights"
+                                    >
+                                      {laneGapInsightsMutation.isPending ? "Generating…" : "✦ AI Talking Points"}
+                                    </Button>
+                                  </div>
+                                  <div className="space-y-2">
+                                    {topUnawarded.map((c, i) => (
+                                      <div key={i} className="space-y-1">
+                                        <p className="text-muted-foreground pl-1">· <span className="font-medium text-foreground">{c.lane}</span> ({c.totalVolume.toLocaleString()} loads/yr)</p>
+                                        {laneGapInsights[c.lane] && (
+                                          <div className="ml-3 flex items-start gap-2 rounded bg-white/60 dark:bg-white/5 border border-amber-200/60 dark:border-amber-800/20 px-2 py-1.5">
+                                            <span className="text-amber-600 dark:text-amber-400 mt-0.5">💬</span>
+                                            <p className="text-muted-foreground leading-relaxed flex-1">{laneGapInsights[c.lane]}</p>
+                                            <button
+                                              className="shrink-0 text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 transition-colors"
+                                              title="Copy talking point"
+                                              data-testid={`button-copy-lane-insight-${i}`}
+                                              onClick={() => navigator.clipboard.writeText(laneGapInsights[c.lane])}
+                                            >
+                                              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
                               )}
                               {activeCorridors.map((c, i) => {

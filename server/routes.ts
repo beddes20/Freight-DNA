@@ -6712,10 +6712,38 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       else if (total >= 40) { grade = "Fair";      color = "amber"; }
       else                  { grade = "At Risk";   color = "red"; }
 
+      // Momentum: compare touches last 30 days vs 31-60 days ago
+      const sixtyDaysAgo = new Date(now); sixtyDaysAgo.setDate(now.getDate() - 60);
+      const sixtyDaysStr = sixtyDaysAgo.toISOString().slice(0, 10);
+      const prevPeriodCount = touchpoints.filter(t => t.date >= sixtyDaysStr && t.date < thirtyDaysStr).length;
+      const meaningfulRecent = touchpoints.filter(t => t.date >= thirtyDaysStr && (t as any).isMeaningful).length;
+
+      let momentum: "up" | "flat" | "down";
+      let momentumLabel: string;
+      if (recentCount === 0 && prevPeriodCount === 0) {
+        momentum = "flat"; momentumLabel = "No recent activity";
+      } else if (prevPeriodCount === 0) {
+        momentum = "up"; momentumLabel = `New engagement — ${recentCount} touch${recentCount !== 1 ? "es" : ""} this period`;
+      } else {
+        const pctChange = (recentCount - prevPeriodCount) / prevPeriodCount;
+        if (pctChange >= 0.25) {
+          momentum = "up"; momentumLabel = `Up ${Math.round(pctChange * 100)}% vs prior month (${recentCount} vs ${prevPeriodCount} touches)`;
+        } else if (pctChange <= -0.25) {
+          momentum = "down"; momentumLabel = `Down ${Math.round(Math.abs(pctChange) * 100)}% vs prior month (${recentCount} vs ${prevPeriodCount} touches)`;
+        } else {
+          momentum = "flat"; momentumLabel = `Steady — ${recentCount} touches this period`;
+        }
+      }
+      if (meaningfulRecent > 0 && momentum !== "up") {
+        momentum = "up"; momentumLabel = `${meaningfulRecent} meaningful conversation${meaningfulRecent !== 1 ? "s" : ""} in last 30 days`;
+      }
+
       res.json({
         score: total,
         grade,
         color,
+        momentum,
+        momentumLabel,
         factors: [
           { name: "Touchpoint Recency",   score: recencyScore, max: 30, label: recencyLabel },
           { name: "Engagement Frequency", score: freqScore,    max: 25, label: freqLabel },
@@ -6726,6 +6754,51 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to compute health score" });
+    }
+  });
+
+  // Lane gap AI talking points — generate a one-liner per unawarded corridor
+  app.post("/api/companies/:id/lane-gap-insights", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const { corridors } = req.body as { corridors: Array<{ lane: string; totalVolume: number; originState?: string; destinationState?: string }> };
+      if (!corridors?.length) return res.json({ insights: [] });
+
+      const { default: OpenAI } = await import("openai");
+      const openai = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
+
+      const laneList = corridors.slice(0, 5).map((c, i) =>
+        `${i + 1}. ${c.lane} — ${c.totalVolume.toLocaleString()} loads/yr${c.originState && c.destinationState ? ` (${c.originState} → ${c.destinationState})` : ""}`
+      ).join("\n");
+
+      const prompt = `You are a freight brokerage sales coach. For each of these unawarded shipping lanes for customer "${company.name}", write a single punchy, specific talking point a sales rep can use on a call. Focus on freight density, carrier availability, competitive positioning, or urgency. Keep each to 1-2 sentences max. Be concrete and confident.
+
+Lanes:
+${laneList}
+
+Respond with valid JSON only:
+{ "insights": [{ "lane": "exact lane name from input", "talkingPoint": "your talking point here" }] }`;
+
+      const resp = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 500,
+        temperature: 0.4,
+      });
+
+      const raw = resp.choices[0]?.message?.content?.trim() || "";
+      const parsed = JSON.parse(raw);
+      res.json(parsed);
+    } catch (err) {
+      console.error("Lane gap insights error:", err);
+      res.status(500).json({ error: "Failed to generate lane insights" });
     }
   });
 
