@@ -59,17 +59,26 @@ async function getAuthToken(): Promise<string> {
     return cachedToken;
   }
 
-  const username = process.env.ZOOMINFO_USERNAME || process.env.ZOOMINFO_CLIENT_ID;
-  const password = process.env.ZOOMINFO_PASSWORD || process.env.ZOOMINFO_CLIENT_SECRET;
+  const username = process.env.ZOOMINFO_USERNAME;
+  const password = process.env.ZOOMINFO_PASSWORD;
+  const clientId = process.env.ZOOMINFO_CLIENT_ID;
+  const clientSecret = process.env.ZOOMINFO_CLIENT_SECRET;
 
-  if (!username || !password) {
-    throw new Error("ZoomInfo credentials not configured");
+  if (!username || !password || !clientId || !clientSecret) {
+    const missing: string[] = [];
+    if (!username) missing.push("ZOOMINFO_USERNAME");
+    if (!password) missing.push("ZOOMINFO_PASSWORD");
+    if (!clientId) missing.push("ZOOMINFO_CLIENT_ID");
+    if (!clientSecret) missing.push("ZOOMINFO_CLIENT_SECRET");
+    throw new Error(`ZoomInfo credentials not fully configured. Missing: ${missing.join(", ")}`);
   }
+
+  const authBody: Record<string, string> = { username, password, client_id: clientId, client_secret: clientSecret };
 
   const res = await fetch(`${ZOOMINFO_API_BASE}/authenticate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify(authBody),
   });
 
   if (!res.ok) {
