@@ -189,9 +189,11 @@ export default function Dashboard() {
     refetchOnWindowFocus: false,
   });
 
+  const isLmRole = currentUser?.role === "logistics_manager" || currentUser?.role === "logistics_coordinator";
   const { data: churnRisk = [] } = useQuery<Array<{ companyId: string; companyName: string; repName: string | null; curLoads: number; priorLoads: number; dropPct: number }>>({
     queryKey: ["/api/dashboard/churn-risk"],
     refetchOnWindowFocus: false,
+    enabled: !isLmRole,
   });
 
   const { data: allTasks = [], isLoading: tasksLoading } = useQuery<Task[]>({
@@ -2234,7 +2236,7 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {churnRisk.length > 0 && (
+      {churnRisk.length > 0 && !isLmRole && (
         <Card className="border-orange-300 dark:border-orange-700" data-testid="card-churn-risk">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base text-orange-700 dark:text-orange-400">
