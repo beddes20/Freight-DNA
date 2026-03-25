@@ -384,7 +384,15 @@ export default function Dashboard() {
     refetchInterval: 300000,
   });
 
-  const { data: briefingData } = useQuery<{ dueTasks: number; todayTouchpoints: number; streak: number; streakGoal: number; streakToday: number }>({
+  const { data: briefingData } = useQuery<{
+    skip?: boolean;
+    dueTasks?: number;
+    todayTouchpoints?: number;
+    streak?: number;
+    streakGoal?: number;
+    streakToday?: number;
+    goals?: { metric: string; label: string; current: number; target: number }[];
+  }>({
     queryKey: ["/api/dashboard/briefing"],
     enabled: !briefingDismissed,
     staleTime: 60000,
@@ -796,8 +804,8 @@ export default function Dashboard() {
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
 
-      {/* Daily Briefing Popup */}
-      {!briefingDismissed && briefingData && (
+      {/* Daily Briefing Popup — hidden for management roles via skip flag */}
+      {!briefingDismissed && briefingData && !briefingData.skip && (
         <div className="flex items-start gap-3 rounded-lg border border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/40 p-4" data-testid="banner-daily-briefing">
           <BellRing className="h-5 w-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
@@ -805,17 +813,27 @@ export default function Dashboard() {
               Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, {currentUser?.name?.split(" ")[0]}! Here's your day at a glance.
             </p>
             <div className="flex flex-wrap gap-3 mt-1.5">
-              {briefingData.dueTasks > 0 && (
+              {(briefingData.dueTasks ?? 0) > 0 && (
                 <span className="text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
                   <ListTodo className="h-3.5 w-3.5" />
                   {briefingData.dueTasks} task{briefingData.dueTasks !== 1 ? "s" : ""} due today
                 </span>
               )}
-              <span className="text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
-                <PhoneCall className="h-3.5 w-3.5" />
-                {briefingData.streakToday}/{briefingData.streakGoal} touches today
-              </span>
-              {briefingData.streak > 0 && (
+              {/* Show real goal metrics if the NAM set goals for this rep, otherwise fall back to streak */}
+              {briefingData.goals && briefingData.goals.length > 0 ? (
+                briefingData.goals.map(g => (
+                  <span key={g.metric} className="text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
+                    <PhoneCall className="h-3.5 w-3.5" />
+                    {g.current}/{g.target} {g.label} this month
+                  </span>
+                ))
+              ) : (
+                <span className="text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
+                  <PhoneCall className="h-3.5 w-3.5" />
+                  {briefingData.streakToday}/{briefingData.streakGoal} touches today
+                </span>
+              )}
+              {(briefingData.streak ?? 0) > 0 && (
                 <span className="text-xs text-orange-600 dark:text-orange-400 font-semibold flex items-center gap-1">
                   🔥 {briefingData.streak}-day streak!
                 </span>

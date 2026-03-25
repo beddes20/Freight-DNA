@@ -8129,10 +8129,17 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
+      // Management roles don't have individual daily touch targets — skip the banner
+      const mgmtRoles = ["director", "national_account_manager", "admin", "sales", "sales_director"];
+      if (mgmtRoles.includes(user.role)) {
+        return res.json({ skip: true });
+      }
+
       const today = new Date().toISOString().slice(0, 10);
-      const [allTasks, allCompanies, tps, streak] = await Promise.all([
+      const currentMonth = today.slice(0, 7);
+
+      const [allTasks, tps, streak, goalsData] = await Promise.all([
         storage.getTasks(),
-        storage.getCompanies(req.session.organizationId!),
         storage.getTouchpointsByUser(user.id, today),
         (async () => {
           const goalSetting = await storage.getSetting("streak_goal");
@@ -8152,18 +8159,51 @@ Respond with valid JSON only:
           }
           return { streak: s, goal, todayCount: byDate[today] || 0 };
         })(),
+        // Fetch and compute current-month goals for this rep
+        (async () => {
+          const userGoals = await storage.getGoals({ amId: user.id });
+          const activeGoals = userGoals.filter(g =>
+            g.status === "active" && g.startDate && g.startDate.startsWith(currentMonth)
+          );
+          const computed = await Promise.all(activeGoals.map(async g => {
+            let current = 0;
+            if (g.metric === "touchpoints") {
+              current = await storage.getTouchpointCountByAm(g.amId, g.startDate, g.endDate);
+            } else if (g.metric === "meaningful_touchpoints") {
+              current = await storage.getMeaningfulTouchpointCountByAm(g.amId, g.startDate, g.endDate);
+            } else if (g.metric === "contacts_added") {
+              current = await storage.getContactsAddedByAm(g.amId, g.startDate, g.endDate);
+            } else {
+              current = Number(g.currentValue) || 0;
+            }
+            const metricLabels: Record<string, string> = {
+              touchpoints: "touches",
+              meaningful_touchpoints: "meaningful touches",
+              contacts_added: "contacts added",
+              tasks_completed: "tasks completed",
+            };
+            return {
+              metric: g.metric,
+              label: g.customLabel || metricLabels[g.metric] || g.metric,
+              current,
+              target: Number(g.target),
+            };
+          }));
+          return computed;
+        })(),
       ]);
 
-      const myCompanyIds = new Set(allCompanies.filter(c => c.salesPersonId === user.id || user.role === "admin").map(c => c.id));
       const dueTasks = allTasks.filter(t => t.assignedTo === user.id && t.status === "open" && t.dueDate && t.dueDate <= today);
       const todayTouchpoints = tps.length;
 
       res.json({
+        skip: false,
         dueTasks: dueTasks.length,
         todayTouchpoints,
         streak: streak.streak,
         streakGoal: streak.goal,
         streakToday: streak.todayCount,
+        goals: goalsData,
       });
     } catch (err) {
       res.status(500).json({ error: "Failed to load briefing data" });
