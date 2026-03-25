@@ -1135,19 +1135,25 @@ export default function Dashboard() {
                   ) : (trendingAccounts?.up?.length ?? 0) === 0 ? (
                     <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
                   ) : (
-                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                      {trendingAccounts!.up.map((acct, idx) => (
-                        <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-up-${idx}`}>
-                          <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                          <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                          {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                          <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
-                            <ArrowUpRight className="h-3.5 w-3.5" />
-                            ${Math.round(acct.delta).toLocaleString()} ahead
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                    <>
+                      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                        {trendingAccounts!.up.map((acct, idx) => (
+                          <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-up-${idx}`}>
+                            <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                            <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                            {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
+                            <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
+                              <ArrowUpRight className="h-3.5 w-3.5" />
+                              ${Math.round(acct.delta).toLocaleString()} ahead
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex items-center justify-between pt-2 mt-2 border-t">
+                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{trendingAccounts!.up.length} accounts</span>
+                        <span className="text-sm font-bold text-green-600 dark:text-green-400">+${Math.round(trendingAccounts!.up.reduce((s, a) => s + a.delta, 0)).toLocaleString()} total</span>
+                      </div>
+                    </>
                   )}
                 </CardContent>
               )}
@@ -1180,19 +1186,25 @@ export default function Dashboard() {
                   ) : (trendingAccounts?.down?.length ?? 0) === 0 ? (
                     <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
                   ) : (
-                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                      {trendingAccounts!.down.map((acct, idx) => (
-                        <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-down-${idx}`}>
-                          <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                          <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                          {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                          <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
-                            <ArrowDownRight className="h-3.5 w-3.5" />
-                            ${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                    <>
+                      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                        {trendingAccounts!.down.map((acct, idx) => (
+                          <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-down-${idx}`}>
+                            <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                            <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                            {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
+                            <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
+                              <ArrowDownRight className="h-3.5 w-3.5" />
+                              ${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex items-center justify-between pt-2 mt-2 border-t">
+                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{trendingAccounts!.down.length} accounts</span>
+                        <span className="text-sm font-bold text-red-600 dark:text-red-400">-${Math.round(Math.abs(trendingAccounts!.down.reduce((s, a) => s + a.delta, 0))).toLocaleString()} total</span>
+                      </div>
+                    </>
                   )}
                 </CardContent>
               )}
@@ -1399,16 +1411,22 @@ export default function Dashboard() {
                 <CardContent className="pt-0">
                   {namTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
                   : (namTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.up.map((acct, idx) => (
-                    <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-up-${idx}`}>
-                      <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                      <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                      {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                      <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
-                        <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
-                      </span>
+                  : <>
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.up.map((acct, idx) => (
+                      <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-up-${idx}`}>
+                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                        <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                        {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
+                        <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
+                          <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
+                        </span>
+                      </div>
+                    ))}</div>
+                    <div className="flex items-center justify-between pt-2 mt-2 border-t">
+                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{namTrendingAccounts!.up.length} accounts</span>
+                      <span className="text-sm font-bold text-green-600 dark:text-green-400">+${Math.round(namTrendingAccounts!.up.reduce((s, a) => s + a.delta, 0)).toLocaleString()} total</span>
                     </div>
-                  ))}</div>}
+                  </>}
                 </CardContent>
               )}
             </Card>
@@ -1431,16 +1449,22 @@ export default function Dashboard() {
                 <CardContent className="pt-0">
                   {namTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
                   : (namTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.down.map((acct, idx) => (
-                    <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-down-${idx}`}>
-                      <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                      <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                      {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                      <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
-                        <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
-                      </span>
+                  : <>
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.down.map((acct, idx) => (
+                      <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-down-${idx}`}>
+                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                        <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                        {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
+                        <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
+                          <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
+                        </span>
+                      </div>
+                    ))}</div>
+                    <div className="flex items-center justify-between pt-2 mt-2 border-t">
+                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{namTrendingAccounts!.down.length} accounts</span>
+                      <span className="text-sm font-bold text-red-600 dark:text-red-400">-${Math.round(Math.abs(namTrendingAccounts!.down.reduce((s, a) => s + a.delta, 0))).toLocaleString()} total</span>
                     </div>
-                  ))}</div>}
+                  </>}
                 </CardContent>
               )}
             </Card>
@@ -1625,16 +1649,22 @@ export default function Dashboard() {
                 <CardContent className="pt-0">
                   {amTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
                   : (amTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.up.map((acct, idx) => (
-                    <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-up-${idx}`}>
-                      <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                      <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                      {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                      <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
-                        <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
-                      </span>
+                  : <>
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.up.map((acct, idx) => (
+                      <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-up-${idx}`}>
+                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                        <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                        {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
+                        <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
+                          <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
+                        </span>
+                      </div>
+                    ))}</div>
+                    <div className="flex items-center justify-between pt-2 mt-2 border-t">
+                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{amTrendingAccounts!.up.length} accounts</span>
+                      <span className="text-sm font-bold text-green-600 dark:text-green-400">+${Math.round(amTrendingAccounts!.up.reduce((s, a) => s + a.delta, 0)).toLocaleString()} total</span>
                     </div>
-                  ))}</div>}
+                  </>}
                 </CardContent>
               )}
             </Card>
@@ -1657,16 +1687,22 @@ export default function Dashboard() {
                 <CardContent className="pt-0">
                   {amTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
                   : (amTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.down.map((acct, idx) => (
-                    <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-down-${idx}`}>
-                      <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                      <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                      {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                      <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
-                        <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
-                      </span>
+                  : <>
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.down.map((acct, idx) => (
+                      <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-down-${idx}`}>
+                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                        <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
+                        {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
+                        <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
+                          <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
+                        </span>
+                      </div>
+                    ))}</div>
+                    <div className="flex items-center justify-between pt-2 mt-2 border-t">
+                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{amTrendingAccounts!.down.length} accounts</span>
+                      <span className="text-sm font-bold text-red-600 dark:text-red-400">-${Math.round(Math.abs(amTrendingAccounts!.down.reduce((s, a) => s + a.delta, 0))).toLocaleString()} total</span>
                     </div>
-                  ))}</div>}
+                  </>}
                 </CardContent>
               )}
             </Card>
