@@ -1132,7 +1132,7 @@ export default function Dashboard() {
                   ) : (trendingAccounts?.up?.length ?? 0) === 0 ? (
                     <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                       {trendingAccounts!.up.map((acct, idx) => (
                         <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-up-${idx}`}>
                           <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
@@ -1174,7 +1174,7 @@ export default function Dashboard() {
                   ) : (trendingAccounts?.down?.length ?? 0) === 0 ? (
                     <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                       {trendingAccounts!.down.map((acct, idx) => (
                         <div key={acct.name} className="flex items-center gap-2" data-testid={`trending-down-${idx}`}>
                           <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
@@ -1390,7 +1390,7 @@ export default function Dashboard() {
                 <CardContent className="pt-0">
                   {namTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
                   : (namTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <div className="space-y-2">{namTrendingAccounts!.up.map((acct, idx) => (
+                  : <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.up.map((acct, idx) => (
                     <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-up-${idx}`}>
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
@@ -1419,7 +1419,7 @@ export default function Dashboard() {
                 <CardContent className="pt-0">
                   {namTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
                   : (namTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <div className="space-y-2">{namTrendingAccounts!.down.map((acct, idx) => (
+                  : <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.down.map((acct, idx) => (
                     <div key={acct.name} className="flex items-center gap-2" data-testid={`nam-trending-down-${idx}`}>
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
@@ -1610,7 +1610,7 @@ export default function Dashboard() {
                 <CardContent className="pt-0">
                   {amTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
                   : (amTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <div className="space-y-2">{amTrendingAccounts!.up.map((acct, idx) => (
+                  : <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.up.map((acct, idx) => (
                     <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-up-${idx}`}>
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
@@ -1639,7 +1639,7 @@ export default function Dashboard() {
                 <CardContent className="pt-0">
                   {amTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
                   : (amTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <div className="space-y-2">{amTrendingAccounts!.down.map((acct, idx) => (
+                  : <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.down.map((acct, idx) => (
                     <div key={acct.name} className="flex items-center gap-2" data-testid={`am-trending-down-${idx}`}>
                       <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
                       <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>

@@ -8052,11 +8052,11 @@ Respond with valid JSON only:
         : deltas;
 
       filteredDeltas.sort((a, b) => b.delta - a.delta);
-      const up = filteredDeltas.slice(0, 5).filter(d => d.delta > 0).map(d => ({
+      const up = filteredDeltas.filter(d => d.delta > 0).map(d => ({
         name: resolveCompanyName(d.alias),
         delta: d.delta,
       }));
-      const down = [...filteredDeltas].sort((a, b) => a.delta - b.delta).slice(0, 5).filter(d => d.delta < 0).map(d => ({
+      const down = [...filteredDeltas].sort((a, b) => a.delta - b.delta).filter(d => d.delta < 0).map(d => ({
         name: resolveCompanyName(d.alias),
         delta: d.delta,
       }));
