@@ -8381,6 +8381,83 @@ Respond with valid JSON only:
     }
   });
 
+  // LM Carrier metrics — repeat carrier rate for the logged-in LM
+  app.get("/api/dashboard/lm-carrier-metrics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "logistics_manager" && user.role !== "logistics_coordinator") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const repId = (user as any).financialRepId as string | null;
+      if (!repId) return res.json({ totalLoads: 0, uniqueCarriers: 0, repeatCarrierLoads: 0, repeatPct: 0, preferredCarriers: 0, topCarriers: [] });
+
+      const upload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      const allRows: any[] = (upload?.rows as any[]) || [];
+      const cols = resolveColumns(allRows);
+
+      // Determine current month from upload data
+      const monthKeys = new Set<string>();
+      for (const row of allRows) {
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (monthKey) monthKeys.add(monthKey);
+      }
+      const curMonthKey = monthKeys.size > 0
+        ? Array.from(monthKeys).sort().pop()!
+        : toMonthKey(new Date());
+
+      // Filter to this LM's dispatched loads in current month
+      const repIdLower = repId.toLowerCase().trim();
+      const myRows = allRows.filter(row => {
+        if (isExcludedRow(row, cols)) return false;
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (monthKey !== curMonthKey) return false;
+        const disp = getDispatcherFromRow(row, cols).toLowerCase();
+        return disp === repIdLower;
+      });
+
+      if (myRows.length === 0) {
+        return res.json({ totalLoads: 0, uniqueCarriers: 0, repeatCarrierLoads: 0, repeatPct: 0, preferredCarriers: 0, topCarriers: [], curMonthKey });
+      }
+
+      // Count uses per carrier
+      const carrierUses: Record<string, number> = {};
+      for (const row of myRows) {
+        const carrier = String(row[cols.carrier] || row["Carrier"] || "").trim();
+        if (!carrier) continue;
+        carrierUses[carrier] = (carrierUses[carrier] || 0) + 1;
+      }
+
+      const totalLoads = myRows.length;
+      const uniqueCarriers = Object.keys(carrierUses).length;
+      let repeatCarrierLoads = 0;
+      let preferredCarriers = 0;
+      for (const uses of Object.values(carrierUses)) {
+        if (uses >= 2) {
+          repeatCarrierLoads += uses;
+          preferredCarriers++;
+        }
+      }
+      const repeatPct = totalLoads > 0 ? Math.round((repeatCarrierLoads / totalLoads) * 1000) / 10 : 0;
+
+      // Top 10 carriers by load count
+      const topCarriers = Object.entries(carrierUses)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([carrier, loads]) => {
+          // Strip the alias prefix (e.g. "JACOINSC - JACOBS TRANS LLC" → "Jacobs Trans LLC")
+          const parts = carrier.split(" - ");
+          const displayName = parts.length > 1 ? parts.slice(1).join(" - ") : carrier;
+          return { carrier: displayName, loads, isRepeat: loads >= 2 };
+        });
+
+      res.json({ totalLoads, uniqueCarriers, repeatCarrierLoads, repeatPct, preferredCarriers, topCarriers, curMonthKey });
+    } catch (err) {
+      console.error("Error loading LM carrier metrics:", err);
+      res.status(500).json({ error: "Failed to load carrier metrics" });
+    }
+  });
+
   // Daily briefing data
   app.get("/api/dashboard/briefing", requireAuth, async (req, res) => {
     try {

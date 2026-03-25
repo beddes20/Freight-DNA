@@ -11,10 +11,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import {
   Package, DollarSign, TrendingUp, CheckCircle2, Circle,
-  GraduationCap, ChevronRight, Target, Truck,
+  GraduationCap, ChevronRight, Target, Truck, RefreshCw,
 } from "lucide-react";
 
 type Milestone = { id: string; text: string; completed: boolean };
+
+type CarrierMetrics = {
+  totalLoads: number;
+  uniqueCarriers: number;
+  repeatCarrierLoads: number;
+  repeatPct: number;
+  preferredCarriers: number;
+  topCarriers: { carrier: string; loads: number; isRepeat: boolean }[];
+  curMonthKey?: string;
+};
 
 function fmtMoney(n: number) {
   if (n >= 1000000) return `$${(n / 1000000).toFixed(1)}M`;
@@ -42,6 +52,16 @@ export function LmCareerPanel() {
       if (!res.ok) return [];
       return res.json();
     },
+  });
+
+  const { data: carrierMetrics, isLoading: carrierLoading } = useQuery<CarrierMetrics>({
+    queryKey: ["/api/dashboard/lm-carrier-metrics"],
+    queryFn: async () => {
+      const res = await fetch("/api/dashboard/lm-carrier-metrics", { credentials: "include" });
+      if (!res.ok) return { totalLoads: 0, uniqueCarriers: 0, repeatCarrierLoads: 0, repeatPct: 0, preferredCarriers: 0, topCarriers: [] };
+      return res.json();
+    },
+    refetchInterval: 120000,
   });
 
   const { data: criteria = [] } = useQuery<any[]>({
@@ -98,16 +118,29 @@ export function LmCareerPanel() {
   const completedMilestones = milestones.filter(m => m.completed).length;
   const totalMilestones = milestones.length;
 
+  const repeatPct = carrierMetrics?.repeatPct ?? 0;
+  const preferredCarriers = carrierMetrics?.preferredCarriers ?? 0;
+  const topCarriers = carrierMetrics?.topCarriers ?? [];
+
   if (!user) return null;
 
   return (
     <div className="space-y-4">
-      {/* Operational Stats Row */}
-      <div className="grid gap-3 grid-cols-3">
+      {/* Operational Stats Row — 4 cards */}
+      <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
         {[
-          { label: "Loads This Month", value: stats.loads.toLocaleString(), icon: Truck, color: "text-blue-500", bg: "bg-blue-50 dark:bg-blue-950/40" },
-          { label: "Margin This Month", value: fmtMoney(stats.margin), icon: DollarSign, color: "text-green-500", bg: "bg-green-50 dark:bg-green-950/40" },
-          { label: "Margin %", value: `${marginPct.toFixed(1)}%`, icon: TrendingUp, color: "text-amber-500", bg: "bg-amber-50 dark:bg-amber-950/40" },
+          { label: "Loads This Month", value: stats.loads.toLocaleString(), icon: Truck, color: "text-blue-500", bg: "bg-blue-50 dark:bg-blue-950/40", testId: "loads-this-month" },
+          { label: "Margin This Month", value: fmtMoney(stats.margin), icon: DollarSign, color: "text-green-500", bg: "bg-green-50 dark:bg-green-950/40", testId: "margin-this-month" },
+          { label: "Margin %", value: `${marginPct.toFixed(1)}%`, icon: TrendingUp, color: "text-amber-500", bg: "bg-amber-50 dark:bg-amber-950/40", testId: "margin-pct" },
+          {
+            label: "Repeat Carrier Rate",
+            value: carrierLoading ? "—" : `${repeatPct.toFixed(1)}%`,
+            subValue: carrierLoading ? null : `${preferredCarriers} preferred`,
+            icon: RefreshCw,
+            color: repeatPct >= 50 ? "text-green-500" : repeatPct >= 25 ? "text-amber-500" : "text-red-500",
+            bg: repeatPct >= 50 ? "bg-green-50 dark:bg-green-950/40" : repeatPct >= 25 ? "bg-amber-50 dark:bg-amber-950/40" : "bg-red-50 dark:bg-red-950/40",
+            testId: "repeat-carrier-rate",
+          },
         ].map(stat => (
           <Card key={stat.label} className="overflow-hidden">
             <CardContent className="p-4">
@@ -115,9 +148,12 @@ export function LmCareerPanel() {
                 <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${stat.bg}`}>
                   <stat.icon className={`h-4 w-4 ${stat.color}`} />
                 </div>
-                <div className="text-xl font-bold" data-testid={`text-lm-stat-${stat.label.replace(/\s/g, "-").toLowerCase()}`}>
+                <div className="text-xl font-bold" data-testid={`text-lm-stat-${stat.testId}`}>
                   {stat.value}
                 </div>
+                {'subValue' in stat && stat.subValue && (
+                  <p className="text-xs text-muted-foreground -mt-1">{stat.subValue}</p>
+                )}
                 <p className="text-xs text-muted-foreground">{stat.label}</p>
               </div>
             </CardContent>
@@ -125,7 +161,7 @@ export function LmCareerPanel() {
         ))}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-3">
         {/* Path to AM — Promotion Criteria */}
         <Card>
           <CardHeader className="pb-3">
@@ -188,6 +224,44 @@ export function LmCareerPanel() {
                 <ChevronRight className="h-3 w-3 ml-1" />
               </Button>
             </Link>
+          </CardContent>
+        </Card>
+
+        {/* Top Repeat Carriers */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <RefreshCw className="h-4 w-4 text-blue-500" />
+              Top Carriers This Month
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {carrierLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-7 w-full" />)}
+              </div>
+            ) : topCarriers.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No carrier data available for this month.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {topCarriers.map((c, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2" data-testid={`carrier-row-${i}`}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs text-muted-foreground w-4 shrink-0">{i + 1}.</span>
+                      <span className="text-xs truncate font-medium">{c.carrier}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="text-xs font-semibold tabular-nums">{c.loads}</span>
+                      {c.isRepeat ? (
+                        <Badge variant="secondary" className="text-xs px-1 py-0 h-4 text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-950/40 border-0">repeat</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs px-1 py-0 h-4 text-muted-foreground">1×</Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
