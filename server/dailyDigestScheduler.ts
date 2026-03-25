@@ -111,6 +111,21 @@ async function sendDailyDigests(): Promise<void> {
     // My RFP deadlines
     const myRfpDeadlines = rfpDeadlines.filter((r: any) => r.companyId && myCompanyIds.includes(r.companyId));
 
+    // Stale companies (no touchpoint logged in 21+ days)
+    const STALE_COMPANY_DAYS = 21;
+    const staleCompanies: typeof myCompanies = [];
+    for (const company of myCompanies) {
+      const companyTouchpoints = allTouchpoints.filter((tp: any) => tp.companyId === company.id);
+      if (companyTouchpoints.length === 0) {
+        staleCompanies.push(company);
+      } else {
+        const latestDate = companyTouchpoints.map((tp: any) => tp.date).sort().reverse()[0];
+        if (daysSince(latestDate) >= STALE_COMPANY_DAYS) {
+          staleCompanies.push(company);
+        }
+      }
+    }
+
     // Churn risk: companies with >20% load drop vs last month (min 5 prior loads)
     const churnRiskCompanies: Array<{ company: any; curLoads: number; prevLoads: number; pct: number }> = [];
     for (const company of myCompanies) {
@@ -138,12 +153,13 @@ async function sendDailyDigests(): Promise<void> {
     }
     churnRiskCompanies.sort((a, b) => b.pct - a.pct);
 
-    const hasAlert = overdueTasks.length > 0 || coldContacts.length > 0 || myRfpDeadlines.length > 0 || churnRiskCompanies.length > 0;
+    const hasAlert = overdueTasks.length > 0 || coldContacts.length > 0 || myRfpDeadlines.length > 0 || churnRiskCompanies.length > 0 || staleCompanies.length > 0;
 
     if (!hasAlert) continue;
 
     const notifParts: string[] = [];
     if (overdueTasks.length > 0) notifParts.push(`${overdueTasks.length} overdue task${overdueTasks.length > 1 ? "s" : ""}`);
+    if (staleCompanies.length > 0) notifParts.push(`${staleCompanies.length} untouched account${staleCompanies.length > 1 ? "s" : ""}`);
     if (coldContacts.length > 0) notifParts.push(`${coldContacts.length} cold contact${coldContacts.length > 1 ? "s" : ""}`);
     if (myRfpDeadlines.length > 0) notifParts.push(`${myRfpDeadlines.length} RFP deadline${myRfpDeadlines.length > 1 ? "s" : ""}`);
     if (churnRiskCompanies.length > 0) notifParts.push(`${churnRiskCompanies.length} volume drop${churnRiskCompanies.length > 1 ? "s" : ""}`);
@@ -151,9 +167,11 @@ async function sendDailyDigests(): Promise<void> {
     const notifTitle = `Daily brief: ${notifParts.join(", ")}`;
     const notifBody = churnRiskCompanies.length > 0
       ? `${churnRiskCompanies[0].company.name} is down ${churnRiskCompanies[0].pct}% in loads — check in today.`
-      : overdueTasks.length > 0
-        ? `You have ${overdueTasks.length} overdue task${overdueTasks.length > 1 ? "s" : ""} that need attention.`
-        : `${coldContacts.length} contact${coldContacts.length > 1 ? "s" : ""} haven't been touched in ${COLD_THRESHOLD_DAYS}+ days.`;
+      : staleCompanies.length > 0
+        ? `You haven't logged a touchpoint for ${staleCompanies[0].name} in 21+ days — time to check in.`
+        : overdueTasks.length > 0
+          ? `You have ${overdueTasks.length} overdue task${overdueTasks.length > 1 ? "s" : ""} that need attention.`
+          : `${coldContacts.length} contact${coldContacts.length > 1 ? "s" : ""} haven't been touched in ${COLD_THRESHOLD_DAYS}+ days.`;
 
     await storage.createNotification({
       userId: user.id,

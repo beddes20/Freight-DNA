@@ -8114,6 +8114,67 @@ Respond with valid JSON only:
     }
   });
 
+  // Stale accounts — companies with no touchpoint in 21+ days, scoped to the current rep/NAM
+  app.get("/api/dashboard/stale-accounts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const isAmRole = user.role === "account_manager";
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      if (!isAmRole && !isNamRole) return res.json({ stale: [] });
+
+      const STALE_DAYS = 21;
+      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+
+      let myCompanies: any[];
+      if (isAmRole) {
+        myCompanies = getAmCompanies(user.id, allCompanies).filter((c: any) => !c.archivedAt);
+      } else {
+        const allUsers = await storage.getUsers(req.session.organizationId!);
+        myCompanies = getNamTeamCompanies(user.id, allUsers, allCompanies).filter((c: any) => !c.archivedAt);
+      }
+
+      if (myCompanies.length === 0) return res.json({ stale: [] });
+
+      // Get all touchpoints in the last 90 days — one query, then filter in memory
+      const since90 = new Date();
+      since90.setDate(since90.getDate() - 90);
+      const recentTps = await storage.getTouchpointsSince(since90.toISOString().slice(0, 10));
+
+      // Build map: companyId → latest touchpoint date
+      const latestByCompany: Record<string, string> = {};
+      for (const tp of recentTps) {
+        if (!tp.companyId) continue;
+        if (!latestByCompany[tp.companyId] || tp.date > latestByCompany[tp.companyId]) {
+          latestByCompany[tp.companyId] = tp.date;
+        }
+      }
+
+      const today = new Date();
+      const stale: { id: string; name: string; daysSince: number }[] = [];
+      for (const company of myCompanies) {
+        const latestDate = latestByCompany[company.id];
+        let daySinceTouch: number;
+        if (!latestDate) {
+          daySinceTouch = 90;
+        } else {
+          const d = new Date(latestDate + "T12:00:00");
+          daySinceTouch = Math.floor((today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+        }
+        if (daySinceTouch >= STALE_DAYS) {
+          stale.push({ id: company.id, name: company.name, daysSince: daySinceTouch });
+        }
+      }
+
+      stale.sort((a, b) => b.daysSince - a.daysSince);
+      res.json({ stale });
+    } catch (err) {
+      console.error("Error computing stale accounts:", err);
+      res.status(500).json({ error: "Failed to compute stale accounts" });
+    }
+  });
+
   // Team activity metrics — today's touches, meaningful touches, new contacts
   // Directors: org-wide; NAMs: scoped to their team
   app.get("/api/dashboard/team-activity", requireAuth, async (req, res) => {

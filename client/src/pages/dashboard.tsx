@@ -307,6 +307,14 @@ export default function Dashboard() {
     refetchOnWindowFocus: false,
   });
 
+  type StaleAccount = { id: string; name: string; daysSince: number };
+  const { data: staleAccountsData } = useQuery<{ stale: StaleAccount[] }>({
+    queryKey: ["/api/dashboard/stale-accounts"],
+    enabled: isAm || isNam,
+    staleTime: 300000,
+  });
+  const staleAccounts = staleAccountsData?.stale ?? [];
+
   type TeamActivity = { touches: number; meaningful: number; newContacts: number };
   const { data: teamActivity, isLoading: teamActivityLoading } = useQuery<TeamActivity>({
     queryKey: ["/api/dashboard/team-activity", selectedDirectorId],
@@ -1558,6 +1566,42 @@ export default function Dashboard() {
             </Card>
           )}
 
+          {/* Stale Accounts Alert — accounts with no touchpoint in 21+ days */}
+          {staleAccounts.length > 0 && (
+            <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-stale-accounts-nam">
+              <CardHeader className="pb-2 pt-4 px-4">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                  <CardTitle className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                    Accounts Needing Attention
+                  </CardTitle>
+                  <Badge variant="outline" className="ml-auto text-xs text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700">
+                    {staleAccounts.length} account{staleAccounts.length !== 1 ? "s" : ""} · 21+ days no touch
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="pt-0 px-4 pb-4">
+                <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3 max-h-36 overflow-y-auto">
+                  {staleAccounts.slice(0, 12).map(acct => (
+                    <div
+                      key={acct.id}
+                      className="flex items-center gap-2 cursor-pointer hover:bg-amber-100/60 dark:hover:bg-amber-900/30 rounded px-1.5 py-1 -mx-0.5"
+                      onDoubleClick={() => setLocation(`/companies/${acct.id}`)}
+                      data-testid={`stale-account-nam-${acct.id}`}
+                    >
+                      <Clock className="h-3 w-3 text-amber-500 shrink-0" />
+                      <span className="text-xs flex-1 truncate text-amber-900 dark:text-amber-200 font-medium">{acct.name}</span>
+                      <span className="text-xs text-amber-600 dark:text-amber-400 shrink-0">{acct.daysSince >= 90 ? "90+" : acct.daysSince}d</span>
+                    </div>
+                  ))}
+                </div>
+                {staleAccounts.length > 12 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1.5">+{staleAccounts.length - 12} more accounts need attention</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Row 4: My Personal Metrics */}
           <div className="space-y-1">
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide px-0.5">My Activity</h3>
@@ -1603,6 +1647,24 @@ export default function Dashboard() {
                         <div className="text-2xl font-bold" data-testid="nam-personal-stat-contacts">{personalMetrics?.contactsAddedToday ?? 0}</div>
                         <p className="text-xs text-muted-foreground mt-0.5">My new contacts added today</p>
                       </div>
+                      {(() => {
+                        const goal = myGoals.find((g: any) => g.metric === "contacts_added" && g.startDate <= todayStr && g.endDate >= todayStr && !g.companyId);
+                        if (!goal) return null;
+                        const target = parseFloat(goal.target || "0");
+                        const current = goal.computedValue != null ? goal.computedValue : parseFloat(goal.currentValue || "0");
+                        const pct = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
+                        return (
+                          <div className="space-y-0.5 mt-0.5" data-testid="nam-contacts-goal-progress">
+                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : "bg-blue-500"}`} style={{ width: `${pct}%` }} />
+                            </div>
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                              <span>{Math.round(current)} / {Math.round(target)} this month</span>
+                              <span>{pct}%</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </CardContent>
@@ -1618,6 +1680,24 @@ export default function Dashboard() {
                         <div className="text-2xl font-bold" data-testid="nam-personal-stat-touches">{personalMetrics?.touchesToday ?? 0}</div>
                         <p className="text-xs text-muted-foreground mt-0.5">My touches today (all types)</p>
                       </div>
+                      {(() => {
+                        const goal = myGoals.find((g: any) => g.metric === "touchpoints" && g.startDate <= todayStr && g.endDate >= todayStr && !g.companyId);
+                        if (!goal) return null;
+                        const target = parseFloat(goal.target || "0");
+                        const current = goal.computedValue != null ? goal.computedValue : parseFloat(goal.currentValue || "0");
+                        const pct = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
+                        return (
+                          <div className="space-y-0.5 mt-0.5" data-testid="nam-touches-goal-progress">
+                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : "bg-amber-500"}`} style={{ width: `${pct}%` }} />
+                            </div>
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                              <span>{Math.round(current)} / {Math.round(target)} this month</span>
+                              <span>{pct}%</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </CardContent>
@@ -1630,6 +1710,42 @@ export default function Dashboard() {
       {/* ── AM Dashboard Portlets ────────────────────────────────────────────── */}
       {isAm && (
         <>
+          {/* Stale Accounts Alert — accounts with no touchpoint in 21+ days */}
+          {staleAccounts.length > 0 && (
+            <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-stale-accounts-am">
+              <CardHeader className="pb-2 pt-4 px-4">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                  <CardTitle className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                    Accounts Needing Attention
+                  </CardTitle>
+                  <Badge variant="outline" className="ml-auto text-xs text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700">
+                    {staleAccounts.length} account{staleAccounts.length !== 1 ? "s" : ""} · 21+ days no touch
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="pt-0 px-4 pb-4">
+                <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3 max-h-36 overflow-y-auto">
+                  {staleAccounts.slice(0, 12).map(acct => (
+                    <div
+                      key={acct.id}
+                      className="flex items-center gap-2 cursor-pointer hover:bg-amber-100/60 dark:hover:bg-amber-900/30 rounded px-1.5 py-1 -mx-0.5"
+                      onDoubleClick={() => setLocation(`/companies/${acct.id}`)}
+                      data-testid={`stale-account-am-${acct.id}`}
+                    >
+                      <Clock className="h-3 w-3 text-amber-500 shrink-0" />
+                      <span className="text-xs flex-1 truncate text-amber-900 dark:text-amber-200 font-medium">{acct.name}</span>
+                      <span className="text-xs text-amber-600 dark:text-amber-400 shrink-0">{acct.daysSince >= 90 ? "90+" : acct.daysSince}d</span>
+                    </div>
+                  ))}
+                </div>
+                {staleAccounts.length > 12 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1.5">+{staleAccounts.length - 12} more accounts need attention</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Row 1: Trending accounts */}
           <div className="grid gap-4 md:grid-cols-2" data-testid="am-trending-row">
             <Card data-testid="am-portlet-trending-up">
@@ -1755,6 +1871,24 @@ export default function Dashboard() {
                         <div className="text-2xl font-bold" data-testid="am-personal-stat-contacts">{personalMetrics?.contactsAddedToday ?? 0}</div>
                         <p className="text-xs text-muted-foreground mt-0.5">New contacts added today</p>
                       </div>
+                      {(() => {
+                        const goal = myGoals.find((g: any) => g.metric === "contacts_added" && g.startDate <= todayStr && g.endDate >= todayStr && !g.companyId);
+                        if (!goal) return null;
+                        const target = parseFloat(goal.target || "0");
+                        const current = goal.computedValue != null ? goal.computedValue : parseFloat(goal.currentValue || "0");
+                        const pct = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
+                        return (
+                          <div className="space-y-0.5 mt-0.5" data-testid="am-contacts-goal-progress">
+                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : "bg-blue-500"}`} style={{ width: `${pct}%` }} />
+                            </div>
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                              <span>{Math.round(current)} / {Math.round(target)} this month</span>
+                              <span>{pct}%</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </CardContent>
@@ -1770,6 +1904,24 @@ export default function Dashboard() {
                         <div className="text-2xl font-bold" data-testid="am-personal-stat-touches">{personalMetrics?.touchesToday ?? 0}</div>
                         <p className="text-xs text-muted-foreground mt-0.5">Touches today (all types)</p>
                       </div>
+                      {(() => {
+                        const goal = myGoals.find((g: any) => g.metric === "touchpoints" && g.startDate <= todayStr && g.endDate >= todayStr && !g.companyId);
+                        if (!goal) return null;
+                        const target = parseFloat(goal.target || "0");
+                        const current = goal.computedValue != null ? goal.computedValue : parseFloat(goal.currentValue || "0");
+                        const pct = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
+                        return (
+                          <div className="space-y-0.5 mt-0.5" data-testid="am-touches-goal-progress">
+                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : "bg-amber-500"}`} style={{ width: `${pct}%` }} />
+                            </div>
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                              <span>{Math.round(current)} / {Math.round(target)} this month</span>
+                              <span>{pct}%</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </CardContent>
