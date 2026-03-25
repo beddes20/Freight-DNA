@@ -6286,8 +6286,9 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         createdAt: new Date().toISOString(),
         currentValue: "0",
       });
-      // Notify the AM that a goal has been set for them
-      if (goal.amId && goal.amId !== user.id) {
+      const isSelfGoal = goal.amId === user.id;
+      if (!isSelfGoal && goal.amId) {
+        // Notify the AM that a goal has been set for them
         storage.createNotification({
           userId: goal.amId,
           type: "goal_set",
@@ -6297,6 +6298,24 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           relatedId: goal.id,
           read: false,
         }).catch(() => {});
+      } else if (isSelfGoal) {
+        // Self-goal: notify the user's director/manager and all admins
+        const orgUsers = await storage.getUsers(req.session.organizationId!);
+        const notifyIds = new Set<string>();
+        if (user.managerId) notifyIds.add(user.managerId);
+        orgUsers.filter(u => u.role === "admin" || u.role === "director" || u.role === "sales_director")
+          .forEach(u => { if (u.id !== user.id) notifyIds.add(u.id); });
+        for (const uid of notifyIds) {
+          storage.createNotification({
+            userId: uid,
+            type: "goal_set",
+            title: `${user.name} set a goal for themselves`,
+            body: goal.title || goal.metric.replace(/_/g, " "),
+            link: "/goals",
+            relatedId: goal.id,
+            read: false,
+          }).catch(() => {});
+        }
       }
       res.status(201).json(goal);
     } catch (error) {
