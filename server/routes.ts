@@ -2789,11 +2789,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       // Auto-post to callouts feed when a win is logged
       if (type === "win") {
         const categoryLabels: Record<string, string> = {
-          spot_batch: "Spot Batch",
-          dedicated_contracted: "Dedicated/Contracted",
-          mini_bid: "Mini-Bid Lanes",
-          project: "Project Freight",
-          other: "Other",
+          spot_batch: "Batch of Spot Loads",
+          dedicated_contracted: "Spot to Contracted Conversion",
+          mini_bid: "Mini-Bid",
+          project: "Project",
+          other: "New Site, First Opp",
         };
         const catLabel = categoryLabels[category] || category || "Win";
         const parts = [`🏆 ${user.name} logged a win: ${title}`, `Category: ${catLabel}`];

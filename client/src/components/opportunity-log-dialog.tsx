@@ -12,11 +12,11 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 export const OPPORTUNITY_CATEGORIES = [
-  { value: "spot_batch", label: "Spot Batch" },
-  { value: "dedicated_contracted", label: "Dedicated / Contracted" },
-  { value: "mini_bid", label: "Mini-Bid Lanes" },
-  { value: "project", label: "Project Freight" },
-  { value: "other", label: "Other" },
+  { value: "spot_batch", label: "Batch of Spot Loads" },
+  { value: "dedicated_contracted", label: "Spot to Contracted Conversion" },
+  { value: "mini_bid", label: "Mini-Bid" },
+  { value: "project", label: "Project" },
+  { value: "other", label: "New Site, First Opp" },
 ];
 
 interface OpportunityLogDialogProps {
