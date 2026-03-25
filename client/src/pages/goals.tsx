@@ -18,7 +18,7 @@ import {
   Target, Plus, MessageSquare, Trash2, ChevronDown, ChevronUp,
   TrendingUp, Users, Truck, DollarSign, CalendarDays, Pencil, Send,
   CheckCircle2, BarChart3, BellRing, X, Sliders, Percent, Heart, RefreshCw,
-  Copy, Flame, TrendingDown, Zap,
+  Copy, Flame, TrendingDown, Zap, Building2,
 } from "lucide-react";
 import { useConfetti } from "@/components/confetti";
 import type { Goal, GoalComment } from "@shared/schema";
@@ -66,11 +66,12 @@ interface GoalCardProps {
   currentUserId: string;
   userRole: string;
   allUsers: Array<{ id: string; name: string }>;
+  allCompanies: Array<{ id: string; name: string }>;
   onEdit: (goal: Goal) => void;
   onDelete: (id: string) => void;
 }
 
-function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }: GoalCardProps) {
+function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdit, onDelete }: GoalCardProps) {
   const { toast } = useToast();
   const [showComments, setShowComments] = useState(true);
   const [commentBody, setCommentBody] = useState("");
@@ -106,6 +107,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
 
   const amName = allUsers.find(u => u.id === goal.amId)?.name ?? "Unknown";
   const namName = allUsers.find(u => u.id === goal.namId)?.name ?? "Unknown";
+  const companyName = goal.companyId ? (allCompanies.find(c => c.id === goal.companyId)?.name ?? null) : null;
 
   const displayCurrent = isAutoTracked && autoProgress?.autoValue != null
     ? autoProgress.autoValue
@@ -208,6 +210,11 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, onEdit, onDelete }:
                 ) : goal.metric !== "custom" ? (
                   <Badge variant="outline" className="text-[10px] font-normal px-1.5 py-0 h-4 text-muted-foreground">Manual</Badge>
                 ) : null}
+                {companyName && (
+                  <Badge className="text-[10px] font-normal gap-0.5 px-1.5 py-0 h-4 bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                    <Building2 className="h-2 w-2" /> {companyName}
+                  </Badge>
+                )}
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <CalendarDays className="h-3 w-3" />
                   {fmtDate(goal.startDate)} – {fmtDate(goal.endDate)}
@@ -413,6 +420,8 @@ interface GoalFormData {
   startDate: string;
   endDate: string;
   amId: string;
+  scopeType: "overall" | "account";
+  companyId: string;
 }
 
 function toLocalDateString(d: Date) {
@@ -441,6 +450,8 @@ const defaultForm: GoalFormData = {
   notes: "",
   ...getMonthDefaults(),
   amId: "",
+  scopeType: "overall",
+  companyId: "",
 };
 
 const defaultBulkForm = {
@@ -494,6 +505,11 @@ export default function GoalsPage() {
     queryKey: ["/api/goals/monthly-check"],
     enabled: isNam,
     refetchOnWindowFocus: false,
+  });
+
+  const { data: allCompanies = [] } = useQuery<Array<{ id: string; name: string; salesPersonId: string | null; assignedTo: string | null }>>({
+    queryKey: ["/api/companies"],
+    staleTime: 120000,
   });
 
   // LM milestone management
@@ -670,6 +686,8 @@ export default function GoalsPage() {
       startDate: goal.startDate,
       endDate: goal.endDate,
       amId: goal.amId,
+      scopeType: goal.companyId ? "account" : "overall",
+      companyId: goal.companyId || "",
     });
     setDialogOpen(true);
   }
@@ -683,10 +701,18 @@ export default function GoalsPage() {
       toast({ variant: "destructive", description: "Please enter a name for your custom metric." });
       return;
     }
+    if (form.scopeType === "account" && !form.companyId) {
+      toast({ variant: "destructive", description: "Please select an account or switch to Overall." });
+      return;
+    }
+    const payload = {
+      ...form,
+      companyId: form.scopeType === "account" ? form.companyId : null,
+    };
     if (editingGoal) {
-      updateGoalMutation.mutate({ id: editingGoal.id, data: form });
+      updateGoalMutation.mutate({ id: editingGoal.id, data: payload });
     } else {
-      createGoal.mutate(form);
+      createGoal.mutate(payload);
     }
   }
 
@@ -921,6 +947,7 @@ export default function GoalsPage() {
               currentUserId={user!.id}
               userRole={user!.role}
               allUsers={allUsers}
+              allCompanies={allCompanies}
               onEdit={openEdit}
               onDelete={id => deleteGoalMutation.mutate(id)}
             />
@@ -1021,7 +1048,7 @@ export default function GoalsPage() {
             {((isNam && !isAm) || amCanSetGoals) && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Team Member</label>
-                <Select value={form.amId} onValueChange={v => setForm(f => ({ ...f, amId: v }))}>
+                <Select value={form.amId} onValueChange={v => setForm(f => ({ ...f, amId: v, companyId: "" }))}>
                   <SelectTrigger data-testid="select-goal-am">
                     <SelectValue placeholder="Select team member..." />
                   </SelectTrigger>
@@ -1033,6 +1060,57 @@ export default function GoalsPage() {
                 </Select>
               </div>
             )}
+            {/* Scope toggle */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Goal Scope</label>
+              <div className="flex rounded-md border border-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, scopeType: "overall", companyId: "" }))}
+                  className={`flex-1 py-2 text-sm font-medium transition-colors ${form.scopeType === "overall" ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:bg-muted"}`}
+                  data-testid="button-scope-overall"
+                >
+                  Overall
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, scopeType: "account" }))}
+                  className={`flex-1 py-2 text-sm font-medium transition-colors border-l border-border ${form.scopeType === "account" ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:bg-muted"}`}
+                  data-testid="button-scope-account"
+                >
+                  Account Specific
+                </button>
+              </div>
+            </div>
+            {form.scopeType === "account" && (() => {
+              const repCompanies = allCompanies
+                .filter(c => c.salesPersonId === form.amId || c.assignedTo === form.amId)
+                .sort((a, b) => a.name.localeCompare(b.name));
+              return (
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium flex items-center gap-1.5">
+                    <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+                    Account
+                  </label>
+                  <Select
+                    value={form.companyId}
+                    onValueChange={v => setForm(f => ({ ...f, companyId: v }))}
+                  >
+                    <SelectTrigger data-testid="select-goal-company">
+                      <SelectValue placeholder={repCompanies.length ? "Select account..." : "No accounts found for this rep"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {repCompanies.map(c => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {form.amId && repCompanies.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No accounts are currently assigned to this rep.</p>
+                  )}
+                </div>
+              );
+            })()}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Metric</label>
               <Select value={form.metric} onValueChange={v => setForm(f => ({ ...f, metric: v, customLabel: "" }))}>

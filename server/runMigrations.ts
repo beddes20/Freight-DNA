@@ -547,6 +547,18 @@ export async function runMigrations() {
     clientOppLog.release();
   }
 
+  const clientGoalCompany = await pool.connect();
+  try {
+    await clientGoalCompany.query(`
+      ALTER TABLE goals ADD COLUMN IF NOT EXISTS company_id varchar REFERENCES companies(id) ON DELETE SET NULL
+    `);
+    console.log("[migrations] goals.company_id column ensured");
+  } catch (err) {
+    console.error("[migrations] goals.company_id migration error:", err);
+  } finally {
+    clientGoalCompany.release();
+  }
+
   const clientSession = await pool.connect();
   try {
     await clientSession.query(`
