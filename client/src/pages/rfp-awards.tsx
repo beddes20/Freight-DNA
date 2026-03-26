@@ -391,6 +391,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
   const [selectedLaneIndex, setSelectedLaneIndex] = useState(0);
   const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "origin", dir: "asc" });
   const [hvLanesCollapsed, setHvLanesCollapsed] = useState(false);
+  const [laneSearch, setLaneSearch] = useState("");
   const [dataViewerCollapsed, setDataViewerCollapsed] = useState(false);
   const [rfpFacilityCoverageCollapsed, setRfpFacilityCoverageCollapsed] = useState(false);
   const [rfpLanePatternsCollapsed, setRfpLanePatternsCollapsed] = useState(false);
@@ -650,7 +651,32 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
 
               const hasMiles = sortedLanes.some(({ lane }) => lane.miles != null);
 
+              const displayedLanes = laneSearch.trim()
+                ? sortedLanes.filter(({ lane }) => {
+                    const q = laneSearch.toLowerCase();
+                    const orig = fmtLoc(lane.origin, lane.originState).toLowerCase();
+                    const dest = fmtLoc(lane.destination, lane.destinationState).toLowerCase();
+                    return orig.includes(q) || dest.includes(q);
+                  })
+                : sortedLanes;
+
               return (
+                <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Filter by origin or destination…"
+                    value={laneSearch}
+                    onChange={e => setLaneSearch(e.target.value)}
+                    className="h-8 w-full max-w-xs rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    data-testid="input-lane-search"
+                  />
+                  {laneSearch && (
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      {displayedLanes.length} of {sortedLanes.length} lanes
+                    </span>
+                  )}
+                </div>
                 <div className="overflow-x-auto rounded-md border">
                   <table className="w-full text-sm" data-testid="table-high-volume-lanes">
                     <thead>
@@ -681,7 +707,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedLanes.map(({ lane, origIdx }) => (
+                      {displayedLanes.map(({ lane, origIdx }) => (
                         <tr
                           key={origIdx}
                           className={`border-b last:border-0 transition-colors ${
@@ -742,6 +768,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                       ))}
                     </tbody>
                   </table>
+                </div>
                 </div>
               );
             })()}

@@ -77,6 +77,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
   const [commentBody, setCommentBody] = useState("");
   const [updatingValue, setUpdatingValue] = useState(false);
   const [newValue, setNewValue] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const storageKey = `confetti-fired-goal-${goal.id}`;
   const [confettiFired, setConfettiFired] = useState(() => localStorage.getItem(storageKey) === "1");
   const { fire: fireConfetti, ConfettiOverlay } = useConfetti();
@@ -231,12 +232,38 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
           <div className="flex items-center gap-1 shrink-0">
             {canDelete && (
               <>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(goal)} data-testid={`button-edit-goal-${goal.id}`}>
-                  <Pencil className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(goal.id)} data-testid={`button-delete-goal-${goal.id}`}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                {confirmingDelete ? (
+                  <div className="flex items-center gap-1.5" data-testid={`confirm-delete-${goal.id}`}>
+                    <span className="text-xs text-destructive font-medium">Delete goal?</span>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="h-6 text-xs px-2"
+                      onClick={() => onDelete(goal.id)}
+                      data-testid={`button-confirm-delete-goal-${goal.id}`}
+                    >
+                      Delete
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-2"
+                      onClick={() => setConfirmingDelete(false)}
+                      data-testid={`button-cancel-delete-goal-${goal.id}`}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(goal)} data-testid={`button-edit-goal-${goal.id}`}>
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => setConfirmingDelete(true)} data-testid={`button-delete-goal-${goal.id}`}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -479,6 +506,7 @@ export default function GoalsPage() {
   const [alertDismissed, setAlertDismissed] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkForm, setBulkForm] = useState(defaultBulkForm);
+  const [pastGoalsCollapsed, setPastGoalsCollapsed] = useState(true);
 
   const [newMilestoneText, setNewMilestoneText] = useState("");
 
@@ -924,51 +952,111 @@ export default function GoalsPage() {
         </div>
       )}
 
-      {filteredGoals.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="py-12 flex flex-col items-center justify-center text-center">
-            <Target className="h-10 w-10 text-muted-foreground/40 mb-3" />
-            <p className="text-sm font-medium text-muted-foreground">No goals yet</p>
-            {isNam && (
-              <>
-                <p className="text-xs text-muted-foreground mt-1 mb-4">Create goals to track new contacts, load counts, and margin targets</p>
-                <Button onClick={() => openCreate(activeTab !== "all" ? activeTab : undefined)} variant="outline" size="sm" data-testid="button-create-first-goal">
-                  <Plus className="h-4 w-4 mr-2" /> Create First Goal
-                </Button>
-              </>
+      {(() => {
+        const activeFilteredGoals = filteredGoals.filter(g => g.endDate >= nowStr);
+        const pastFilteredGoals = filteredGoals.filter(g => g.endDate < nowStr).sort((a, b) => b.endDate.localeCompare(a.endDate));
+        return (
+          <>
+            {activeFilteredGoals.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="py-12 flex flex-col items-center justify-center text-center">
+                  <Target className="h-10 w-10 text-muted-foreground/40 mb-3" />
+                  <p className="text-sm font-medium text-muted-foreground">No active goals</p>
+                  {isNam && (
+                    <>
+                      <p className="text-xs text-muted-foreground mt-1 mb-4">Create goals to track new contacts, load counts, and margin targets</p>
+                      <Button onClick={() => openCreate(activeTab !== "all" ? activeTab : undefined)} variant="outline" size="sm" data-testid="button-create-first-goal">
+                        <Plus className="h-4 w-4 mr-2" /> Create First Goal
+                      </Button>
+                    </>
+                  )}
+                  {isAmRole && (
+                    <>
+                      <p className="text-xs text-muted-foreground mt-1 mb-4">Set personal goals to track your own performance</p>
+                      <Button onClick={() => openCreate()} variant="outline" size="sm" data-testid="button-create-first-goal-am">
+                        <Plus className="h-4 w-4 mr-2" /> Create My First Goal
+                      </Button>
+                    </>
+                  )}
+                  {isAm && !isAmRole && <p className="text-xs text-muted-foreground mt-1">Goals will be set for you by your manager</p>}
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-3">
+                {activeFilteredGoals.map(goal => (
+                  <GoalCard
+                    key={goal.id}
+                    goal={goal}
+                    currentUserId={user!.id}
+                    userRole={user!.role}
+                    allUsers={allUsers}
+                    allCompanies={allCompanies}
+                    onEdit={openEdit}
+                    onDelete={id => deleteGoalMutation.mutate(id)}
+                  />
+                ))}
+                {isNam && activeTab !== "all" && (
+                  <Button variant="outline" className="w-full" onClick={() => openCreate(activeTab)} data-testid="button-add-goal-for-am">
+                    <Plus className="h-4 w-4 mr-2" /> Add Goal for {uniqueAms.find(p => p.amId === activeTab)?.amName}
+                  </Button>
+                )}
+              </div>
             )}
-            {isAmRole && (
-              <>
-                <p className="text-xs text-muted-foreground mt-1 mb-4">Set personal goals to track your own performance</p>
-                <Button onClick={() => openCreate()} variant="outline" size="sm" data-testid="button-create-first-goal-am">
-                  <Plus className="h-4 w-4 mr-2" /> Create My First Goal
-                </Button>
-              </>
+
+            {pastFilteredGoals.length > 0 && (
+              <div>
+                <button
+                  className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors w-full text-left py-1"
+                  onClick={() => setPastGoalsCollapsed(c => !c)}
+                  data-testid="button-toggle-past-goals"
+                >
+                  <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${pastGoalsCollapsed ? "-rotate-90" : ""}`} />
+                  Past Goals ({pastFilteredGoals.length})
+                </button>
+                {!pastGoalsCollapsed && (
+                  <div className="mt-3 space-y-2">
+                    {pastFilteredGoals.map(goal => {
+                      const current = parseFloat(goal.currentValue || "0");
+                      const target = parseFloat(goal.target || "1");
+                      const pct = progressPct(current, target);
+                      const met = pct >= 100;
+                      const m = getMetric(goal.metric);
+                      const MetIcon = m.icon;
+                      const amName = allUsers.find(u => u.id === goal.amId)?.name;
+                      return (
+                        <div
+                          key={goal.id}
+                          className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3"
+                          data-testid={`past-goal-${goal.id}`}
+                        >
+                          <div className={`h-7 w-7 rounded-full ${m.color} flex items-center justify-center shrink-0`}>
+                            <MetIcon className="h-3.5 w-3.5 text-white" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium leading-tight truncate">
+                              {goal.title || (goal.metric === "custom" ? (goal.customLabel || "Custom Goal") : m.label)}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {fmtDate(goal.startDate)} – {fmtDate(goal.endDate)}
+                              {amName && goal.amId !== user?.id && <span className="ml-1 text-muted-foreground/60">· {amName}</span>}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className={`text-sm font-semibold ${met ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                              {pct}%
+                            </span>
+                            <p className="text-xs text-muted-foreground">{met ? "✓ Goal met" : "Not met"}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             )}
-            {isAm && !isAmRole && <p className="text-xs text-muted-foreground mt-1">Goals will be set for you by your manager</p>}
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {filteredGoals.map(goal => (
-            <GoalCard
-              key={goal.id}
-              goal={goal}
-              currentUserId={user!.id}
-              userRole={user!.role}
-              allUsers={allUsers}
-              allCompanies={allCompanies}
-              onEdit={openEdit}
-              onDelete={id => deleteGoalMutation.mutate(id)}
-            />
-          ))}
-          {isNam && activeTab !== "all" && (
-            <Button variant="outline" className="w-full" onClick={() => openCreate(activeTab)} data-testid="button-add-goal-for-am">
-              <Plus className="h-4 w-4 mr-2" /> Add Goal for {uniqueAms.find(p => p.amId === activeTab)?.amName}
-            </Button>
-          )}
-        </div>
-      )}
+          </>
+        );
+      })()}
 
       {/* Development Milestones — shown for manager viewing LM tab, or LM viewing their own goals */}
       {(canManageMilestones || user?.role === "logistics_manager") && (

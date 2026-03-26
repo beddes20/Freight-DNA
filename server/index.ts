@@ -12,6 +12,7 @@ import { initRepReportScheduler } from "./repReportScheduler";
 import { initOneOnOneReminderScheduler } from "./oneOnOneReminderScheduler";
 import { initHealthAlertScheduler } from "./healthAlertScheduler";
 import { initPtoReturnScheduler } from "./ptoReturnScheduler";
+import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
 
@@ -124,6 +125,7 @@ app.use((req, res, next) => {
       initOneOnOneReminderScheduler();
       initHealthAlertScheduler();
       initPtoReturnScheduler();
+      initWeeklyGoalRecapScheduler();
     },
   );
 })();
