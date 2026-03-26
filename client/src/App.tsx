@@ -11,8 +11,10 @@ import { NotificationBell } from "@/components/notification-bell";
 import { NotificationToasts } from "@/components/notification-toasts";
 import { CrmChatbot } from "@/components/crm-chatbot";
 import { Button } from "@/components/ui/button";
-import { Loader2, UserX } from "lucide-react";
-import React, { useEffect } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Loader2, UserX, Clock } from "lucide-react";
+import React, { useEffect, useCallback } from "react";
+import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
 import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -100,6 +102,24 @@ function Router() {
 function AuthenticatedApp() {
   const { user, isLoading } = useAuth();
 
+  const handleInactivityLogout = useCallback(async () => {
+    try {
+      await apiRequest("POST", "/api/auth/logout");
+    } catch {}
+    queryClient.clear();
+    window.location.href = "/login";
+  }, []);
+
+  const { warningVisible, secondsLeft, staySignedIn } = useInactivityTimeout(
+    user ? handleInactivityLogout : () => {}
+  );
+
+  const minutesLeft = Math.floor(secondsLeft / 60);
+  const secs = secondsLeft % 60;
+  const countdownLabel = minutesLeft > 0
+    ? `${minutesLeft}:${String(secs).padStart(2, "0")}`
+    : `${secs}s`;
+
   useEffect(() => {
     if (!user) return;
     const prefetch = (key: string) =>
@@ -148,6 +168,33 @@ function AuthenticatedApp() {
 
   return (
     <>
+      <Dialog open={warningVisible && !!user} onOpenChange={(open) => { if (!open) staySignedIn(); }}>
+        <DialogContent className="sm:max-w-sm" data-testid="dialog-inactivity-warning">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5 text-amber-500" />
+              Are you still there?
+            </DialogTitle>
+            <DialogDescription>
+              You've been inactive for a while. For your security, you'll be automatically signed out in:
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center justify-center py-4">
+            <span className="text-4xl font-bold tabular-nums text-amber-500" data-testid="text-inactivity-countdown">
+              {countdownLabel}
+            </span>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={handleInactivityLogout} data-testid="button-inactivity-sign-out">
+              Sign out now
+            </Button>
+            <Button onClick={staySignedIn} data-testid="button-inactivity-stay">
+              Stay signed in
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <SidebarProvider style={style as React.CSSProperties}>
         <div className="flex h-screen w-full">
           <AppSidebar />
