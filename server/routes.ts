@@ -6404,12 +6404,15 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.status(403).json({ error: "Only managers can create goals" });
-      // AMs can only set goals for users who report directly to them
+      // AMs can set goals for themselves or for users who report directly to them
       if (user.role === "account_manager") {
-        const allUsers = await storage.getUsers(req.session.organizationId!);
-        const targetUser = allUsers.find(u => u.id === req.body.amId);
-        if (!targetUser || targetUser.managerId !== user.id) {
-          return res.status(403).json({ error: "You can only set goals for your direct reports" });
+        const amId = req.body.amId;
+        if (amId !== user.id) {
+          const allUsers = await storage.getUsers(req.session.organizationId!);
+          const targetUser = allUsers.find(u => u.id === amId);
+          if (!targetUser || targetUser.managerId !== user.id) {
+            return res.status(403).json({ error: "You can only set goals for yourself or your direct reports" });
+          }
         }
       }
       const goal = await storage.createGoal({

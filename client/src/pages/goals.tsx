@@ -670,7 +670,7 @@ export default function GoalsPage() {
 
   function openCreate(amId?: string) {
     setEditingGoal(null);
-    const defaultAmId = amId || (isNam ? uniqueAms[0]?.amId : amLmReports[0]?.amId) || "";
+    const defaultAmId = amId || (isNam ? uniqueAms[0]?.amId : amLmReports[0]?.amId) || (isAmRole ? user?.id : "") || "";
     const defaultMetric = amCanSetGoals && !isNam ? "loads_booked" : "contacts_added";
     setForm({ ...defaultForm, ...getMonthDefaults(), amId: defaultAmId, metric: defaultMetric });
     setDialogOpen(true);
@@ -798,7 +798,7 @@ export default function GoalsPage() {
               Set for All AMs
             </Button>
           )}
-          {(isNam || amCanSetGoals) && (
+          {(isNam || amCanSetGoals || isAmRole) && (
             <Button onClick={() => openCreate()} data-testid="button-create-goal">
               <Plus className="h-4 w-4 mr-2" />
               New Goal
@@ -937,7 +937,15 @@ export default function GoalsPage() {
                 </Button>
               </>
             )}
-            {isAm && <p className="text-xs text-muted-foreground mt-1">Your NAM will set goals for your review</p>}
+            {isAmRole && (
+              <>
+                <p className="text-xs text-muted-foreground mt-1 mb-4">Set personal goals to track your own performance</p>
+                <Button onClick={() => openCreate()} variant="outline" size="sm" data-testid="button-create-first-goal-am">
+                  <Plus className="h-4 w-4 mr-2" /> Create My First Goal
+                </Button>
+              </>
+            )}
+            {isAm && !isAmRole && <p className="text-xs text-muted-foreground mt-1">Goals will be set for you by your manager</p>}
           </CardContent>
         </Card>
       ) : (
