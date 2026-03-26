@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -293,8 +293,43 @@ export default function Dashboard() {
   const [amTrendingUpCollapsed, setAmTrendingUpCollapsed] = useState(false);
   const [amTrendingDownCollapsed, setAmTrendingDownCollapsed] = useState(false);
 
+  // Collapsible state for list portlets — initialized after user loads (role-based defaults)
+  const [recentWinsCollapsed, setRecentWinsCollapsed] = useState(false);
+  const [coldContactsCollapsed, setColdContactsCollapsed] = useState(false);
+  const [meaningfulOverdueCollapsed, setMeaningfulOverdueCollapsed] = useState(false);
+  const [topOppsCollapsed, setTopOppsCollapsed] = useState(false);
+  const [churnRiskCollapsed, setChurnRiskCollapsed] = useState(false);
+  const [rfpDeadlineCollapsed, setRfpDeadlineCollapsed] = useState(false);
+  const [goalsNudgeCollapsed, setGoalsNudgeCollapsed] = useState(false);
+  const [goalsAlertCollapsed, setGoalsAlertCollapsed] = useState(false);
+  const portletDefaultsApplied = useRef(false);
+  const togglePortlet = (key: string, val: boolean, setter: (v: boolean) => void) => {
+    setter(val);
+    localStorage.setItem(key, String(val));
+  };
+
   const isAdmin = currentUser?.role === "admin";
   const directorFilterParam = isAdmin && selectedDirectorId ? `?directorId=${encodeURIComponent(selectedDirectorId)}` : "";
+
+  // Apply role-based portlet defaults once after user loads — directors default to collapsed
+  useEffect(() => {
+    if (portletDefaultsApplied.current || !currentUser) return;
+    portletDefaultsApplied.current = true;
+    const dirDefault = isDirector;
+    const lp = (key: string, setter: (v: boolean) => void) => {
+      const stored = localStorage.getItem(key);
+      if (stored !== null) setter(stored === "true");
+      else if (dirDefault) setter(true);
+    };
+    lp("dash_recent_wins_collapsed", setRecentWinsCollapsed);
+    lp("dash_cold_contacts_collapsed", setColdContactsCollapsed);
+    lp("dash_meaningful_overdue_collapsed", setMeaningfulOverdueCollapsed);
+    lp("dash_top_opps_collapsed", setTopOppsCollapsed);
+    lp("dash_churn_risk_collapsed", setChurnRiskCollapsed);
+    lp("dash_rfp_deadline_collapsed", setRfpDeadlineCollapsed);
+    lp("dash_goals_nudge_collapsed", setGoalsNudgeCollapsed);
+    lp("dash_goals_alert_collapsed", setGoalsAlertCollapsed);
+  }, [currentUser, isDirector]);
 
   type TrendingAccount = { name: string; delta: number; isNew?: boolean; companyId?: string };
   type TrendingResponse = { up: TrendingAccount[]; down: TrendingAccount[]; monthFraction?: number; isPartialMonth?: boolean; curMonthLabel?: string };
@@ -1318,13 +1353,16 @@ export default function Dashboard() {
           {recentWins.length > 0 && (
             <Card data-testid="portlet-director-recent-wins">
               <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Trophy className="h-4 w-4 text-amber-500" />
-                  Recent Wins — {new Date().toLocaleString("default", { month: "long" })}
-                  <Badge className="ml-1 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 font-semibold text-xs">{recentWins.length}</Badge>
-                </CardTitle>
+                <button onClick={() => togglePortlet("dash_recent_wins_collapsed", !recentWinsCollapsed, setRecentWinsCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-recent-wins">
+                  {recentWinsCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Trophy className="h-4 w-4 text-amber-500" />
+                    Recent Wins — {new Date().toLocaleString("default", { month: "long" })}
+                    <Badge className="ml-1 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 font-semibold text-xs">{recentWins.length}</Badge>
+                  </CardTitle>
+                </button>
               </CardHeader>
-              <CardContent className="pt-0">
+              {!recentWinsCollapsed && <CardContent className="pt-0">
                 <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                   {recentWins.slice(0, 15).map(win => {
                     const rep = teamMembers.find(m => m.id === win.repId);
@@ -1344,7 +1382,7 @@ export default function Dashboard() {
                     );
                   })}
                 </div>
-              </CardContent>
+              </CardContent>}
             </Card>
           )}
         </>
@@ -2335,13 +2373,16 @@ export default function Dashboard() {
       {coldContacts.length > 0 && (
         <Card data-testid="card-cold-contacts">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <AlertTriangle className="h-4 w-4 text-amber-500" />
-              Contacts Needing Attention
-              <Badge variant="secondary" className="ml-auto font-normal">{coldContacts.length}</Badge>
-            </CardTitle>
+            <button onClick={() => togglePortlet("dash_cold_contacts_collapsed", !coldContactsCollapsed, setColdContactsCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-cold-contacts">
+              {coldContactsCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <CardTitle className="flex items-center gap-2 text-base">
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                Contacts Needing Attention
+                <Badge variant="secondary" className="ml-auto font-normal">{coldContacts.length}</Badge>
+              </CardTitle>
+            </button>
           </CardHeader>
-          <CardContent className="p-0">
+          {!coldContactsCollapsed && <CardContent className="p-0">
             <div className="divide-y">
               {coldContacts.slice(0, 8).map(({ contact, company, daysSince, lastType }) => {
                 const dotColor = daysSince >= 999 ? "bg-muted-foreground/40" : daysSince > 30 ? "bg-red-500" : "bg-amber-500";
@@ -2388,20 +2429,23 @@ export default function Dashboard() {
                 );
               })}
             </div>
-          </CardContent>
+          </CardContent>}
         </Card>
       )}
 
       {meaningfulOverdue.length > 0 && (
         <Card data-testid="card-meaningful-overdue">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <MessageSquare className="h-4 w-4 text-purple-500" />
-              No Meaningful Conversation in 30+ Days
-              <Badge variant="secondary" className="ml-auto font-normal">{meaningfulOverdue.length}</Badge>
-            </CardTitle>
+            <button onClick={() => togglePortlet("dash_meaningful_overdue_collapsed", !meaningfulOverdueCollapsed, setMeaningfulOverdueCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-meaningful-overdue">
+              {meaningfulOverdueCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <CardTitle className="flex items-center gap-2 text-base">
+                <MessageSquare className="h-4 w-4 text-purple-500" />
+                No Meaningful Conversation in 30+ Days
+                <Badge variant="secondary" className="ml-auto font-normal">{meaningfulOverdue.length}</Badge>
+              </CardTitle>
+            </button>
           </CardHeader>
-          <CardContent className="p-0">
+          {!meaningfulOverdueCollapsed && <CardContent className="p-0">
             <div className="divide-y">
               {meaningfulOverdue.slice(0, 6).map(({ contact, company, daysSinceLastMeaningful }) => {
                 const days = daysSinceLastMeaningful >= 999 ? null : daysSinceLastMeaningful;
@@ -2423,21 +2467,24 @@ export default function Dashboard() {
                 );
               })}
             </div>
-          </CardContent>
+          </CardContent>}
         </Card>
       )}
 
       {opportunityLeaderboard.length > 0 && (
         <Card data-testid="card-opportunity-leaderboard">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
-              Top Wallet Share Opportunities
-              <InfoTooltip text="Your accounts ranked by how much untapped margin potential they have. Calculated from their estimated freight spend or RFP volume vs what you're currently capturing." side="top" />
-              <Badge variant="secondary" className="ml-auto font-normal">YTD</Badge>
-            </CardTitle>
+            <button onClick={() => togglePortlet("dash_top_opps_collapsed", !topOppsCollapsed, setTopOppsCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-top-opps">
+              {topOppsCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <CardTitle className="flex items-center gap-2 text-base">
+                <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
+                Top Wallet Share Opportunities
+                <InfoTooltip text="Your accounts ranked by how much untapped margin potential they have. Calculated from their estimated freight spend or RFP volume vs what you're currently capturing." side="top" />
+                <Badge variant="secondary" className="ml-auto font-normal">YTD</Badge>
+              </CardTitle>
+            </button>
           </CardHeader>
-          <CardContent className="pt-0 space-y-2">
+          {!topOppsCollapsed && <CardContent className="pt-0 space-y-2">
             {opportunityLeaderboard.map((item, idx) => (
               <Link key={item.companyId} href={`/companies/${item.companyId}`}>
                 <div className="flex items-center justify-between gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer" data-testid={`opportunity-row-${item.companyId}`}>
@@ -2459,24 +2506,27 @@ export default function Dashboard() {
                 </div>
               </Link>
             ))}
-          </CardContent>
+          </CardContent>}
         </Card>
       )}
 
       {churnRisk.length > 0 && !isLmRole && (
         <Card className="border-orange-300 dark:border-orange-700" data-testid="card-churn-risk">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base text-orange-700 dark:text-orange-400">
-              <TrendingDown className="h-4 w-4" />
-              Volume Drop Alert
-              <InfoTooltip text="Accounts where total load volume dropped 20% or more compared to last month (minimum 5 prior loads to qualify). Could signal competitor activity, operational changes, or reduced shipping needs — worth a quick call." side="top" />
-              <Badge className="ml-auto bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300 font-normal border-orange-300">
-                {churnRisk.length} account{churnRisk.length !== 1 ? "s" : ""}
-              </Badge>
-            </CardTitle>
+            <button onClick={() => togglePortlet("dash_churn_risk_collapsed", !churnRiskCollapsed, setChurnRiskCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-churn-risk">
+              {churnRiskCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <CardTitle className="flex items-center gap-2 text-base text-orange-700 dark:text-orange-400">
+                <TrendingDown className="h-4 w-4" />
+                Volume Drop Alert
+                <InfoTooltip text="Accounts where total load volume dropped 20% or more compared to last month (minimum 5 prior loads to qualify). Could signal competitor activity, operational changes, or reduced shipping needs — worth a quick call." side="top" />
+                <Badge className="ml-auto bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300 font-normal border-orange-300">
+                  {churnRisk.length} account{churnRisk.length !== 1 ? "s" : ""}
+                </Badge>
+              </CardTitle>
+            </button>
             <p className="text-xs text-muted-foreground">Loads down 20%+ vs last month — possible competitor activity</p>
           </CardHeader>
-          <CardContent className="pt-0 space-y-1">
+          {!churnRiskCollapsed && <CardContent className="pt-0 space-y-1">
             {churnRisk.map((item) => (
               <Link key={item.companyId} href={`/companies/${item.companyId}`}>
                 <div className="flex items-center justify-between gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer" data-testid={`churn-risk-row-${item.companyId}`}>
@@ -2493,22 +2543,25 @@ export default function Dashboard() {
                 </div>
               </Link>
             ))}
-          </CardContent>
+          </CardContent>}
         </Card>
       )}
 
       {urgentRfps.length > 0 && (
         <Card className="border-red-300 dark:border-red-700" data-testid="card-rfp-deadline-alert">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base text-red-700 dark:text-red-400">
-              <Clock className="h-4 w-4" />
-              RFP Deadlines Approaching
-              <Badge className="ml-auto bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300 font-normal border-red-300">
-                {urgentRfps.length} RFP{urgentRfps.length !== 1 ? "s" : ""}
-              </Badge>
-            </CardTitle>
+            <button onClick={() => togglePortlet("dash_rfp_deadline_collapsed", !rfpDeadlineCollapsed, setRfpDeadlineCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-rfp-deadline">
+              {rfpDeadlineCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <CardTitle className="flex items-center gap-2 text-base text-red-700 dark:text-red-400">
+                <Clock className="h-4 w-4" />
+                RFP Deadlines Approaching
+                <Badge className="ml-auto bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300 font-normal border-red-300">
+                  {urgentRfps.length} RFP{urgentRfps.length !== 1 ? "s" : ""}
+                </Badge>
+              </CardTitle>
+            </button>
           </CardHeader>
-          <CardContent className="pt-0 space-y-2">
+          {!rfpDeadlineCollapsed && <CardContent className="pt-0 space-y-2">
             {urgentRfps.map((rfp: any) => {
               const due = new Date(rfp.dueDate + "T00:00:00");
               const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
@@ -2531,22 +2584,25 @@ export default function Dashboard() {
                 </Link>
               );
             })}
-          </CardContent>
+          </CardContent>}
         </Card>
       )}
 
       {behindGoals.length > 0 && !isLmRole && (
         <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goals-nudge">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
-              <Target className="h-4 w-4" />
-              Goals Need Attention
-              <Badge className="ml-auto bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300 font-normal border-amber-300">
-                {behindGoals.length} goal{behindGoals.length !== 1 ? "s" : ""} behind
-              </Badge>
-            </CardTitle>
+            <button onClick={() => togglePortlet("dash_goals_nudge_collapsed", !goalsNudgeCollapsed, setGoalsNudgeCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-goals-nudge">
+              {goalsNudgeCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
+                <Target className="h-4 w-4" />
+                Goals Need Attention
+                <Badge className="ml-auto bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300 font-normal border-amber-300">
+                  {behindGoals.length} goal{behindGoals.length !== 1 ? "s" : ""} behind
+                </Badge>
+              </CardTitle>
+            </button>
           </CardHeader>
-          <CardContent className="pt-0">
+          {!goalsNudgeCollapsed && <CardContent className="pt-0">
             <p className="text-sm text-muted-foreground mb-3">
               You're past the halfway point of the month and these goals are under 50% complete:
             </p>
@@ -2581,7 +2637,7 @@ export default function Dashboard() {
                 Update Progress →
               </Button>
             </Link>
-          </CardContent>
+          </CardContent>}
         </Card>
       )}
 
@@ -2601,15 +2657,18 @@ export default function Dashboard() {
       {canSeeTeam && missingMonthlyGoals.length > 0 && (
         <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goal-alert">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
-              <BellRing className="h-4 w-4" />
-              Monthly Goals Not Set
-              <Badge className="ml-auto bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300 font-normal border-amber-300">
-                {missingMonthlyGoals.length} rep{missingMonthlyGoals.length !== 1 ? "s" : ""}
-              </Badge>
-            </CardTitle>
+            <button onClick={() => togglePortlet("dash_goals_alert_collapsed", !goalsAlertCollapsed, setGoalsAlertCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-goals-alert">
+              {goalsAlertCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
+                <BellRing className="h-4 w-4" />
+                Monthly Goals Not Set
+                <Badge className="ml-auto bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300 font-normal border-amber-300">
+                  {missingMonthlyGoals.length} rep{missingMonthlyGoals.length !== 1 ? "s" : ""}
+                </Badge>
+              </CardTitle>
+            </button>
           </CardHeader>
-          <CardContent className="pt-0">
+          {!goalsAlertCollapsed && <CardContent className="pt-0">
             <p className="text-sm text-muted-foreground mb-3">
               The following reps are missing monthly goals for{" "}
               <span className="font-medium text-foreground">
@@ -2628,7 +2687,7 @@ export default function Dashboard() {
                 Set Goals →
               </Button>
             </Link>
-          </CardContent>
+          </CardContent>}
         </Card>
       )}
 
