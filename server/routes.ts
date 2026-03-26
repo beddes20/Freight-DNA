@@ -6012,6 +6012,243 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
+  // ── Team Performance Drill-Down Detail ─────────────────────────────────────
+  app.get("/api/team/performance/detail/:metric", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const amEquivRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+      if (amEquivRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
+
+      const metric = req.params.metric as string;
+      const period = (req.query.period as string) || "current";
+      const now = new Date();
+      const todayStr = now.toISOString().split("T")[0];
+      let startDate: string;
+      let endDate: string;
+      if (period === "last") {
+        const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        startDate = lastMonth.toISOString().split("T")[0];
+        endDate = lastMonthEnd.toISOString().split("T")[0];
+      } else if (period === "ytd") {
+        startDate = `${now.getFullYear()}-01-01`;
+        endDate = todayStr;
+      } else {
+        startDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+        endDate = todayStr;
+      }
+
+      let teamIds: string[];
+      if (user.role === "admin") {
+        const allUsers = await storage.getUsers(req.session.organizationId!);
+        teamIds = allUsers.filter(u => ["account_manager","national_account_manager","logistics_manager","logistics_coordinator","director","sales_director","sales"].includes(u.role)).map(u => u.id);
+      } else {
+        teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+      }
+
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      const usersById: Record<string, typeof allUsers[0]> = {};
+      for (const u of allUsers) usersById[u.id] = u;
+
+      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+      const companiesById: Record<string, typeof allCompanies[0]> = {};
+      for (const c of allCompanies) companiesById[c.id] = c;
+
+      const allContacts = await storage.getContacts();
+      const contactsById: Record<string, typeof allContacts[0]> = {};
+      for (const c of allContacts) contactsById[c.id] = c;
+
+      const touchpointMetrics = ["calls", "texts", "emails", "touched", "meaningful"];
+      const taskMetrics = ["open_tasks", "overdue"];
+      const accountMetrics = ["total_accounts", "new_contacts", "relationships_moved"];
+
+      if (touchpointMetrics.includes(metric)) {
+        const teamIdSet = new Set(teamIds);
+        const allTps = await storage.getTouchpoints();
+        let tps = allTps.filter(tp =>
+          teamIdSet.has(tp.loggedById) &&
+          tp.date >= startDate &&
+          tp.date <= endDate
+        );
+
+        if (metric === "calls") tps = tps.filter(tp => tp.type === "call");
+        else if (metric === "texts") tps = tps.filter(tp => tp.type === "text");
+        else if (metric === "emails") tps = tps.filter(tp => tp.type === "email");
+        else if (metric === "meaningful") tps = tps.filter(tp => tp.isMeaningful);
+        else if (metric === "touched") {
+          // Dedup per-rep per-contact (matches aggregate: sum of each rep's unique contacts)
+          const seenRepContact = new Set<string>();
+          const uniqueTps: typeof tps = [];
+          for (const tp of tps) {
+            if (!tp.contactId) continue;
+            const key = `${tp.loggedById}:${tp.contactId}`;
+            if (!seenRepContact.has(key)) {
+              seenRepContact.add(key);
+              uniqueTps.push(tp);
+            }
+          }
+          tps = uniqueTps;
+        }
+
+        const tpIds = tps.map(t => t.id);
+        const attachmentCounts: Record<string, number> = {};
+        if (tpIds.length > 0) {
+          const attachments = await storage.getAttachmentsByEntities("touchpoint", tpIds);
+          for (const a of attachments) {
+            attachmentCounts[a.entityId] = (attachmentCounts[a.entityId] || 0) + 1;
+          }
+        }
+
+        interface TouchpointRow {
+          id: string;
+          repName: string;
+          contactName: string | null;
+          companyName: string | null;
+          date: string;
+          notes: string | null;
+          hasAttachments: boolean;
+          isMeaningful: boolean;
+          type: string;
+        }
+
+        const rows: TouchpointRow[] = tps.map(tp => {
+          const rep = usersById[tp.loggedById];
+          const contact = tp.contactId ? contactsById[tp.contactId] : null;
+          const company = companiesById[tp.companyId];
+          return {
+            id: tp.id,
+            repName: rep?.name ?? "Unknown",
+            contactName: contact?.name ?? null,
+            companyName: company?.name ?? null,
+            date: tp.date,
+            notes: tp.notes ?? null,
+            hasAttachments: (attachmentCounts[tp.id] ?? 0) > 0,
+            isMeaningful: tp.isMeaningful ?? false,
+            type: tp.type,
+          };
+        });
+
+        rows.sort((a, b) => b.date.localeCompare(a.date));
+        return res.json({ metric, period, startDate, endDate, rows });
+      }
+
+      if (taskMetrics.includes(metric)) {
+        const allTasks = await storage.getTasks();
+        const teamTaskIds = new Set(teamIds);
+        let filtered = allTasks.filter(t => teamTaskIds.has(t.assignedTo));
+        if (metric === "open_tasks") {
+          filtered = filtered.filter(t => t.status === "open" || t.status === "in_progress");
+        } else if (metric === "overdue") {
+          filtered = filtered.filter(t => (t.status === "open" || t.status === "in_progress") && t.dueDate && t.dueDate < todayStr);
+        }
+
+        interface TaskRow {
+          id: string;
+          title: string;
+          notes: string | null;
+          repName: string;
+          companyName: string | null;
+          dueDate: string | null;
+          status: string;
+          isOverdue: boolean;
+        }
+
+        const rows: TaskRow[] = filtered.map(t => {
+          const rep = usersById[t.assignedTo];
+          const company = t.companyId ? companiesById[t.companyId] : null;
+          return {
+            id: t.id,
+            title: t.title,
+            notes: t.notes ?? null,
+            repName: rep?.name ?? "Unknown",
+            companyName: company?.name ?? null,
+            dueDate: t.dueDate ?? null,
+            status: t.status,
+            isOverdue: !!(t.dueDate && t.dueDate < todayStr && (t.status === "open" || t.status === "in_progress")),
+          };
+        });
+
+        rows.sort((a, b) => {
+          if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+          if (a.dueDate) return -1;
+          if (b.dueDate) return 1;
+          return 0;
+        });
+        return res.json({ metric, period, startDate, endDate, rows });
+      }
+
+      if (accountMetrics.includes(metric)) {
+        const companiesByTeam = allCompanies.filter(c => c.assignedTo && teamIds.includes(c.assignedTo));
+
+        if (metric === "total_accounts") {
+          const rows = companiesByTeam.map(c => {
+            const rep = c.assignedTo ? usersById[c.assignedTo] : null;
+            return {
+              id: c.id,
+              accountName: c.name,
+              repName: rep?.name ?? "Unknown",
+              industry: c.industry ?? null,
+            };
+          });
+          rows.sort((a, b) => a.accountName.localeCompare(b.accountName));
+          return res.json({ metric, period, startDate, endDate, rows });
+        }
+
+        if (metric === "new_contacts") {
+          const newContacts = allContacts.filter(c => {
+            const d = c.createdAt?.slice(0, 10);
+            if (!d || d < startDate || d > endDate) return false;
+            const company = companiesById[c.companyId];
+            return company && company.assignedTo && teamIds.includes(company.assignedTo);
+          });
+          const rows = newContacts.map(c => {
+            const company = companiesById[c.companyId];
+            const rep = company?.assignedTo ? usersById[company.assignedTo] : null;
+            const creator = c.createdBy ? usersById[c.createdBy] : null;
+            return {
+              id: c.id,
+              contactName: c.name,
+              companyName: company?.name ?? null,
+              repName: creator?.name ?? rep?.name ?? "Unknown",
+              dateAdded: c.createdAt?.slice(0, 10) ?? null,
+            };
+          });
+          rows.sort((a, b) => (b.dateAdded ?? "").localeCompare(a.dateAdded ?? ""));
+          return res.json({ metric, period, startDate, endDate, rows });
+        }
+
+        if (metric === "relationships_moved") {
+          const movedContacts = allContacts.filter(c => {
+            const d = c.baseAdvancedAt?.slice(0, 10);
+            if (!d || d < startDate || d > endDate) return false;
+            const company = companiesById[c.companyId];
+            return company && company.assignedTo && teamIds.includes(company.assignedTo);
+          });
+          const rows = movedContacts.map(c => {
+            const company = companiesById[c.companyId];
+            const rep = company?.assignedTo ? usersById[company.assignedTo] : null;
+            return {
+              id: c.id,
+              contactName: c.name,
+              companyName: company?.name ?? null,
+              repName: rep?.name ?? "Unknown",
+              dateAdvanced: c.baseAdvancedAt?.slice(0, 10) ?? null,
+              relationshipBase: c.relationshipBase ?? null,
+            };
+          });
+          rows.sort((a, b) => (b.dateAdvanced ?? "").localeCompare(a.dateAdvanced ?? ""));
+          return res.json({ metric, period, startDate, endDate, rows });
+        }
+      }
+
+      return res.status(400).json({ error: "Unknown metric" });
+    } catch (error) {
+      console.error("Error in team performance detail:", error);
+      res.status(500).json({ error: "Failed to fetch detail data" });
+    }
+  });
+
   // ── SMTP Test ────────────────────────────────────────────────────────────
   app.post("/api/admin/smtp/test", requireAuth, async (req, res) => {
     try {

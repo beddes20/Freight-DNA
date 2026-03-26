@@ -936,13 +936,18 @@ export default function TeamPerformancePage() {
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               {[
-                { label: "Open Tasks", value: totalOpenTasks, icon: <Clock className="h-4 w-4 text-amber-500" />, color: "text-amber-600" },
-                { label: "Overdue", value: totalOverdue, icon: <AlertTriangle className="h-4 w-4 text-red-500" />, color: "text-red-600" },
-                { label: "Total Accounts", value: totalAccounts, icon: <Building2 className="h-4 w-4 text-blue-500" />, color: "text-blue-600" },
-                { label: "New Contacts", value: totalNewContacts, icon: <UserPlus className="h-4 w-4 text-emerald-500" />, color: "text-emerald-600" },
-                { label: "Relationships Moved", value: totalBaseAdvanced, icon: <ArrowUpRight className="h-4 w-4 text-teal-500" />, color: "text-teal-600" },
+                { label: "Open Tasks", value: totalOpenTasks, icon: <Clock className="h-4 w-4 text-amber-500" />, color: "text-amber-600", metric: "open_tasks" },
+                { label: "Overdue", value: totalOverdue, icon: <AlertTriangle className="h-4 w-4 text-red-500" />, color: "text-red-600", metric: "overdue" },
+                { label: "Total Accounts", value: totalAccounts, icon: <Building2 className="h-4 w-4 text-blue-500" />, color: "text-blue-600", metric: "total_accounts" },
+                { label: "New Contacts", value: totalNewContacts, icon: <UserPlus className="h-4 w-4 text-emerald-500" />, color: "text-emerald-600", metric: "new_contacts" },
+                { label: "Relationships Moved", value: totalBaseAdvanced, icon: <ArrowUpRight className="h-4 w-4 text-teal-500" />, color: "text-teal-600", metric: "relationships_moved" },
               ].map(stat => (
-                <Card key={stat.label}>
+                <Card
+                  key={stat.label}
+                  className="cursor-pointer hover:shadow-md hover:border-primary/30 transition-all"
+                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}`)}
+                  data-testid={`portlet-${stat.metric}`}
+                >
                   <CardContent className="pt-4 pb-3">
                     <div className="flex items-center gap-2 mb-1">
                       {stat.icon}
@@ -955,13 +960,18 @@ export default function TeamPerformancePage() {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               {[
-                { label: "Calls", value: totalCalls, icon: <Phone className="h-4 w-4 text-blue-500" />, color: "text-blue-600", sub: null },
-                { label: "Texts", value: totalTexts, icon: <MessageSquare className="h-4 w-4 text-green-500" />, color: "text-green-600", sub: null },
-                { label: "Emails", value: totalEmails, icon: <Mail className="h-4 w-4 text-purple-500" />, color: "text-purple-600", sub: null },
-                { label: "Touched", value: totalTouched, icon: <UserCheck className="h-4 w-4 text-cyan-500" />, color: "text-cyan-600", sub: null },
-                { label: "Meaningful", value: totalMeaningful, icon: <Heart className="h-4 w-4 text-rose-500" />, color: "text-rose-600", sub: totalAllTouchpoints > 0 ? `of ${totalAllTouchpoints} (${totalMeaningfulPct}%)` : null },
+                { label: "Calls", value: totalCalls, icon: <Phone className="h-4 w-4 text-blue-500" />, color: "text-blue-600", sub: null, metric: "calls" },
+                { label: "Texts", value: totalTexts, icon: <MessageSquare className="h-4 w-4 text-green-500" />, color: "text-green-600", sub: null, metric: "texts" },
+                { label: "Emails", value: totalEmails, icon: <Mail className="h-4 w-4 text-purple-500" />, color: "text-purple-600", sub: null, metric: "emails" },
+                { label: "Touched", value: totalTouched, icon: <UserCheck className="h-4 w-4 text-cyan-500" />, color: "text-cyan-600", sub: null, metric: "touched" },
+                { label: "Meaningful", value: totalMeaningful, icon: <Heart className="h-4 w-4 text-rose-500" />, color: "text-rose-600", sub: totalAllTouchpoints > 0 ? `of ${totalAllTouchpoints} (${totalMeaningfulPct}%)` : null, metric: "meaningful" },
               ].map(stat => (
-                <Card key={stat.label}>
+                <Card
+                  key={stat.label}
+                  className="cursor-pointer hover:shadow-md hover:border-primary/30 transition-all"
+                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}`)}
+                  data-testid={`portlet-${stat.metric}`}
+                >
                   <CardContent className="pt-4 pb-3">
                     <div className="flex items-center gap-2 mb-1">
                       {stat.icon}

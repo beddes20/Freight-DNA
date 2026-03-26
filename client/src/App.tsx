@@ -33,6 +33,7 @@ import TopOpportunities from "@/pages/top-opportunities";
 import OneOnOnePage from "@/pages/one-on-one";
 import TasksPage from "@/pages/tasks";
 import TeamPerformancePage from "@/pages/team-performance";
+import TeamPerformanceDetailPage from "@/pages/team-performance-detail";
 import GoalsPage from "@/pages/goals";
 import PtoPassoffPage from "@/pages/pto-passoff";
 import TrainingPage from "@/pages/training";
@@ -86,6 +87,7 @@ function Router() {
       <Route path="/one-on-one" component={OneOnOnePage} />
       <Route path="/tasks" component={TasksPage} />
       <Route path="/team-performance" component={TeamPerformancePage} />
+      <Route path="/team-performance/detail/:metric" component={TeamPerformanceDetailPage} />
       <Route path="/goals" component={GoalsPage} />
       <Route path="/pto-passoff" component={PtoPassoffPage} />
       <Route path="/training" component={TrainingPage} />
