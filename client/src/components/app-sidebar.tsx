@@ -40,12 +40,12 @@ const navItems = [
 
 const pipelineItems = [
   { title: "RFP & Awards",   url: "/rfp-awards",     icon: Trophy       },
-  { title: "Research Tasks", url: "/research-tasks", icon: ClipboardList },
+  { title: "Lane Research",  url: "/research-tasks", icon: ClipboardList },
 ];
 
 const toolItems = [
-  { title: "Tools",    url: "/tools",    icon: Wrench        },
-  { title: "Training", url: "/training", icon: GraduationCap },
+  { title: "Resources", url: "/tools",    icon: Wrench        },
+  { title: "Training",  url: "/training", icon: GraduationCap },
 ];
 
 const ROLE_LABELS: Record<string, string> = {
@@ -230,7 +230,7 @@ export function AppSidebar() {
                   <SidebarMenuButton asChild isActive={location === "/financials"}>
                     <Link href="/financials" data-testid="link-financials">
                       <BarChart3 className="h-4 w-4" />
-                      <span>Numbers</span>
+                      <span>Financials</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
