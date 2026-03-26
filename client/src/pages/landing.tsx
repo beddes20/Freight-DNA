@@ -4,14 +4,15 @@ import {
   TrendingUp, Network, FileSearch, MousePointerClick, BarChart3,
   Target, Map, Users, CheckCircle, ClipboardList, CalendarCheck,
   BookOpen, Zap, ChevronRight, TrendingUp as CareerIcon,
+  GitBranch, Phone, Key, Megaphone, Sparkles, Bot, ArrowRight,
 } from "lucide-react";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
 import sidebarImg from "@assets/image_1774288850565.png";
 
 const stats = [
-  { value: "10+", label: "Platform Modules" },
+  { value: "15+", label: "Platform Modules" },
   { value: "360°", label: "Account Visibility" },
-  { value: "Real-time", label: "Data & Alerts" },
+  { value: "AI-Powered", label: "Analysis & Alerts" },
   { value: "Built for", label: "Freight Brokers" },
 ];
 
@@ -64,23 +65,62 @@ const modules = [
   { icon: Map, name: "Lane Analytics", desc: "Heat maps and corridor analysis from financial and RFP upload data." },
   { icon: CareerIcon, name: "Career Progression", desc: "Career conversations, progression tracking, and performance history for every rep on your team." },
   { icon: BookOpen, name: "Playbook & Buckets", desc: "External resource links, sales playbooks, and account segmentation buckets for structured selling." },
+  { icon: GitBranch, name: "Org Charts & Contacts", desc: "Visual org charts for every account — map decision-makers, influencers, and key contacts across the organization." },
+  { icon: Phone, name: "Touchpoint Log", desc: "Every call, email, text, and site visit in a unified timeline. AI flags cold contacts before they cost you freight." },
+  { icon: Key, name: "Portal Credentials (LC Central)", desc: "Securely store and access customer portal logins, carrier onboarding credentials, and spot process details in one place." },
+  { icon: BarChart3, name: "Team Performance", desc: "Period-over-period activity and revenue tracking with rep rankings — turn coaching from opinions into evidence." },
+  { icon: Target, name: "Goals & Accountability", desc: "Set and auto-track targets for loads, margin, touchpoints, and new contacts against live platform data." },
+  { icon: Megaphone, name: "Callouts / Trends Feed", desc: "Broadcast wins, flag at-risk accounts, and share market intel across your team in real time." },
 ];
 
 const howItWorks = [
   {
     step: "01",
     title: "Map your accounts",
-    body: "Build org charts, log contact details, and capture account intelligence — portal credentials, spot process, tendering style, dispatch email — all in one place.",
+    body: "Build visual org charts, capture every contact's role and influence, log portal credentials and carrier intel in LC Central — all the account DNA your team needs, right where they work.",
   },
   {
     step: "02",
     title: "Track every touchpoint",
-    body: "Every call, email, text, and site visit is logged in seconds. The system flags contacts going cold so nothing falls through the cracks.",
+    body: "Every call, email, text, and site visit is logged in seconds. Freight DNA's AI automatically flags contacts going cold — so your reps engage before the relationship costs you freight.",
   },
   {
     step: "03",
     title: "Win more freight",
-    body: "Use RFP intelligence, wallet share analysis, and lane data to show up to every conversation with a better story than your competition.",
+    body: "AI-powered analysis surfaces wallet share gaps, RFP intelligence shows you where to bid and how to win, and real-time scoring tells you which accounts to prioritize today — not next quarter.",
+  },
+];
+
+const personas = [
+  {
+    role: "NAMs & Account Executives",
+    tagline: "Your whole book in one place.",
+    bullets: [
+      "Full account org charts with contact ownership and decision-maker mapping",
+      "One-click touchpoint logging from anywhere — calls, emails, texts, site visits",
+      "AI-flagged cold contacts so no relationship slips through the cracks",
+      "Wallet share scoring and RFP history to walk into every conversation prepared",
+    ],
+  },
+  {
+    role: "Directors & Managers",
+    tagline: "Coach with data, not opinions.",
+    bullets: [
+      "Real-time team performance dashboards with period-over-period comparisons",
+      "Rep scorecards covering loads, margin, touchpoints, and goal progress",
+      "1:1 meeting tooling with threaded follow-ups and structured agendas",
+      "Career progression tracking to develop talent from day one",
+    ],
+  },
+  {
+    role: "Admins & Operations",
+    tagline: "Keep the platform running clean.",
+    bullets: [
+      "Multi-team and multi-org support with role-based access control",
+      "Centralized portal credentials management via LC Central",
+      "PTO passoff workflows so accounts never slip during coverage gaps",
+      "Playbook and bucket configuration to standardize how your team sells",
+    ],
   },
 ];
 
@@ -270,6 +310,54 @@ export default function LandingPage() {
         <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
       </div>
 
+      {/* Built for Every Role */}
+      <section className="py-24 px-6 md:px-12 max-w-6xl mx-auto w-full">
+        <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
+          Built for Every Role
+        </p>
+        <h2
+          className="text-3xl md:text-4xl font-bold text-center mb-4 tracking-tight"
+          style={{ letterSpacing: "-0.02em" }}
+          data-testid="text-roles-heading"
+        >
+          Your whole team, one platform.
+        </h2>
+        <p className="text-center text-sm mb-16 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
+          Freight DNA delivers distinct value to every person in the org — from the rep on the phone to the director running the quarter.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {personas.map((persona, i) => (
+            <div
+              key={i}
+              className="flex flex-col gap-5 p-7 rounded-xl"
+              style={{ background: "#0f0f0f", border: "1px solid rgba(255,180,0,0.14)" }}
+              data-testid={`card-role-${i}`}
+            >
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] font-semibold mb-2" style={{ color: "rgba(255,180,0,0.6)" }}>
+                  {persona.role}
+                </p>
+                <h3 className="text-lg font-bold">{persona.tagline}</h3>
+              </div>
+              <ul className="flex flex-col gap-3">
+                {persona.bullets.map((bullet, j) => (
+                  <li key={j} className="flex items-start gap-2.5" data-testid={`text-role-${i}-bullet-${j}`}>
+                    <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#ffc333" }} />
+                    <span className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.5)" }}>{bullet}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
       {/* How it works */}
       <section className="py-24 px-6 md:px-12 max-w-5xl mx-auto w-full">
         <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
@@ -295,6 +383,74 @@ export default function LandingPage() {
               <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>{step.body}</p>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
+      {/* AI Feature Teaser */}
+      <section className="py-20 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-ai-teaser">
+        <div
+          className="relative rounded-2xl overflow-hidden p-10 md:p-14 flex flex-col md:flex-row items-start md:items-center gap-8"
+          style={{
+            background: "linear-gradient(135deg, #0f0f0f 0%, #131008 60%, #1a1200 100%)",
+            border: "1px solid rgba(255,180,0,0.22)",
+            boxShadow: "0 0 60px rgba(255,180,0,0.06)",
+          }}
+        >
+          {/* Glow */}
+          <div
+            className="pointer-events-none absolute top-0 right-0 w-[400px] h-[300px]"
+            style={{ background: "radial-gradient(ellipse at top right, rgba(255,180,0,0.08) 0%, transparent 65%)" }}
+          />
+
+          <div
+            className="flex-shrink-0 flex items-center justify-center w-16 h-16 rounded-2xl"
+            style={{ background: "rgba(255,195,51,0.12)", border: "1.5px solid rgba(255,195,51,0.3)" }}
+            data-testid="icon-ai-teaser"
+          >
+            <Bot className="w-8 h-8" style={{ color: "#ffc333" }} />
+          </div>
+
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-3">
+              <span
+                className="text-xs font-bold uppercase tracking-widest px-2.5 py-1 rounded-full"
+                style={{ background: "rgba(255,195,51,0.15)", color: "#ffc333", border: "1px solid rgba(255,195,51,0.3)" }}
+                data-testid="badge-ai-status"
+              >
+                Early Access
+              </span>
+            </div>
+            <h2
+              className="text-2xl md:text-3xl font-extrabold mb-3 tracking-tight"
+              style={{ letterSpacing: "-0.02em" }}
+              data-testid="text-ai-teaser-heading"
+            >
+              Introducing Freight DNA AI
+            </h2>
+            <p className="text-sm md:text-base leading-relaxed mb-5 max-w-xl" style={{ color: "rgba(255,255,255,0.5)" }}>
+              Ask Freight DNA anything about your accounts — get instant answers from your data. Which contacts haven't been touched in 60 days? Which lanes are at-risk? What's my wallet share on this account? Your data, on demand.
+            </p>
+            <div className="flex items-center gap-5 flex-wrap">
+              <div className="flex items-center gap-2" style={{ color: "rgba(255,180,0,0.6)" }}>
+                <Sparkles className="w-4 h-4" />
+                <span className="text-xs font-semibold uppercase tracking-widest">Powered by your live platform data</span>
+              </div>
+              <a
+                href="/login"
+                onClick={e => { e.preventDefault(); navigate("/login"); }}
+                className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest transition-opacity duration-150 hover:opacity-80"
+                style={{ color: "#ffc333" }}
+                data-testid="link-ai-teaser-cta"
+              >
+                Explore AI Assistant <ArrowRight className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          </div>
         </div>
       </section>
 
