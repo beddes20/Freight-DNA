@@ -67,7 +67,7 @@ const modules = [
   { icon: BookOpen, name: "Playbook & Buckets", desc: "External resource links, sales playbooks, and account segmentation buckets for structured selling." },
   { icon: GitBranch, name: "Org Charts & Contacts", desc: "Visual org charts for every account — map decision-makers, influencers, and key contacts across the organization." },
   { icon: Phone, name: "Touchpoint Log", desc: "Every call, email, text, and site visit in a unified timeline. AI flags cold contacts before they cost you freight." },
-  { icon: Key, name: "Portal Credentials (LC Central)", desc: "Securely store and access customer portal logins, carrier onboarding credentials, and spot process details in one place." },
+  { icon: Key, name: "Portal Credentials (Coordinator's Corner)", desc: "Securely store and access customer portal logins, carrier onboarding credentials, and spot process details in one place." },
   { icon: BarChart3, name: "Team Performance", desc: "Period-over-period activity and revenue tracking with rep rankings — turn coaching from opinions into evidence." },
   { icon: Target, name: "Goals & Accountability", desc: "Set and auto-track targets for loads, margin, touchpoints, and new contacts against live platform data." },
   { icon: Megaphone, name: "Callouts / Trends Feed", desc: "Broadcast wins, flag at-risk accounts, and share market intel across your team in real time." },
@@ -77,7 +77,7 @@ const howItWorks = [
   {
     step: "01",
     title: "Map your accounts",
-    body: "Build visual org charts, capture every contact's role and influence, log portal credentials and carrier intel in LC Central — all the account DNA your team needs, right where they work.",
+    body: "Build visual org charts, capture every contact's role and influence, log portal credentials and carrier intel in Coordinator's Corner — all the account DNA your team needs, right where they work.",
   },
   {
     step: "02",
@@ -117,7 +117,7 @@ const personas = [
     tagline: "Keep the platform running clean.",
     bullets: [
       "Multi-team and multi-org support with role-based access control",
-      "Centralized portal credentials management via LC Central",
+      "Centralized portal credentials management via Coordinator's Corner",
       "PTO passoff workflows so accounts never slip during coverage gaps",
       "Playbook and bucket configuration to standardize how your team sells",
     ],
