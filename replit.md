@@ -31,7 +31,8 @@ The application utilizes React, TypeScript, and Tailwind CSS with `shadcn/ui` to
     - **Account Intelligence**: Dedicated fields within company profiles for critical operational and financial details, including portal credentials, tendering processes, and account quirks.
     - **Customer Scorecard**: Secure upload and download of customer scorecard documents.
     - **Dashboard Enhancements**: Contextual alerts for RFP deadlines, goal progress, and pending 1:1 topics, along with specialized dashboard portlets for LMs, AMs, and NAMs, providing role-specific insights and metrics.
-    - **AI-Powered Insights**: AI-generated talking points for lane gap insights, incorporating account context for enhanced daily brief emails and chatbot prompts.
+    - **AI-Powered Insights**: AI-generated talking points for lane gap insights, incorporating account context for enhanced daily brief emails and chatbot prompts. Includes: AI health score narrative (2-sentence GPT-4o-mini "why" explanation shown in company detail and pre-call planner), AI touchpoint note summary (auto-summarizes last 5 touchpoint notes in pre-call planner), proactive nudge alerts in DNA Guru chatbot (goals behind, cold contacts, urgent RFPs, tasks due today), and lane gap priority scoring (High/Medium/Low badges on corridor rows ranked by volume, multi-RFP presence, award status, and count).
+    - **DNA Guru Action Execution**: Chatbot supports OpenAI function calling for `log_touchpoint` (call/email/text/site_visit) and `create_task` actions — AI proposes inline confirmation cards, user confirms to execute against the CRM.
     - **Health and Momentum Scoring**: Automated calculation of company health and momentum scores based on various interaction and activity factors.
     - **Shipping Mode Management**: Categorization and filtering of companies by shipping modes (LTL, FTL, Drayage, IMDL).
 

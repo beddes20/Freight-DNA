@@ -431,6 +431,19 @@ export default function CompanyDetail() {
     staleTime: 60_000,
   });
 
+  const { data: healthNarrative } = useQuery<{ narrative: string }>({
+    queryKey: ["/api/companies", companyId, "health-narrative"],
+    queryFn: () => apiRequest("POST", `/api/companies/${companyId}/health-narrative`, {
+      score: healthScore!.score,
+      grade: healthScore!.grade,
+      factors: healthScore!.factors,
+      momentum: healthScore!.momentum,
+      momentumLabel: healthScore!.momentumLabel,
+    }).then(r => r.json()),
+    enabled: !!healthScore,
+    staleTime: 15 * 60 * 1000,
+  });
+
   const { data: claimsConfig } = useQuery<{ url: string | null }>({
     queryKey: ["/api/config/claims-url"],
     staleTime: 300_000,
@@ -1084,30 +1097,35 @@ export default function CompanyDetail() {
                   const momentumIcon = healthScore.momentum === "up" ? "↑" : healthScore.momentum === "down" ? "↓" : "→";
                   const momentumColor = healthScore.momentum === "up" ? "text-green-600 dark:text-green-400" : healthScore.momentum === "down" ? "text-red-500 dark:text-red-400" : "text-muted-foreground";
                   return (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => setPreCallOpen(true)}
-                        className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${colorMap[healthScore.color] ?? colorMap.amber}`}
-                        title="Click to open Pre-Call Brief"
-                        data-testid="badge-health-score"
-                      >
-                        <Activity className="h-3 w-3" />
-                        {healthScore.grade} · {healthScore.score}/100
-                      </button>
-                      <InfoTooltip
-                        text="Relationship health is a 0–100 score built from 5 factors: how recently and frequently you've touched the account, how many contacts you have, whether there's an active RFP, and whether financial data matches. Click the badge to see the full breakdown."
-                        side="bottom"
-                      />
-                      <span
-                        className={`text-sm font-bold ${momentumColor}`}
-                        data-testid="badge-momentum"
-                      >
-                        {momentumIcon}
-                      </span>
-                      <InfoTooltip
-                        text={`Momentum compares your touch count from the last 30 days vs the prior 30 days. ${healthScore.momentumLabel || ""} ↑ = engaging more, ↓ = dropping off, → = steady.`}
-                        side="bottom"
-                      />
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setPreCallOpen(true)}
+                          className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${colorMap[healthScore.color] ?? colorMap.amber}`}
+                          title="Click to open Pre-Call Brief"
+                          data-testid="badge-health-score"
+                        >
+                          <Activity className="h-3 w-3" />
+                          {healthScore.grade} · {healthScore.score}/100
+                        </button>
+                        <InfoTooltip
+                          text="Relationship health is a 0–100 score built from 5 factors: how recently and frequently you've touched the account, how many contacts you have, whether there's an active RFP, and whether financial data matches. Click the badge to see the full breakdown."
+                          side="bottom"
+                        />
+                        <span
+                          className={`text-sm font-bold ${momentumColor}`}
+                          data-testid="badge-momentum"
+                        >
+                          {momentumIcon}
+                        </span>
+                        <InfoTooltip
+                          text={`Momentum compares your touch count from the last 30 days vs the prior 30 days. ${healthScore.momentumLabel || ""} ↑ = engaging more, ↓ = dropping off, → = steady.`}
+                          side="bottom"
+                        />
+                      </div>
+                      {healthNarrative?.narrative && (
+                        <p className="text-xs text-muted-foreground italic leading-relaxed max-w-md" data-testid="health-narrative">{healthNarrative.narrative}</p>
+                      )}
                     </div>
                   );
                 })()}
@@ -2829,8 +2847,24 @@ export default function CompanyDetail() {
                         const filteredCorridors = lanePatterns.topCorridors.filter(c =>
                           (validLoc(c.origin) || validLoc(c.originState)) && (validLoc(c.destination) || validLoc(c.destinationState))
                         );
-                        const activeCorridors = filteredCorridors.filter(c => !vendorRoutedKeys.includes(`corridor:${c.lane}`));
-                        const handledCorridors = filteredCorridors.filter(c => vendorRoutedKeys.includes(`corridor:${c.lane}`));
+
+                        // Priority scoring: volume 40% + multi-RFP 30% + not-awarded 20% + count 10%
+                        const awardedRfpTitleSetForScore = new Set(companyRfps.filter(r => r.status === "awarded" || r.status === "partially_awarded").map(r => r.title));
+                        const maxVolume = Math.max(...filteredCorridors.map(c => c.totalVolume), 1);
+                        const maxCount = Math.max(...filteredCorridors.map(c => c.count ?? 1), 1);
+                        const withPriority = filteredCorridors.map(c => {
+                          const volumeScore = (c.totalVolume / maxVolume) * 40;
+                          const multiRfpScore = c.appearsInMultipleRfps ? 30 : 0;
+                          const notAwardedScore = !c.rfpTitles.some(t => awardedRfpTitleSetForScore.has(t)) ? 20 : 0;
+                          const countScore = ((c.count ?? 1) / maxCount) * 10;
+                          const priorityScore = Math.round(volumeScore + multiRfpScore + notAwardedScore + countScore);
+                          const priorityLabel = priorityScore >= 70 ? "High" : priorityScore >= 40 ? "Medium" : "Low";
+                          const priorityColor = priorityScore >= 70 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : priorityScore >= 40 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : "bg-gray-100 text-gray-600 dark:bg-gray-800/50 dark:text-gray-400";
+                          return { ...c, priorityScore, priorityLabel, priorityColor };
+                        }).sort((a, b) => b.priorityScore - a.priorityScore);
+
+                        const activeCorridors = withPriority.filter(c => !vendorRoutedKeys.includes(`corridor:${c.lane}`));
+                        const handledCorridors = withPriority.filter(c => vendorRoutedKeys.includes(`corridor:${c.lane}`));
                         const multiRfpCount = filteredCorridors.filter(c => c.appearsInMultipleRfps).length;
                         return filteredCorridors.length > 0 ? (
                           <div className="space-y-3">
@@ -2843,17 +2877,16 @@ export default function CompanyDetail() {
                             )}
                             {(() => {
                               const awardedRfpTitleSet = new Set(companyRfps.filter(r => r.status === "awarded" || r.status === "partially_awarded").map(r => r.title));
-                              const weShipCount = filteredCorridors.filter(c => c.rfpTitles.some(t => awardedRfpTitleSet.has(t))).length;
-                              const topUnawarded = filteredCorridors
+                              const weShipCount = withPriority.filter(c => c.rfpTitles.some(t => awardedRfpTitleSet.has(t))).length;
+                              const topUnawarded = withPriority
                                 .filter(c => !c.rfpTitles.some(t => awardedRfpTitleSet.has(t)))
-                                .sort((a, b) => b.totalVolume - a.totalVolume)
                                 .slice(0, 3);
                               return (
                             <div className="space-y-2">
                               {weShipCount > 0 && (
                                 <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-green-50/70 dark:bg-green-950/20 border border-green-200/60 dark:border-green-800/40 text-xs">
-                                  <span className="font-medium text-green-700 dark:text-green-400">✓ We ship {weShipCount} of {filteredCorridors.length} corridor{filteredCorridors.length !== 1 ? "s" : ""}</span>
-                                  <span className="text-muted-foreground">— {filteredCorridors.length - weShipCount} still to win</span>
+                                  <span className="font-medium text-green-700 dark:text-green-400">✓ We ship {weShipCount} of {withPriority.length} corridor{withPriority.length !== 1 ? "s" : ""}</span>
+                                  <span className="text-muted-foreground">— {withPriority.length - weShipCount} still to win</span>
                                   <InfoTooltip text="Corridors you're already covering through an awarded or partially-awarded RFP. The remaining ones are active opportunities." side="right" />
                                 </div>
                               )}
@@ -2910,7 +2943,12 @@ export default function CompanyDetail() {
                                       <TruckIcon className="h-3.5 w-3.5" />
                                     </div>
                                     <div className="min-w-0">
-                                      <p className="font-medium text-sm truncate">{c.lane}</p>
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <p className="font-medium text-sm truncate">{c.lane}</p>
+                                        <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0 rounded-full ${c.priorityColor}`} title={`Priority score: ${c.priorityScore}/100`} data-testid={`corridor-priority-${i}`}>
+                                          {c.priorityLabel}
+                                        </span>
+                                      </div>
                                       <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5 flex-wrap">
                                         <span>{c.totalVolume.toLocaleString()} loads/yr</span>
                                         {c.originState && c.destinationState && <span className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded">{c.originState} → {c.destinationState}</span>}

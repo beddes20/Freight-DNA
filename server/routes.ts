@@ -7434,6 +7434,211 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
+  // Personalized chatbot nudges — alerts + smarter suggestions for the greeting card
+  app.get("/api/chatbot/nudges", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000).toISOString().slice(0, 10);
+      const sevenDaysFromNow = new Date(now.getTime() + 7 * 86400000).toISOString().slice(0, 10);
+      const todayStr = now.toISOString().slice(0, 10);
+
+      const [allCompanies, allContacts, allTouchpoints, openRfps, openTasks, activeGoals] = await Promise.all([
+        storage.getCompanies(user.organizationId),
+        storage.getContacts(),
+        storage.getTouchpoints(),
+        storage.getRfps(),
+        storage.getTasks(),
+        storage.getGoals(),
+      ]);
+
+      const myCompanies = allCompanies.filter((c: any) => c.assignedTo === user.id);
+      const companyIds = myCompanies.map((c: any) => c.id);
+
+      // Find contacts at my companies not touched in 30+ days
+      const myContacts = allContacts.filter((c: any) => companyIds.includes(c.companyId));
+      const myContactIds = myContacts.map((c: any) => c.id);
+      const touchedRecently = new Set(
+        allTouchpoints
+          .filter((t: any) => myContactIds.includes(t.contactId) && t.date >= thirtyDaysAgo)
+          .map((t: any) => t.contactId)
+      );
+      const coldContactCount = myContacts.filter((c: any) => !touchedRecently.has(c.id)).length;
+
+      // RFPs due within 7 days
+      const urgentRfps = openRfps.filter((r: any) =>
+        r.status === "open" && r.dueDate && r.dueDate <= sevenDaysFromNow && r.dueDate >= todayStr &&
+        companyIds.includes(r.companyId)
+      );
+
+      // Goals behind pace (for AMs — check own goals; for NAMs — check team)
+      const myGoals = activeGoals.filter((g: any) =>
+        g.amId === user.id || g.namId === user.id
+      );
+      const behindGoals = myGoals.filter((g: any) => {
+        const target = parseFloat(g.target || "0");
+        const current = parseFloat(g.currentValue || "0");
+        const dayOfMonth = now.getDate();
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const monthFraction = dayOfMonth / daysInMonth;
+        return target > 0 && monthFraction > 0.5 && (current / target) < 0.5;
+      });
+
+      // Tasks due today
+      const tasksDueToday = openTasks.filter((t: any) =>
+        (t.assignedTo === user.id) && t.dueDate && t.dueDate <= todayStr && t.status !== "complete"
+      );
+
+      // Build personalized alerts
+      const alerts: string[] = [];
+      if (behindGoals.length > 0) {
+        alerts.push(`⚠️ ${behindGoals.length} goal${behindGoals.length > 1 ? "s are" : " is"} behind pace this month`);
+      }
+      if (coldContactCount > 0) {
+        alerts.push(`📞 ${coldContactCount} contact${coldContactCount > 1 ? "s haven't" : " hasn't"} been touched in 30+ days`);
+      }
+      if (urgentRfps.length > 0) {
+        alerts.push(`📋 ${urgentRfps.length} RFP${urgentRfps.length > 1 ? "s" : ""} due within 7 days`);
+      }
+      if (tasksDueToday.length > 0) {
+        alerts.push(`✅ ${tasksDueToday.length} task${tasksDueToday.length > 1 ? "s" : ""} due today`);
+      }
+
+      // Contextual suggestions based on what's happening
+      const suggestions: string[] = [];
+      if (coldContactCount > 0) suggestions.push("Which contacts haven't been touched in 30+ days?");
+      if (urgentRfps.length > 0) suggestions.push("Show me my upcoming RFP deadlines");
+      if (behindGoals.length > 0) suggestions.push("Which of my goals are behind this month?");
+      if (tasksDueToday.length > 0) suggestions.push("What tasks do I have due today?");
+
+      // Fill with evergreen suggestions
+      const evergreen = [
+        "What accounts should I prioritize calling today?",
+        "Who are my key contacts at my top accounts?",
+        "Show me accounts with no touchpoints this month",
+        "What's the health status of my top 5 accounts?",
+        "Which accounts have open RFPs?",
+        "Show me my recent wins this month",
+      ];
+      for (const s of evergreen) {
+        if (suggestions.length >= 6) break;
+        if (!suggestions.includes(s)) suggestions.push(s);
+      }
+
+      res.json({ alerts, suggestions: suggestions.slice(0, 6) });
+    } catch (err) {
+      console.error("Nudges error:", err);
+      res.json({ alerts: [], suggestions: [] });
+    }
+  });
+
+  // Health score AI narrative — 2-sentence explanation of the score
+  app.post("/api/companies/:id/health-narrative", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const { score, grade, factors, momentum, momentumLabel } = req.body as {
+        score: number;
+        grade: string;
+        factors: Array<{ name: string; score: number; max: number; label: string }>;
+        momentum: string;
+        momentumLabel: string;
+      };
+
+      if (!factors?.length) return res.status(400).json({ error: "Factors required" });
+
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
+      const companyName = company?.name || "this account";
+
+      const { default: OpenAI } = await import("openai");
+      const openai = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
+
+      const factorSummary = factors.map(f => `${f.name}: ${f.score}/${f.max} — ${f.label}`).join("\n");
+
+      const prompt = `You are a freight brokerage sales coach analyzing the relationship health score for account "${companyName}".
+
+Health Score: ${score}/100 (${grade})
+Momentum: ${momentumLabel}
+
+Score Breakdown:
+${factorSummary}
+
+Write exactly 2 sentences explaining WHY this score is ${score}/100. Be specific — mention the actual factors driving the score up or down. Be direct and actionable. Do not start with "This account" — vary the opener. No fluff.`;
+
+      const resp = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 120,
+        temperature: 0.3,
+      });
+
+      const narrative = resp.choices[0]?.message?.content?.trim() || "";
+      res.json({ narrative });
+    } catch (err) {
+      console.error("Health narrative error:", err);
+      res.status(500).json({ error: "Failed to generate narrative" });
+    }
+  });
+
+  // AI touchpoint note summarizer for pre-call planner
+  app.get("/api/companies/:id/touchpoint-summary", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const [company, allTouchpoints] = await Promise.all([
+        storage.getCompanyInOrg((req.params.id as string), user.organizationId),
+        storage.getTouchpointsByCompany((req.params.id as string)),
+      ]);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      // Get last 5 touchpoints that have notes
+      const withNotes = [...allTouchpoints]
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .filter((t: any) => t.notes?.trim())
+        .slice(0, 5);
+
+      if (withNotes.length === 0) return res.json({ summary: null });
+
+      const { default: OpenAI } = await import("openai");
+      const openai = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
+
+      const noteList = withNotes.map((t: any) => {
+        const dateStr = new Date(t.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+        return `[${dateStr} — ${t.type}] ${t.notes}`;
+      }).join("\n\n");
+
+      const prompt = `You are reviewing recent touchpoint notes for sales account "${company.name}". Summarize the key themes, any commitments made, open items, or concerns in 3-5 concise bullet points. Be specific — pull out actual details mentioned. Do not pad or repeat yourself.
+
+Notes:
+${noteList}
+
+Respond with bullet points only (no header, no intro sentence).`;
+
+      const resp = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 250,
+        temperature: 0.2,
+      });
+
+      const summary = resp.choices[0]?.message?.content?.trim() || null;
+      res.json({ summary, noteCount: withNotes.length });
+    } catch (err) {
+      console.error("Touchpoint summary error:", err);
+      res.status(500).json({ error: "Failed to generate summary" });
+    }
+  });
+
   // Lane gap AI talking points — generate a one-liner per unawarded corridor
   app.post("/api/companies/:id/lane-gap-insights", requireAuth, async (req, res) => {
     try {

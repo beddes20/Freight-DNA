@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles, ClipboardList, ExternalLink } from "lucide-react";
+import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles, ClipboardList, ExternalLink, Phone, Mail, MessageSquareText, MapPin, Check, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -24,21 +24,18 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  action?: {
+    tool: string;
+    args: Record<string, string>;
+    confirmed?: boolean;
+    failed?: boolean;
+  };
 }
 
-const MY_TEAM_SUGGESTIONS = [
-  "Which contacts haven't been touched in 30+ days?",
-  "What RFPs are due soon?",
-  "Show me my open tasks",
-  "Who are my key contacts at my top accounts?",
-];
-
-const EVERYONE_SUGGESTIONS = [
-  "Who has the most new contacts this month?",
-  "Which rep has the most touchpoints this month?",
-  "Show me open RFPs across all accounts",
-  "Which accounts have the most contacts?",
-];
+interface NudgesResponse {
+  alerts: string[];
+  suggestions: string[];
+}
 
 function MarkdownText({ content }: { content: string }) {
   const lines = content.split("\n");
@@ -63,6 +60,95 @@ function MarkdownText({ content }: { content: string }) {
   );
 }
 
+function TouchpointTypeIcon({ type }: { type: string }) {
+  if (type === "call") return <Phone className="h-4 w-4 text-blue-500" />;
+  if (type === "email") return <Mail className="h-4 w-4 text-purple-500" />;
+  if (type === "text") return <MessageSquareText className="h-4 w-4 text-green-500" />;
+  if (type === "site_visit") return <MapPin className="h-4 w-4 text-orange-500" />;
+  return <Phone className="h-4 w-4 text-blue-500" />;
+}
+
+function ActionCard({
+  action,
+  onConfirm,
+  onDismiss,
+}: {
+  action: NonNullable<ChatMessage["action"]>;
+  onConfirm: () => void;
+  onDismiss: () => void;
+}) {
+  if (action.confirmed) {
+    return (
+      <div className="mt-2 flex items-center gap-2 text-xs text-green-600 dark:text-green-400">
+        <Check className="h-3.5 w-3.5" />
+        {action.tool === "log_touchpoint" ? "Touchpoint logged!" : "Task created!"}
+      </div>
+    );
+  }
+  if (action.failed) {
+    return (
+      <div className="mt-2 flex items-center gap-2 text-xs text-red-500">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        Action failed. Try again from the main app.
+      </div>
+    );
+  }
+
+  if (action.tool === "log_touchpoint") {
+    const typeLabel = { call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" }[action.args.type] ?? action.args.type;
+    return (
+      <div className="mt-2 border border-blue-200 dark:border-blue-800 rounded-xl bg-blue-50 dark:bg-blue-950/30 p-3 space-y-2">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300">
+          <TouchpointTypeIcon type={action.args.type} />
+          Log {typeLabel}
+        </div>
+        {action.args.company_name && (
+          <p className="text-xs text-muted-foreground">Account: <span className="font-medium text-foreground">{action.args.company_name}</span></p>
+        )}
+        {action.args.contact_name && (
+          <p className="text-xs text-muted-foreground">Contact: <span className="font-medium text-foreground">{action.args.contact_name}</span></p>
+        )}
+        {action.args.note && (
+          <p className="text-xs text-muted-foreground italic">"{action.args.note}"</p>
+        )}
+        <div className="flex gap-2 pt-1">
+          <Button size="sm" className="h-7 text-xs bg-blue-600 hover:bg-blue-700 text-white flex-1" onClick={onConfirm} data-testid="action-confirm-touchpoint">
+            <Check className="h-3.5 w-3.5 mr-1" /> Log it
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={onDismiss} data-testid="action-dismiss">
+            Dismiss
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (action.tool === "create_task") {
+    return (
+      <div className="mt-2 border border-amber-200 dark:border-amber-800 rounded-xl bg-amber-50 dark:bg-amber-950/30 p-3 space-y-2">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+          <ClipboardList className="h-4 w-4" />
+          Create Task
+        </div>
+        <p className="text-xs font-medium">{action.args.title}</p>
+        {action.args.due_date && (
+          <p className="text-xs text-muted-foreground">Due: {new Date(action.args.due_date + "T12:00:00").toLocaleDateString()}</p>
+        )}
+        <div className="flex gap-2 pt-1">
+          <Button size="sm" className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white flex-1" onClick={onConfirm} data-testid="action-confirm-task">
+            <Check className="h-3.5 w-3.5 mr-1" /> Create it
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={onDismiss} data-testid="action-dismiss">
+            Dismiss
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 export function CrmChatbot() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
@@ -80,6 +166,7 @@ export function CrmChatbot() {
   const [suggestionSent, setSuggestionSent] = useState(false);
   const [input, setInput] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
+  const [pendingAction, setPendingAction] = useState<{ tool: string; args: Record<string, string> } | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const [scope, setScope] = useState<"my_team" | "everyone">("my_team");
@@ -91,7 +178,18 @@ export function CrmChatbot() {
   const showScopeToggle = !isAdminOrDirector && !!user;
   const effectiveScope = user?.role === "admin" ? "everyone" : (isAdminOrDirector ? "my_team" : scope);
 
-  const SUGGESTIONS = effectiveScope === "everyone" ? EVERYONE_SUGGESTIONS : MY_TEAM_SUGGESTIONS;
+  // Load personalized nudges when chatbot opens
+  const { data: nudges } = useQuery<NudgesResponse>({
+    queryKey: ["/api/chatbot/nudges"],
+    enabled: open && !!user,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const SUGGESTIONS = nudges?.suggestions?.length
+    ? nudges.suggestions
+    : effectiveScope === "everyone"
+      ? ["Who has the most new contacts this month?", "Which rep has the most touchpoints this month?", "Show me open RFPs across all accounts", "Which accounts have the most contacts?", "What's the leaderboard for touches this week?", "Which reps are behind on their goals?"]
+      : ["Which contacts haven't been touched in 30+ days?", "What RFPs are due soon?", "Show me my open tasks", "What accounts should I prioritize today?", "Which accounts have no touchpoints this month?", "Who are my key contacts at my top accounts?"];
 
   const { data: conversations = [] } = useQuery<Conversation[]>({
     queryKey: ["/api/chatbot/conversations"],
@@ -136,7 +234,6 @@ export function CrmChatbot() {
     mutationFn: (content: string) => apiRequest("POST", "/api/chatbot/suggest", { content }),
     onSuccess: () => {
       setSuggestionSent(true);
-      // No auto-dismiss — user can navigate to Tasks or close manually
     },
   });
 
@@ -182,6 +279,58 @@ export function CrmChatbot() {
 
   useEffect(() => { scrollToBottom(); }, [localMessages, streamingContent]);
 
+  // Handle confirming a pending action (log touchpoint or create task)
+  const confirmAction = async (msgId: number, action: NonNullable<ChatMessage["action"]>) => {
+    try {
+      if (action.tool === "log_touchpoint") {
+        // Find company + contact by name if provided, then log touchpoint
+        const companies = await fetch("/api/companies", { credentials: "include" }).then(r => r.json());
+        const matchedCompany = action.args.company_name
+          ? companies.find((c: any) => c.name.toLowerCase().includes(action.args.company_name.toLowerCase()))
+          : null;
+
+        let contactId: string | null = null;
+        if (matchedCompany && action.args.contact_name) {
+          const contacts = await fetch(`/api/contacts?companyId=${matchedCompany.id}`, { credentials: "include" }).then(r => r.json());
+          const matchedContact = contacts.find((c: any) => c.name.toLowerCase().includes(action.args.contact_name.toLowerCase()));
+          if (matchedContact) contactId = matchedContact.id;
+        }
+
+        await apiRequest("POST", "/api/touchpoints", {
+          companyId: matchedCompany?.id || null,
+          contactId,
+          type: action.args.type || "call",
+          notes: action.args.note || "",
+          date: new Date().toISOString().slice(0, 10),
+          isMeaningful: false,
+        });
+        qc.invalidateQueries({ queryKey: ["/api/touchpoints"] });
+      } else if (action.tool === "create_task") {
+        await apiRequest("POST", "/api/tasks", {
+          title: action.args.title,
+          dueDate: action.args.due_date || null,
+          status: "open",
+        });
+        qc.invalidateQueries({ queryKey: ["/api/tasks"] });
+      }
+      setLocalMessages(prev => prev.map(m =>
+        m.id === msgId && m.action ? { ...m, action: { ...m.action, confirmed: true } } : m
+      ));
+      setPendingAction(null);
+    } catch {
+      setLocalMessages(prev => prev.map(m =>
+        m.id === msgId && m.action ? { ...m, action: { ...m.action, failed: true } } : m
+      ));
+    }
+  };
+
+  const dismissAction = (msgId: number) => {
+    setLocalMessages(prev => prev.map(m =>
+      m.id === msgId && m.action ? { ...m, action: { ...m.action, confirmed: true } } : m
+    ));
+    setPendingAction(null);
+  };
+
   const sendMessage = async (text: string) => {
     if (!text.trim() || isStreaming) return;
 
@@ -205,6 +354,7 @@ export function CrmChatbot() {
     setInput("");
     setIsStreaming(true);
     setStreamingContent("");
+    setPendingAction(null);
 
     try {
       const response = await fetch(`/api/chatbot/conversations/${convoId}/messages`, {
@@ -220,6 +370,7 @@ export function CrmChatbot() {
       const decoder = new TextDecoder();
       let buffer = "";
       let full = "";
+      let detectedAction: { tool: string; args: Record<string, string> } | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -235,6 +386,9 @@ export function CrmChatbot() {
               full += evt.content;
               setStreamingContent(full);
             }
+            if (evt.action) {
+              detectedAction = evt.action;
+            }
             if (evt.done) {
               const assistantMsg: ChatMessage = {
                 id: Date.now() + 1,
@@ -242,6 +396,7 @@ export function CrmChatbot() {
                 role: "assistant",
                 content: full,
                 createdAt: new Date().toISOString(),
+                action: detectedAction || undefined,
               };
               setLocalMessages((prev) => [...prev, assistantMsg]);
               setStreamingContent("");
@@ -294,7 +449,7 @@ export function CrmChatbot() {
       {/* Chat panel */}
       {open && (
         <div className={cn(
-          "fixed bottom-24 right-6 z-50 w-[390px] h-[580px] rounded-2xl shadow-2xl border border-border/50",
+          "fixed bottom-24 right-6 z-50 w-[390px] h-[600px] rounded-2xl shadow-2xl border border-border/50",
           "bg-background flex flex-col overflow-hidden",
           "animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
         )}>
@@ -604,31 +759,55 @@ export function CrmChatbot() {
             <div className="p-4 space-y-4">
               {isEmpty && (
                 <div className="space-y-4">
+                  {/* Greeting */}
                   <div className="flex gap-3">
                     <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
                       <Bot className="h-4 w-4 text-primary" />
                     </div>
                     <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[290px]">
-                      <p className="text-sm">
-                        Hi! I'm DNA Guru. I have live access to your CRM data.
+                      <p className="text-sm font-medium">
+                        Hey{user?.name ? ` ${user.name.split(" ")[0]}` : ""}! I'm DNA Guru.
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
                         {isAdminOrDirector
-                          ? " As an admin/director, I can see data across all teams."
-                          : " Use the toggle below to switch between your team's data or the entire org."}
+                          ? "I can see all reps, accounts, and teams."
+                          : "I have live access to your CRM data — ask me anything."}
                       </p>
                     </div>
                   </div>
-                  <div className="space-y-2">
+
+                  {/* Personalized alerts */}
+                  {nudges?.alerts && nudges.alerts.length > 0 && (
+                    <div className="ml-10 space-y-1.5">
+                      {nudges.alerts.map((alert, i) => (
+                        <div key={i} className="text-xs px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40 text-amber-800 dark:text-amber-300" data-testid={`guru-alert-${i}`}>
+                          {alert}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Suggested prompts */}
+                  <div className="space-y-1.5">
                     <p className="text-xs text-muted-foreground px-1">Try asking:</p>
-                    {SUGGESTIONS.map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => sendMessage(s)}
-                        className="block w-full text-left text-xs px-3 py-2 rounded-xl border border-border hover:border-primary/40 hover:bg-primary/5 transition-colors text-muted-foreground hover:text-foreground"
-                      >
-                        {s}
-                      </button>
-                    ))}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {SUGGESTIONS.map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => sendMessage(s)}
+                          className="text-left text-xs px-2.5 py-2 rounded-xl border border-border hover:border-primary/40 hover:bg-primary/5 transition-colors text-muted-foreground hover:text-foreground leading-snug"
+                          data-testid="guru-suggestion-chip"
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
                   </div>
+
+                  {/* Action hint */}
+                  <p className="text-xs text-muted-foreground px-1 italic">
+                    💡 Say "log a call with [contact]" or "create a task" and I'll do it for you.
+                  </p>
                 </div>
               )}
 
@@ -646,7 +825,18 @@ export function CrmChatbot() {
                       : "bg-muted rounded-tl-sm"
                   )}>
                     {msg.role === "assistant"
-                      ? <MarkdownText content={msg.content} />
+                      ? (
+                        <>
+                          <MarkdownText content={msg.content} />
+                          {msg.action && (
+                            <ActionCard
+                              action={msg.action}
+                              onConfirm={() => confirmAction(msg.id, msg.action!)}
+                              onDismiss={() => dismissAction(msg.id)}
+                            />
+                          )}
+                        </>
+                      )
                       : <p className="text-sm">{msg.content}</p>
                     }
                   </div>
@@ -723,7 +913,7 @@ export function CrmChatbot() {
                 placeholder={
                   effectiveScope === "everyone"
                     ? "Ask about any rep, team, or account…"
-                    : "Ask about your accounts, contacts, RFPs…"
+                    : "Ask anything or say 'log a call with…'"
                 }
                 className="resize-none min-h-[38px] max-h-[120px] text-sm py-2 px-3 rounded-xl"
                 rows={1}

@@ -320,8 +320,44 @@ Keep it short and casual — reps are busy. No fluff, no filler.
 - For ranking questions use the TEAM MEMBERS section for per-rep stats
 - Bullet points for lists, plain sentences otherwise
 - If data isn't there, just say so
-- Suggest a quick next action when it's obvious
-- Talk like a sharp colleague, not a corporate assistant`;
+- Talk like a sharp colleague, not a corporate assistant
+- When the user says they want to LOG A CALL, LOG AN EMAIL, LOG A TEXT, LOG A VISIT, or LOG A TOUCHPOINT — use the log_touchpoint tool
+- When the user says they want to CREATE A TASK, SET A REMINDER, or ADD A TO-DO — use the create_task tool`;
+
+      const tools: any[] = [
+        {
+          type: "function",
+          function: {
+            name: "log_touchpoint",
+            description: "Log a touchpoint/interaction (call, email, text, or site visit) with a contact. Use this when the user wants to log or record a call, email, text, or meeting.",
+            parameters: {
+              type: "object",
+              properties: {
+                company_name: { type: "string", description: "Name of the company/account (as it appears in the CRM)" },
+                contact_name: { type: "string", description: "Name of the contact person (leave empty if not specified)" },
+                type: { type: "string", enum: ["call", "email", "text", "site_visit"], description: "Type of interaction" },
+                note: { type: "string", description: "Brief note about what was discussed or the outcome" },
+              },
+              required: ["type"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "create_task",
+            description: "Create a new task or reminder. Use this when the user wants to set a reminder, create a to-do, or follow up on something.",
+            parameters: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Clear, actionable task title" },
+                due_date: { type: "string", description: "Due date in YYYY-MM-DD format (optional, omit if not mentioned)" },
+              },
+              required: ["title"],
+            },
+          },
+        },
+      ];
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -335,23 +371,54 @@ Keep it short and casual — reps are busy. No fluff, no filler.
       const stream = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [{ role: "system", content: systemPrompt }, ...chatHistory],
+        tools,
+        tool_choice: "auto",
         stream: true,
         max_tokens: 1200,
       });
 
       let fullResponse = "";
+      let toolCallName = "";
+      let toolCallArgs = "";
+
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content || "";
-        if (delta) {
-          fullResponse += delta;
-          res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+        const choice = chunk.choices[0];
+        const delta = choice?.delta;
+
+        // Streaming text content
+        if (delta?.content) {
+          fullResponse += delta.content;
+          res.write(`data: ${JSON.stringify({ content: delta.content })}\n\n`);
+        }
+
+        // Accumulate tool call data
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            if (tc.function?.name) toolCallName += tc.function.name;
+            if (tc.function?.arguments) toolCallArgs += tc.function.arguments;
+          }
+        }
+
+        // Tool call complete — emit action event
+        if (choice?.finish_reason === "tool_calls" && toolCallName) {
+          try {
+            const args = JSON.parse(toolCallArgs);
+            const actionResponse = `I can do that for you. Here's what I'll log:`;
+            fullResponse += actionResponse;
+            res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
+            res.write(`data: ${JSON.stringify({ action: { tool: toolCallName, args } })}\n\n`);
+            toolCallName = "";
+            toolCallArgs = "";
+          } catch (parseErr) {
+            console.error("Tool call parse error:", parseErr);
+          }
         }
       }
 
       await db.insert(chatMessages).values({
         conversationId,
         role: "assistant",
-        content: fullResponse,
+        content: fullResponse || "(action proposed)",
         createdAt: new Date().toISOString(),
       });
 

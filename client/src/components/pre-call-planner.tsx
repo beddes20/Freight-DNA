@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -25,8 +25,10 @@ import {
   Building2,
   Sparkles,
   Loader2,
+  Brain,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
 import { fmtMoney } from "@/lib/rep-utils";
 import type { Company, Contact, Touchpoint, Rfp, Award } from "@shared/schema";
 import { ContactIntelModal } from "@/components/contact-intel-modal";
@@ -81,6 +83,36 @@ export function PreCallPlanner({
   const [talkingPoints, setTalkingPoints] = useState<string[]>([]);
   const [loadingPoints, setLoadingPoints] = useState(false);
   const [selectedContactForIntel, setSelectedContactForIntel] = useState<Contact | null>(null);
+  const [narrativeEnabled, setNarrativeEnabled] = useState(false);
+
+  // Enable health narrative fetch once modal is open
+  useEffect(() => {
+    if (open) setNarrativeEnabled(true);
+  }, [open]);
+
+  const touchpointsWithNotes = touchpoints.filter(t => t.notes?.trim());
+
+  // AI touchpoint note summary — auto-loads when modal opens and notes exist
+  const { data: tpSummaryData, isLoading: tpSummaryLoading } = useQuery<{ summary: string | null; noteCount: number }>({
+    queryKey: ["/api/companies", company.id, "touchpoint-summary"],
+    queryFn: () => fetch(`/api/companies/${company.id}/touchpoint-summary`, { credentials: "include" }).then(r => r.json()),
+    enabled: open && touchpointsWithNotes.length > 0,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  // AI health narrative — loads when modal opens and healthScore is available
+  const { data: healthNarrativeData, isLoading: narrativeLoading } = useQuery<{ narrative: string }>({
+    queryKey: ["/api/companies", company.id, "health-narrative"],
+    queryFn: () => apiRequest("POST", `/api/companies/${company.id}/health-narrative`, {
+      score: healthScore!.score,
+      grade: healthScore!.grade,
+      factors: healthScore!.factors,
+      momentum: healthScore!.momentum,
+      momentumLabel: healthScore!.momentumLabel,
+    }).then(r => r.json()),
+    enabled: narrativeEnabled && !!healthScore && open,
+    staleTime: 15 * 60 * 1000,
+  });
 
   const generateTalkingPoints = async () => {
     setLoadingPoints(true);
@@ -274,6 +306,39 @@ export function PreCallPlanner({
             );
           })()}
 
+          {/* AI Touchpoint Note Summary */}
+          {touchpointsWithNotes.length > 0 && (
+            <section className="bg-indigo-50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-300 mb-2 flex items-center gap-1.5">
+                <Brain className="h-3.5 w-3.5" /> AI Conversation Summary
+                {tpSummaryData?.noteCount && (
+                  <span className="font-normal normal-case text-indigo-500 dark:text-indigo-400">— last {tpSummaryData.noteCount} note{tpSummaryData.noteCount !== 1 ? "s" : ""}</span>
+                )}
+              </h3>
+              {tpSummaryLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />
+                  Summarizing conversation history…
+                </div>
+              ) : tpSummaryData?.summary ? (
+                <div className="space-y-1">
+                  {tpSummaryData.summary.split("\n").map((line, i) => {
+                    const trimmed = line.replace(/^[-•*]\s*/, "").trim();
+                    if (!trimmed) return null;
+                    return (
+                      <div key={i} className="flex items-start gap-1.5 text-sm">
+                        <span className="text-indigo-400 shrink-0 mt-0.5">•</span>
+                        <span className="text-foreground/90">{trimmed}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground italic">Unable to summarize — try again later.</p>
+              )}
+            </section>
+          )}
+
           {/* Key Contacts */}
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground border-b pb-1 mb-2 flex items-center gap-1.5">
@@ -422,6 +487,17 @@ export function PreCallPlanner({
                   <span className="text-[11px] font-normal normal-case text-muted-foreground">({healthScore.momentumLabel})</span>
                 )}
               </h3>
+
+              {/* AI Narrative */}
+              {narrativeLoading ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Generating health narrative…
+                </div>
+              ) : healthNarrativeData?.narrative ? (
+                <p className="text-sm text-muted-foreground italic mb-3 leading-relaxed border-l-2 border-primary/30 pl-3">{healthNarrativeData.narrative}</p>
+              ) : null}
+
               <div className="space-y-1.5">
                 {healthScore.factors.map(f => (
                   <div key={f.name} className="flex items-center gap-3 text-sm">
