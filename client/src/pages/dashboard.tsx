@@ -40,6 +40,7 @@ import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBas
 import { LmCareerPanel } from "@/components/lm-career-panel";
 import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
+import { DashboardActivitySheet, type PortletType } from "@/components/dashboard-activity-sheet";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -156,6 +157,7 @@ export default function Dashboard() {
   const feedTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [feedSearch, setFeedSearch] = useState("");
   const [selectedDirectorId, setSelectedDirectorId] = useState<string | null>(null);
+  const [activePortlet, setActivePortlet] = useState<{ type: PortletType; personal: boolean; title: string } | null>(null);
   const [feedAuthorFilter, setFeedAuthorFilter] = useState("all");
   const [ptoBannerDismissed, setPtoBannerDismissed] = useState(false);
   const [touchpointsTodayCollapsed, setTouchpointsTodayCollapsed] = useState(() => localStorage.getItem("dash_touchpoints_today_collapsed") === "true");
@@ -1054,7 +1056,7 @@ export default function Dashboard() {
           <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="director-activity-row">
 
             {/* Relationships Moved Up */}
-            <Card className="overflow-hidden" data-testid="portlet-relationships-moved">
+            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="portlet-relationships-moved" onClick={() => setActivePortlet({ type: "relationships", personal: false, title: "Relationships Moved Up This Month" })}>
               <CardContent className="p-4">
                 {relationshipsMovedLoading ? <Skeleton className="h-16 w-full" /> : (
                   <div className="flex flex-col gap-2">
@@ -1073,7 +1075,7 @@ export default function Dashboard() {
             </Card>
 
             {/* Meaningful Conversations Today */}
-            <Card className="overflow-hidden" data-testid="portlet-meaningful-conversations">
+            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="portlet-meaningful-conversations" onClick={() => setActivePortlet({ type: "meaningful", personal: false, title: "Meaningful Conversations Today" })}>
               <CardContent className="p-4">
                 {teamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
                   <div className="flex flex-col gap-2">
@@ -1092,7 +1094,7 @@ export default function Dashboard() {
             </Card>
 
             {/* New Contacts Added Today */}
-            <Card className="overflow-hidden" data-testid="portlet-new-contacts">
+            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="portlet-new-contacts" onClick={() => setActivePortlet({ type: "contacts", personal: false, title: "New Contacts Added Today" })}>
               <CardContent className="p-4">
                 {teamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
                   <div className="flex flex-col gap-2">
@@ -1111,7 +1113,7 @@ export default function Dashboard() {
             </Card>
 
             {/* Touches Today */}
-            <Card className="overflow-hidden" data-testid="portlet-touches-today">
+            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="portlet-touches-today" onClick={() => setActivePortlet({ type: "touches", personal: false, title: "Touches Today" })}>
               <CardContent className="p-4">
                 {teamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
                   <div className="flex flex-col gap-2">
@@ -1353,7 +1355,7 @@ export default function Dashboard() {
         <>
           {/* Row 1: Team activity metrics */}
           <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-activity-row">
-            <Card className="overflow-hidden" data-testid="nam-portlet-relationships-moved">
+            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-relationships-moved" onClick={() => setActivePortlet({ type: "relationships", personal: false, title: "Team Relationships Moved Up This Month" })}>
               <CardContent className="p-4">
                 {namRelationshipsMovedLoading ? <Skeleton className="h-16 w-full" /> : (
                   <div className="flex flex-col gap-2">
@@ -1368,7 +1370,7 @@ export default function Dashboard() {
                 )}
               </CardContent>
             </Card>
-            <Card className="overflow-hidden" data-testid="nam-portlet-meaningful">
+            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-meaningful" onClick={() => setActivePortlet({ type: "meaningful", personal: false, title: "Team Meaningful Conversations Today" })}>
               <CardContent className="p-4">
                 {namTeamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
                   <div className="flex flex-col gap-2">
@@ -1383,7 +1385,7 @@ export default function Dashboard() {
                 )}
               </CardContent>
             </Card>
-            <Card className="overflow-hidden" data-testid="nam-portlet-contacts">
+            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-contacts" onClick={() => setActivePortlet({ type: "contacts", personal: false, title: "Team New Contacts Added Today" })}>
               <CardContent className="p-4">
                 {namTeamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
                   <div className="flex flex-col gap-2">
@@ -1398,7 +1400,7 @@ export default function Dashboard() {
                 )}
               </CardContent>
             </Card>
-            <Card className="overflow-hidden" data-testid="nam-portlet-touches">
+            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-touches" onClick={() => setActivePortlet({ type: "touches", personal: false, title: "Team Touches Today" })}>
               <CardContent className="p-4">
                 {namTeamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
                   <div className="flex flex-col gap-2">
@@ -1621,7 +1623,7 @@ export default function Dashboard() {
           <div className="space-y-1">
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide px-0.5">My Activity</h3>
             <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-personal-metrics-row">
-              <Card className="overflow-hidden" data-testid="nam-personal-relationships">
+              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-personal-relationships" onClick={() => setActivePortlet({ type: "relationships", personal: true, title: "My Relationships Moved Up This Month" })}>
                 <CardContent className="p-4">
                   {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
                     <div className="flex flex-col gap-2">
@@ -1636,7 +1638,7 @@ export default function Dashboard() {
                   )}
                 </CardContent>
               </Card>
-              <Card className="overflow-hidden" data-testid="nam-personal-meaningful">
+              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-personal-meaningful" onClick={() => setActivePortlet({ type: "meaningful", personal: true, title: "My Meaningful Conversations Today" })}>
                 <CardContent className="p-4">
                   {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
                     <div className="flex flex-col gap-2">
@@ -1651,7 +1653,7 @@ export default function Dashboard() {
                   )}
                 </CardContent>
               </Card>
-              <Card className="overflow-hidden" data-testid="nam-personal-contacts">
+              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-personal-contacts" onClick={() => setActivePortlet({ type: "contacts", personal: true, title: "My New Contacts Added Today" })}>
                 <CardContent className="p-4">
                   {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
                     <div className="flex flex-col gap-2">
@@ -1684,7 +1686,7 @@ export default function Dashboard() {
                   )}
                 </CardContent>
               </Card>
-              <Card className="overflow-hidden" data-testid="nam-personal-touches">
+              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-personal-touches" onClick={() => setActivePortlet({ type: "touches", personal: true, title: "My Touches Today" })}>
                 <CardContent className="p-4">
                   {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
                     <div className="flex flex-col gap-2">
@@ -1845,7 +1847,7 @@ export default function Dashboard() {
           <div className="space-y-1">
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide px-0.5">My Activity</h3>
             <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="am-personal-metrics-row">
-              <Card className="overflow-hidden" data-testid="am-personal-relationships">
+              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="am-personal-relationships" onClick={() => setActivePortlet({ type: "relationships", personal: true, title: "My Relationships Moved Up This Month" })}>
                 <CardContent className="p-4">
                   {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
                     <div className="flex flex-col gap-2">
@@ -1860,7 +1862,7 @@ export default function Dashboard() {
                   )}
                 </CardContent>
               </Card>
-              <Card className="overflow-hidden" data-testid="am-personal-meaningful">
+              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="am-personal-meaningful" onClick={() => setActivePortlet({ type: "meaningful", personal: true, title: "My Meaningful Conversations Today" })}>
                 <CardContent className="p-4">
                   {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
                     <div className="flex flex-col gap-2">
@@ -1875,7 +1877,7 @@ export default function Dashboard() {
                   )}
                 </CardContent>
               </Card>
-              <Card className="overflow-hidden" data-testid="am-personal-contacts">
+              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="am-personal-contacts" onClick={() => setActivePortlet({ type: "contacts", personal: true, title: "My New Contacts Added Today" })}>
                 <CardContent className="p-4">
                   {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
                     <div className="flex flex-col gap-2">
@@ -1908,7 +1910,7 @@ export default function Dashboard() {
                   )}
                 </CardContent>
               </Card>
-              <Card className="overflow-hidden" data-testid="am-personal-touches">
+              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="am-personal-touches" onClick={() => setActivePortlet({ type: "touches", personal: true, title: "My Touches Today" })}>
                 <CardContent className="p-4">
                   {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
                     <div className="flex flex-col gap-2">
@@ -3303,6 +3305,12 @@ export default function Dashboard() {
         contact={viewContact}
         open={!!viewContact}
         onClose={() => setViewContact(null)}
+      />
+
+      <DashboardActivitySheet
+        portlet={activePortlet}
+        onClose={() => setActivePortlet(null)}
+        directorId={selectedDirectorId ?? undefined}
       />
 
     </div>

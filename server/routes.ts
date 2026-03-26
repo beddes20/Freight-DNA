@@ -8701,6 +8701,96 @@ Respond with valid JSON only:
     }
   });
 
+  // Activity detail — enriched records for portlet drill-down
+  // type = relationships | touches | meaningful | contacts
+  // personal=true scopes to current user's own companies only
+  app.get("/api/dashboard/activity-detail", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const type = String(req.query.type || "");
+      const personal = req.query.personal === "true";
+      const orgId = req.session.organizationId!;
+      const today = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
+      const orgCompanies = await storage.getCompanies(orgId);
+      const allUsers = await storage.getUsers(orgId);
+      const companyMap = new Map(orgCompanies.map(c => [c.id, c]));
+      const userMap = new Map(allUsers.map(u => [u.id, u]));
+
+      let scopedCompanyIds: Set<string>;
+      if (personal) {
+        scopedCompanyIds = new Set(orgCompanies.filter(c => c.assignedTo === user.id).map(c => c.id));
+      } else {
+        const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+        const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+        const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+        if (isNamRole) {
+          const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
+          scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+        } else if (directorIdParam) {
+          const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, orgCompanies);
+          scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+        } else if (isDirectorRole) {
+          const teamCompanies = getDirectorTeamCompanies(user.id, allUsers, orgCompanies);
+          scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+        } else {
+          scopedCompanyIds = new Set(orgCompanies.filter(c => c.assignedTo === user.id).map(c => c.id));
+        }
+      }
+
+      if (type === "relationships") {
+        const allContacts = await storage.getContacts();
+        const result = allContacts
+          .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && scopedCompanyIds.has(c.companyId))
+          .sort((a, b) => (b.baseAdvancedAt || "").localeCompare(a.baseAdvancedAt || ""))
+          .map(c => {
+            const company = companyMap.get(c.companyId);
+            const rep = company?.assignedTo ? userMap.get(company.assignedTo) : null;
+            return { contactId: c.id, contactName: c.name, contactTitle: c.title || null, relationshipBase: c.relationshipBase || null, baseAdvancedAt: c.baseAdvancedAt, companyId: c.companyId, companyName: company?.name || "Unknown", repName: rep?.name || null };
+          });
+        return res.json(result);
+      }
+
+      if (type === "touches" || type === "meaningful") {
+        const allTouchpoints = await storage.getTouchpoints();
+        const allContacts = await storage.getContacts();
+        const contactMap = new Map(allContacts.map(c => [c.id, c]));
+        let tps = allTouchpoints.filter(t => t.date === today && scopedCompanyIds.has(t.companyId));
+        if (type === "meaningful") tps = tps.filter(t => t.isMeaningful);
+        const result = tps
+          .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+          .map(t => {
+            const company = companyMap.get(t.companyId);
+            const contact = t.contactId ? contactMap.get(t.contactId) : null;
+            const rep = company?.assignedTo ? userMap.get(company.assignedTo) : null;
+            return { id: t.id, type: t.type, isMeaningful: t.isMeaningful || false, notes: t.notes || null, date: t.date, companyId: t.companyId, companyName: company?.name || "Unknown", contactName: contact?.name || null, repName: rep?.name || null };
+          });
+        return res.json(result);
+      }
+
+      if (type === "contacts") {
+        const allContacts = await storage.getContacts();
+        const result = allContacts
+          .filter(c => c.createdAt && c.createdAt.slice(0, 10) === today && scopedCompanyIds.has(c.companyId))
+          .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+          .map(c => {
+            const company = companyMap.get(c.companyId);
+            const rep = company?.assignedTo ? userMap.get(company.assignedTo) : null;
+            return { contactId: c.id, contactName: c.name, contactTitle: c.title || null, companyId: c.companyId, companyName: company?.name || "Unknown", repName: rep?.name || null };
+          });
+        return res.json(result);
+      }
+
+      return res.status(400).json({ error: "Invalid type" });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load activity detail" });
+    }
+  });
+
   // Relationships moved up — accounts with contacts that advanced this month
   // Directors: org-wide; NAMs: their team's accounts
   app.get("/api/dashboard/relationships-moved", requireAuth, async (req, res) => {
