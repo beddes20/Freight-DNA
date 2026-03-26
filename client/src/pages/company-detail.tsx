@@ -285,6 +285,7 @@ export default function CompanyDetail() {
   const [preCallOpen, setPreCallOpen] = useState(false);
   const [oppLogOpen, setOppLogOpen] = useState(false);
   const [touchLogCollapsed, setTouchLogCollapsed] = useState(false);
+  const [selectedTouchpoint, setSelectedTouchpoint] = useState<(Touchpoint & { loggedByName: string; contactName: string | null }) | null>(null);
   const [laneGapInsights, setLaneGapInsights] = useState<Record<string, string>>({});
   const [importRows, setImportRows] = useState<any[]>([]);
   const [importFileName, setImportFileName] = useState("");
@@ -1620,6 +1621,106 @@ export default function CompanyDetail() {
         </CardContent>
       </Card>
 
+      {/* ── Touch Log portlet ─────────────────────────────────────────────── */}
+      {(() => {
+        const VIBE_COLORS: Record<string, string> = {
+          great:   "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+          neutral: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+          cold:    "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+        };
+        const TYPE_ICONS: Record<string, typeof PhoneCall> = { call: PhoneCall, email: Mail, text: MessageSquare, site_visit: Building2 };
+        const TYPE_LABELS: Record<string, string> = { call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" };
+        const TYPE_COLORS: Record<string, string> = {
+          call:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+          email:      "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+          text:       "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+          site_visit: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+        };
+        const timeAgo = (iso: string) => {
+          try {
+            const diff = Date.now() - new Date(iso).getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 60) return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return `${hrs}h ago`;
+            const days = Math.floor(hrs / 24);
+            if (days < 30) return `${days}d ago`;
+            return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          } catch { return ""; }
+        };
+        return (
+          <Card data-testid="card-touch-log">
+            <CardHeader className="pb-3">
+              <button
+                onClick={() => setTouchLogCollapsed(c => !c)}
+                className="w-full flex items-center justify-between group"
+                data-testid="btn-toggle-touch-log"
+              >
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-cyan-500" />
+                  Touch Log
+                  <Badge variant="secondary" className="ml-1 font-normal">{touchLogEntries.length}</Badge>
+                </CardTitle>
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${touchLogCollapsed ? "-rotate-90" : ""}`} />
+              </button>
+            </CardHeader>
+            {!touchLogCollapsed && (
+            <CardContent className="pt-0">
+              {touchLogEntries.length === 0 ? (
+                <div className="py-6 text-center space-y-2">
+                  <PhoneCall className="h-8 w-8 mx-auto text-muted-foreground/30" />
+                  <p className="text-sm text-muted-foreground">No touches logged yet</p>
+                  <p className="text-xs text-muted-foreground">Use the "Log Touch" button in the header to record touchpoints.</p>
+                </div>
+              ) : (
+                <div className="space-y-0">
+                  {touchLogEntries.map((tp) => {
+                    const TypeIcon = TYPE_ICONS[tp.type] ?? PhoneCall;
+                    return (
+                      <div
+                        key={tp.id}
+                        className="flex items-start gap-3 py-2 border-b last:border-0 cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors"
+                        onClick={() => setSelectedTouchpoint(tp)}
+                        data-testid={`touch-log-row-${tp.id}`}
+                      >
+                        <div className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium shrink-0 mt-0.5 ${TYPE_COLORS[tp.type] ?? "bg-muted text-muted-foreground"}`}>
+                          <TypeIcon className="h-3 w-3" />
+                          {TYPE_LABELS[tp.type] ?? tp.type}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {tp.contactName && (
+                              <span className="text-xs font-medium text-foreground">{tp.contactName}</span>
+                            )}
+                            {tp.sentiment && (
+                              <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${VIBE_COLORS[tp.sentiment] ?? "bg-muted text-muted-foreground"}`} data-testid={`touch-log-vibe-${tp.id}`}>
+                                {tp.sentiment.charAt(0).toUpperCase() + tp.sentiment.slice(1)}
+                              </span>
+                            )}
+                            {tp.isMeaningful && (
+                              <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300" data-testid={`touch-log-meaningful-${tp.id}`}>
+                                Meaningful
+                              </span>
+                            )}
+                          </div>
+                          {tp.notes && (
+                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`touch-log-notes-${tp.id}`}>{tp.notes}</p>
+                          )}
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {tp.loggedByName} · {timeAgo(tp.createdAt || tp.date)}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+            )}
+          </Card>
+        );
+      })()}
+
         </TabsContent>
 
         <TabsContent value="intelligence" className="space-y-4 mt-2">
@@ -2222,6 +2323,90 @@ export default function CompanyDetail() {
         ) : null;
       })()}
 
+      {/* Touchpoint Detail Dialog */}
+      {selectedTouchpoint && (() => {
+        const tp = selectedTouchpoint;
+        const VIBE_COLORS: Record<string, string> = {
+          great:   "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+          neutral: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+          cold:    "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+        };
+        const TYPE_ICONS: Record<string, typeof PhoneCall> = { call: PhoneCall, email: Mail, text: MessageSquare, site_visit: Building2 };
+        const TYPE_LABELS: Record<string, string> = { call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" };
+        const TYPE_COLORS: Record<string, string> = {
+          call:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+          email:      "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+          text:       "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+          site_visit: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+        };
+        const TypeIcon = TYPE_ICONS[tp.type] ?? PhoneCall;
+        const dateStr = (() => {
+          try {
+            return new Date(tp.createdAt || tp.date).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+          } catch { return tp.date; }
+        })();
+        const timeStr = (() => {
+          try {
+            const d = new Date(tp.createdAt);
+            return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+          } catch { return ""; }
+        })();
+        return (
+          <Dialog open onOpenChange={() => setSelectedTouchpoint(null)}>
+            <DialogContent className="max-w-md" data-testid="dialog-touchpoint-detail">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <span className={`inline-flex items-center gap-1.5 text-sm px-2 py-1 rounded font-medium ${TYPE_COLORS[tp.type] ?? "bg-muted text-muted-foreground"}`}>
+                    <TypeIcon className="h-4 w-4" />
+                    {TYPE_LABELS[tp.type] ?? tp.type}
+                  </span>
+                  Touchpoint Detail
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-1">
+                {tp.contactName && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">Contact</p>
+                    <p className="text-sm font-medium" data-testid="tp-detail-contact">{tp.contactName}</p>
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  {tp.sentiment && (
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${VIBE_COLORS[tp.sentiment] ?? "bg-muted text-muted-foreground"}`} data-testid="tp-detail-vibe">
+                      {tp.sentiment.charAt(0).toUpperCase() + tp.sentiment.slice(1)}
+                    </span>
+                  )}
+                  {tp.isMeaningful && (
+                    <span className="text-xs px-2 py-0.5 rounded font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300" data-testid="tp-detail-meaningful">
+                      Meaningful
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">Logged by</p>
+                  <p className="text-sm" data-testid="tp-detail-logged-by">{tp.loggedByName}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">Date &amp; Time</p>
+                  <p className="text-sm" data-testid="tp-detail-date">{dateStr}{timeStr ? ` · ${timeStr}` : ""}</p>
+                </div>
+                {tp.notes ? (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Notes</p>
+                    <p className="text-sm whitespace-pre-wrap leading-relaxed" data-testid="tp-detail-notes">{tp.notes}</p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Notes</p>
+                    <p className="text-sm text-muted-foreground italic" data-testid="tp-detail-notes-empty">No notes recorded</p>
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
+
       {/* Transfer Account Dialog */}
       <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
         <DialogContent>
@@ -2419,101 +2604,6 @@ export default function CompanyDetail() {
           )}
         </CardContent>
       </Card>
-
-      {/* ── Touch Log portlet ─────────────────────────────────────────────── */}
-      {(() => {
-        const VIBE_COLORS: Record<string, string> = {
-          great:   "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-          neutral: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-          cold:    "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-        };
-        const TYPE_ICONS: Record<string, typeof PhoneCall> = { call: PhoneCall, email: Mail, text: MessageSquare, site_visit: Building2 };
-        const TYPE_LABELS: Record<string, string> = { call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" };
-        const TYPE_COLORS: Record<string, string> = {
-          call:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-          email:      "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
-          text:       "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-          site_visit: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-        };
-        const timeAgo = (iso: string) => {
-          try {
-            const diff = Date.now() - new Date(iso).getTime();
-            const mins = Math.floor(diff / 60000);
-            if (mins < 60) return `${mins}m ago`;
-            const hrs = Math.floor(mins / 60);
-            if (hrs < 24) return `${hrs}h ago`;
-            const days = Math.floor(hrs / 24);
-            if (days < 30) return `${days}d ago`;
-            return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-          } catch { return ""; }
-        };
-        return (
-          <Card data-testid="card-touch-log">
-            <CardHeader className="pb-3">
-              <button
-                onClick={() => setTouchLogCollapsed(c => !c)}
-                className="w-full flex items-center justify-between group"
-                data-testid="btn-toggle-touch-log"
-              >
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-cyan-500" />
-                  Touch Log
-                  <Badge variant="secondary" className="ml-1 font-normal">{touchLogEntries.length}</Badge>
-                </CardTitle>
-                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${touchLogCollapsed ? "-rotate-90" : ""}`} />
-              </button>
-            </CardHeader>
-            {!touchLogCollapsed && (
-            <CardContent className="pt-0">
-              {touchLogEntries.length === 0 ? (
-                <div className="py-6 text-center space-y-2">
-                  <PhoneCall className="h-8 w-8 mx-auto text-muted-foreground/30" />
-                  <p className="text-sm text-muted-foreground">No touches logged yet</p>
-                  <p className="text-xs text-muted-foreground">Use the "Log Touch" button in the header to record touchpoints.</p>
-                </div>
-              ) : (
-                <div className="space-y-0">
-                  {touchLogEntries.map((tp) => {
-                    const TypeIcon = TYPE_ICONS[tp.type] ?? PhoneCall;
-                    return (
-                      <div key={tp.id} className="flex items-start gap-3 py-2 border-b last:border-0" data-testid={`touch-log-row-${tp.id}`}>
-                        <div className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium shrink-0 mt-0.5 ${TYPE_COLORS[tp.type] ?? "bg-muted text-muted-foreground"}`}>
-                          <TypeIcon className="h-3 w-3" />
-                          {TYPE_LABELS[tp.type] ?? tp.type}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {tp.contactName && (
-                              <span className="text-xs font-medium text-foreground">{tp.contactName}</span>
-                            )}
-                            {tp.sentiment && (
-                              <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${VIBE_COLORS[tp.sentiment] ?? "bg-muted text-muted-foreground"}`} data-testid={`touch-log-vibe-${tp.id}`}>
-                                {tp.sentiment.charAt(0).toUpperCase() + tp.sentiment.slice(1)}
-                              </span>
-                            )}
-                            {tp.isMeaningful && (
-                              <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300" data-testid={`touch-log-meaningful-${tp.id}`}>
-                                Meaningful
-                              </span>
-                            )}
-                          </div>
-                          {tp.notes && (
-                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`touch-log-notes-${tp.id}`}>{tp.notes}</p>
-                          )}
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {tp.loggedByName} · {timeAgo(tp.createdAt || tp.date)}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-            )}
-          </Card>
-        );
-      })()}
 
         </TabsContent>
 
