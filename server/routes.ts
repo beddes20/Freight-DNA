@@ -903,6 +903,14 @@ export async function registerRoutes(
       }
       const user = await storage.updateUser((req.params.id as string), currentUser.organizationId, data);
       if (!user) return res.status(404).json({ error: "User not found" });
+      // Invalidate financial summary caches when financialRepId changes so team performance
+      // immediately reflects the updated rep attribution without waiting for TTL expiry.
+      if (req.body.financialRepId !== undefined) {
+        cacheInvalidatePrefix(`account-summary:`);
+        cacheInvalidatePrefix(`margin-metrics:`);
+        cacheInvalidatePrefix(`dispatcher-summary:`);
+        cacheInvalidatePrefix(`leaderboard:`);
+      }
       const { password: _, ...safeUser } = user;
       res.json(safeUser);
     } catch (error) {
