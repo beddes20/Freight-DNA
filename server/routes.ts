@@ -13,6 +13,7 @@ import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardS
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
+import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
 
 // Customer/ops-user codes that must never appear in any financial report, summary, or aggregation.
 const EXCLUDED_FINANCIAL_CODES = new Set(["valubuaz"]);
@@ -4232,6 +4233,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         console.error("[salesperson-link] auto-link error:", err)
       );
 
+      cacheInvalidatePrefix(`margin-metrics:`);
+      cacheInvalidatePrefix(`account-summary:`);
+      cacheInvalidatePrefix(`dispatcher-summary:`);
       res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
     } catch (error) {
       console.error("Error uploading financials:", error);
@@ -4290,6 +4294,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/financials/account-summary", requireAuth, async (req, res) => {
     try {
+      const asCacheKey = `account-summary:${req.session.organizationId}:${req.query.period || "current"}`;
+      const asCached = cacheGet(asCacheKey);
+      if (asCached) return res.json(asCached);
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json([]);
       const latest = uploads[uploads.length - 1];
@@ -4384,6 +4391,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         return { customerName, totalLoads, spotLoads, totalMargin, repName };
       }).filter((r: any) => r.customerName);
 
+      cacheSet(`account-summary:${req.session.organizationId}:${req.query.period || "current"}`, result, 15 * 60 * 1000);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch account summary" });
@@ -4393,6 +4401,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Dispatcher summary (for Logistics Managers) ────────────────────────────
   app.get("/api/financials/dispatcher-summary", requireAuth, async (req, res) => {
     try {
+      const dsCacheKey = `dispatcher-summary:${req.session.organizationId}:${req.query.period || "current"}`;
+      const dsCached = cacheGet(dsCacheKey);
+      if (dsCached) return res.json(dsCached);
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json([]);
       const latest = uploads[uploads.length - 1];
@@ -4439,7 +4450,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         if (isSpot) byDispatcher[key].spotLoads++;
       }
 
-      return res.json(Object.values(byDispatcher));
+      const dsResult = Object.values(byDispatcher);
+      cacheSet(`dispatcher-summary:${req.session.organizationId}:${req.query.period || "current"}`, dsResult, 15 * 60 * 1000);
+      return res.json(dsResult);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch dispatcher summary" });
     }
@@ -6546,12 +6559,16 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
+      const lbCacheKey = `leaderboard:${req.session.organizationId}`;
+      const lbCached = cacheGet(lbCacheKey);
+      if (lbCached) return res.json(lbCached);
+
       // All goals across the org (NAMs see company-wide leaderboard)
       const allGoals = await storage.getGoals({});
       const allUsers = await storage.getUsers(req.session.organizationId!);
 
       const todayStr = new Date().toISOString().slice(0, 10);
-      const activeGoals = allGoals.filter(g => g.startDate <= todayStr && g.endDate >= todayStr);
+      const activeGoals = allGoals.filter(g => g.startDate <= todayStr && (!g.endDate || g.endDate >= todayStr));
 
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
@@ -6630,6 +6647,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
 
       leaderboard.sort((a, b) => METRIC_ORDER.indexOf(a.metric) - METRIC_ORDER.indexOf(b.metric));
+      cacheSet(`leaderboard:${req.session.organizationId}`, leaderboard);
       res.json(leaderboard);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch leaderboard" });
@@ -6690,6 +6708,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           }).catch(() => {});
         }
       }
+      cacheInvalidatePrefix(`leaderboard:`);
       res.status(201).json(goal);
     } catch (error) {
       res.status(500).json({ error: "Failed to create goal" });
@@ -6822,6 +6841,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           }
         }
       }
+      cacheInvalidatePrefix(`leaderboard:`);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update goal" });
@@ -6836,6 +6856,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!existing) return res.status(404).json({ error: "Goal not found" });
       if (user.role !== "admin" && existing.namId !== user.id) return res.status(403).json({ error: "Access denied" });
       await storage.deleteGoal((req.params.id as string));
+      cacheInvalidatePrefix(`leaderboard:`);
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete goal" });
@@ -7241,6 +7262,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
         autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: contact.companyId || null, contactId: contact.id, createdAt: now.toISOString() });
       }
+      cacheInvalidatePrefix(`cold-contacts:${user.id}`);
+      cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       res.status(500).json({ error: "Failed to create touchpoint" });
@@ -7252,6 +7275,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       await storage.deleteTouchpoint((req.params.id as string));
+      cacheInvalidatePrefix(`cold-contacts:${user.id}`);
+      cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete touchpoint" });
@@ -7510,16 +7535,19 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const days = parseInt(req.query.days as string) || 30;
+      const cacheKey = `cold-contacts:${user.id}:${days}`;
+      const cached = cacheGet(cacheKey);
+      if (cached) return res.json(cached);
+      let results;
       if (user.role === "admin") {
-        const results = await storage.getColdContacts(null, days);
-        return res.json(results);
-      }
-      if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
+        results = await storage.getColdContacts(null, days);
+      } else if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        const results = await storage.getColdContacts(null, days, teamIds);
-        return res.json(results);
+        results = await storage.getColdContacts(null, days, teamIds);
+      } else {
+        results = await storage.getColdContacts(user.id, days);
       }
-      const results = await storage.getColdContacts(user.id, days);
+      cacheSet(cacheKey, results);
       res.json(results);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch cold contacts" });
@@ -7531,16 +7559,19 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const days = parseInt(req.query.days as string) || 30;
+      const cacheKey = `meaningful-overdue:${user.id}:${days}`;
+      const cached = cacheGet(cacheKey);
+      if (cached) return res.json(cached);
+      let results;
       if (user.role === "admin") {
-        const results = await storage.getMeaningfulOverdueContacts(null, days);
-        return res.json(results);
-      }
-      if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
+        results = await storage.getMeaningfulOverdueContacts(null, days);
+      } else if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        const results = await storage.getMeaningfulOverdueContacts(null, days, teamIds);
-        return res.json(results);
+        results = await storage.getMeaningfulOverdueContacts(null, days, teamIds);
+      } else {
+        results = await storage.getMeaningfulOverdueContacts(user.id, days);
       }
-      const results = await storage.getMeaningfulOverdueContacts(user.id, days);
+      cacheSet(cacheKey, results);
       res.json(results);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch meaningful overdue contacts" });
@@ -8663,6 +8694,10 @@ Respond with valid JSON only:
         return res.status(403).json({ error: "Access denied" });
       }
 
+      const mmCacheKey = `margin-metrics:${req.session.organizationId}:${user.id}`;
+      const mmCached = cacheGet(mmCacheKey);
+      if (mmCached) return res.json(mmCached);
+
       const now = new Date();
 
       // Get latest financial data — org-scoped to prevent cross-tenant data leakage
@@ -8788,10 +8823,9 @@ Respond with valid JSON only:
       const namMetrics = isNamRole ? [] : buildMetrics(namRoles);
       const amMetrics = buildMetrics(amRoles);
       console.log(`[margin-metrics] role=${user.role} nams=${namMetrics.length} ams=${amMetrics.length} scopedUserIds=${scopedUserIds ? scopedUserIds.size : 'null'} byRepIdKeys=${Object.keys(byRepId).length} curMonthKey=${curMonthKey}`);
-      res.json({
-        nams: namMetrics,
-        ams: amMetrics,
-      });
+      const mmResult = { nams: namMetrics, ams: amMetrics };
+      cacheSet(`margin-metrics:${req.session.organizationId}:${user.id}`, mmResult, 15 * 60 * 1000);
+      res.json(mmResult);
     } catch (err) {
       console.error("Error loading margin metrics:", err);
       res.status(500).json({ error: "Failed to load margin metrics" });

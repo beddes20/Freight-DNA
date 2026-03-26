@@ -576,4 +576,27 @@ export async function runMigrations() {
   } finally {
     clientSession.release();
   }
+
+  const clientIdx = await pool.connect();
+  try {
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_company_id      ON touchpoints(company_id)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_contact_id      ON touchpoints(contact_id)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_date             ON touchpoints(date DESC)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_is_meaningful    ON touchpoints(is_meaningful) WHERE is_meaningful = true`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_logged_by        ON touchpoints(logged_by_id)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_contacts_company_id          ON contacts(company_id)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_companies_assigned_to        ON companies(assigned_to)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_companies_organization_id    ON companies(organization_id)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_goals_am_id                  ON goals(am_id)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_goals_nam_id                 ON goals(nam_id)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_goals_start_end              ON goals(start_date, end_date)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to            ON tasks(assigned_to)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_tasks_company_id             ON tasks(company_id)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_tasks_status                 ON tasks(status)`);
+    console.log("[migrations] performance indexes ensured");
+  } catch (err) {
+    console.error("[migrations] performance index error:", err);
+  } finally {
+    clientIdx.release();
+  }
 }
