@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Truck, MapPin, Flame, Package, TrendingUp, Building2,
-  FileText, Zap, Plus, ExternalLink, Trash2, RotateCcw, EyeOff,
+  FileText, Zap, Plus, ExternalLink, Trash2, RotateCcw, EyeOff, ChevronDown,
 } from "lucide-react";
 
 type OpportunityMatch = {
@@ -90,6 +90,11 @@ export default function TopOpportunities() {
   const [confirmDismiss, setConfirmDismiss] = useState<{ companyId: string; companyName: string } | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskPrefill, setTaskPrefill] = useState<TaskPrefill | null>(null);
+  const [collapsedCompanies, setCollapsedCompanies] = useState<Record<string, boolean>>({});
+
+  const toggleCollapsed = (companyId: string) => {
+    setCollapsedCompanies(prev => ({ ...prev, [companyId]: !prev[companyId] }));
+  };
 
   const dismissMutation = useMutation({
     mutationFn: (companyId: string) => apiRequest("POST", `/api/opportunities/dismiss/${companyId}`, {}),
@@ -197,7 +202,11 @@ export default function TopOpportunities() {
         <div className="space-y-4" data-testid="opportunities-list">
           {byCompany.map((group, idx) => (
             <Card key={group.companyId} data-testid={`card-opportunity-company-${group.companyId}`} className="overflow-hidden">
-              <CardHeader className="pb-3 bg-gradient-to-r from-primary/5 to-transparent border-b">
+              <CardHeader
+                className="pb-3 bg-gradient-to-r from-primary/5 to-transparent border-b cursor-pointer select-none"
+                onClick={() => toggleCollapsed(group.companyId)}
+                data-testid={`btn-toggle-company-${group.companyId}`}
+              >
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <div className="flex items-center justify-center h-8 w-8 rounded-full bg-primary/10 text-primary font-bold text-sm shrink-0">
@@ -209,7 +218,7 @@ export default function TopOpportunities() {
                         <span
                           className="font-semibold text-base text-primary hover:underline cursor-pointer"
                           data-testid={`text-company-name-${group.companyId}`}
-                          onClick={() => goToAccount(group.companyId)}
+                          onClick={(e) => { e.stopPropagation(); goToAccount(group.companyId); }}
                         >
                           {group.companyName}
                         </span>
@@ -229,7 +238,7 @@ export default function TopOpportunities() {
                       size="sm"
                       variant="outline"
                       className="h-7 px-2 text-xs gap-1"
-                      onClick={() => goToAccount(group.companyId)}
+                      onClick={(e) => { e.stopPropagation(); goToAccount(group.companyId); }}
                       data-testid={`btn-view-account-${group.companyId}`}
                     >
                       <ExternalLink className="h-3 w-3" />
@@ -244,17 +253,22 @@ export default function TopOpportunities() {
                         size="sm"
                         variant="ghost"
                         className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                        onClick={() => setConfirmDismiss({ companyId: group.companyId, companyName: group.companyName })}
+                        onClick={(e) => { e.stopPropagation(); setConfirmDismiss({ companyId: group.companyId, companyName: group.companyName }); }}
                         data-testid={`btn-dismiss-opportunity-${group.companyId}`}
                         title="Remove from list"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     )}
+                    <ChevronDown
+                      className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${collapsedCompanies[group.companyId] ? "-rotate-90" : ""}`}
+                      data-testid={`icon-chevron-${group.companyId}`}
+                    />
                   </div>
                 </div>
               </CardHeader>
 
+              {!collapsedCompanies[group.companyId] && (
               <CardContent className="p-0">
                 <div className="divide-y">
                   {group.matches.map((match, mIdx) => (
@@ -335,6 +349,7 @@ export default function TopOpportunities() {
                   ))}
                 </div>
               </CardContent>
+              )}
             </Card>
           ))}
         </div>
