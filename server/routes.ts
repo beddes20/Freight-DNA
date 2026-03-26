@@ -7259,13 +7259,18 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const aiInsights = await analyzeTouchpointNote(notes || "", contact.name, company?.name).catch(() => null);
       let autoTask = null;
       if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
-        const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-        autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: contact.companyId || null, contactId: contact.id, createdAt: now.toISOString() });
+        try {
+          const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: contact.companyId || null, contactId: contact.id, createdAt: now.toISOString() });
+        } catch (taskError) {
+          console.error("Failed to create auto follow-up task for contact touchpoint:", taskError);
+        }
       }
       cacheInvalidatePrefix(`cold-contacts:${user.id}`);
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
+      console.error("Failed to create touchpoint:", error);
       res.status(500).json({ error: "Failed to create touchpoint" });
     }
   });
@@ -9339,11 +9344,16 @@ Respond with valid JSON only:
       const aiInsights = await analyzeTouchpointNote(notes || "", contact?.name, company.name).catch(() => null);
       let autoTask = null;
       if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
-        const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-        autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: req.params.id as string, contactId: contactId || null, createdAt: now.toISOString() });
+        try {
+          const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: req.params.id as string, contactId: contactId || null, createdAt: now.toISOString() });
+        } catch (taskError) {
+          console.error("Failed to create auto follow-up task for company touchpoint:", taskError);
+        }
       }
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
+      console.error("Failed to log touchpoint (company route):", error);
       res.status(500).json({ error: "Failed to log touchpoint" });
     }
   });
@@ -9378,11 +9388,16 @@ Respond with valid JSON only:
       const aiInsights = await analyzeTouchpointNote(cleanNotes || "", contact?.name, company.name).catch(() => null);
       let autoTask = null;
       if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
-        const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-        autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(cleanNotes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId, contactId: contactId || null, createdAt: now.toISOString() });
+        try {
+          const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(cleanNotes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId, contactId: contactId || null, createdAt: now.toISOString() });
+        } catch (taskError) {
+          console.error("Failed to create auto follow-up task for touch-log:", taskError);
+        }
       }
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
+      console.error("Failed to log touch:", error);
       res.status(500).json({ error: "Failed to log touch" });
     }
   });
