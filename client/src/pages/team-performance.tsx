@@ -709,11 +709,9 @@ export default function TeamPerformancePage() {
   for (const row of accountSummary) {
     if (!row.repName) continue;
     const repNameLower = row.repName.toLowerCase().trim();
-    // Try financialRepId match first (most reliable for ReplistNumbers format), then fall back to name match
-    const match = reps.find(r =>
-      (r.financialRepId && r.financialRepId.toLowerCase() === repNameLower) ||
-      matchRepName(row.repName, r.name)
-    );
+    const match =
+      reps.find(r => r.financialRepId && r.financialRepId.toLowerCase() === repNameLower) ||
+      reps.find(r => matchRepName(row.repName, r.name));
     if (match) {
       if (!repLoadsMap[match.userId]) repLoadsMap[match.userId] = { loads: 0, margin: 0, revenue: 0 };
       repLoadsMap[match.userId].loads += row.totalLoads;
@@ -729,10 +727,9 @@ export default function TeamPerformancePage() {
   for (const row of dispatcherSummary) {
     if (!row.dispatcherName) continue;
     const dispLower = row.dispatcherName.toLowerCase().trim();
-    const match = lmReps.find(r =>
-      (r.financialRepId && r.financialRepId.toLowerCase() === dispLower) ||
-      matchRepName(row.dispatcherName, r.name)
-    );
+    const match =
+      lmReps.find(r => r.financialRepId && r.financialRepId.toLowerCase() === dispLower) ||
+      lmReps.find(r => matchRepName(row.dispatcherName, r.name));
     if (match) {
       if (!lmLoadsMap[match.userId]) lmLoadsMap[match.userId] = { loads: 0, margin: 0, revenue: 0 };
       lmLoadsMap[match.userId].loads += row.totalLoads;
@@ -746,10 +743,9 @@ export default function TeamPerformancePage() {
   for (const row of repeatCarriersData) {
     if (!row.dispatcherName) continue;
     const dispLower = row.dispatcherName.toLowerCase().trim();
-    const match = lmReps.find(r =>
-      (r.financialRepId && r.financialRepId.toLowerCase() === dispLower) ||
-      matchRepName(row.dispatcherName, r.name)
-    );
+    const match =
+      lmReps.find(r => r.financialRepId && r.financialRepId.toLowerCase() === dispLower) ||
+      lmReps.find(r => matchRepName(row.dispatcherName, r.name));
     if (match) {
       if (!lmRepeatCarrierMap[match.userId]) lmRepeatCarrierMap[match.userId] = { repeatCarrierLoads: 0, repeatCarrierPct: 0 };
       lmRepeatCarrierMap[match.userId].repeatCarrierLoads += row.repeatCarrierLoads;
@@ -762,10 +758,9 @@ export default function TeamPerformancePage() {
   for (const row of salespersonSummary) {
     if (!row.salespersonName) continue;
     const spLower = row.salespersonName.toLowerCase().trim();
-    const match = spReps.find(r =>
-      (r.financialRepId && r.financialRepId.toLowerCase() === spLower) ||
-      matchRepName(row.salespersonName, r.name)
-    );
+    const match =
+      spReps.find(r => r.financialRepId && r.financialRepId.toLowerCase() === spLower) ||
+      spReps.find(r => matchRepName(row.salespersonName, r.name));
     if (match) {
       if (!salesLoadsMap[match.userId]) salesLoadsMap[match.userId] = { loads: 0, margin: 0, revenue: 0, spotLoads: 0 };
       salesLoadsMap[match.userId].loads += row.totalLoads;

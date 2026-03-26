@@ -4365,7 +4365,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
             if (isSpot) byCustomerRep[key].byMonth[monthKey].spotLoads++;
           }
         }
-        return res.json(Object.values(byCustomerRep));
+        const result = Object.values(byCustomerRep);
+        cacheSet(asCacheKey, result, 15 * 60 * 1000);
+        return res.json(result);
       }
 
       // Detect whether rows use named headers or __EMPTY keys (non-standard header layout)
