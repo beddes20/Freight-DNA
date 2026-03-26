@@ -55,19 +55,51 @@ const ROLE_COLORS: Record<string, string> = {
   logistics_coordinator: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
 };
 
-function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummaryRow | null {
+type FinMatch = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+
+function matchFinancials(name: string, financialAlias: string | null | undefined, rows: AccountSummaryRow[]): FinMatch | null {
   if (!rows.length) return null;
-  const lower = name.toLowerCase();
-  const exact = rows.find(r => r.customerName.toLowerCase() === lower);
-  if (exact) return exact;
-  if (name.length >= 5) {
-    const sub = rows.find(r =>
-      r.customerName.toLowerCase().includes(lower) ||
-      lower.includes(r.customerName.toLowerCase())
-    );
-    if (sub) return sub;
+
+  let matched: AccountSummaryRow[] = [];
+
+  // 1. financialAlias exact code prefix (e.g. "GMCCPOMI" matches "GMCCPOMI - General Motors…")
+  if (financialAlias) {
+    const aliases = financialAlias.split(",").map(a => a.trim().toLowerCase()).filter(Boolean);
+    for (const alias of aliases) {
+      const hits = rows.filter(r => {
+        const cn = r.customerName.toLowerCase();
+        return cn === alias || cn.startsWith(alias + " ") || cn.startsWith(alias + "-");
+      });
+      matched.push(...hits);
+    }
   }
-  return null;
+
+  // 2. Fall back to display name matching
+  if (matched.length === 0) {
+    const lower = name.toLowerCase();
+    const exact = rows.filter(r => r.customerName.toLowerCase() === lower);
+    if (exact.length > 0) {
+      matched = exact;
+    } else if (name.length >= 5) {
+      matched = rows.filter(r =>
+        r.customerName.toLowerCase().includes(lower) ||
+        lower.includes(r.customerName.toLowerCase())
+      );
+    }
+  }
+
+  if (matched.length === 0) return null;
+
+  // Aggregate in case multiple rows match (multi-alias or split entries)
+  return matched.reduce<FinMatch>(
+    (acc, r) => ({
+      totalLoads: acc.totalLoads + r.totalLoads,
+      spotLoads: acc.spotLoads + (r.spotLoads ?? 0),
+      totalMargin: acc.totalMargin + r.totalMargin,
+      totalRevenue: acc.totalRevenue + (r.totalRevenue ?? 0),
+    }),
+    { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 }
+  );
 }
 
 function getPeriodLabel(period: PeriodOption): string {
@@ -378,7 +410,7 @@ export default function RepCustomers() {
             {filtered.map((company) => {
               const contacts = contactsByCompany.get(company.id) || [];
               const openTasks = openTasksByCompany.get(company.id) || 0;
-              const fin = matchFinancials(company.name, repFinancialRows);
+              const fin = matchFinancials(company.name, company.financialAlias, repFinancialRows);
               const marginPct = fin && fin.totalRevenue && fin.totalRevenue > 0
                 ? (fin.totalMargin / fin.totalRevenue) * 100
                 : null;
