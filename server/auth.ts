@@ -28,10 +28,11 @@ export function setupAuth(app: any) {
       secret: process.env.SESSION_SECRET || "orgchart-crm-secret-key",
       resave: false,
       saveUninitialized: false,
+      rolling: true,
       cookie: {
         maxAge: 30 * 24 * 60 * 60 * 1000,
         httpOnly: true,
-        secure: false,
+        secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
       },
     })
