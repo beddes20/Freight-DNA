@@ -7543,6 +7543,64 @@ Respond with valid JSON only:
     }
   });
 
+  app.get("/api/touchpoints/today", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+
+      const [allTodayTps, allOrgUsers, allOrgCompanies] = await Promise.all([
+        storage.getTouchpointsSince(todayStr),
+        storage.getUsers(user.organizationId),
+        storage.getCompanies(user.organizationId),
+      ]);
+
+      const orgCompanyIds = new Set(allOrgCompanies.map(c => c.id));
+      const orgUserIds = new Set(allOrgUsers.map(u => u.id));
+      const userMap = new Map(allOrgUsers.map(u => [u.id, u.name || u.username]));
+      const companyMap = new Map(allOrgCompanies.map(c => [c.id, c.name]));
+
+      const allOrgTps = allTodayTps.filter(t => t.date === todayStr && t.loggedById && orgUserIds.has(t.loggedById) && orgCompanyIds.has(t.companyId));
+
+      let visibleUserIds: Set<string>;
+      if (user.role === "admin" || user.role === "director" || user.role === "sales_director") {
+        visibleUserIds = orgUserIds;
+      } else if (user.role === "national_account_manager" || user.role === "sales") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        visibleUserIds = new Set(teamIds);
+        visibleUserIds.add(user.id);
+      } else {
+        visibleUserIds = new Set([user.id]);
+      }
+
+      const filteredTps = allOrgTps.filter(t => t.loggedById && visibleUserIds.has(t.loggedById));
+
+      const contactIds = [...new Set(filteredTps.map(t => t.contactId).filter(Boolean))] as string[];
+      let contactMap = new Map<string, string>();
+      if (contactIds.length > 0) {
+        const contactResults = await Promise.all(contactIds.map(id => storage.getContact(id)));
+        for (const c of contactResults) {
+          if (c) contactMap.set(c.id, c.name);
+        }
+      }
+
+      filteredTps.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+      const enriched = filteredTps.map(tp => ({
+        ...tp,
+        repName: tp.loggedById ? (userMap.get(tp.loggedById) ?? "Unknown") : "Unknown",
+        companyName: companyMap.get(tp.companyId) ?? "Unknown Company",
+        contactName: tp.contactId ? (contactMap.get(tp.contactId) ?? null) : null,
+      }));
+
+      res.json(enriched);
+    } catch (error) {
+      console.error("Error fetching today's touchpoints:", error);
+      res.status(500).json({ error: "Failed to fetch today's touchpoints" });
+    }
+  });
+
   app.get("/api/dashboard/cold-contacts", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

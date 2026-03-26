@@ -39,6 +39,7 @@ import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoi
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
 import { LmCareerPanel } from "@/components/lm-career-panel";
 import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
+import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -157,6 +158,14 @@ export default function Dashboard() {
   const [selectedDirectorId, setSelectedDirectorId] = useState<string | null>(null);
   const [feedAuthorFilter, setFeedAuthorFilter] = useState("all");
   const [ptoBannerDismissed, setPtoBannerDismissed] = useState(false);
+  const [touchpointsTodayCollapsed, setTouchpointsTodayCollapsed] = useState(() => localStorage.getItem("dash_touchpoints_today_collapsed") === "true");
+  const toggleTouchpointsToday = () => {
+    setTouchpointsTodayCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem("dash_touchpoints_today_collapsed", String(next));
+      return next;
+    });
+  };
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
   const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") === "true");
   const [lmCheckInsGroupCollapsed, setLmCheckInsGroupCollapsed] = useState(() => localStorage.getItem("dash_lm_checkins_group_collapsed") === "true");
@@ -1001,6 +1010,12 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* ── Outbound Touchpoints Today ──────────────────────────────────────── */}
+      <TouchpointsTodayPortlet
+        collapsed={touchpointsTodayCollapsed}
+        onToggle={toggleTouchpointsToday}
+      />
 
       {/* ── Director/Admin Portlets ─────────────────────────────────────────── */}
       {isDirector && (
