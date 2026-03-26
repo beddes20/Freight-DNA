@@ -70,6 +70,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RfpDialog } from "@/components/rfp-dialog";
 import { AwardDialog } from "@/components/award-dialog";
+import { ConvertToAwardDialog } from "@/components/convert-to-award-dialog";
 import { ResearchLaneDialog } from "@/components/research-lane-dialog";
 import { DataAnalystPortlet } from "@/components/data-analyst-portlet";
 import { useToast } from "@/hooks/use-toast";
@@ -91,9 +92,10 @@ interface RfpCardProps {
   onEdit: (rfp: Rfp) => void;
   onDelete: (rfp: Rfp) => void;
   onViewData: (rfp: Rfp) => void;
+  onConvert: (rfp: Rfp) => void;
 }
 
-function RfpCard({ rfp, company, onEdit, onDelete, onViewData }: RfpCardProps) {
+function RfpCard({ rfp, company, onEdit, onDelete, onViewData, onConvert }: RfpCardProps) {
   const status = rfpStatusConfig[rfp.status as keyof typeof rfpStatusConfig] || rfpStatusConfig.pending;
   const StatusIcon = status.icon;
 
@@ -169,34 +171,50 @@ function RfpCard({ rfp, company, onEdit, onDelete, onViewData }: RfpCardProps) {
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t">
-          {!!rfp.fileData && (
+        <div className="flex items-center justify-between gap-1 mt-3 pt-3 border-t">
+          <div className="flex items-center gap-1">
+            {rfp.status !== "awarded" && rfp.status !== "partially_awarded" && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => onConvert(rfp)}
+                className="text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+                data-testid={`button-convert-award-${rfp.id}`}
+              >
+                <Trophy className="h-4 w-4 mr-1" />
+                Mark as Won
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {!!rfp.fileData && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => onViewData(rfp)}
+                data-testid={`button-view-data-${rfp.id}`}
+              >
+                <BarChart3 className="h-4 w-4 mr-1" />
+                View Data
+              </Button>
+            )}
             <Button
-              size="sm"
+              size="icon"
               variant="ghost"
-              onClick={() => onViewData(rfp)}
-              data-testid={`button-view-data-${rfp.id}`}
+              onClick={() => onEdit(rfp)}
+              data-testid={`button-edit-rfp-${rfp.id}`}
             >
-              <BarChart3 className="h-4 w-4 mr-1" />
-              View Data
+              <Pencil className="h-4 w-4" />
             </Button>
-          )}
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => onEdit(rfp)}
-            data-testid={`button-edit-rfp-${rfp.id}`}
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => onDelete(rfp)}
-            data-testid={`button-delete-rfp-${rfp.id}`}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => onDelete(rfp)}
+              data-testid={`button-delete-rfp-${rfp.id}`}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -1223,6 +1241,7 @@ export default function RfpAwards() {
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
   const [pdfExtractedLanes, setPdfExtractedLanes] = useState<any[]>([]);
   const [pdfRfpType, setPdfRfpType] = useState<"mini_bid" | "full_rfp" | "">("");
+  const [convertingRfp, setConvertingRfp] = useState<Rfp | null>(null);
 
   const { data: rfps, isLoading: rfpsLoading } = useQuery<Rfp[]>({
     queryKey: ["/api/rfps"],
@@ -1997,6 +2016,12 @@ export default function RfpAwards() {
         />
       )}
 
+      <ConvertToAwardDialog
+        rfp={convertingRfp}
+        company={convertingRfp ? companiesMap.get(convertingRfp.companyId) : undefined}
+        onClose={() => setConvertingRfp(null)}
+      />
+
       {isLoading ? (
         <div className="space-y-8">
           <div>
@@ -2096,6 +2121,7 @@ export default function RfpAwards() {
                     onEdit={handleEditRfp}
                     onDelete={setDeleteRfpTarget}
                     onViewData={setViewingRfp}
+                    onConvert={setConvertingRfp}
                   />
                 ))}
               </div>
