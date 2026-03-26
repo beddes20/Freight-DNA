@@ -63,7 +63,7 @@ interface TeamMemberSummary {
 }
 
 interface RepReportData {
-  rep: { id: string; name: string; role: string; manager: string | null; director: string | null; createdAt?: string | null };
+  rep: { id: string; name: string; role: string; manager: string | null; director: string | null; createdAt?: string | null; financialRepId?: string | null };
   period: { type: string; label: string; start: string; end: string };
   goals: Array<{ id: string; label: string; metric: string; period: string; current: number; target: number; pct: number }>;
   touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; meaningful: number; weeklyTrend: number[] };
@@ -491,8 +491,14 @@ export default function RepReportPage() {
   const { rep, period: p, goals, touchpoints: tp, contacts, tasks, topAccounts, accountsNeedingAttention, wins, teamMembers } = data;
 
   // Compute financial totals for this rep from account-summary data
+  // Priority: exact financialRepId match (handles abbreviated IDs like "jallen") → fuzzy name match
   const repAccountRows = accountSummary
-    .filter(row => row.repName && matchRepName(row.repName, rep.name));
+    .filter(row => {
+      if (!row.repName) return false;
+      const rn = row.repName.toLowerCase().trim();
+      return (rep.financialRepId && rn === rep.financialRepId.toLowerCase().trim()) ||
+        matchRepName(row.repName, rep.name);
+    });
   const repFinancials = repAccountRows
     .reduce((acc, row) => ({
       loads: acc.loads + row.totalLoads,
@@ -691,7 +697,7 @@ export default function RepReportPage() {
           const hasAnyCriteria = c.minLoadCount != null || c.minMarginPct != null || c.minTouchpoints != null || c.minTenureMonths != null;
           if (!hasAnyCriteria) return null;
 
-          const repRevenue = accountSummary.filter((row: AccountSummaryRow) => row.repName && matchRepName(row.repName, rep.name)).reduce((acc: number, row: AccountSummaryRow) => acc + (row.totalRevenue ?? 0), 0);
+          const repRevenue = repFinancials.revenue;
           const marginPct = repRevenue > 0 && repFinancials.margin != null
             ? (repFinancials.margin / repRevenue) * 100
             : null;

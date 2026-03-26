@@ -1697,6 +1697,7 @@ export class DatabaseStorage implements IStorage {
         manager: manager?.name || null,
         director: director?.name || null,
         createdAt: repUser?.createdAt || null,
+        financialRepId: repUser?.financialRepId || null,
       },
       period: { type: period, label: periodLabel, start: periodStart, end: periodEnd },
       goals: enrichedGoals,
