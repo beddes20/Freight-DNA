@@ -1,7 +1,17 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-async function throwIfResNotOk(res: Response) {
+function redirectToLogin() {
+  if (!window.location.pathname.startsWith("/login")) {
+    window.location.href = "/login";
+  }
+}
+
+async function throwIfResNotOk(res: Response, redirect401 = false) {
   if (!res.ok) {
+    if (res.status === 401 && redirect401) {
+      redirectToLogin();
+      return;
+    }
     const text = (await res.text()) || res.statusText;
     throw new Error(`${res.status}: ${text}`);
   }
@@ -19,6 +29,11 @@ export async function apiRequest(
     credentials: "include",
   });
 
+  if (res.status === 401) {
+    redirectToLogin();
+    return res;
+  }
+
   await throwIfResNotOk(res);
   return res;
 }
@@ -33,7 +48,9 @@ export const getQueryFn: <T>(options: {
       credentials: "include",
     });
 
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+    if (res.status === 401) {
+      if (unauthorizedBehavior === "returnNull") return null;
+      redirectToLogin();
       return null;
     }
 

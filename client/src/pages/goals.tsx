@@ -118,12 +118,12 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
   // Pace indicator
   const today = new Date();
   const goalStart = new Date(goal.startDate);
-  const goalEnd = new Date(goal.endDate);
-  const totalDays = Math.max(1, (goalEnd.getTime() - goalStart.getTime()) / 86400000);
+  const goalEnd = goal.endDate ? new Date(goal.endDate) : null;
+  const totalDays = goalEnd ? Math.max(1, (goalEnd.getTime() - goalStart.getTime()) / 86400000) : 365;
   const daysPassed = Math.max(0, Math.min(totalDays, (today.getTime() - goalStart.getTime()) / 86400000));
   const expectedPct = Math.min(100, Math.round((daysPassed / totalDays) * 100));
   const paceGap = displayPct - expectedPct;
-  const goalExpired = today > goalEnd;
+  const goalExpired = goalEnd ? today > goalEnd : false;
   const goalNotStarted = today < goalStart;
 
   const updateProgress = useMutation({
@@ -218,7 +218,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
                 )}
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <CalendarDays className="h-3 w-3" />
-                  {fmtDate(goal.startDate)} – {fmtDate(goal.endDate)}
+                  {fmtDate(goal.startDate)} – {goal.endDate ? fmtDate(goal.endDate) : "Ongoing"}
                 </span>
                 {goal.amId !== currentUserId && (
                   <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -750,7 +750,7 @@ export default function GoalsPage() {
   const todayStr = new Date().toISOString().slice(0, 10);
   const hitRateByAm: Record<string, { hit: number; total: number }> = {};
   for (const g of goals) {
-    if (g.endDate >= todayStr) continue;
+    if (!g.endDate || g.endDate >= todayStr) continue;
     const amId = g.amId;
     if (!hitRateByAm[amId]) hitRateByAm[amId] = { hit: 0, total: 0 };
     hitRateByAm[amId].total++;
@@ -759,14 +759,14 @@ export default function GoalsPage() {
 
   // Team goals summary for NAM view
   const nowStr = new Date().toISOString().slice(0, 10);
-  const activeGoals = goals.filter(g => g.startDate <= nowStr && g.endDate >= nowStr);
+  const activeGoals = goals.filter(g => g.startDate <= nowStr && (!g.endDate || g.endDate >= nowStr));
   const repsWithActiveGoals = [...new Set(activeGoals.map(g => g.amId))];
   const repsOnTrack = repsWithActiveGoals.filter(amId => {
     const repGoals = activeGoals.filter(g => g.amId === amId);
     return repGoals.every(g => {
       const pct = progressPct(parseFloat(g.currentValue || "0"), parseFloat(g.target || "1"));
-      const start = new Date(g.startDate); const end = new Date(g.endDate); const now2 = new Date();
-      const total = Math.max(1, (end.getTime() - start.getTime()) / 86400000);
+      const start = new Date(g.startDate); const end = g.endDate ? new Date(g.endDate) : null; const now2 = new Date();
+      const total = end ? Math.max(1, (end.getTime() - start.getTime()) / 86400000) : 365;
       const passed = Math.max(0, (now2.getTime() - start.getTime()) / 86400000);
       const expected = Math.min(100, Math.round((passed / total) * 100));
       return pct >= expected - 10;
@@ -953,8 +953,8 @@ export default function GoalsPage() {
       )}
 
       {(() => {
-        const activeFilteredGoals = filteredGoals.filter(g => g.endDate >= nowStr);
-        const pastFilteredGoals = filteredGoals.filter(g => g.endDate < nowStr).sort((a, b) => b.endDate.localeCompare(a.endDate));
+        const activeFilteredGoals = filteredGoals.filter(g => !g.endDate || g.endDate >= nowStr);
+        const pastFilteredGoals = filteredGoals.filter(g => g.endDate && g.endDate < nowStr).sort((a, b) => b.endDate!.localeCompare(a.endDate!));
         return (
           <>
             {activeFilteredGoals.length === 0 ? (
