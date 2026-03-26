@@ -445,7 +445,7 @@ function analyzeRfpSpreadsheet(workbook: XLSX.WorkBook) {
 }
 
 // Standard field types for RFP column mapping
-type RfpFieldType = "origin_city" | "origin_state" | "origin_zip" | "dest_city" | "dest_state" | "dest_zip" | "volume" | "equipment" | "lane_id" | "ignore";
+type RfpFieldType = "origin_city" | "origin_state" | "origin_zip" | "dest_city" | "dest_state" | "dest_zip" | "volume" | "equipment" | "lane_id" | "miles" | "ignore";
 
 type ConfirmedColumnMapping = Record<string, RfpFieldType>;
 
@@ -509,6 +509,7 @@ function analyzeRfpSpreadsheetWithMapping(workbook: XLSX.WorkBook, confirmedMapp
   const volumeCol = fieldToCol("volume");
   const equipmentCol = fieldToCol("equipment");
   const laneIdCol = fieldToCol("lane_id");
+  const milesCol = fieldToCol("miles");
 
   // Determine volume cadence from column name (weekly or monthly)
   let isWeeklyVolume = false;
@@ -565,6 +566,7 @@ function analyzeRfpSpreadsheetWithMapping(workbook: XLSX.WorkBook, confirmedMapp
       const cityDescription = originPart && destPart ? `${originPart} → ${destPart}` : originPart || destPart || "";
       const laneDescription = cityDescription || laneName || "Unknown Lane";
 
+      const rawMiles = milesCol ? parseFloat(String(row[milesCol] || "").replace(/[^0-9.]/g, "")) : NaN;
       highVolumeLanes.push({
         lane: laneDescription,
         laneId: laneName || "",
@@ -574,6 +576,7 @@ function analyzeRfpSpreadsheetWithMapping(workbook: XLSX.WorkBook, confirmedMapp
         destinationState: dState,
         volume: rowVolume,
         equipment: equipmentCol ? String(row[equipmentCol] || "") : "",
+        miles: !isNaN(rawMiles) && rawMiles > 0 ? rawMiles : null,
         rawRow: row,
       });
     }
@@ -1659,6 +1662,7 @@ The standard fields are:
 - volume: Number of loads/shipments (annual or weekly)
 - equipment: Equipment or trailer type (e.g. Van, Flatbed, Reefer)
 - lane_id: Lane identifier or name
+- miles: Distance in miles for the lane (also called distance, mileage, mi, loaded miles, deadhead miles)
 - ignore: Column is not relevant
 
 Respond ONLY with a JSON object where keys are the original column names and values are one of the standard field types above.
@@ -1674,7 +1678,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         });
 
         const parsed = JSON.parse(aiResponse.choices[0].message.content || "{}");
-        const validFields = new Set(["origin_city", "origin_state", "origin_zip", "dest_city", "dest_state", "dest_zip", "volume", "equipment", "lane_id", "ignore"]);
+        const validFields = new Set(["origin_city", "origin_state", "origin_zip", "dest_city", "dest_state", "dest_zip", "volume", "equipment", "lane_id", "miles", "ignore"]);
         for (const h of headers) {
           const suggestion = parsed[h];
           suggestedMappings[h] = validFields.has(suggestion) ? suggestion : "ignore";

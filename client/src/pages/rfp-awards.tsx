@@ -640,12 +640,15 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                   case "destination": return dir * fmtLoc(a.lane.destination, a.lane.destinationState).localeCompare(fmtLoc(b.lane.destination, b.lane.destinationState));
                   case "volume": return dir * (a.lane.volume - b.lane.volume);
                   case "equipment": return dir * (a.lane.equipment || "").localeCompare(b.lane.equipment || "");
+                  case "miles": return dir * ((a.lane.miles ?? 0) - (b.lane.miles ?? 0));
                   case "status": return dir * (a.lane.status || "open").localeCompare(b.lane.status || "open");
                   default: return 0;
                 }
               });
 
               const thClass = "px-3 py-2 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap";
+
+              const hasMiles = sortedLanes.some(({ lane }) => lane.miles != null);
 
               return (
                 <div className="overflow-x-auto rounded-md border">
@@ -661,6 +664,11 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                         <th className={thClass} onClick={() => handleLaneSort("volume")}>
                           Volume <SortIcon col="volume" />
                         </th>
+                        {hasMiles && (
+                          <th className={thClass} onClick={() => handleLaneSort("miles")}>
+                            Miles <SortIcon col="miles" />
+                          </th>
+                        )}
                         <th className={thClass} onClick={() => handleLaneSort("equipment")}>
                           Equipment <SortIcon col="equipment" />
                         </th>
@@ -692,6 +700,11 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                           <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
                             {Math.round(lane.volume).toLocaleString()} / yr
                           </td>
+                          {hasMiles && (
+                            <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                              {lane.miles != null ? `${Math.round(lane.miles).toLocaleString()} mi` : "—"}
+                            </td>
+                          )}
                           <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
                             {lane.equipment || "—"}
                           </td>
@@ -1958,6 +1971,7 @@ export default function RfpAwards() {
                         <SelectItem value="volume">Volume (loads)</SelectItem>
                         <SelectItem value="equipment">Equipment Type</SelectItem>
                         <SelectItem value="lane_id">Lane ID</SelectItem>
+                        <SelectItem value="miles">Miles / Distance</SelectItem>
                         <SelectItem value="ignore">Ignore</SelectItem>
                       </SelectContent>
                     </Select>
