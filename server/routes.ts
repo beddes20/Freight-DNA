@@ -1502,10 +1502,84 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      const allowedExts = [".xlsx", ".xls", ".csv"];
+      const allowedExts = [".xlsx", ".xls", ".csv", ".pdf"];
       const fileExt = req.file.originalname.toLowerCase().replace(/.*(\.[^.]+)$/, "$1");
       if (!allowedExts.includes(fileExt)) {
-        return res.status(400).json({ error: "Invalid file type. Please upload an Excel (.xlsx, .xls) or CSV file." });
+        return res.status(400).json({ error: "Invalid file type. Please upload an Excel (.xlsx, .xls), CSV, or PDF file." });
+      }
+
+      // PDF path: extract text via pdf-parse, then use AI to extract lane data
+      if (fileExt === ".pdf") {
+        try {
+          const pdfParse = (await import("pdf-parse")).default;
+          const pdfData = await pdfParse(req.file.buffer);
+          const pdfText = pdfData.text?.trim() || "";
+
+          if (!pdfText) {
+            return res.status(400).json({ error: "Could not extract text from the PDF. The file may be scanned or image-only." });
+          }
+
+          const OpenAI = (await import("openai")).default;
+          const openai = new OpenAI({
+            apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+            baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+          });
+
+          const aiResponse = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content: `You are an expert freight logistics analyst. Your task is to extract structured freight lane data from an RFP (Request for Proposal) document.
+
+Extract every shipping lane you can find from the document text. A "lane" is an origin→destination pair with associated volume or load count.
+
+Return a JSON object with this exact structure:
+{
+  "lanes": [
+    {
+      "origin_city": "Chicago",
+      "origin_state": "IL",
+      "origin_zip": "60601",
+      "dest_city": "Dallas",
+      "dest_state": "TX",
+      "dest_zip": "75201",
+      "volume": 120,
+      "equipment": "Van",
+      "lane_id": "LANE-001"
+    }
+  ]
+}
+
+Rules:
+- origin_zip, dest_zip, equipment, and lane_id are optional — only include them if clearly present.
+- volume should be the number of annual loads/shipments. If the document shows weekly loads, multiply by 52. If monthly, multiply by 12.
+- If volume is not available for a lane, use null.
+- State should always be the 2-letter abbreviation (e.g., "IL", "TX").
+- If the document has no identifiable lanes, return { "lanes": [] }.
+- Do not invent data. Only extract what is present.`,
+              },
+              {
+                role: "user",
+                content: `Extract freight lanes from this RFP document:\n\n${pdfText.slice(0, 25000)}`,
+              },
+            ],
+            response_format: { type: "json_object" },
+            max_completion_tokens: 4096,
+          });
+
+          const parsed = JSON.parse(aiResponse.choices[0].message.content || "{}");
+          const extractedLanes: any[] = Array.isArray(parsed.lanes) ? parsed.lanes : [];
+
+          return res.json({
+            isPdf: true,
+            extractedLanes,
+            laneCount: extractedLanes.length,
+          });
+        } catch (pdfError) {
+          console.error("PDF processing error:", pdfError);
+          return res.status(500).json({ error: "Failed to process PDF file. Please ensure the PDF contains readable text." });
+        }
       }
 
       let workbook: XLSX.WorkBook;
@@ -1696,6 +1770,56 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     } catch (error) {
       console.error("Error uploading RFP:", error);
       res.status(500).json({ error: "Failed to process uploaded file" });
+    }
+  });
+
+  app.post("/api/rfps/upload-pdf", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+
+      const { companyId, rfpType, lanes, fileName, title } = req.body;
+      if (!companyId) return res.status(400).json({ error: "Company ID is required" });
+      if (!Array.isArray(lanes)) return res.status(400).json({ error: "lanes must be an array" });
+
+      const company = await storage.getCompanyInOrg(companyId, req.session.organizationId!);
+      if (!company) return res.status(400).json({ error: "Company not found" });
+
+      const originStates = [...new Set(lanes.map((l: any) => l.origin_state).filter(Boolean))] as string[];
+      const destStates = [...new Set(lanes.map((l: any) => l.dest_state).filter(Boolean))] as string[];
+      const totalVolume = lanes.reduce((sum: number, l: any) => sum + (Number(l.volume) || 0), 0);
+      const laneCount = lanes.length;
+
+      const highVolumeLanes = lanes
+        .filter((l: any) => Number(l.volume) > 0)
+        .sort((a: any, b: any) => Number(b.volume) - Number(a.volume))
+        .slice(0, 10);
+
+      const rfpData = {
+        companyId,
+        title: title || (fileName ? fileName.replace(/\.[^.]+$/, "") : "Untitled RFP"),
+        status: "pending",
+        value: null,
+        dueDate: null,
+        notes: null,
+        fileName: fileName || "rfp.pdf",
+        fileData: { rows: lanes, highVolumeLanes, sheetName: "PDF Extract" },
+        laneCount,
+        totalVolume: String(totalVolume),
+        originStates,
+        destinationStates: destStates,
+        rfpType: rfpType || null,
+      };
+
+      const rfp = await storage.createRfp(rfpData);
+      res.status(201).json({
+        rfp,
+        analysis: { laneCount, totalVolume: String(totalVolume), originStates, destinationStates: destStates, highVolumeLaneCount: highVolumeLanes.length },
+        laneCount,
+      });
+    } catch (error) {
+      console.error("Error saving PDF RFP:", error);
+      res.status(500).json({ error: "Failed to save RFP" });
     }
   });
 

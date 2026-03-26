@@ -1220,6 +1220,9 @@ export default function RfpAwards() {
   } | null>(null);
   const [confirmedMapping, setConfirmedMapping] = useState<Record<string, string>>({});
   const [uploadRfpType, setUploadRfpType] = useState<"mini_bid" | "full_rfp" | "">("");
+  const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
+  const [pdfExtractedLanes, setPdfExtractedLanes] = useState<any[]>([]);
+  const [pdfRfpType, setPdfRfpType] = useState<"mini_bid" | "full_rfp" | "">("");
 
   const { data: rfps, isLoading: rfpsLoading } = useQuery<Rfp[]>({
     queryKey: ["/api/rfps"],
@@ -1320,12 +1323,49 @@ export default function RfpAwards() {
       return response.json();
     },
     onSuccess: (data) => {
-      setColumnMappingData(data);
-      setConfirmedMapping({ ...data.suggestedMappings });
-      setColumnMappingOpen(true);
+      if (data.isPdf) {
+        setPdfExtractedLanes(data.extractedLanes || []);
+        setPdfRfpType("");
+        setPdfPreviewOpen(true);
+      } else {
+        setColumnMappingData(data);
+        setConfirmedMapping({ ...data.suggestedMappings });
+        setColumnMappingOpen(true);
+      }
     },
     onError: (error: Error) => {
       toast({ title: "Failed to analyze file", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const uploadPdfMutation = useMutation({
+    mutationFn: async ({ companyId, rfpType, lanes, fileName }: { companyId: string; rfpType: string; lanes: any[]; fileName: string }) => {
+      const response = await fetch("/api/rfps/upload-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyId, rfpType, lanes, fileName }),
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || "Failed to save RFP");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/research-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      setPdfPreviewOpen(false);
+      setPdfExtractedLanes([]);
+      setPdfRfpType("");
+      setPendingFile(null);
+      toast({
+        title: "RFP created from PDF",
+        description: `AI extracted ${data.laneCount} lane${data.laneCount !== 1 ? "s" : ""} from the document`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
     },
   });
 
@@ -1359,24 +1399,27 @@ export default function RfpAwards() {
     setIsDragging(false);
   }, []);
 
+  const isValidRfpFile = (file: File) =>
+    file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv") || file.name.endsWith(".pdf");
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     const file = e.dataTransfer.files[0];
-    if (file && (file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv"))) {
+    if (file && isValidRfpFile(file)) {
       triggerUpload(file);
     } else {
-      toast({ title: "Invalid file type", description: "Please upload an Excel (.xlsx, .xls) or CSV file", variant: "destructive" });
+      toast({ title: "Invalid file type", description: "Please upload an Excel, CSV, or PDF file", variant: "destructive" });
     }
   }, [triggerUpload, toast]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv")) {
+      if (isValidRfpFile(file)) {
         triggerUpload(file);
       } else {
-        toast({ title: "Invalid file type", description: "Please upload an Excel (.xlsx, .xls) or CSV file", variant: "destructive" });
+        toast({ title: "Invalid file type", description: "Please upload an Excel, CSV, or PDF file", variant: "destructive" });
       }
     }
     e.target.value = "";
@@ -1554,15 +1597,23 @@ export default function RfpAwards() {
             </div>
             <div className="text-center">
               <h3 className="font-medium mb-1">
-                {previewHeadersMutation.isPending ? "Analyzing columns..." : uploadMutation.isPending ? "Uploading & Analyzing..." : "Upload RFP Spreadsheet"}
+                {previewHeadersMutation.isPending
+                  ? (pendingFile?.name.endsWith(".pdf") ? "Reading PDF & extracting lanes..." : "Analyzing columns...")
+                  : uploadMutation.isPending || uploadPdfMutation.isPending
+                    ? "Uploading & Analyzing..."
+                    : "Upload RFP File"}
               </h3>
               <p className="text-sm text-muted-foreground mb-3">
-                Drag and drop an Excel or CSV file here to create an RFP with data analysis
+                Drag and drop an Excel, CSV, or PDF file — AI will extract lane data automatically
               </p>
             </div>
             {pendingFile && (
               <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-sm w-full max-w-md">
-                <FileSpreadsheet className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                {pendingFile.name.endsWith(".pdf") ? (
+                  <FileText className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                ) : (
+                  <FileSpreadsheet className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                )}
                 <span className="truncate flex-1 text-amber-800 dark:text-amber-300 font-medium">{pendingFile.name}</span>
                 <button onClick={() => setPendingFile(null)} className="text-amber-500 hover:text-amber-700 shrink-0" data-testid="button-clear-pending-file">
                   <X className="h-3.5 w-3.5" />
@@ -1590,7 +1641,7 @@ export default function RfpAwards() {
               <label>
                 <input
                   type="file"
-                  accept=".xlsx,.xls,.csv"
+                  accept=".xlsx,.xls,.csv,.pdf"
                   onChange={handleFileSelect}
                   className="hidden"
                   disabled={uploadMutation.isPending || previewHeadersMutation.isPending}
@@ -1632,6 +1683,130 @@ export default function RfpAwards() {
           data-testid="input-search-rfps"
         />
       </div>
+
+      {/* PDF Extracted Lanes Review Dialog */}
+      <Dialog open={pdfPreviewOpen} onOpenChange={(open) => {
+        if (!open) {
+          setPdfPreviewOpen(false);
+          setPdfExtractedLanes([]);
+          setPdfRfpType("");
+        }
+      }}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="dialog-pdf-review">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              AI-Extracted Lanes from PDF
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              GPT-4o read <span className="font-medium">{pendingFile?.name}</span> and extracted the following freight lanes.
+              Review them, then confirm to create the RFP.
+            </p>
+          </DialogHeader>
+
+          {pdfExtractedLanes.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 py-8 text-center text-muted-foreground">
+              <AlertTriangle className="h-8 w-8 text-amber-500" />
+              <div>
+                <p className="font-medium text-foreground">No lanes found</p>
+                <p className="text-sm mt-1">The AI could not find structured lane data in this PDF. The document may use a format the AI couldn't parse, or it may not contain lane-level data.</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 p-3 rounded-md bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 text-sm text-green-800 dark:text-green-300" data-testid="status-pdf-lanes-found">
+                <CheckCircle className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
+                <span>{pdfExtractedLanes.length} lane{pdfExtractedLanes.length !== 1 ? "s" : ""} extracted — review before confirming</span>
+              </div>
+
+              <div className="border rounded-md overflow-x-auto">
+                <table className="w-full text-sm" data-testid="table-pdf-lanes">
+                  <thead>
+                    <tr className="bg-muted/50 border-b">
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground whitespace-nowrap">Origin</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground whitespace-nowrap">Destination</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Volume</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Equipment</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Lane ID</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pdfExtractedLanes.map((lane, idx) => (
+                      <tr key={idx} className="border-b last:border-0 hover:bg-muted/30">
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {[lane.origin_city, lane.origin_state, lane.origin_zip].filter(Boolean).join(", ") || <span className="text-muted-foreground">—</span>}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {[lane.dest_city, lane.dest_state, lane.dest_zip].filter(Boolean).join(", ") || <span className="text-muted-foreground">—</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {lane.volume != null ? Number(lane.volume).toLocaleString() : <span className="text-muted-foreground">—</span>}
+                        </td>
+                        <td className="px-3 py-2">{lane.equipment || <span className="text-muted-foreground">—</span>}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{lane.lane_id || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {/* RFP Type */}
+          <div className="p-3 rounded-md border border-border bg-muted/30">
+            <p className="text-sm font-medium mb-2">
+              RFP Type <span className="text-destructive">*</span>
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setPdfRfpType("mini_bid")}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-md border text-sm font-medium transition-colors ${pdfRfpType === "mini_bid" ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted text-muted-foreground"}`}
+                data-testid="button-pdf-rfp-type-mini-bid"
+              >
+                Mini Bid
+              </button>
+              <button
+                type="button"
+                onClick={() => setPdfRfpType("full_rfp")}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-md border text-sm font-medium transition-colors ${pdfRfpType === "full_rfp" ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted text-muted-foreground"}`}
+                data-testid="button-pdf-rfp-type-full-rfp"
+              >
+                Full RFP
+              </button>
+            </div>
+            {!pdfRfpType && (
+              <p className="text-xs text-destructive mt-1">Please select a type to proceed.</p>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <Button variant="outline" onClick={() => { setPdfPreviewOpen(false); setPdfExtractedLanes([]); setPdfRfpType(""); }} data-testid="button-cancel-pdf">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (uploadCompanyId && pdfRfpType && pendingFile) {
+                  uploadPdfMutation.mutate({
+                    companyId: uploadCompanyId,
+                    rfpType: pdfRfpType,
+                    lanes: pdfExtractedLanes,
+                    fileName: pendingFile.name,
+                  });
+                }
+              }}
+              disabled={uploadPdfMutation.isPending || !pdfRfpType || pdfExtractedLanes.length === 0}
+              data-testid="button-confirm-pdf"
+            >
+              {uploadPdfMutation.isPending ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving...</>
+              ) : (
+                <><CheckCircle className="h-4 w-4 mr-2" />Confirm & Create RFP</>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Column Mapping Dialog */}
       {columnMappingData && (
