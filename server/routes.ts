@@ -8729,6 +8729,7 @@ Respond with valid JSON only:
       } else {
         const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
         const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+        const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
         const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
         if (isNamRole) {
           const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
@@ -8736,9 +8737,12 @@ Respond with valid JSON only:
         } else if (directorIdParam) {
           const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, orgCompanies);
           scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
-        } else if (isDirectorRole) {
+        } else if (isDirectorOnlyRole) {
           const teamCompanies = getDirectorTeamCompanies(user.id, allUsers, orgCompanies);
           scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+        } else if (isDirectorRole) {
+          // admin without a directorId filter — see all companies
+          scopedCompanyIds = new Set(orgCompanies.map(c => c.id));
         } else {
           scopedCompanyIds = new Set(orgCompanies.filter(c => c.assignedTo === user.id).map(c => c.id));
         }
