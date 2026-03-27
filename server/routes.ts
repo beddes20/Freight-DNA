@@ -10061,34 +10061,42 @@ Respond with valid JSON only:
         return "unknown";
       }
 
-      const contactResults = contacts.map(contact => {
-        const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
-        let freightMetrics = { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
-        if (contactAttribs.length > 0 && rawRows.length > 0) {
-          freightMetrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
-        }
-        const base = normalizeBase(contact.relationshipBase);
-        return {
-          contactId: contact.id,
-          contactName: contact.name,
-          contactTitle: contact.title,
-          relationshipBase: base,
-          baseLabel: BASE_LABELS[base] || base,
-          attributionCount: contactAttribs.length,
-          attributions: contactAttribs,
-          ...freightMetrics,
-          marginPct: freightMetrics.loads > 0 ? null : null, // computed below
-        };
-      });
+      // Only include contacts that have lane attributions (business assigned)
+      const contactResults = contacts
+        .map(contact => {
+          const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
+          if (contactAttribs.length === 0) return null;
+          let freightMetrics = { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+          if (rawRows.length > 0) {
+            freightMetrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+          }
+          const base = normalizeBase(contact.relationshipBase);
+          const marginPerLoad = freightMetrics.loads > 0
+            ? Math.round((freightMetrics.margin / freightMetrics.loads) * 100) / 100
+            : null;
+          const contractedPct = freightMetrics.loads > 0
+            ? Math.round(freightMetrics.contractedLoads / freightMetrics.loads * 1000) / 10
+            : null;
+          const spotPct = freightMetrics.loads > 0
+            ? Math.round(freightMetrics.spotLoads / freightMetrics.loads * 1000) / 10
+            : null;
+          return {
+            contactId: contact.id,
+            contactName: contact.name,
+            contactTitle: contact.title,
+            relationshipBase: base,
+            baseLabel: BASE_LABELS[base] || base,
+            attributionCount: contactAttribs.length,
+            attributions: contactAttribs,
+            ...freightMetrics,
+            marginPerLoad,
+            contractedPct,
+            spotPct,
+          };
+        })
+        .filter(Boolean);
 
-      // Compute margin % for each contact
-      const results = contactResults.map(c => {
-        const revK = cols.revenue ?? "Total revenue";
-        // Use margin/revenue for pct if available — otherwise just report raw margin
-        return { ...c, marginPct: null as number | null };
-      });
-
-      res.json({ contacts: results, companyId: company.id });
+      res.json({ contacts: contactResults, companyId: company.id });
     } catch (e: any) {
       console.error("[relationship-freight-summary/company]", e);
       res.status(500).json({ error: e.message });
@@ -10160,11 +10168,14 @@ Respond with valid JSON only:
       }
 
       for (const contact of allContacts) {
+        const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
+        // Only include contacts that have business (lane attributions) assigned
+        if (contactAttribs.length === 0) continue;
+
         const base = normBase(contact.relationshipBase);
         grouped[base].contacts++;
 
-        const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
-        if (contactAttribs.length > 0 && rawRows.length > 0) {
+        if (rawRows.length > 0) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
           const metrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
           grouped[base].loads += metrics.loads;

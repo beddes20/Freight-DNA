@@ -35,6 +35,7 @@ interface SummaryRow {
   margin: number;
   contractedLoads: number;
   spotLoads: number;
+  marginPct: number | null;
   contractedPct: number | null;
   spotPct: number | null;
 }
@@ -61,7 +62,7 @@ export function RelationshipFreightDashboardPortlet() {
                   <Info className="w-3.5 h-3.5 text-zinc-500 cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Loads attributed to contacts via lane patterns. Assign lane attributions in each contact profile to populate this data.
+                  Contacts with lane attributions assigned, grouped by relationship level. Only contacts with business (lanes) assigned are counted. Loads and margin come from financial data matching those lanes.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -111,6 +112,9 @@ interface CompanyContact {
   margin: number;
   contractedLoads: number;
   spotLoads: number;
+  marginPerLoad: number | null;
+  contractedPct: number | null;
+  spotPct: number | null;
   attributions: any[];
 }
 
@@ -130,9 +134,9 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
     queryFn: () => fetch(`/api/companies/${companyId}/relationship-freight-summary`, { credentials: "include" }).then(r => r.json()),
   });
 
+  // Backend now only returns contacts with lane attributions (business assigned)
   const contacts = data?.contacts ?? [];
   const hasContacts = contacts.length > 0;
-  const hasAnyAttributions = contacts.some(c => c.attributionCount > 0);
   const totalLoads = contacts.reduce((s, c) => s + c.loads, 0);
   const totalMargin = contacts.reduce((s, c) => s + c.margin, 0);
 
@@ -178,9 +182,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !hasContacts ? (
-            <EmptyState message="No contacts yet. Add contacts to this company to start tracking relationship freight." />
-          ) : !hasAnyAttributions ? (
-            <EmptyState message="No lane attributions yet. Open a contact and assign their lanes to start attributing freight." />
+            <EmptyState message="No contacts with lane attributions yet. Open a contact and assign their lanes to start attributing freight." />
           ) : (
             <div className="space-y-4">
               {baseOrder.filter(b => grouped[b]?.length).map(base => {
@@ -231,13 +233,11 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
 function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; onAddLane: () => void }) {
   const cfg = BASE_CONFIG[contact.relationshipBase] ?? BASE_CONFIG["unknown"];
   const hasLoads = contact.loads > 0;
-  const marginPerLoad = hasLoads ? contact.margin / contact.loads : 0;
-  const contractedPct = hasLoads ? Math.round(contact.contractedLoads / contact.loads * 100) : null;
 
   return (
     <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-zinc-800/50 group" data-testid={`row-contact-freight-${contact.contactId}`}>
       <div className="flex items-center gap-2 min-w-0">
-        <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: cfg.color.replace("text-", "").replace("-400", "") === "emerald" ? "#34d399" : cfg.color.includes("blue") ? "#60a5fa" : cfg.color.includes("yellow") ? "#facc15" : cfg.color.includes("orange") ? "#fb923c" : "#a1a1aa" }} />
+        <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: cfg.color.includes("emerald") ? "#34d399" : cfg.color.includes("blue") ? "#60a5fa" : cfg.color.includes("yellow") ? "#facc15" : cfg.color.includes("orange") ? "#fb923c" : "#a1a1aa" }} />
         <div className="min-w-0">
           <p className="text-xs font-medium text-white truncate">{contact.contactName}</p>
           {contact.contactTitle && <p className="text-[10px] text-zinc-500 truncate">{contact.contactTitle}</p>}
@@ -248,23 +248,28 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
           <>
             <span className="text-xs text-zinc-300 font-mono">{contact.loads.toLocaleString()} loads</span>
             <span className="text-xs text-emerald-400 font-mono">{fmt$(contact.margin)}</span>
-            {contractedPct !== null && (
-              <span className="text-[10px] text-zinc-500">{contractedPct}% contract</span>
+            {contact.marginPerLoad !== null && (
+              <span className="text-[10px] text-zinc-400 font-mono">{fmt$(contact.marginPerLoad)}/ld</span>
+            )}
+            {contact.contractedPct !== null && (
+              <span className="text-[10px] text-zinc-500">{contact.contractedPct.toFixed(0)}% ct</span>
             )}
           </>
-        ) : contact.attributionCount > 0 ? (
-          <span className="text-[10px] text-zinc-600 italic">{contact.attributionCount} lane{contact.attributionCount !== 1 ? "s" : ""} assigned · no data</span>
         ) : (
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px] text-zinc-600 hover:text-amber-400 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`}>
-            <Plus className="w-3 h-3 mr-1" /> Assign Lane
-          </Button>
+          <span className="text-[10px] text-zinc-600 italic">{contact.attributionCount} lane{contact.attributionCount !== 1 ? "s" : ""} · no data</span>
         )}
+        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-zinc-600 hover:text-amber-400 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`} title="Add lane attribution">
+          <Plus className="w-3 h-3" />
+        </Button>
       </div>
     </div>
   );
 }
 
 function SummaryTable({ rows }: { rows: SummaryRow[] }) {
+  // Only show rows that have at least one contact with lanes assigned
+  const activeRows = rows.filter(r => r.contacts > 0);
+  if (activeRows.length === 0) return null;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
@@ -274,12 +279,13 @@ function SummaryTable({ rows }: { rows: SummaryRow[] }) {
             <th className="text-right py-2 text-zinc-500 font-medium px-2">Contacts</th>
             <th className="text-right py-2 text-zinc-500 font-medium px-2">Loads</th>
             <th className="text-right py-2 text-zinc-500 font-medium px-2">Margin</th>
+            <th className="text-right py-2 text-zinc-500 font-medium px-2">$/Load</th>
             <th className="text-right py-2 text-zinc-500 font-medium px-2">Contract %</th>
             <th className="text-right py-2 text-zinc-500 font-medium px-2">Spot %</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map(row => {
+          {activeRows.map(row => {
             const cfg = BASE_CONFIG[row.base] ?? BASE_CONFIG["unknown"];
             return (
               <tr key={row.base} className="border-b border-zinc-800/50 hover:bg-zinc-800/30" data-testid={`row-relationship-${row.base}`}>
@@ -290,6 +296,9 @@ function SummaryTable({ rows }: { rows: SummaryRow[] }) {
                 <td className="text-right py-2 px-2 text-zinc-300 font-mono">{row.loads > 0 ? row.loads.toLocaleString() : <span className="text-zinc-600">—</span>}</td>
                 <td className="text-right py-2 px-2 font-mono">
                   {row.loads > 0 ? <span className="text-emerald-400">{fmt$(row.margin)}</span> : <span className="text-zinc-600">—</span>}
+                </td>
+                <td className="text-right py-2 px-2 font-mono">
+                  {row.marginPct !== null ? <span className="text-amber-400">{fmt$(row.marginPct)}</span> : <span className="text-zinc-600">—</span>}
                 </td>
                 <td className="text-right py-2 px-2 text-zinc-300">
                   {row.contractedPct !== null ? `${row.contractedPct.toFixed(0)}%` : <span className="text-zinc-600">—</span>}
