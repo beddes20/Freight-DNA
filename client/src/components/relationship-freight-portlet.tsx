@@ -139,6 +139,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
   const hasContacts = contacts.length > 0;
   const totalLoads = contacts.reduce((s, c) => s + c.loads, 0);
   const totalMargin = contacts.reduce((s, c) => s + c.margin, 0);
+  const hasAnyAttributions = hasContacts && totalLoads > 0;
 
   // Group contacts by base
   const baseOrder = ["hr", "home", "3rd", "2nd", "1st", "unknown"];
