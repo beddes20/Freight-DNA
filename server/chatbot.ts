@@ -477,7 +477,7 @@ Keep it short and casual — reps are busy. No fluff, no filler.
           type: "app_suggestion",
           title: taskTitle,
           body: bodyPreview,
-          link: "/tasks",
+          link: "/feedback-inbox",
           read: false,
           relatedId: suggestion.id,
         });
@@ -519,7 +519,7 @@ Keep it short and casual — reps are busy. No fluff, no filler.
     if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
     try {
       const [currentUser] = await db.select().from(users).where(eq(users.id, req.session.userId));
-      if (!currentUser || currentUser.role !== "admin") return res.status(403).json({ error: "Admins only" });
+      if (!currentUser || !["admin", "director"].includes(currentUser.role)) return res.status(403).json({ error: "Admins only" });
 
       const results = await db
         .select({
@@ -529,15 +529,30 @@ Keep it short and casual — reps are busy. No fluff, no filler.
           createdAt: appSuggestions.createdAt,
           submitterName: users.name,
           submitterRole: users.role,
+          submittedById: appSuggestions.submittedById,
         })
         .from(appSuggestions)
         .innerJoin(users, eq(users.id, appSuggestions.submittedById))
         .orderBy(desc(appSuggestions.createdAt))
-        .limit(100);
+        .limit(200);
 
       res.json(results);
     } catch (err) {
       res.status(500).json({ error: "Failed to load suggestions" });
+    }
+  });
+
+  app.patch("/api/chatbot/suggestions/:id", async (req: Request, res: Response) => {
+    if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
+    try {
+      const [currentUser] = await db.select().from(users).where(eq(users.id, req.session.userId));
+      if (!currentUser || !["admin", "director"].includes(currentUser.role)) return res.status(403).json({ error: "Admins only" });
+      const { status } = req.body;
+      if (!["new", "reviewing", "resolved"].includes(status)) return res.status(400).json({ error: "Invalid status" });
+      await db.update(appSuggestions).set({ status }).where(eq(appSuggestions.id, req.params.id));
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to update suggestion" });
     }
   });
 

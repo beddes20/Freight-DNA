@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, Bell, KeyRound } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, Bell, KeyRound, Inbox } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -248,6 +248,16 @@ export function AppSidebar() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {(user?.role === "admin" || user?.role === "director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/feedback-inbox"}>
+                      <Link href="/feedback-inbox" data-testid="link-feedback-inbox">
+                        <Inbox className="h-4 w-4" />
+                        <span>Feedback Inbox</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
