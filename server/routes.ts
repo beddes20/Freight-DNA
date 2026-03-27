@@ -10103,20 +10103,13 @@ Respond with valid JSON only:
         return "unknown";
       }
 
-      // Compute company total once (fallback when no lane attributions)
-      const companyTotalFreight = rawRows.length > 0
-        ? computeCompanyFreightTotal(rawRows, cols, companyNames)
-        : { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
-
-      // Include contacts with a relationship base set (lane attributions optional)
+      // Only include contacts that have lane attributions assigned
       const contactResults = contacts
-        .filter(contact => contact.relationshipBase && contact.relationshipBase.trim())
         .map(contact => {
           const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
-          const hasLanes = contactAttribs.length > 0;
-          // Use lane-filtered freight if lanes assigned, otherwise fall back to company total
+          if (contactAttribs.length === 0) return null;
           const freight = rawRows.length > 0
-            ? (hasLanes ? computeFreightMetrics(rawRows, cols, companyNames, contactAttribs) : companyTotalFreight)
+            ? computeFreightMetrics(rawRows, cols, companyNames, contactAttribs)
             : { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
           const base = normalizeBase(contact.relationshipBase);
           const marginPerLoad = freight.loads > 0 ? Math.round((freight.margin / freight.loads) * 100) / 100 : null;
@@ -10130,13 +10123,13 @@ Respond with valid JSON only:
             baseLabel: BASE_LABELS[base] || base,
             attributionCount: contactAttribs.length,
             attributions: contactAttribs,
-            laneFiltered: hasLanes, // true = lane-matched freight, false = company total fallback
             ...freight,
             marginPerLoad,
             contractedPct,
             spotPct,
           };
-        });
+        })
+        .filter(Boolean);
 
       res.json({ contacts: contactResults, companyId: company.id });
     } catch (e: any) {
@@ -10209,29 +10202,17 @@ Respond with valid JSON only:
         return "unknown";
       }
 
-      // Cache company total freight (fallback for contacts with no lane attributions)
-      const companyFreightCache: Record<string, { loads: number; margin: number; contractedLoads: number; spotLoads: number }> = {};
-
       for (const contact of allContacts) {
-        if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
+        const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
+        // Only count contacts with lane attributions assigned
+        if (contactAttribs.length === 0) continue;
 
         const base = normBase(contact.relationshipBase);
         grouped[base].contacts++;
 
         if (rawRows.length > 0) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
-          const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
-          let metrics: { loads: number; margin: number; contractedLoads: number; spotLoads: number };
-          if (contactAttribs.length > 0) {
-            // Precise: use only the lanes assigned to this contact
-            metrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
-          } else {
-            // Fallback: company total (no lanes set up yet)
-            if (!companyFreightCache[contact.companyId]) {
-              companyFreightCache[contact.companyId] = computeCompanyFreightTotal(rawRows, cols, companyNames);
-            }
-            metrics = companyFreightCache[contact.companyId];
-          }
+          const metrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
           grouped[base].loads += metrics.loads;
           grouped[base].margin += metrics.margin;
           grouped[base].contractedLoads += metrics.contractedLoads;
@@ -10475,27 +10456,18 @@ Respond with valid JSON only:
       for (const base of BASE_ORDER_S) groupedS[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
       groupedS["unknown"] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
-      // Cache company total freight (fallback when no lane attributions)
-      const companyFreightCacheS: Record<string, { loads: number; margin: number; contractedLoads: number; spotLoads: number }> = {};
-      // Load all lane attributions for visible companies
+      // Load lane attributions for visible companies
       const allAttributionsListS = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
 
       for (const contact of allContacts) {
-        if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
+        const contactAttribs = allAttributionsListS.filter(a => a.contactId === contact.id);
+        // Only count contacts with lane attributions assigned
+        if (contactAttribs.length === 0) continue;
         const base = normBaseS(contact.relationshipBase);
         groupedS[base].contacts++;
         if (rawRows.length > 0) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
-          const contactAttribs = allAttributionsListS.filter(a => a.contactId === contact.id);
-          let m: { loads: number; margin: number; contractedLoads: number; spotLoads: number };
-          if (contactAttribs.length > 0) {
-            m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
-          } else {
-            if (!companyFreightCacheS[contact.companyId]) {
-              companyFreightCacheS[contact.companyId] = computeCompanyFreightTotal(rawRows, cols, companyNames);
-            }
-            m = companyFreightCacheS[contact.companyId];
-          }
+          const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
           groupedS[base].loads += m.loads;
           groupedS[base].margin += m.margin;
           groupedS[base].contractedLoads += m.contractedLoads;
