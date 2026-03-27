@@ -35,6 +35,7 @@ The application utilizes React, TypeScript, and Tailwind CSS with `shadcn/ui` to
     - **DNA Guru Action Execution**: Chatbot supports OpenAI function calling for `log_touchpoint` (call/email/text/site_visit) and `create_task` actions — AI proposes inline confirmation cards, user confirms to execute against the CRM.
     - **Health and Momentum Scoring**: Automated calculation of company health and momentum scores based on various interaction and activity factors.
     - **Shipping Mode Management**: Categorization and filtering of companies by shipping modes (LTL, FTL, Drayage, IMDL).
+    - **Relationship Freight Reporting**: `contact_lane_attributions` table lets reps assign lane patterns (origin/dest state+city) to individual contacts. Freight loads from financial uploads are then matched and attributed to each contact's relationship base level (1st/2nd/3rd/Home Run). Portlets appear on the dashboard and on each company's overview tab, showing loads, margin, contracted %, and spot % per level. The `ContactLaneManager` component in contact detail sheets handles add/remove of lane attributions.
 
 ## External Dependencies
 - **PostgreSQL**: Used for database management and session storage.

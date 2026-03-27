@@ -664,6 +664,23 @@ export const insertOpportunityLogSchema = createInsertSchema(opportunityLogs).om
 export type InsertOpportunityLog = z.infer<typeof insertOpportunityLogSchema>;
 export type OpportunityLog = typeof opportunityLogs.$inferSelect;
 
+export const contactLaneAttributions = pgTable("contact_lane_attributions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contactId: varchar("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  originCity: text("origin_city"),
+  originState: text("origin_state"),
+  destinationCity: text("destination_city"),
+  destinationState: text("destination_state"),
+  source: text("source").notNull().default("manual"), // 'manual' | 'rfp' | 'award' | 'ai'
+  notes: text("notes"),
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: text("created_at"),
+});
+export const insertContactLaneAttributionSchema = createInsertSchema(contactLaneAttributions).omit({ id: true, createdAt: true });
+export type InsertContactLaneAttribution = z.infer<typeof insertContactLaneAttributionSchema>;
+export type ContactLaneAttribution = typeof contactLaneAttributions.$inferSelect;
+
 export const toolLinks = pgTable("tool_links", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),

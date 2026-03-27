@@ -24,6 +24,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Contact, Touchpoint } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
+import { ContactLaneManager } from "@/components/relationship-freight-portlet";
 
 const TYPE_CONFIG: Record<string, { label: string; icon: React.ElementType; color: string }> = {
   call:       { label: "Call",       icon: PhoneCall,    color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" },
@@ -286,6 +287,10 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
                 {contact.notes}
               </div>
             )}
+
+            <Separator />
+
+            <ContactLaneManager contactId={contact.id} />
 
             <Separator />
 

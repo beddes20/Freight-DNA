@@ -41,6 +41,7 @@ import { LmCareerPanel } from "@/components/lm-career-panel";
 import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
 import { DashboardActivitySheet, type PortletType } from "@/components/dashboard-activity-sheet";
+import { RelationshipFreightDashboardPortlet } from "@/components/relationship-freight-portlet";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -3231,6 +3232,8 @@ export default function Dashboard() {
       </div>
 
       {canSeeTeam && <MarketSharePortlet />}
+
+      <RelationshipFreightDashboardPortlet />
 
       {canSeeTeam && (leaderboardLoading || leaderboard.length > 0) && (
         <Card data-testid="card-leaderboard">

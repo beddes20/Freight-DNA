@@ -100,6 +100,9 @@ import {
   opportunityLogs,
   type OpportunityLog,
   type InsertOpportunityLog,
+  contactLaneAttributions,
+  type ContactLaneAttribution,
+  type InsertContactLaneAttribution,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -168,6 +171,11 @@ export interface IStorage {
   bulkCreateContacts(contacts: InsertContact[]): Promise<Contact[]>;
   updateContact(id: string, contact: InsertContact): Promise<Contact | undefined>;
   deleteContact(id: string): Promise<boolean>;
+
+  getLaneAttributionsByContact(contactId: string): Promise<ContactLaneAttribution[]>;
+  getLaneAttributionsByCompany(companyId: string): Promise<ContactLaneAttribution[]>;
+  createLaneAttribution(data: InsertContactLaneAttribution): Promise<ContactLaneAttribution>;
+  deleteLaneAttribution(id: string): Promise<boolean>;
   
   getRfps(): Promise<Rfp[]>;
   getRfp(id: string): Promise<Rfp | undefined>;
@@ -2089,6 +2097,30 @@ export class DatabaseStorage implements IStorage {
       else summary[r.repId].opportunities++;
     }
     return Object.entries(summary).map(([repId, s]) => ({ repId, ...s }));
+  }
+
+  async getLaneAttributionsByContact(contactId: string): Promise<ContactLaneAttribution[]> {
+    return db.select().from(contactLaneAttributions)
+      .where(eq(contactLaneAttributions.contactId, contactId))
+      .orderBy(contactLaneAttributions.createdAt);
+  }
+
+  async getLaneAttributionsByCompany(companyId: string): Promise<ContactLaneAttribution[]> {
+    return db.select().from(contactLaneAttributions)
+      .where(eq(contactLaneAttributions.companyId, companyId));
+  }
+
+  async createLaneAttribution(data: InsertContactLaneAttribution): Promise<ContactLaneAttribution> {
+    const [row] = await db.insert(contactLaneAttributions).values({
+      ...data,
+      createdAt: new Date().toISOString(),
+    }).returning();
+    return row;
+  }
+
+  async deleteLaneAttribution(id: string): Promise<boolean> {
+    const result = await db.delete(contactLaneAttributions).where(eq(contactLaneAttributions.id, id)).returning();
+    return result.length > 0;
   }
 }
 

@@ -122,6 +122,7 @@ import { PreCallPlanner } from "@/components/pre-call-planner";
 import { ContactIntelModal } from "@/components/contact-intel-modal";
 import { ZoomInfoSuggestionsDialog } from "@/components/zoominfo-suggestions";
 import { OpportunityLogDialog } from "@/components/opportunity-log-dialog";
+import { RelationshipFreightCompanyPortlet } from "@/components/relationship-freight-portlet";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
@@ -1402,6 +1403,9 @@ export default function CompanyDetail() {
           </CardContent>
         </Card>
       )}
+
+      {/* Relationship Freight Attribution */}
+      <RelationshipFreightCompanyPortlet companyId={companyId} companyName={company.name} />
 
       {/* Account Tasks */}
       <Card data-testid="card-company-tasks">

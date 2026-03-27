@@ -577,6 +577,30 @@ export async function runMigrations() {
     clientSession.release();
   }
 
+  const clientLaneAttrib = await pool.connect();
+  try {
+    await clientLaneAttrib.query(`
+      CREATE TABLE IF NOT EXISTS contact_lane_attributions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        contact_id varchar NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        origin_city text,
+        origin_state text,
+        destination_city text,
+        destination_state text,
+        source text NOT NULL DEFAULT 'manual',
+        notes text,
+        created_by varchar REFERENCES users(id),
+        created_at text
+      )
+    `);
+    console.log("[migrations] contact_lane_attributions table ensured");
+  } catch (err) {
+    console.error("[migrations] contact_lane_attributions error:", err);
+  } finally {
+    clientLaneAttrib.release();
+  }
+
   const clientIdx = await pool.connect();
   try {
     await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_company_id      ON touchpoints(company_id)`);

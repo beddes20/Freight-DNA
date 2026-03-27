@@ -9935,6 +9935,244 @@ Respond with valid JSON only:
     res.json({ configured, missing });
   });
 
+  // ── Lane Attribution Endpoints ───────────────────────────────────────────
+  app.get("/api/contacts/:id/lane-attributions", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const attributions = await storage.getLaneAttributionsByContact(req.params.id as string);
+      res.json(attributions);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/contacts/:id/lane-attributions", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const contact = await storage.getContact(req.params.id as string);
+      if (!contact) return res.status(404).json({ error: "Contact not found" });
+      const { originCity, originState, destinationCity, destinationState, source, notes } = req.body;
+      const attrib = await storage.createLaneAttribution({
+        contactId: req.params.id as string,
+        companyId: contact.companyId,
+        originCity: originCity?.trim() || null,
+        originState: originState?.trim()?.toUpperCase() || null,
+        destinationCity: destinationCity?.trim() || null,
+        destinationState: destinationState?.trim()?.toUpperCase() || null,
+        source: source || "manual",
+        notes: notes?.trim() || null,
+        createdBy: user.id,
+      });
+      res.json(attrib);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/contact-lane-attributions/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const ok = await storage.deleteLaneAttribution(req.params.id as string);
+      if (!ok) return res.status(404).json({ error: "Attribution not found" });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Helper: compute freight metrics for a set of lane attributions against financial rows ─
+  function computeFreightMetrics(
+    rows: any[],
+    cols: any,
+    companyNames: string[], // normalized company name + aliases
+    attributions: { originCity?: string | null; originState?: string | null; destinationCity?: string | null; destinationState?: string | null }[]
+  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number } {
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const companyNorms = companyNames.map(n => norm(n));
+    let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
+    for (const row of rows) {
+      const custRaw = getCustomerFromRow(row, cols);
+      const custNorm = norm(custRaw);
+      const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
+      if (!isCompany) continue;
+      const origCity = norm(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
+      const origState = norm(String(row[cols.shipperState] || row[cols.originState] || ""));
+      const destCity = norm(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
+      const destState = norm(String(row[cols.consigneeState] || row[cols.destinationState] || ""));
+      const matched = attributions.some(a => {
+        const origCityOk = !a.originCity || origCity.includes(norm(a.originCity)) || norm(a.originCity).includes(origCity.substring(0, 4));
+        const origStateOk = !a.originState || origState === norm(a.originState) || origCity.includes(norm(a.originState));
+        const destCityOk = !a.destinationCity || destCity.includes(norm(a.destinationCity)) || norm(a.destinationCity).includes(destCity.substring(0, 4));
+        const destStateOk = !a.destinationState || destState === norm(a.destinationState) || destCity.includes(norm(a.destinationState));
+        return origCityOk && origStateOk && destCityOk && destStateOk;
+      });
+      if (!matched) continue;
+      const marginK = cols.marginDollar ?? "Margin $";
+      const rowMargin = parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
+      const orderTypeK = cols.orderType ?? "Order Type";
+      const orderTypeRaw = String(row[orderTypeK] || "").toLowerCase();
+      const isSpot = orderTypeRaw.includes("spot");
+      loads++;
+      margin += rowMargin;
+      if (isSpot) spotLoads++; else contractedLoads++;
+    }
+    return { loads, margin, contractedLoads, spotLoads };
+  }
+
+  // ── Relationship Freight Summary — company-level ─────────────────────────
+  app.get("/api/companies/:id/relationship-freight-summary", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const company = await storage.getCompanyInOrg(req.params.id as string, user.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const [contacts, allAttributions, upload] = await Promise.all([
+        storage.getContactsByCompany(company.id),
+        storage.getLaneAttributionsByCompany(company.id),
+        storage.getLatestFinancialUploadForOrg(user.organizationId),
+      ]);
+
+      const companyNames = [company.name, ...(company.financialAlias ? company.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
+      let rawRows: any[] = upload?.rows ?? [];
+      const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
+
+      const BASE_ORDER = ["1st", "2nd", "3rd", "hr", "home"];
+      const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "home": "Home Run" };
+
+      const contactResults = contacts.map(contact => {
+        const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
+        let freightMetrics = { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+        if (contactAttribs.length > 0 && rawRows.length > 0) {
+          freightMetrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+        }
+        const base = contact.relationshipBase || "unknown";
+        return {
+          contactId: contact.id,
+          contactName: contact.name,
+          contactTitle: contact.title,
+          relationshipBase: base,
+          baseLabel: BASE_LABELS[base] || base,
+          attributionCount: contactAttribs.length,
+          attributions: contactAttribs,
+          ...freightMetrics,
+          marginPct: freightMetrics.loads > 0 ? null : null, // computed below
+        };
+      });
+
+      // Compute margin % for each contact
+      const results = contactResults.map(c => {
+        const revK = cols.revenue ?? "Total revenue";
+        // Use margin/revenue for pct if available — otherwise just report raw margin
+        return { ...c, marginPct: null as number | null };
+      });
+
+      res.json({ contacts: results, companyId: company.id });
+    } catch (e: any) {
+      console.error("[relationship-freight-summary/company]", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Relationship Freight Summary — dashboard-level (grouped by base) ─────
+  app.get("/api/relationship-freight-summary", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const isAdmin = user.role === "admin";
+      const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
+
+      // Get visible company IDs based on role
+      let visibleCompanyIds: string[] = [];
+      if (isAdmin) {
+        const allCompanies = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = allCompanies.map(c => c.id);
+      } else if (isDirector) {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const repIds = [user.id, ...teamIds];
+        const allCompanies = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = allCompanies.filter(c => repIds.includes(c.assignedTo ?? "")).map(c => c.id);
+      } else {
+        // Rep: only their own companies
+        const allCompanies = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = allCompanies.filter(c => c.assignedTo === user.id).map(c => c.id);
+      }
+
+      if (visibleCompanyIds.length === 0) return res.json({ summary: [], totalContacts: 0, totalLoads: 0, totalMargin: 0 });
+
+      // Load everything in parallel
+      const [allCompanies, upload] = await Promise.all([
+        storage.getCompaniesByIds(visibleCompanyIds, user.organizationId),
+        storage.getLatestFinancialUploadForOrg(user.organizationId),
+      ]);
+
+      // Build company → names map
+      const companyNameMap: Record<string, string[]> = {};
+      for (const c of allCompanies) {
+        companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
+      }
+
+      // Load contacts + attributions for all visible companies
+      const allContacts = (await Promise.all(visibleCompanyIds.map(id => storage.getContactsByCompany(id)))).flat();
+      const allAttributionsList = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
+
+      const rawRows: any[] = upload?.rows ?? [];
+      const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
+
+      const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "home": "Home Run" };
+      const BASE_ORDER = ["1st", "2nd", "3rd", "hr"];
+
+      // Group by relationship base
+      const grouped: Record<string, { contacts: number; loads: number; margin: number; contractedLoads: number; spotLoads: number }> = {};
+      for (const base of BASE_ORDER) grouped[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+      grouped["unknown"] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+
+      for (const contact of allContacts) {
+        const base = contact.relationshipBase === "home" ? "hr" : (contact.relationshipBase || "unknown");
+        if (!grouped[base]) grouped[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+        grouped[base].contacts++;
+
+        const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
+        if (contactAttribs.length > 0 && rawRows.length > 0) {
+          const companyNames = companyNameMap[contact.companyId] ?? [];
+          const metrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+          grouped[base].loads += metrics.loads;
+          grouped[base].margin += metrics.margin;
+          grouped[base].contractedLoads += metrics.contractedLoads;
+          grouped[base].spotLoads += metrics.spotLoads;
+        }
+      }
+
+      const summary = [...BASE_ORDER, ...(grouped["unknown"].contacts > 0 ? ["unknown"] : [])].map(base => ({
+        base,
+        label: BASE_LABELS[base] || "Unassigned",
+        ...grouped[base],
+        marginPct: grouped[base].loads > 0
+          ? Math.round((grouped[base].margin / grouped[base].loads) * 100) / 100
+          : null,
+        contractedPct: grouped[base].loads > 0
+          ? Math.round((grouped[base].contractedLoads / grouped[base].loads) * 1000) / 10
+          : null,
+        spotPct: grouped[base].loads > 0
+          ? Math.round((grouped[base].spotLoads / grouped[base].loads) * 1000) / 10
+          : null,
+      }));
+
+      const totalLoads = summary.reduce((s, r) => s + r.loads, 0);
+      const totalMargin = summary.reduce((s, r) => s + r.margin, 0);
+      const totalContacts = summary.reduce((s, r) => s + r.contacts, 0);
+
+      res.json({ summary, totalContacts, totalLoads, totalMargin });
+    } catch (e: any) {
+      console.error("[relationship-freight-summary]", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {
       if (err.code === "LIMIT_FILE_SIZE") {
