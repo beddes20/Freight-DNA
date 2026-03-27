@@ -10048,6 +10048,80 @@ Respond with valid JSON only:
     return { loads, margin, contractedLoads, spotLoads };
   }
 
+  // Compute freight from a contact's free-text lanes/regions arrays (coverage tab data)
+  function computeFreightFromContactLaneStrings(
+    rows: any[],
+    cols: any,
+    companyNames: string[],
+    contactLanes: string[],
+    contactRegions: string[]
+  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number } {
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const companyNorms = companyNames.map(n => norm(n));
+    let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
+
+    // Convert each lane/region string into a structured matcher
+    type LaneMatcher = { originCity?: string; originState?: string; destCity?: string; destState?: string };
+    const matchers: LaneMatcher[] = [];
+
+    for (const term of [...(contactLanes || []), ...(contactRegions || [])]) {
+      const t = term.trim();
+      if (!t) continue;
+      // Skip purely descriptive text (contains spaces and is not a direction) unless it's a city name
+      const dirMatch = t.match(/^(.+?)(?:→|->|\s+to\s+)(.+)$/i);
+      if (dirMatch) {
+        const from = dirMatch[1].trim();
+        const to = dirMatch[2].trim();
+        matchers.push({
+          originState: from.length <= 3 && /^[a-zA-Z]+$/.test(from) ? from : undefined,
+          originCity: from.length > 3 ? from : undefined,
+          destState: to.length <= 3 && /^[a-zA-Z]+$/.test(to) ? to : undefined,
+          destCity: to.length > 3 ? to : undefined,
+        });
+        continue;
+      }
+      // State abbreviation (2-3 chars, letters only)
+      if (t.length <= 3 && /^[a-zA-Z]+$/.test(t)) {
+        matchers.push({ originState: t });
+        continue;
+      }
+      // City / region name
+      matchers.push({ originCity: t });
+    }
+
+    if (matchers.length === 0) return { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+
+    for (const row of rows) {
+      const custRaw = getCustomerFromRow(row, cols);
+      const custNorm = norm(custRaw);
+      const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
+      if (!isCompany) continue;
+
+      const origCity = norm(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
+      const origState = norm(String(row[cols.shipperState] || row[cols.originState] || ""));
+      const dstCity = norm(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
+      const dstState = norm(String(row[cols.consigneeState] || row[cols.destinationState] || ""));
+
+      const matched = matchers.some(m => {
+        const origCityOk = !m.originCity || origCity.includes(norm(m.originCity)) || norm(m.originCity).includes(origCity.substring(0, 4));
+        const origStateOk = !m.originState || origState === norm(m.originState);
+        const destCityOk = !m.destCity || dstCity.includes(norm(m.destCity)) || norm(m.destCity).includes(dstCity.substring(0, 4));
+        const destStateOk = !m.destState || dstState === norm(m.destState);
+        return origCityOk && origStateOk && destCityOk && destStateOk;
+      });
+
+      if (!matched) continue;
+      const marginK = cols.marginDollar ?? "Margin $";
+      const rowMargin = parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
+      const orderTypeK = cols.orderType ?? "Order Type";
+      const isSpot = String(row[orderTypeK] || "").toLowerCase().includes("spot");
+      loads++;
+      margin += rowMargin;
+      if (isSpot) spotLoads++; else contractedLoads++;
+    }
+    return { loads, margin, contractedLoads, spotLoads };
+  }
+
   // All company freight (no lane filtering) — used when contacts have no lane attributions
   function computeCompanyFreightTotal(
     rows: any[],
@@ -10103,14 +10177,33 @@ Respond with valid JSON only:
         return "unknown";
       }
 
-      // Only include contacts that have lane attributions assigned
+      // Include contacts that have explicit lane attributions OR coverage lane strings (lanes/regions fields)
       const contactResults = contacts
         .map(contact => {
+          if (!contact.relationshipBase || !contact.relationshipBase.trim()) return null;
           const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
-          if (contactAttribs.length === 0) return null;
-          const freight = rawRows.length > 0
-            ? computeFreightMetrics(rawRows, cols, companyNames, contactAttribs)
-            : { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+          const hasAttribs = contactAttribs.length > 0;
+          const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
+          if (!hasAttribs && !hasLaneStrings) return null;
+
+          let freight = { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+          if (rawRows.length > 0) {
+            if (hasAttribs) {
+              const f1 = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+              freight.loads += f1.loads;
+              freight.margin += f1.margin;
+              freight.contractedLoads += f1.contractedLoads;
+              freight.spotLoads += f1.spotLoads;
+            }
+            if (hasLaneStrings) {
+              const f2 = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
+              freight.loads += f2.loads;
+              freight.margin += f2.margin;
+              freight.contractedLoads += f2.contractedLoads;
+              freight.spotLoads += f2.spotLoads;
+            }
+          }
+
           const base = normalizeBase(contact.relationshipBase);
           const marginPerLoad = freight.loads > 0 ? Math.round((freight.margin / freight.loads) * 100) / 100 : null;
           const contractedPct = freight.loads > 0 ? Math.round(freight.contractedLoads / freight.loads * 1000) / 10 : null;
@@ -10122,6 +10215,7 @@ Respond with valid JSON only:
             relationshipBase: base,
             baseLabel: BASE_LABELS[base] || base,
             attributionCount: contactAttribs.length,
+            coverageLaneCount: (contact.lanes?.length || 0) + (contact.regions?.length || 0),
             attributions: contactAttribs,
             ...freight,
             marginPerLoad,
@@ -10203,20 +10297,31 @@ Respond with valid JSON only:
       }
 
       for (const contact of allContacts) {
+        if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
         const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
-        // Only count contacts with lane attributions assigned
-        if (contactAttribs.length === 0) continue;
+        const hasAttribs = contactAttribs.length > 0;
+        const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
+        if (!hasAttribs && !hasLaneStrings) continue;
 
         const base = normBase(contact.relationshipBase);
         grouped[base].contacts++;
 
         if (rawRows.length > 0) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
-          const metrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
-          grouped[base].loads += metrics.loads;
-          grouped[base].margin += metrics.margin;
-          grouped[base].contractedLoads += metrics.contractedLoads;
-          grouped[base].spotLoads += metrics.spotLoads;
+          if (hasAttribs) {
+            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+            grouped[base].loads += m.loads;
+            grouped[base].margin += m.margin;
+            grouped[base].contractedLoads += m.contractedLoads;
+            grouped[base].spotLoads += m.spotLoads;
+          }
+          if (hasLaneStrings) {
+            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
+            grouped[base].loads += m.loads;
+            grouped[base].margin += m.margin;
+            grouped[base].contractedLoads += m.contractedLoads;
+            grouped[base].spotLoads += m.spotLoads;
+          }
         }
       }
 
@@ -10460,18 +10565,30 @@ Respond with valid JSON only:
       const allAttributionsListS = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
 
       for (const contact of allContacts) {
+        if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
         const contactAttribs = allAttributionsListS.filter(a => a.contactId === contact.id);
-        // Only count contacts with lane attributions assigned
-        if (contactAttribs.length === 0) continue;
+        const hasAttribsS = contactAttribs.length > 0;
+        const hasLaneStringsS = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
+        if (!hasAttribsS && !hasLaneStringsS) continue;
+
         const base = normBaseS(contact.relationshipBase);
         groupedS[base].contacts++;
         if (rawRows.length > 0) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
-          const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
-          groupedS[base].loads += m.loads;
-          groupedS[base].margin += m.margin;
-          groupedS[base].contractedLoads += m.contractedLoads;
-          groupedS[base].spotLoads += m.spotLoads;
+          if (hasAttribsS) {
+            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+            groupedS[base].loads += m.loads;
+            groupedS[base].margin += m.margin;
+            groupedS[base].contractedLoads += m.contractedLoads;
+            groupedS[base].spotLoads += m.spotLoads;
+          }
+          if (hasLaneStringsS) {
+            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
+            groupedS[base].loads += m.loads;
+            groupedS[base].margin += m.margin;
+            groupedS[base].contractedLoads += m.contractedLoads;
+            groupedS[base].spotLoads += m.spotLoads;
+          }
         }
       }
 

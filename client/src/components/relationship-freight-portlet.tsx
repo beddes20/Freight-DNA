@@ -118,6 +118,7 @@ interface CompanyContact {
   contractedPct: number | null;
   spotPct: number | null;
   attributions: any[];
+  coverageLaneCount: number;
 }
 
 interface CompanyPortletProps {
@@ -165,7 +166,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
                   <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Shows freight attributed to each contact based on their assigned lanes. To track a contact, set their relationship base (1st/2nd/3rd/HR) in their contact sheet, then assign lanes using the + button. Only lane-assigned freight is counted here.
+                  Shows freight attributed to each contact based on their assigned lanes and coverage assignments. Contacts appear if they have a relationship base set and either explicit lane attributions or facility coverage assignments (from the RFP Coverage tab). Add explicit lanes with the + button for more precise attribution.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -185,7 +186,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !hasContacts ? (
-            <EmptyState message="No lanes assigned yet. Open a contact, set their relationship base (1st/2nd/3rd/HR), then use the + button to assign their lanes. Freight is tracked per contact based on their specific lanes." />
+            <EmptyState message="No contacts with a relationship base and lane or coverage assignments found. Set a contact's base level (1st/2nd/3rd/HR) in their contact sheet, then assign lanes there or via the RFP Coverage tab." />
           ) : (
             <div className="space-y-4">
               {baseOrder.filter(b => grouped[b]?.length).map(base => {
@@ -257,10 +258,9 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
             {contact.contractedPct !== null && (
               <span className="text-[10px] text-muted-foreground">{contact.contractedPct.toFixed(0)}% ct</span>
             )}
-            <span className="text-[10px] text-muted-foreground">{contact.attributionCount} lane{contact.attributionCount !== 1 ? "s" : ""}</span>
           </>
         ) : (
-          <span className="text-[10px] text-muted-foreground italic">{contact.attributionCount} lane{contact.attributionCount !== 1 ? "s" : ""} · no matching data</span>
+          <span className="text-[10px] text-muted-foreground italic">no matching data</span>
         )}
         <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-500 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`} title="Add lane attribution">
           <Plus className="w-3 h-3" />
