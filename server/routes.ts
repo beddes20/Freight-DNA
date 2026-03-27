@@ -6944,14 +6944,21 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       let autoValue: number | null = null;
       const allUsers = await storage.getUsers(req.session.organizationId!);
       const targetUser = allUsers.find(u => u.id === goal.amId);
-      const isLMGoal = targetUser?.role === "logistics_manager";
+      const isLMGoal = targetUser?.role === "logistics_manager" || targetUser?.role === "logistics_coordinator";
 
       if (goal.metric === "contacts_added") {
-        autoValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+        // LMs/LCs don't own companies via assignedTo — skip auto-compute so manual update is available
+        if (!isLMGoal) {
+          autoValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+        }
       } else if (goal.metric === "touchpoints") {
-        autoValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        if (!isLMGoal) {
+          autoValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        }
       } else if (goal.metric === "meaningful_touchpoints") {
-        autoValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        if (!isLMGoal) {
+          autoValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        }
       } else if (goal.metric === "loads_booked" || goal.metric === "margin_pct" || (goal.metric === "margin" && isLMGoal)) {
         // LM metrics — computed from the Dispatcher column in transaction rows
         const repKey = targetUser ? (targetUser as any).financialRepId as string | null : null;

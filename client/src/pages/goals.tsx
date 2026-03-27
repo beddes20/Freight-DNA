@@ -90,10 +90,18 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
   const isAutoTracked = goal.metric === "contacts_added" || goal.metric === "touchpoints" || goal.metric === "meaningful_touchpoints" || goal.metric === "margin" || goal.metric === "loads_booked" || goal.metric === "margin_pct";
   const isFinancialTracked = goal.metric === "margin";
 
-  const { data: autoProgress } = useQuery<{ autoValue: number | null; currentValue: number }>({
+  // Check if the goal recipient is an LM/LC — these roles can't auto-track person-based metrics
+  const recipientRole = allUsers.find(u => u.id === goal.amId)?.role;
+  const isLmLcRecipient = recipientRole === "logistics_manager" || recipientRole === "logistics_coordinator";
+  const isPersonBasedMetric = goal.metric === "contacts_added" || goal.metric === "touchpoints" || goal.metric === "meaningful_touchpoints";
+
+  const { data: autoProgress, status: autoProgressStatus } = useQuery<{ autoValue: number | null; currentValue: number }>({
     queryKey: ["/api/goals", goal.id, "progress"],
     enabled: isAutoTracked,
   });
+
+  // When backend returns null autoValue (e.g. LM/LC with person-based metric), treat as manual
+  const isEffectivelyManual = isAutoTracked && autoProgressStatus === "success" && autoProgress?.autoValue == null;
 
   const { data: comments = [] } = useQuery<GoalComment[]>({
     queryKey: ["/api/goals", goal.id, "comments"],
@@ -110,7 +118,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
   const namName = allUsers.find(u => u.id === goal.namId)?.name ?? "Unknown";
   const companyName = goal.companyId ? (allCompanies.find(c => c.id === goal.companyId)?.name ?? null) : null;
 
-  const displayCurrent = isAutoTracked && autoProgress?.autoValue != null
+  const displayCurrent = isAutoTracked && !isEffectivelyManual && autoProgress?.autoValue != null
     ? autoProgress.autoValue
     : current;
   const displayPct = progressPct(displayCurrent, target);
@@ -204,7 +212,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
               <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                 <Badge variant="secondary" className="text-xs font-normal capitalize">{goal.metric === "custom" ? (goal.customLabel || "Custom") : metric.label}</Badge>
                 <Badge variant="outline" className="text-xs font-normal capitalize">{goal.period}</Badge>
-                {isAutoTracked ? (
+                {isAutoTracked && !isEffectivelyManual ? (
                   <Badge className="text-[10px] font-normal gap-0.5 px-1.5 py-0 h-4 bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400 border border-sky-200 dark:border-sky-800">
                     <RefreshCw className="h-2 w-2" /> Auto
                   </Badge>
@@ -289,7 +297,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
                 `${displayPct}% of goal`
               )}
             </span>
-            {isAutoTracked && (
+            {isAutoTracked && !isEffectivelyManual && (
               <span className="text-xs text-muted-foreground">
                 {isFinancialTracked ? "From financial data" : "Auto-tracked"}
               </span>
@@ -351,7 +359,7 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
           );
         })()}
 
-        {!isAutoTracked && canUpdateProgress && (
+        {(!isAutoTracked || isEffectivelyManual) && canUpdateProgress && (
           <div className="mb-3">
             {updatingValue ? (
               <div className="flex gap-2">
@@ -692,6 +700,13 @@ export default function GoalsPage() {
         ]
     : amLmReports;
 
+  // Use "Team" instead of "AMs" when the team includes LMs/LCs (e.g. Brianna's team)
+  const teamHasLmLc = uniqueAms.some(p => {
+    const role = allUsers.find(u => u.id === p.amId)?.role;
+    return role === "logistics_manager" || role === "logistics_coordinator";
+  });
+  const teamLabel = teamHasLmLc ? "Team" : "AMs";
+
   const filteredGoals = activeTab === "all"
     ? goals
     : goals.filter(g => g.amId === activeTab);
@@ -823,7 +838,7 @@ export default function GoalsPage() {
           {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager") && uniqueAms.length > 1 && (
             <Button variant="outline" onClick={() => setBulkOpen(true)} data-testid="button-bulk-goals">
               <Users className="h-4 w-4 mr-2" />
-              Set for All AMs
+              Set for All {teamLabel}
             </Button>
           )}
           {(isNam || amCanSetGoals || isAmRole) && (
@@ -924,7 +939,7 @@ export default function GoalsPage() {
             className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${activeTab === "all" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground"}`}
             data-testid="tab-all-ams"
           >
-            All AMs ({goals.length})
+            All {teamLabel} ({goals.length})
           </button>
           {uniqueAms.map(p => {
             const count = goals.filter(g => g.amId === p.amId).length;
@@ -1353,7 +1368,7 @@ export default function GoalsPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Users className="h-5 w-5 text-primary" />
-              Set Goal for All AMs
+              Set Goal for All {teamLabel}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
