@@ -9,7 +9,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
@@ -1421,7 +1421,8 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      if (parsed.data.relationshipBase && parsed.data.relationshipBase !== existing.relationshipBase) {
+      const baseChanged = parsed.data.relationshipBase && parsed.data.relationshipBase !== existing.relationshipBase;
+      if (baseChanged) {
         parsed.data.baseAdvancedAt = new Date().toISOString().split("T")[0];
         const oldRank = getBaseRank(existing.relationshipBase);
         const newRank = getBaseRank(parsed.data.relationshipBase);
@@ -1439,6 +1440,13 @@ export async function registerRoutes(
             );
           }).catch(() => {});
         }
+        // Log history
+        storage.logContactBaseHistory(
+          req.params.id as string,
+          existing.relationshipBase ?? null,
+          parsed.data.relationshipBase!,
+          currentUser.id
+        ).catch(() => {});
       }
       const contact = await storage.updateContact((req.params.id as string), parsed.data);
       res.json(contact);
@@ -1467,6 +1475,17 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error deleting contact:", error);
       res.status(500).json({ error: "Failed to delete contact" });
+    }
+  });
+
+  // T003: Relationship advancement history
+  app.get("/api/contacts/:id/base-history", requireAuth, async (req, res) => {
+    try {
+      const history = await storage.getContactBaseHistory(req.params.id as string);
+      res.json(history);
+    } catch (e) {
+      console.error("Error fetching base history:", e);
+      res.status(500).json({ error: "Failed to fetch history" });
     }
   });
 
@@ -10142,8 +10161,8 @@ Respond with valid JSON only:
         companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
       }
 
-      // Load contacts + attributions for all visible companies
-      const allContacts = (await Promise.all(visibleCompanyIds.map(id => storage.getContactsByCompany(id)))).flat();
+      // Load contacts + attributions for all visible companies (bulk queries — no N+1)
+      const allContacts = await storage.getContactsByCompanyIds(visibleCompanyIds);
       const allAttributionsList = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
 
       const rawRows: any[] = upload?.rows ?? [];
@@ -10239,13 +10258,20 @@ Respond with valid JSON only:
       }
 
       const [allContacts, visibleCompanies] = await Promise.all([
-        Promise.all(visibleCompanyIds.map(id => storage.getContactsByCompany(id))).then(r => r.flat()),
+        storage.getContactsByCompanyIds(visibleCompanyIds),
         storage.getCompaniesByIds(visibleCompanyIds, user.organizationId),
       ]);
 
       // Build company name map
       const companyNameById: Record<string, string> = {};
       for (const c of visibleCompanies) companyNameById[c.id] = c.name;
+
+      // T002: greenfield companies — have no contacts with any relationship base set
+      const companiesWithAttributedContacts = new Set(
+        allContacts.filter(c => c.relationshipBase && c.relationshipBase.trim()).map(c => c.companyId)
+      );
+      const greenfieldCompanyIds = visibleCompanyIds.filter(id => !companiesWithAttributedContacts.has(id));
+      const greenfieldCount = greenfieldCompanyIds.length;
 
       function normB(raw: string | null | undefined): string {
         if (!raw) return "unknown";
@@ -10314,9 +10340,156 @@ Respond with valid JSON only:
         .filter(b => advancesPerLevel[b] > 0)
         .map(base => ({ base, label: BASE_LABELS[base], count: advancesPerLevel[base] }));
 
-      res.json({ levels, recentAdvances, totalCompanies, totalContacts });
+      res.json({ levels, recentAdvances, totalCompanies, totalContacts, greenfieldCount });
     } catch (e: any) {
       console.error("[relationship-base-distribution]", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // T006: Consolidated dashboard relationship summary — replaces 3 separate endpoint calls
+  app.get("/api/dashboard-relationship-summary", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const isAdmin = user.role === "admin";
+      const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
+
+      let visibleCompanyIds: string[] = [];
+      if (isAdmin) {
+        const all = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = all.map(c => c.id);
+      } else if (isDirector) {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const repIds = [user.id, ...teamIds];
+        const all = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = all.filter(c => repIds.includes(c.assignedTo ?? "")).map(c => c.id);
+      } else {
+        const all = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = all.filter(c => c.assignedTo === user.id).map(c => c.id);
+      }
+
+      if (visibleCompanyIds.length === 0) {
+        return res.json({
+          distribution: { levels: [], recentAdvances: [], totalCompanies: 0, totalContacts: 0, greenfieldCount: 0 },
+          summary: { summary: [], totalContacts: 0, totalLoads: 0, totalMargin: 0 },
+        });
+      }
+
+      // Single parallel fetch for all data
+      const [allContacts, allCompanies, upload] = await Promise.all([
+        storage.getContactsByCompanyIds(visibleCompanyIds),
+        storage.getCompaniesByIds(visibleCompanyIds, user.organizationId),
+        storage.getLatestFinancialUploadForOrg(user.organizationId),
+      ]);
+      const allAttributionsList = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
+
+      // ----- Distribution section (same logic as /api/relationship-base-distribution) -----
+      const companyNameById: Record<string, string> = {};
+      for (const c of allCompanies) companyNameById[c.id] = c.name;
+
+      function normBDash(raw: string | null | undefined): string {
+        if (!raw) return "unknown";
+        const v = raw.trim().toLowerCase();
+        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
+        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
+        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
+        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
+        return "unknown";
+      }
+      const BASE_ORDER_D = ["hr", "3rd", "2nd", "1st", "unknown"];
+      const BASE_LABELS_D: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "unknown": "Unassigned" };
+      const cutoff2 = new Date(); cutoff2.setDate(cutoff2.getDate() - 30);
+      const cutoffStr2 = cutoff2.toISOString().slice(0, 10);
+      const companiesPerLevel: Record<string, Set<string>> = {};
+      const contactListPerLevel: Record<string, any[]> = {};
+      const advancesPerLevel: Record<string, number> = {};
+      for (const b of BASE_ORDER_D) { companiesPerLevel[b] = new Set(); contactListPerLevel[b] = []; advancesPerLevel[b] = 0; }
+      const companiesWithAttributedContacts2 = new Set(allContacts.filter(c => c.relationshipBase && c.relationshipBase.trim()).map(c => c.companyId));
+      const greenfieldCount2 = visibleCompanyIds.filter(id => !companiesWithAttributedContacts2.has(id)).length;
+      for (const contact of allContacts) {
+        const base = normBDash(contact.relationshipBase);
+        companiesPerLevel[base].add(contact.companyId);
+        const recentlyAdvanced = !!(contact.baseAdvancedAt && contact.baseAdvancedAt >= cutoffStr2);
+        if (recentlyAdvanced) advancesPerLevel[base]++;
+        contactListPerLevel[base].push({ contactId: contact.id, contactName: contact.name, contactTitle: contact.title ?? null, companyId: contact.companyId, companyName: companyNameById[contact.companyId] ?? "Unknown", baseAdvancedAt: contact.baseAdvancedAt ?? null, recentlyAdvanced });
+      }
+      for (const b of BASE_ORDER_D) contactListPerLevel[b].sort((a: any, b2: any) => { if (a.recentlyAdvanced !== b2.recentlyAdvanced) return a.recentlyAdvanced ? -1 : 1; return a.companyName.localeCompare(b2.companyName); });
+      const distLevels = BASE_ORDER_D.map(base => ({ base, label: BASE_LABELS_D[base], companies: companiesPerLevel[base].size, contacts: contactListPerLevel[base].length, contactList: contactListPerLevel[base] })).filter(r => r.contacts > 0);
+      const recentAdvances2 = BASE_ORDER_D.filter(b => advancesPerLevel[b] > 0).map(base => ({ base, label: BASE_LABELS_D[base], count: advancesPerLevel[base] }));
+
+      // ----- Summary section (same logic as /api/relationship-freight-summary) -----
+      const companyNameMap: Record<string, string[]> = {};
+      for (const c of allCompanies) companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
+
+      const rawRows: any[] = upload?.rows ?? [];
+      const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
+      const BASE_LABELS_S: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "home": "Home Run" };
+      const BASE_ORDER_S = ["1st", "2nd", "3rd", "hr"];
+
+      function normBaseS(raw: string | null | undefined): string {
+        if (!raw) return "unknown";
+        const v = raw.trim().toLowerCase();
+        if (v.includes("home") || v === "hr") return "hr";
+        if (v.startsWith("3")) return "3rd";
+        if (v.startsWith("2")) return "2nd";
+        if (v.startsWith("1")) return "1st";
+        return "unknown";
+      }
+
+      const grouped: Record<string, { contacts: number; loads: number; margin: number; contractedLoads: number; spotLoads: number }> = {};
+      const contactsByBase: Record<string, Set<string>> = {};
+      for (const attr of allAttributionsList) {
+        const contact = allContacts.find(c => c.id === attr.contactId);
+        if (!contact) continue;
+        const base = normBaseS(contact.relationshipBase);
+        if (!grouped[base]) { grouped[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 }; contactsByBase[base] = new Set(); }
+        if (!contactsByBase[base].has(contact.id)) { grouped[base].contacts++; contactsByBase[base].add(contact.id); }
+        const attrOrigin = (attr.originState ?? "").toUpperCase();
+        const attrDest = (attr.destState ?? "").toUpperCase();
+        for (const row of rawRows) {
+          const custName = (getCustomerFromRow(row, cols) ?? "").toLowerCase();
+          const companyId = allAttributionsList.find(a => a.id === attr.id)?.companyId ?? "";
+          const names = companyNameMap[companyId] ?? [];
+          const matches = names.some(n => custName.includes(n.toLowerCase()) || n.toLowerCase().includes(custName));
+          if (!matches) continue;
+          const origState = (row[cols.originState] ?? "").toUpperCase();
+          const destState = (row[cols.destState] ?? "").toUpperCase();
+          if (attrOrigin && attrOrigin !== origState) continue;
+          if (attrDest && attrDest !== destState) continue;
+          grouped[base].loads++;
+          grouped[base].margin += parseFloat(row[cols.margin] ?? 0) || 0;
+          const status = getStatusFromRow(row, cols) ?? "";
+          if (status.toLowerCase().includes("spot")) grouped[base].spotLoads++;
+          else grouped[base].contractedLoads++;
+        }
+      }
+      const summaryResult = BASE_ORDER_S.map(base => ({
+        base, label: BASE_LABELS_S[base] ?? base,
+        contacts: grouped[base]?.contacts ?? 0,
+        loads: grouped[base]?.loads ?? 0,
+        margin: grouped[base]?.margin ?? 0,
+        contractedLoads: grouped[base]?.contractedLoads ?? 0,
+        spotLoads: grouped[base]?.spotLoads ?? 0,
+      })).filter(r => r.contacts > 0 || r.loads > 0);
+
+      const totalLoads = summaryResult.reduce((s: number, r: any) => s + r.loads, 0);
+      const totalMargin = summaryResult.reduce((s: number, r: any) => s + r.margin, 0);
+      const totalContacts = summaryResult.reduce((s: number, r: any) => s + r.contacts, 0);
+
+      res.json({
+        distribution: {
+          levels: distLevels,
+          recentAdvances: recentAdvances2,
+          totalCompanies: visibleCompanyIds.length,
+          totalContacts: allContacts.length,
+          greenfieldCount: greenfieldCount2,
+        },
+        summary: { summary: summaryResult, totalContacts, totalLoads, totalMargin },
+      });
+    } catch (e: any) {
+      console.error("[dashboard-relationship-summary]", e);
       res.status(500).json({ error: e.message });
     }
   });

@@ -41,11 +41,13 @@ interface SummaryRow {
 }
 
 // ── Dashboard-level portlet ───────────────────────────────────────────────────
-export function RelationshipFreightDashboardPortlet() {
+export function RelationshipFreightDashboardPortlet({ externalData }: { externalData?: { summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number } }) {
   const [collapsed, setCollapsed] = useState(false);
-  const { data, isLoading } = useQuery<{ summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number }>({
+  const { data: fetchedData, isLoading } = useQuery<{ summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number }>({
     queryKey: ["/api/relationship-freight-summary"],
+    enabled: !externalData,
   });
+  const data = externalData ?? fetchedData;
 
   const hasAnyLoads = (data?.summary ?? []).some(r => r.loads > 0);
 
@@ -513,6 +515,7 @@ type DistributionData = {
   recentAdvances: RecentAdvance[];
   totalCompanies: number;
   totalContacts: number;
+  greenfieldCount?: number;
 };
 
 // Light-mode–safe progress bar colors keyed by level
@@ -533,13 +536,15 @@ const LABEL_COLOR: Record<string, string> = {
   unknown: "text-muted-foreground",
 };
 
-export function RelationshipBaseDistributionPortlet() {
+export function RelationshipBaseDistributionPortlet({ externalData }: { externalData?: DistributionData }) {
   const [collapsed, setCollapsed] = useState(false);
   const [expandedBase, setExpandedBase] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery<DistributionData>({
+  const { data: fetchedData, isLoading } = useQuery<DistributionData>({
     queryKey: ["/api/relationship-base-distribution"],
+    enabled: !externalData,
   });
+  const data = externalData ?? fetchedData;
 
   const maxCompanies = Math.max(1, ...(data?.levels ?? []).map(l => l.companies));
 
@@ -588,6 +593,16 @@ export function RelationshipBaseDistributionPortlet() {
             <EmptyState message="No contacts assigned to relationship levels yet." />
           ) : (
             <>
+              {/* Greenfield — accounts with zero relationship contacts mapped */}
+              {(data.greenfieldCount ?? 0) > 0 && (
+                <div className="flex items-center justify-between text-xs px-2 py-1.5 rounded-md bg-muted/40 border border-dashed border-muted-foreground/30 text-muted-foreground mb-1">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <span className="text-base leading-none">🌱</span> Unworked Accounts
+                  </span>
+                  <span className="font-mono">{data.greenfieldCount} customer{(data.greenfieldCount ?? 0) !== 1 ? "s" : ""} — no contacts mapped yet</span>
+                </div>
+              )}
+
               {/* Level rows */}
               <div className="space-y-1">
                 {data.levels.map(level => {
@@ -697,5 +712,24 @@ export function RelationshipBaseDistributionPortlet() {
         </CardContent>
       )}
     </Card>
+  );
+}
+
+// ── T006: Consolidated dashboard section — single API call for both portlets ──
+type ConsolidatedData = {
+  distribution: DistributionData;
+  summary: { summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number };
+};
+
+export function RelationshipDashboardSection() {
+  const { data } = useQuery<ConsolidatedData>({
+    queryKey: ["/api/dashboard-relationship-summary"],
+  });
+
+  return (
+    <div className="space-y-3">
+      <RelationshipFreightDashboardPortlet externalData={data?.summary} />
+      <RelationshipBaseDistributionPortlet externalData={data?.distribution} />
+    </div>
   );
 }

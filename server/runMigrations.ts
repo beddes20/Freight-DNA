@@ -611,6 +611,39 @@ export async function runMigrations() {
     clientOpHours.release();
   }
 
+  // contact_base_history table
+  const clientCBH = await pool.connect();
+  try {
+    await clientCBH.query(`
+      CREATE TABLE IF NOT EXISTS contact_base_history (
+        id serial PRIMARY KEY,
+        contact_id varchar NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+        from_base text,
+        to_base text NOT NULL,
+        changed_by_id varchar NOT NULL REFERENCES users(id),
+        changed_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientCBH.query(`CREATE INDEX IF NOT EXISTS idx_cbh_contact_id ON contact_base_history(contact_id)`);
+    console.log("[migrations] contact_base_history table ensured");
+  } catch (err) {
+    console.error("[migrations] contact_base_history error:", err);
+  } finally {
+    clientCBH.release();
+  }
+
+  // app_suggestions admin response columns
+  const clientSugResp = await pool.connect();
+  try {
+    await clientSugResp.query(`ALTER TABLE app_suggestions ADD COLUMN IF NOT EXISTS admin_response text`);
+    await clientSugResp.query(`ALTER TABLE app_suggestions ADD COLUMN IF NOT EXISTS responded_at timestamp`);
+    console.log("[migrations] app_suggestions admin_response columns ensured");
+  } catch (err) {
+    console.error("[migrations] app_suggestions response error:", err);
+  } finally {
+    clientSugResp.release();
+  }
+
   const clientIdx = await pool.connect();
   try {
     await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_company_id      ON touchpoints(company_id)`);

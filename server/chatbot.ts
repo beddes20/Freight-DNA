@@ -530,6 +530,9 @@ Keep it short and casual — reps are busy. No fluff, no filler.
           submitterName: users.name,
           submitterRole: users.role,
           submittedById: appSuggestions.submittedById,
+          submitterEmail: users.username,
+          adminResponse: appSuggestions.adminResponse,
+          respondedAt: appSuggestions.respondedAt,
         })
         .from(appSuggestions)
         .innerJoin(users, eq(users.id, appSuggestions.submittedById))
@@ -547,11 +550,49 @@ Keep it short and casual — reps are busy. No fluff, no filler.
     try {
       const [currentUser] = await db.select().from(users).where(eq(users.id, req.session.userId));
       if (!currentUser || !["admin", "director"].includes(currentUser.role)) return res.status(403).json({ error: "Admins only" });
-      const { status } = req.body;
-      if (!["new", "reviewing", "resolved"].includes(status)) return res.status(400).json({ error: "Invalid status" });
-      await db.update(appSuggestions).set({ status }).where(eq(appSuggestions.id, req.params.id));
+      const { status, adminResponse } = req.body;
+      if (status && !["new", "reviewing", "resolved"].includes(status)) return res.status(400).json({ error: "Invalid status" });
+
+      // Fetch current suggestion to detect if response is being newly added
+      const suggId = req.params.id as string;
+      const [existing] = await db.select().from(appSuggestions).where(eq(appSuggestions.id, suggId));
+      if (!existing) return res.status(404).json({ error: "Not found" });
+
+      // Build update: status and/or adminResponse
+      const statusVal: string | undefined = status;
+      const responseVal: string | undefined = adminResponse;
+      if (statusVal && responseVal !== undefined) {
+        await db.update(appSuggestions).set({ status: statusVal, adminResponse: responseVal, respondedAt: new Date() }).where(eq(appSuggestions.id, suggId));
+      } else if (statusVal) {
+        await db.update(appSuggestions).set({ status: statusVal }).where(eq(appSuggestions.id, suggId));
+      } else if (responseVal !== undefined) {
+        await db.update(appSuggestions).set({ adminResponse: responseVal, respondedAt: new Date() }).where(eq(appSuggestions.id, suggId));
+      }
+
+      // If a new response was added, email the submitter (username is the email)
+      if (adminResponse && adminResponse.trim() && !existing.adminResponse) {
+        const [submitter] = await db.select().from(users).where(eq(users.id, existing.submittedById));
+        const submitterEmail = submitter?.username;
+        if (submitterEmail?.includes("@")) {
+          try {
+            const { sendEmail } = await import("./emailService");
+            await sendEmail({
+              to: submitterEmail,
+              subject: "Response to your Freight DNA feedback",
+              html: `<p>Hi ${submitter?.name ?? submitterEmail},</p>
+<p>An admin has responded to your feedback:</p>
+<blockquote style="border-left:3px solid #d97706;padding:8px 16px;margin:12px 0;color:#555;">${existing.content}</blockquote>
+<p><strong>Admin response:</strong></p>
+<blockquote style="border-left:3px solid #2563eb;padding:8px 16px;margin:12px 0;color:#555;">${adminResponse}</blockquote>
+<p>Log in to Freight DNA to view the full thread.</p>`,
+            });
+          } catch (_) { /* email failure is non-fatal */ }
+        }
+      }
+
       res.json({ ok: true });
     } catch (err) {
+      console.error("Error updating suggestion:", err);
       res.status(500).json({ error: "Failed to update suggestion" });
     }
   });

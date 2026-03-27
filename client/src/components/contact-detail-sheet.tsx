@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Phone, Mail, MapPin, Route, DollarSign, FileText, PhoneCall, Copy, Check,
-  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo, X,
+  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo, X, History,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -95,6 +95,12 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
 
   const { data: touchpoints = [], isLoading } = useQuery<Touchpoint[]>({
     queryKey: ["/api/contacts", contact?.id, "touchpoints"],
+    enabled: !!contact?.id && open,
+  });
+
+  const { data: baseHistory = [] } = useQuery<{ id: number; fromBase: string | null; toBase: string; changedAt: string; changedByName: string | null }[]>({
+    queryKey: ["/api/contacts", contact?.id, "base-history"],
+    queryFn: () => fetch(`/api/contacts/${contact!.id}/base-history`, { credentials: "include" }).then(r => r.json()),
     enabled: !!contact?.id && open,
   });
 
@@ -291,6 +297,33 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
             <Separator />
 
             <ContactLaneManager contactId={contact.id} />
+
+            {baseHistory.length > 0 && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  <h3 className="font-medium flex items-center gap-2 text-sm">
+                    <History className="h-4 w-4 text-muted-foreground" />
+                    Relationship Advancement History
+                  </h3>
+                  <div className="space-y-1">
+                    {baseHistory.map((entry) => (
+                      <div key={entry.id} className="flex items-center gap-2 text-xs" data-testid={`base-history-${entry.id}`}>
+                        <span className="text-muted-foreground w-24 shrink-0">
+                          {new Date(entry.changedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        </span>
+                        <span className="text-muted-foreground">{entry.fromBase ?? "Unset"}</span>
+                        <span className="text-muted-foreground">→</span>
+                        <span className="font-medium text-foreground">{entry.toBase}</span>
+                        {entry.changedByName && (
+                          <span className="text-muted-foreground ml-auto shrink-0">by {entry.changedByName}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
 
             <Separator />
 

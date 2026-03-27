@@ -533,6 +533,8 @@ export const appSuggestions = pgTable("app_suggestions", {
   content: text("content").notNull(),
   status: text("status").notNull().default("new"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  adminResponse: text("admin_response"),
+  respondedAt: timestamp("responded_at"),
 });
 export const insertAppSuggestionSchema = createInsertSchema(appSuggestions).omit({ id: true, createdAt: true });
 export type InsertAppSuggestion = z.infer<typeof insertAppSuggestionSchema>;
@@ -696,4 +698,15 @@ export const toolLinks = pgTable("tool_links", {
 export const insertToolLinkSchema = createInsertSchema(toolLinks).omit({ id: true });
 export type InsertToolLink = z.infer<typeof insertToolLinkSchema>;
 export type ToolLink = typeof toolLinks.$inferSelect;
+
+// Contact relationship base change history
+export const contactBaseHistory = pgTable("contact_base_history", {
+  id: serial("id").primaryKey(),
+  contactId: varchar("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+  fromBase: text("from_base"),
+  toBase: text("to_base").notNull(),
+  changedById: varchar("changed_by_id").notNull().references(() => users.id),
+  changedAt: timestamp("changed_at").defaultNow().notNull(),
+});
+export type ContactBaseHistory = typeof contactBaseHistory.$inferSelect;
 

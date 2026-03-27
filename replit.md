@@ -36,6 +36,11 @@ The application utilizes React, TypeScript, and Tailwind CSS with `shadcn/ui` to
     - **Health and Momentum Scoring**: Automated calculation of company health and momentum scores based on various interaction and activity factors.
     - **Shipping Mode Management**: Categorization and filtering of companies by shipping modes (LTL, FTL, Drayage, IMDL).
     - **Relationship Freight Reporting**: `contact_lane_attributions` table lets reps assign lane patterns (origin/dest state+city) to individual contacts. Freight loads from financial uploads are then matched and attributed to each contact's relationship base level (1st/2nd/3rd/Home Run). Portlets appear on the dashboard and on each company's overview tab, showing loads, margin, contracted %, and spot % per level. The `ContactLaneManager` component in contact detail sheets handles add/remove of lane attributions.
+    - **Relationship Advancement History**: `contact_base_history` table tracks every base change (from/to/who/when). History logs on every PATCH /contacts/:id when relationshipBase changes, and is displayed as a timeline in the contact detail sheet.
+    - **Dashboard Consolidation**: Single `/api/dashboard-relationship-summary` endpoint replaces 3 separate relationship API calls on the dashboard. `RelationshipDashboardSection` wrapper passes pre-fetched data to both portlets via props, eliminating redundant queries.
+    - **Greenfield Visibility**: Coverage portlet shows "Unworked Accounts" count — companies with no contacts assigned to any relationship base level.
+    - **Pre-call Planner Relationship Intel**: Contact cards in the pre-call planner now display relationship base badge (1st/2nd/3rd/HR), lane count, loads, and margin sourced from the company's freight summary.
+    - **Feedback Inbox Admin Responses**: Admins can type a response to any feedback submission. Response is saved, displayed in the inbox, and the submitter is notified by email (using their username as the email address).
 
 ## External Dependencies
 - **PostgreSQL**: Used for database management and session storage.

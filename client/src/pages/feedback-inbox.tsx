@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -15,7 +16,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Bug, Lightbulb, Star, Search, Clock, CheckCircle2, Eye, Inbox } from "lucide-react";
+import { Bug, Lightbulb, Star, Search, Clock, CheckCircle2, Eye, Inbox, Send } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 type FeedbackItem = {
@@ -26,6 +27,9 @@ type FeedbackItem = {
   submitterName: string;
   submitterRole: string;
   submittedById: string;
+  submitterEmail?: string;
+  adminResponse?: string | null;
+  respondedAt?: string | null;
 };
 
 function detectType(content: string): "bug" | "improvement" | "feature" {
@@ -98,6 +102,8 @@ function roleLabel(role: string) {
 function FeedbackCard({ item }: { item: FeedbackItem }) {
   const [expanded, setExpanded] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [responseText, setResponseText] = useState(item.adminResponse ?? "");
+  const [savingResponse, setSavingResponse] = useState(false);
   const qc = useQueryClient();
   const { toast } = useToast();
   const type = detectType(item.content);
@@ -116,6 +122,20 @@ function FeedbackCard({ item }: { item: FeedbackItem }) {
       toast({ title: "Failed to update status", variant: "destructive" });
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const saveResponse = async () => {
+    if (!responseText.trim()) return;
+    setSavingResponse(true);
+    try {
+      await apiRequest("PATCH", `/api/chatbot/suggestions/${item.id}`, { adminResponse: responseText.trim() });
+      qc.invalidateQueries({ queryKey: ["/api/chatbot/suggestions"] });
+      toast({ title: "Response saved", description: item.submitterEmail ? "Submitter will be notified by email." : "Response saved." });
+    } catch {
+      toast({ title: "Failed to save response", variant: "destructive" });
+    } finally {
+      setSavingResponse(false);
     }
   };
 
@@ -159,20 +179,50 @@ function FeedbackCard({ item }: { item: FeedbackItem }) {
           </Select>
         </div>
       </CardHeader>
-      <CardContent className="px-4 pb-4 space-y-2">
-        <Separator className="mb-3" />
+      <CardContent className="px-4 pb-4 space-y-3">
+        <Separator className="mb-1" />
         <pre className="whitespace-pre-wrap font-sans text-sm text-foreground leading-relaxed">
           {displayContent}
         </pre>
         {isLong && (
           <button
-            className="text-xs text-primary hover:underline mt-1"
+            className="text-xs text-primary hover:underline"
             onClick={() => setExpanded((v) => !v)}
             data-testid={`feedback-expand-${item.id}`}
           >
             {expanded ? "Show less" : "Show more"}
           </button>
         )}
+
+        {/* Admin response section */}
+        <div className="pt-1">
+          <Separator className="mb-3" />
+          {item.adminResponse && (
+            <div className="mb-3 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 px-3 py-2">
+              <p className="text-xs font-semibold text-blue-700 dark:text-blue-400 mb-1 uppercase tracking-wide">Admin Response{item.respondedAt ? ` · ${formatDistanceToNow(new Date(item.respondedAt), { addSuffix: true })}` : ""}</p>
+              <p className="text-sm text-blue-900 dark:text-blue-200 whitespace-pre-wrap">{item.adminResponse}</p>
+            </div>
+          )}
+          <div className="flex gap-2 items-start">
+            <Textarea
+              placeholder={item.adminResponse ? "Update response…" : "Write a response to the submitter (they'll be notified by email)…"}
+              value={responseText}
+              onChange={e => setResponseText(e.target.value)}
+              className="text-sm resize-none flex-1"
+              rows={2}
+              data-testid={`feedback-response-input-${item.id}`}
+            />
+            <Button
+              size="sm"
+              className="shrink-0"
+              onClick={saveResponse}
+              disabled={savingResponse || !responseText.trim()}
+              data-testid={`feedback-response-send-${item.id}`}
+            >
+              <Send className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );

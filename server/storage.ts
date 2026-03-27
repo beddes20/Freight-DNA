@@ -103,6 +103,7 @@ import {
   contactLaneAttributions,
   type ContactLaneAttribution,
   type InsertContactLaneAttribution,
+  contactBaseHistory,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -166,7 +167,10 @@ export interface IStorage {
   
   getContacts(): Promise<Contact[]>;
   getContactsByCompany(companyId: string): Promise<Contact[]>;
+  getContactsByCompanyIds(companyIds: string[]): Promise<Contact[]>;
   getContact(id: string): Promise<Contact | undefined>;
+  logContactBaseHistory(contactId: string, fromBase: string | null, toBase: string, changedById: string): Promise<void>;
+  getContactBaseHistory(contactId: string): Promise<any[]>;
   createContact(contact: InsertContact): Promise<Contact>;
   bulkCreateContacts(contacts: InsertContact[]): Promise<Contact[]>;
   updateContact(id: string, contact: InsertContact): Promise<Contact | undefined>;
@@ -508,6 +512,31 @@ export class DatabaseStorage implements IStorage {
 
   async getContactsByCompany(companyId: string): Promise<Contact[]> {
     return db.select().from(contacts).where(eq(contacts.companyId, companyId));
+  }
+
+  async getContactsByCompanyIds(companyIds: string[]): Promise<Contact[]> {
+    if (companyIds.length === 0) return [];
+    return db.select().from(contacts).where(inArray(contacts.companyId, companyIds));
+  }
+
+  async logContactBaseHistory(contactId: string, fromBase: string | null, toBase: string, changedById: string): Promise<void> {
+    await db.insert(contactBaseHistory).values({ contactId, fromBase: fromBase ?? null, toBase, changedById });
+  }
+
+  async getContactBaseHistory(contactId: string): Promise<any[]> {
+    const rows = await db
+      .select({
+        id: contactBaseHistory.id,
+        fromBase: contactBaseHistory.fromBase,
+        toBase: contactBaseHistory.toBase,
+        changedAt: contactBaseHistory.changedAt,
+        changedByName: users.name,
+      })
+      .from(contactBaseHistory)
+      .leftJoin(users, eq(contactBaseHistory.changedById, users.id))
+      .where(eq(contactBaseHistory.contactId, contactId))
+      .orderBy(desc(contactBaseHistory.changedAt));
+    return rows;
   }
 
   async getContact(id: string): Promise<Contact | undefined> {

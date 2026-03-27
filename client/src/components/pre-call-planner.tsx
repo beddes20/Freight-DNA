@@ -92,6 +92,14 @@ export function PreCallPlanner({
 
   const touchpointsWithNotes = touchpoints.filter(t => t.notes?.trim());
 
+  // Relationship freight data for relationship intelligence section
+  const { data: relFreightData } = useQuery<{ contacts: any[]; companyId: string }>({
+    queryKey: ["/api/companies", company.id, "relationship-freight-summary"],
+    queryFn: () => fetch(`/api/companies/${company.id}/relationship-freight-summary`, { credentials: "include" }).then(r => r.json()),
+    enabled: open,
+    staleTime: 5 * 60 * 1000,
+  });
+
   // AI touchpoint note summary — auto-loads when modal opens and notes exist
   const { data: tpSummaryData, isLoading: tpSummaryLoading } = useQuery<{ summary: string | null; noteCount: number }>({
     queryKey: ["/api/companies", company.id, "touchpoint-summary"],
@@ -353,6 +361,27 @@ export function PreCallPlanner({
                     .filter(t => t.contactId === c.id)
                     .sort((a, b) => b.date.localeCompare(a.date))[0];
                   const hasGeo = (c.lanes && c.lanes.length > 0) || (c.regions && c.regions.length > 0);
+
+                  // Relationship intel from freight data
+                  const relContact = relFreightData?.contacts?.find((rc: any) => rc.id === c.id);
+                  const BASE_BADGE: Record<string, string> = {
+                    "1st":  "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400",
+                    "2nd":  "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400",
+                    "3rd":  "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400",
+                    "hr":   "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
+                  };
+                  const BASE_LABEL: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
+                  const baseNorm = (raw: string | null | undefined): string | null => {
+                    if (!raw) return null;
+                    const v = raw.trim().toLowerCase();
+                    if (v.startsWith("hr") || v.includes("home")) return "hr";
+                    if (v.startsWith("3")) return "3rd";
+                    if (v.startsWith("2")) return "2nd";
+                    if (v.startsWith("1")) return "1st";
+                    return null;
+                  };
+                  const bKey = baseNorm((c as any).relationshipBase);
+
                   return (
                     <button
                       key={c.id}
@@ -361,13 +390,25 @@ export function PreCallPlanner({
                       data-testid={`precall-contact-${c.id}`}
                     >
                       <div className="min-w-0">
-                        <div className="font-medium flex items-center gap-1.5">
+                        <div className="font-medium flex items-center gap-1.5 flex-wrap">
                           {c.name}
+                          {bKey && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${BASE_BADGE[bKey]}`}>
+                              {BASE_LABEL[bKey]}
+                            </span>
+                          )}
                           {hasGeo && (
                             <MapPin className="h-3 w-3 text-primary opacity-0 group-hover:opacity-100 transition-opacity" />
                           )}
                         </div>
                         <div className="text-xs text-muted-foreground truncate">{c.title}{c.email && ` · ${c.email}`}{c.phone && ` · ${c.phone}`}</div>
+                        {relContact && (relContact.loads > 0 || relContact.laneCount > 0) && (
+                          <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
+                            {relContact.laneCount > 0 && <span>{relContact.laneCount} lane{relContact.laneCount !== 1 ? "s" : ""}</span>}
+                            {relContact.loads > 0 && <span>{relContact.loads} loads</span>}
+                            {relContact.margin > 0 && <span className="text-emerald-600 dark:text-emerald-400">${(relContact.margin / 1000).toFixed(1)}k margin</span>}
+                          </div>
+                        )}
                       </div>
                       <div className="text-xs text-muted-foreground shrink-0 text-right">
                         {lastTp && <div>Last: {lastTp.date}</div>}
