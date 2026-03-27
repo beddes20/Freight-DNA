@@ -5,9 +5,10 @@ import {
   Target, Map, Users, CheckCircle, ClipboardList, CalendarCheck,
   BookOpen, Zap, ChevronRight, TrendingUp as CareerIcon,
   GitBranch, Phone, Key, Megaphone, Sparkles, Bot, ArrowRight,
+  LayoutGrid, MessagesSquare, ListTodo, Trophy, Wrench, GraduationCap,
+  UserCog, LineChart,
 } from "lucide-react";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
-import sidebarImg from "@assets/image_1774288850565.png";
 
 const stats = [
   { value: "15+", label: "Platform Modules" },
@@ -57,7 +58,7 @@ const features = [
 const modules = [
   { icon: Users, name: "Customers", desc: "Full account profiles with financials, contacts, modes, and intelligence notes." },
   { icon: Zap, name: "Top Opportunities", desc: "Auto-surfaced accounts with the highest untapped wallet share potential." },
-  { icon: CalendarCheck, name: "1:1 Meetings", desc: "Structured NAM-AM session topics, follow-ups, and threaded discussion threads." },
+  { icon: CalendarCheck, name: "1:1's", desc: "Structured NAM-AM session topics, follow-ups, and threaded discussion threads." },
   { icon: ClipboardList, name: "Tasks", desc: "Assign and track account-linked tasks with due dates and priority levels." },
   { icon: BarChart3, name: "Report Cards", desc: "Per-rep scorecards showing load count, margin, touchpoints, and goal progress." },
   { icon: BookOpen, name: "PTO Passoff", desc: "Structured handoff documents so accounts never slip during out-of-office periods." },
@@ -108,7 +109,7 @@ const personas = [
     bullets: [
       "Real-time team performance dashboards with period-over-period comparisons",
       "Rep scorecards covering loads, margin, touchpoints, and goal progress",
-      "1:1 meeting tooling with threaded follow-ups and structured agendas",
+      "1:1 tooling with threaded follow-ups and structured agendas",
       "Career progression tracking to develop talent from day one",
     ],
   },
@@ -201,7 +202,7 @@ export default function LandingPage() {
           style={{ color: "rgba(255,255,255,0.5)" }}
           data-testid="text-hero-subheadline"
         >
-          Freight DNA gives your team the relationship depth, pipeline visibility, and competitive intelligence to win more freight — consistently.
+          In today's freight market, the fastest path to exponential growth isn't chasing new logos — it's unlocking the wallet share you're leaving behind in the accounts you already own. Freight DNA gives your team the relationship intelligence and competitive data to grow deeper, not just wider.
         </p>
 
         <div className="flex items-center gap-4">
@@ -247,6 +248,56 @@ export default function LandingPage() {
         </div>
       </div>
 
+      {/* Down, Not Across Philosophy */}
+      <section className="py-20 px-6 md:px-12 max-w-5xl mx-auto w-full text-center" data-testid="section-dna-philosophy">
+        <div
+          className="relative rounded-2xl px-10 py-14 md:py-16 overflow-hidden"
+          style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.18)" }}
+        >
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{ background: "radial-gradient(ellipse at center, rgba(255,180,0,0.06) 0%, transparent 70%)" }}
+          />
+          <p
+            className="text-xs uppercase tracking-[0.22em] font-semibold mb-5"
+            style={{ color: "rgba(255,180,0,0.6)" }}
+          >
+            The DNA Philosophy
+          </p>
+          <h2
+            className="text-3xl md:text-5xl font-extrabold mb-6 tracking-tight leading-tight"
+            style={{ letterSpacing: "-0.03em" }}
+            data-testid="text-dna-philosophy-heading"
+          >
+            New logos are expensive.<br />
+            <span style={{ color: "#ffc333" }}>Depth is exponential.</span>
+          </h2>
+          <p
+            className="text-base md:text-lg leading-relaxed max-w-2xl mx-auto mb-8"
+            style={{ color: "rgba(255,255,255,0.5)" }}
+            data-testid="text-dna-philosophy-body"
+          >
+            In the current freight market, the brokers pulling ahead aren't the ones with the longest prospect list.
+            They're the ones who know their existing accounts better than anyone — who ships what, where, how often, and through whom.
+            Every percentage point of wallet share you unlock from a current account costs a fraction of what a new logo takes to close.
+            Freight DNA is built to help your team go <em style={{ color: "rgba(255,255,255,0.75)", fontStyle: "normal", fontWeight: 600 }}>down, not across</em> — and grow exponentially because of it.
+          </p>
+          <div
+            className="inline-flex items-center gap-3 px-5 py-2.5 rounded-full text-xs font-bold uppercase tracking-widest"
+            style={{ background: "rgba(255,195,51,0.1)", border: "1px solid rgba(255,195,51,0.25)", color: "#ffc333" }}
+          >
+            <span>DNA</span>
+            <span style={{ color: "rgba(255,180,0,0.35)" }}>·</span>
+            <span>Down Not Across</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
       {/* Platform Preview */}
       <section className="py-24 px-6 md:px-12 max-w-6xl mx-auto w-full">
         <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
@@ -264,17 +315,74 @@ export default function LandingPage() {
         </p>
 
         <div className="flex flex-col lg:flex-row gap-10 items-start">
-          {/* Sidebar screenshot */}
+          {/* Sidebar mockup */}
           <div
-            className="flex-shrink-0 rounded-xl overflow-hidden"
-            style={{ border: "1px solid rgba(255,180,0,0.15)", boxShadow: "0 0 40px rgba(255,180,0,0.06)" }}
+            className="flex-shrink-0 rounded-xl overflow-hidden w-48 md:w-52"
+            style={{ background: "#111", border: "1px solid rgba(255,180,0,0.15)", boxShadow: "0 0 40px rgba(255,180,0,0.06)" }}
+            data-testid="img-platform-sidebar"
           >
-            <img
-              src={sidebarImg}
-              alt="Freight DNA platform navigation"
-              className="w-48 md:w-56 block"
-              data-testid="img-platform-sidebar"
-            />
+            {/* Header */}
+            <div className="px-4 py-3 border-b" style={{ borderColor: "rgba(255,180,0,0.12)" }}>
+              <span className="text-xs font-bold tracking-tight" style={{ color: "#ffb400" }}>freight · dna</span>
+              <p className="text-[9px] mt-0.5" style={{ color: "rgba(255,255,255,0.3)" }}>DNA · Down Not Across</p>
+            </div>
+            {/* Nav items */}
+            <div className="py-2 px-2">
+              {[
+                { icon: LayoutGrid, label: "Dashboard", active: true },
+                { icon: Users, label: "Customers" },
+                { icon: Zap, label: "Top Opportunities" },
+                { icon: MessagesSquare, label: "1:1's" },
+                { icon: ListTodo, label: "Tasks" },
+                { icon: TrendingUp, label: "Team Performance" },
+                { icon: Target, label: "Goals" },
+                { icon: BarChart3, label: "Report Cards" },
+                { icon: BookOpen, label: "PTO Passoff" },
+              ].map((item, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded text-[10px] font-medium"
+                  style={{
+                    background: item.active ? "rgba(255,180,0,0.15)" : "transparent",
+                    color: item.active ? "#ffb400" : "rgba(255,255,255,0.55)",
+                  }}
+                >
+                  <item.icon className="w-3 h-3 flex-shrink-0" />
+                  <span>{item.label}</span>
+                </div>
+              ))}
+              <p className="text-[8px] uppercase tracking-widest px-2 pt-3 pb-1" style={{ color: "rgba(255,180,0,0.4)" }}>Pipeline</p>
+              {[
+                { icon: Trophy, label: "RFP & Awards" },
+                { icon: ClipboardList, label: "Lane Research" },
+              ].map((item, i) => (
+                <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded text-[10px] font-medium" style={{ color: "rgba(255,255,255,0.55)" }}>
+                  <item.icon className="w-3 h-3 flex-shrink-0" />
+                  <span>{item.label}</span>
+                </div>
+              ))}
+              <p className="text-[8px] uppercase tracking-widest px-2 pt-3 pb-1" style={{ color: "rgba(255,180,0,0.4)" }}>Tools</p>
+              {[
+                { icon: Wrench, label: "Resources" },
+                { icon: GraduationCap, label: "Training" },
+              ].map((item, i) => (
+                <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded text-[10px] font-medium" style={{ color: "rgba(255,255,255,0.55)" }}>
+                  <item.icon className="w-3 h-3 flex-shrink-0" />
+                  <span>{item.label}</span>
+                </div>
+              ))}
+              <p className="text-[8px] uppercase tracking-widest px-2 pt-3 pb-1" style={{ color: "rgba(255,180,0,0.4)" }}>Admin</p>
+              {[
+                { icon: UserCog, label: "User Management" },
+                { icon: LineChart, label: "Financials" },
+                { icon: Map, label: "Lane Analytics" },
+              ].map((item, i) => (
+                <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded text-[10px] font-medium" style={{ color: "rgba(255,255,255,0.55)" }}>
+                  <item.icon className="w-3 h-3 flex-shrink-0" />
+                  <span>{item.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Module grid */}
@@ -509,9 +617,9 @@ export default function LandingPage() {
       <div style={{ background: "#0d0d0d", borderTop: "1px solid rgba(255,180,0,0.12)", borderBottom: "1px solid rgba(255,180,0,0.12)" }}>
         <div className="max-w-6xl mx-auto py-16 px-6 md:px-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10">
           {[
-            { check: "Built for freight", body: "Not a generic CRM. Every field, workflow, and report is designed around how transportation brokers actually sell." },
-            { check: "Replaces the spreadsheet", body: "Org charts, lane data, RFP history, touchpoints, and goals — all in one place instead of scattered across Excel files and email threads." },
-            { check: "Develops your people", body: "1:1 meeting links, career conversations, and historical report card logs give managers the full development picture. The period toggle on Team Performance turns coaching sessions from opinions into evidence." },
+            { check: "Built for freight", body: "Not a generic CRM. Every field, workflow, and report is designed around how transportation brokers actually sell — not retrofitted from a software playbook." },
+            { check: "Grow the book you have", body: "The average broker sees less than 20% of a shipper's total spend. Freight DNA surfaces the wallet share you're missing and gives your team the intelligence to go capture it — without adding a single new logo." },
+            { check: "Develops your people", body: "1:1 tooling, career conversations, and historical report card logs give managers the full development picture. The period toggle on Team Performance turns coaching sessions from opinions into evidence." },
             { check: "Enterprise-ready", body: "Multi-team and multi-org support means Freight DNA scales with you — from a single brokerage desk to a national enterprise with dozens of teams operating independently under one platform." },
           ].map((item, i) => (
             <div key={i} className="flex flex-col gap-3" data-testid={`card-why-${i}`}>
