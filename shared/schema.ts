@@ -37,6 +37,7 @@ export const companies = pgTable("companies", {
   estimatedFreightSpend: decimal("estimated_freight_spend", { precision: 14, scale: 2 }),
   accountSummary: text("account_summary"),
   sharedReps: jsonb("shared_reps").default([]),
+  operatingHours: text("operating_hours"),
 });
 
 export const sharedRepSchema = z.object({

@@ -601,6 +601,16 @@ export async function runMigrations() {
     clientLaneAttrib.release();
   }
 
+  const clientOpHours = await pool.connect();
+  try {
+    await clientOpHours.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS operating_hours text`);
+    console.log("[migrations] operating_hours added to companies");
+  } catch (err) {
+    console.error("[migrations] operating_hours error:", err);
+  } finally {
+    clientOpHours.release();
+  }
+
   const clientIdx = await pool.connect();
   try {
     await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_company_id      ON touchpoints(company_id)`);

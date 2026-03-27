@@ -250,6 +250,7 @@ export default function CompanyDetail() {
   const [processNotes, setProcessNotes] = useState("");
   const [spotProcess, setSpotProcess] = useState("");
   const [dlEmail, setDlEmail] = useState("");
+  const [operatingHours, setOperatingHours] = useState("");
   const [accountSummary, setAccountSummary] = useState("");
   const [financialAliasEdit, setFinancialAliasEdit] = useState("");
   const [transferOpen, setTransferOpen] = useState(false);
@@ -732,6 +733,7 @@ export default function CompanyDetail() {
         processNotes: processNotes || null,
         spotProcess: spotProcess || null,
         dlEmail: dlEmail || null,
+        operatingHours: operatingHours || null,
         accountSummary: accountSummary.trim() || null,
         salesPersonId: salesPersonIdEdit || null,
       });
@@ -768,6 +770,7 @@ export default function CompanyDetail() {
     setProcessNotes(company?.processNotes || "");
     setSpotProcess(company?.spotProcess || "");
     setDlEmail(company?.dlEmail || "");
+    setOperatingHours((company as any)?.operatingHours || "");
     setAccountSummary((company as any)?.accountSummary || "");
     setSalesPersonIdEdit((company as any)?.salesPersonId || "");
     setPortalEdit(true);
@@ -1888,6 +1891,16 @@ export default function CompanyDetail() {
                     />
                   </div>
                   <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> Operating Hours / Scheduling Windows</label>
+                    <input
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                      placeholder="e.g. Mon–Fri 6am–4pm, no weekend pickups…"
+                      value={operatingHours}
+                      onChange={e => setOperatingHours(e.target.value)}
+                      data-testid="input-operating-hours"
+                    />
+                  </div>
+                  <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Account Quirks</label>
                     <textarea
                       className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring resize-none"
@@ -1984,7 +1997,7 @@ export default function CompanyDetail() {
               )}
 
               {/* Account Intelligence */}
-              {(company.tenderStyle || company.spotProcess || company.dlEmail || company.accountQuirks || company.processNotes) && (
+              {(company.tenderStyle || company.spotProcess || company.dlEmail || (company as any).operatingHours || company.accountQuirks || company.processNotes) && (
                 <div className="border-t pt-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Account Intelligence</p>
                   <div className="space-y-3">
@@ -2004,6 +2017,12 @@ export default function CompanyDetail() {
                       <div>
                         <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Mail className="h-3 w-3" /> D/L Email</p>
                         <a href={`mailto:${company.dlEmail}`} className="text-sm text-blue-600 dark:text-blue-400 hover:underline" data-testid="text-dl-email">{company.dlEmail}</a>
+                      </div>
+                    )}
+                    {(company as any).operatingHours && (
+                      <div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Clock className="h-3 w-3" /> Operating Hours / Scheduling Windows</p>
+                        <p className="text-sm" data-testid="text-operating-hours">{(company as any).operatingHours}</p>
                       </div>
                     )}
                     {company.accountQuirks && (
