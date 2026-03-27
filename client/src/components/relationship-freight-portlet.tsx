@@ -13,12 +13,12 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 const BASE_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; emoji: string }> = {
-  "1st": { label: "1st Base",  color: "text-blue-400",   bg: "bg-blue-950/40",   border: "border-blue-800/40",   emoji: "🟦" },
-  "2nd": { label: "2nd Base",  color: "text-yellow-400",  bg: "bg-yellow-950/40", border: "border-yellow-800/40", emoji: "🟨" },
-  "3rd": { label: "3rd Base",  color: "text-orange-400",  bg: "bg-orange-950/40", border: "border-orange-800/40", emoji: "🟧" },
-  "hr":  { label: "Home Run",  color: "text-emerald-400", bg: "bg-emerald-950/40",border: "border-emerald-800/40",emoji: "🟩" },
-  "home":{ label: "Home Run",  color: "text-emerald-400", bg: "bg-emerald-950/40",border: "border-emerald-800/40",emoji: "🟩" },
-  "unknown": { label: "Unassigned", color: "text-zinc-400", bg: "bg-zinc-900/40", border: "border-zinc-700/40",   emoji: "⬜" },
+  "1st": { label: "1st Base",  color: "text-blue-600 dark:text-blue-400",    bg: "bg-blue-50 dark:bg-blue-950/40",    border: "border-blue-200 dark:border-blue-800/40",    emoji: "🟦" },
+  "2nd": { label: "2nd Base",  color: "text-yellow-600 dark:text-yellow-400", bg: "bg-yellow-50 dark:bg-yellow-950/40", border: "border-yellow-200 dark:border-yellow-800/40", emoji: "🟨" },
+  "3rd": { label: "3rd Base",  color: "text-orange-600 dark:text-orange-400", bg: "bg-orange-50 dark:bg-orange-950/40", border: "border-orange-200 dark:border-orange-800/40", emoji: "🟧" },
+  "hr":  { label: "Home Run",  color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-50 dark:bg-emerald-950/40", border: "border-emerald-200 dark:border-emerald-800/40", emoji: "🟩" },
+  "home":{ label: "Home Run",  color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-50 dark:bg-emerald-950/40", border: "border-emerald-200 dark:border-emerald-800/40", emoji: "🟩" },
+  "unknown": { label: "Unassigned", color: "text-muted-foreground", bg: "bg-muted/40", border: "border-border/40", emoji: "⬜" },
 };
 
 function fmt$(n: number) {
@@ -50,16 +50,16 @@ export function RelationshipFreightDashboardPortlet() {
   const hasAnyLoads = (data?.summary ?? []).some(r => r.loads > 0);
 
   return (
-    <Card className="bg-zinc-900 border-zinc-800" data-testid="card-relationship-freight-dashboard">
+    <Card data-testid="card-relationship-freight-dashboard">
       <CardHeader className="pb-2 cursor-pointer" onClick={() => setCollapsed(p => !p)}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-amber-400" />
-            <CardTitle className="text-sm font-semibold text-white">Relationship Freight Performance</CardTitle>
+            <TrendingUp className="w-4 h-4 text-amber-500" />
+            <CardTitle className="text-sm font-semibold">Relationship Freight Performance</CardTitle>
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Info className="w-3.5 h-3.5 text-zinc-500 cursor-help" />
+                  <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
                   Contacts with lane attributions assigned, grouped by relationship level. Only contacts with business (lanes) assigned are counted. Loads and margin come from financial data matching those lanes.
@@ -69,16 +69,16 @@ export function RelationshipFreightDashboardPortlet() {
           </div>
           <div className="flex items-center gap-3">
             {!collapsed && data && (
-              <span className="text-xs text-zinc-500">{data.totalContacts} contacts · {data.totalLoads.toLocaleString()} loads · {fmt$(data.totalMargin)} margin</span>
+              <span className="text-xs text-muted-foreground">{data.totalContacts} contacts · {data.totalLoads.toLocaleString()} loads · {fmt$(data.totalMargin)} margin</span>
             )}
-            {collapsed ? <ChevronDown className="w-4 h-4 text-zinc-500" /> : <ChevronUp className="w-4 h-4 text-zinc-500" />}
+            {collapsed ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronUp className="w-4 h-4 text-muted-foreground" />}
           </div>
         </div>
       </CardHeader>
       {!collapsed && (
         <CardContent className="pt-0">
           {isLoading ? (
-            <div className="flex items-center justify-center py-6 text-zinc-500">
+            <div className="flex items-center justify-center py-6 text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !data || data.summary.length === 0 ? (
@@ -86,7 +86,7 @@ export function RelationshipFreightDashboardPortlet() {
           ) : (
             <div className="space-y-2">
               {!hasAnyLoads && (
-                <div className="text-xs text-zinc-500 bg-zinc-800/50 rounded px-3 py-2 mb-3">
+                <div className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2 mb-3">
                   Lane attributions exist but no matching loads found in financial data. Make sure financial data is uploaded and company names match.
                 </div>
               )}
@@ -150,16 +150,16 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
   }
 
   return (
-    <Card className="bg-zinc-900 border-zinc-800" data-testid="card-relationship-freight-company">
+    <Card data-testid="card-relationship-freight-company">
       <CardHeader className="pb-2 cursor-pointer" onClick={() => setCollapsed(p => !p)}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-amber-400" />
-            <CardTitle className="text-sm font-semibold text-white">Contact Freight Attribution</CardTitle>
+            <Users className="w-4 h-4 text-amber-500" />
+            <CardTitle className="text-sm font-semibold">Contact Freight Attribution</CardTitle>
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Info className="w-3.5 h-3.5 text-zinc-500 cursor-help" />
+                  <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
                   Freight loads attributed to each contact based on their lane patterns. Go deeper in relationships to see these numbers grow.
@@ -169,16 +169,16 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
           </div>
           <div className="flex items-center gap-3">
             {!collapsed && hasAnyAttributions && (
-              <span className="text-xs text-zinc-500">{totalLoads} loads · {fmt$(totalMargin)}</span>
+              <span className="text-xs text-muted-foreground">{totalLoads} loads · {fmt$(totalMargin)}</span>
             )}
-            {collapsed ? <ChevronDown className="w-4 h-4 text-zinc-500" /> : <ChevronUp className="w-4 h-4 text-zinc-500" />}
+            {collapsed ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronUp className="w-4 h-4 text-muted-foreground" />}
           </div>
         </div>
       </CardHeader>
       {!collapsed && (
         <CardContent className="pt-0">
           {isLoading ? (
-            <div className="flex items-center justify-center py-6 text-zinc-500">
+            <div className="flex items-center justify-center py-6 text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !hasContacts ? (
@@ -235,30 +235,30 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
   const hasLoads = contact.loads > 0;
 
   return (
-    <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-zinc-800/50 group" data-testid={`row-contact-freight-${contact.contactId}`}>
+    <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-muted/50 group" data-testid={`row-contact-freight-${contact.contactId}`}>
       <div className="flex items-center gap-2 min-w-0">
         <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: cfg.color.includes("emerald") ? "#34d399" : cfg.color.includes("blue") ? "#60a5fa" : cfg.color.includes("yellow") ? "#facc15" : cfg.color.includes("orange") ? "#fb923c" : "#a1a1aa" }} />
         <div className="min-w-0">
-          <p className="text-xs font-medium text-white truncate">{contact.contactName}</p>
-          {contact.contactTitle && <p className="text-[10px] text-zinc-500 truncate">{contact.contactTitle}</p>}
+          <p className="text-xs font-medium text-foreground truncate">{contact.contactName}</p>
+          {contact.contactTitle && <p className="text-[10px] text-muted-foreground truncate">{contact.contactTitle}</p>}
         </div>
       </div>
       <div className="flex items-center gap-3 flex-shrink-0 ml-2">
         {hasLoads ? (
           <>
-            <span className="text-xs text-zinc-300 font-mono">{contact.loads.toLocaleString()} loads</span>
-            <span className="text-xs text-emerald-400 font-mono">{fmt$(contact.margin)}</span>
+            <span className="text-xs text-foreground font-mono">{contact.loads.toLocaleString()} loads</span>
+            <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono">{fmt$(contact.margin)}</span>
             {contact.marginPerLoad !== null && (
-              <span className="text-[10px] text-zinc-400 font-mono">{fmt$(contact.marginPerLoad)}/ld</span>
+              <span className="text-[10px] text-muted-foreground font-mono">{fmt$(contact.marginPerLoad)}/ld</span>
             )}
             {contact.contractedPct !== null && (
-              <span className="text-[10px] text-zinc-500">{contact.contractedPct.toFixed(0)}% ct</span>
+              <span className="text-[10px] text-muted-foreground">{contact.contractedPct.toFixed(0)}% ct</span>
             )}
           </>
         ) : (
-          <span className="text-[10px] text-zinc-600 italic">{contact.attributionCount} lane{contact.attributionCount !== 1 ? "s" : ""} · no data</span>
+          <span className="text-[10px] text-muted-foreground italic">{contact.attributionCount} lane{contact.attributionCount !== 1 ? "s" : ""} · no data</span>
         )}
-        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-zinc-600 hover:text-amber-400 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`} title="Add lane attribution">
+        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-500 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`} title="Add lane attribution">
           <Plus className="w-3 h-3" />
         </Button>
       </div>
@@ -274,37 +274,37 @@ function SummaryTable({ rows }: { rows: SummaryRow[] }) {
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="border-b border-zinc-800">
-            <th className="text-left py-2 text-zinc-500 font-medium">Level</th>
-            <th className="text-right py-2 text-zinc-500 font-medium px-2">Contacts</th>
-            <th className="text-right py-2 text-zinc-500 font-medium px-2">Loads</th>
-            <th className="text-right py-2 text-zinc-500 font-medium px-2">Margin</th>
-            <th className="text-right py-2 text-zinc-500 font-medium px-2">$/Load</th>
-            <th className="text-right py-2 text-zinc-500 font-medium px-2">Contract %</th>
-            <th className="text-right py-2 text-zinc-500 font-medium px-2">Spot %</th>
+          <tr className="border-b">
+            <th className="text-left py-2 text-muted-foreground font-medium">Level</th>
+            <th className="text-right py-2 text-muted-foreground font-medium px-2">Contacts</th>
+            <th className="text-right py-2 text-muted-foreground font-medium px-2">Loads</th>
+            <th className="text-right py-2 text-muted-foreground font-medium px-2">Margin</th>
+            <th className="text-right py-2 text-muted-foreground font-medium px-2">$/Load</th>
+            <th className="text-right py-2 text-muted-foreground font-medium px-2">Contract %</th>
+            <th className="text-right py-2 text-muted-foreground font-medium px-2">Spot %</th>
           </tr>
         </thead>
         <tbody>
           {activeRows.map(row => {
             const cfg = BASE_CONFIG[row.base] ?? BASE_CONFIG["unknown"];
             return (
-              <tr key={row.base} className="border-b border-zinc-800/50 hover:bg-zinc-800/30" data-testid={`row-relationship-${row.base}`}>
+              <tr key={row.base} className="border-b hover:bg-muted/40" data-testid={`row-relationship-${row.base}`}>
                 <td className="py-2">
                   <span className={`font-semibold ${cfg.color}`}>{cfg.emoji} {cfg.label}</span>
                 </td>
-                <td className="text-right py-2 px-2 text-zinc-300">{row.contacts}</td>
-                <td className="text-right py-2 px-2 text-zinc-300 font-mono">{row.loads > 0 ? row.loads.toLocaleString() : <span className="text-zinc-600">—</span>}</td>
+                <td className="text-right py-2 px-2 text-foreground">{row.contacts}</td>
+                <td className="text-right py-2 px-2 text-foreground font-mono">{row.loads > 0 ? row.loads.toLocaleString() : <span className="text-muted-foreground">—</span>}</td>
                 <td className="text-right py-2 px-2 font-mono">
-                  {row.loads > 0 ? <span className="text-emerald-400">{fmt$(row.margin)}</span> : <span className="text-zinc-600">—</span>}
+                  {row.loads > 0 ? <span className="text-emerald-600 dark:text-emerald-400">{fmt$(row.margin)}</span> : <span className="text-muted-foreground">—</span>}
                 </td>
                 <td className="text-right py-2 px-2 font-mono">
-                  {row.marginPct !== null ? <span className="text-amber-400">{fmt$(row.marginPct)}</span> : <span className="text-zinc-600">—</span>}
+                  {row.marginPct !== null ? <span className="text-amber-600 dark:text-amber-400">{fmt$(row.marginPct)}</span> : <span className="text-muted-foreground">—</span>}
                 </td>
-                <td className="text-right py-2 px-2 text-zinc-300">
-                  {row.contractedPct !== null ? `${row.contractedPct.toFixed(0)}%` : <span className="text-zinc-600">—</span>}
+                <td className="text-right py-2 px-2 text-foreground">
+                  {row.contractedPct !== null ? `${row.contractedPct.toFixed(0)}%` : <span className="text-muted-foreground">—</span>}
                 </td>
-                <td className="text-right py-2 px-2 text-zinc-300">
-                  {row.spotPct !== null ? `${row.spotPct.toFixed(0)}%` : <span className="text-zinc-600">—</span>}
+                <td className="text-right py-2 px-2 text-foreground">
+                  {row.spotPct !== null ? `${row.spotPct.toFixed(0)}%` : <span className="text-muted-foreground">—</span>}
                 </td>
               </tr>
             );
@@ -336,8 +336,8 @@ function ProgressionCallout({ summary }: { summary: SummaryRow[] }) {
 function EmptyState({ message }: { message: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-8 text-center gap-2">
-      <Package className="w-8 h-8 text-zinc-700" />
-      <p className="text-xs text-zinc-500 max-w-xs">{message}</p>
+      <Package className="w-8 h-8 text-muted-foreground/40" />
+      <p className="text-xs text-muted-foreground max-w-xs">{message}</p>
     </div>
   );
 }
@@ -377,35 +377,35 @@ export function AddLaneDialog({ contactId, onClose, onSaved }: AddLaneDialogProp
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="bg-zinc-900 border-zinc-700 max-w-sm">
+      <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle className="text-white text-sm">Assign Lane to Contact</DialogTitle>
+          <DialogTitle className="text-sm">Assign Lane to Contact</DialogTitle>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3 py-2">
           <div>
-            <Label className="text-xs text-zinc-400 mb-1 block">Origin City</Label>
-            <Input value={originCity} onChange={e => setOriginCity(e.target.value)} placeholder="e.g. Carlisle" className="bg-zinc-800 border-zinc-700 text-white text-xs h-8" data-testid="input-origin-city" />
+            <Label className="text-xs text-muted-foreground mb-1 block">Origin City</Label>
+            <Input value={originCity} onChange={e => setOriginCity(e.target.value)} placeholder="e.g. Carlisle" className="text-xs h-8" data-testid="input-origin-city" />
           </div>
           <div>
-            <Label className="text-xs text-zinc-400 mb-1 block">Origin State</Label>
-            <Input value={originState} onChange={e => setOriginState(e.target.value.toUpperCase())} placeholder="e.g. PA" maxLength={2} className="bg-zinc-800 border-zinc-700 text-white text-xs h-8 uppercase" data-testid="input-origin-state" />
+            <Label className="text-xs text-muted-foreground mb-1 block">Origin State</Label>
+            <Input value={originState} onChange={e => setOriginState(e.target.value.toUpperCase())} placeholder="e.g. PA" maxLength={2} className="text-xs h-8 uppercase" data-testid="input-origin-state" />
           </div>
           <div>
-            <Label className="text-xs text-zinc-400 mb-1 block">Dest City</Label>
-            <Input value={destCity} onChange={e => setDestCity(e.target.value)} placeholder="any" className="bg-zinc-800 border-zinc-700 text-white text-xs h-8" data-testid="input-dest-city" />
+            <Label className="text-xs text-muted-foreground mb-1 block">Dest City</Label>
+            <Input value={destCity} onChange={e => setDestCity(e.target.value)} placeholder="any" className="text-xs h-8" data-testid="input-dest-city" />
           </div>
           <div>
-            <Label className="text-xs text-zinc-400 mb-1 block">Dest State</Label>
-            <Input value={destState} onChange={e => setDestState(e.target.value.toUpperCase())} placeholder="any" maxLength={2} className="bg-zinc-800 border-zinc-700 text-white text-xs h-8 uppercase" data-testid="input-dest-state" />
+            <Label className="text-xs text-muted-foreground mb-1 block">Dest State</Label>
+            <Input value={destState} onChange={e => setDestState(e.target.value.toUpperCase())} placeholder="any" maxLength={2} className="text-xs h-8 uppercase" data-testid="input-dest-state" />
           </div>
           <div className="col-span-2">
-            <Label className="text-xs text-zinc-400 mb-1 block">Notes (optional)</Label>
-            <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. All Carlisle PA outbound" className="bg-zinc-800 border-zinc-700 text-white text-xs h-8" data-testid="input-lane-notes" />
+            <Label className="text-xs text-muted-foreground mb-1 block">Notes (optional)</Label>
+            <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. All Carlisle PA outbound" className="text-xs h-8" data-testid="input-lane-notes" />
           </div>
         </div>
-        <p className="text-[10px] text-zinc-500">Leave a field blank to match any value. E.g. Origin: PA with no city matches all Pennsylvania origins.</p>
+        <p className="text-[10px] text-muted-foreground">Leave a field blank to match any value. E.g. Origin: PA with no city matches all Pennsylvania origins.</p>
         <DialogFooter className="gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose} className="text-zinc-400">Cancel</Button>
+          <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
           <Button size="sm" onClick={() => mutation.mutate()} disabled={!isValid || mutation.isPending} className="bg-amber-500 hover:bg-amber-400 text-black" data-testid="button-save-lane">
             {mutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
             Assign Lane
@@ -443,33 +443,33 @@ export function ContactLaneManager({ contactId }: ContactLaneManagerProps) {
   return (
     <div className="space-y-2" data-testid="section-lane-manager">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Lane Attributions</p>
-        <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)} className="h-6 px-2 text-[10px] text-amber-400 hover:text-amber-300" data-testid="button-add-lane-attrib">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Lane Attributions</p>
+        <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)} className="h-6 px-2 text-[10px] text-amber-500 hover:text-amber-600" data-testid="button-add-lane-attrib">
           <Plus className="w-3 h-3 mr-1" /> Add Lane
         </Button>
       </div>
       {isLoading ? (
-        <div className="text-xs text-zinc-500 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Loading...</div>
+        <div className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Loading...</div>
       ) : attributions.length === 0 ? (
-        <p className="text-[10px] text-zinc-600 italic">No lanes assigned yet. Add lane patterns to attribute freight to this contact.</p>
+        <p className="text-[10px] text-muted-foreground italic">No lanes assigned yet. Add lane patterns to attribute freight to this contact.</p>
       ) : (
         <div className="space-y-1">
           {attributions.map((a: any) => (
-            <div key={a.id} className="flex items-center justify-between px-2 py-1.5 rounded bg-zinc-800/50 text-xs group" data-testid={`lane-attrib-${a.id}`}>
+            <div key={a.id} className="flex items-center justify-between px-2 py-1.5 rounded bg-muted/50 text-xs group" data-testid={`lane-attrib-${a.id}`}>
               <div className="flex items-center gap-2 min-w-0">
-                <Truck className="w-3 h-3 text-zinc-500 flex-shrink-0" />
-                <span className="text-zinc-300 truncate">
+                <Truck className="w-3 h-3 text-muted-foreground flex-shrink-0" />
+                <span className="text-foreground truncate">
                   {[a.originCity, a.originState].filter(Boolean).join(" ") || "Any origin"}
                   {" → "}
                   {[a.destinationCity, a.destinationState].filter(Boolean).join(" ") || "Any dest"}
                 </span>
-                {a.notes && <span className="text-zinc-600 text-[10px] truncate">· {a.notes}</span>}
+                {a.notes && <span className="text-muted-foreground text-[10px] truncate">· {a.notes}</span>}
               </div>
               <div className="flex items-center gap-1 flex-shrink-0 ml-2">
-                <Badge variant="outline" className="text-[9px] h-4 px-1 border-zinc-700 text-zinc-500 capitalize">{a.source}</Badge>
+                <Badge variant="outline" className="text-[9px] h-4 px-1 capitalize">{a.source}</Badge>
                 <button
                   onClick={() => deleteMutation.mutate(a.id)}
-                  className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 ml-1 transition-opacity"
+                  className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 ml-1 transition-opacity"
                   data-testid={`button-remove-lane-${a.id}`}
                   title="Remove lane"
                 >
