@@ -15,7 +15,8 @@ export function useNotificationCounts() {
     staleTime: 25000,
   });
 
-  const unread = notifications.filter((n) => !n.read);
+  const safeNotifications = notifications ?? [];
+  const unread = safeNotifications.filter((n) => !n.read);
   const taskUnread = unread.filter((n) => TASK_NOTIFICATION_TYPES.includes(n.type));
   const otherUnread = unread.filter((n) => !TASK_NOTIFICATION_TYPES.includes(n.type));
 

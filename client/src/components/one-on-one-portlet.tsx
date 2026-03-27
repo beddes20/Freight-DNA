@@ -558,7 +558,7 @@ export default function OneOnOnePortlet() {
   const { data: notifications = [] } = useQuery<Array<{ id: string; read: boolean; type: string }>>({
     queryKey: ["/api/notifications"],
   });
-  const notifUnread = notifications.filter(
+  const notifUnread = (notifications ?? []).filter(
     n => !n.read && ["topic_added", "topic_reply", "session_closed"].includes(n.type)
   ).length;
 

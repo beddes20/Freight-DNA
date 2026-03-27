@@ -49,7 +49,8 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
     refetchInterval: 180000,
   });
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  const safeNotifications = notifications ?? [];
+  const unreadCount = safeNotifications.filter(n => !n.read).length;
 
   const markRead = useMutation({
     mutationFn: (id: string) => apiRequest("PATCH", `/api/notifications/${id}/read`),
@@ -107,13 +108,13 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
-          ) : notifications.length === 0 ? (
+          ) : safeNotifications.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
               <Bell className="h-8 w-8 mx-auto mb-2 opacity-30" />
               <p>No notifications yet</p>
             </div>
           ) : (
-            notifications.map(notif => (
+            safeNotifications.map(notif => (
               <button
                 key={notif.id}
                 onClick={() => handleNotifClick(notif)}

@@ -51,7 +51,7 @@ export const getQueryFn: <T>(options: {
     if (res.status === 401) {
       if (unauthorizedBehavior === "returnNull") return null;
       redirectToLogin();
-      return null;
+      throw new Error("Unauthorized");
     }
 
     await throwIfResNotOk(res);

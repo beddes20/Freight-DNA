@@ -681,20 +681,23 @@ export default function Dashboard() {
   // T007: 1:1 pending topics count
   const pendingTopicsCount = oneOnOnePendingData?.count ?? 0;
 
+  // Null-safe notifications array (API may return null if session briefly 401s during restart)
+  const safeNotifications = notifications ?? [];
+
   // Unread notification counts per portlet — drives activity badges
   const unread = {
-    tasks:    notifications.filter(n => !n.read && ["task_assigned","task_comment","task_completed","task_reminder"].includes(n.type)).length,
-    feed:     notifications.filter(n => !n.read && ["post_reply","new_post"].includes(n.type)).length,
-    oneOnOne: notifications.filter(n => !n.read && ["topic_added","topic_reply","session_closed"].includes(n.type)).length,
-    goals:    notifications.filter(n => !n.read && ["goal_set","goal_updated","goal_comment"].includes(n.type)).length,
+    tasks:    safeNotifications.filter(n => !n.read && ["task_assigned","task_comment","task_completed","task_reminder"].includes(n.type)).length,
+    feed:     safeNotifications.filter(n => !n.read && ["post_reply","new_post"].includes(n.type)).length,
+    oneOnOne: safeNotifications.filter(n => !n.read && ["topic_added","topic_reply","session_closed"].includes(n.type)).length,
+    goals:    safeNotifications.filter(n => !n.read && ["goal_set","goal_updated","goal_comment"].includes(n.type)).length,
   };
 
   // Map task IDs to their unread notifications so we can surface alerts inside the portlet
   const taskAssignedNotifMap = new Map(
-    notifications.filter(n => !n.read && n.type === "task_assigned" && n.relatedId).map(n => [n.relatedId!, n])
+    safeNotifications.filter(n => !n.read && n.type === "task_assigned" && n.relatedId).map(n => [n.relatedId!, n])
   );
   const taskCommentNotifIds = new Set(
-    notifications.filter(n => !n.read && n.type === "task_comment" && n.relatedId).map(n => n.relatedId!)
+    safeNotifications.filter(n => !n.read && n.type === "task_comment" && n.relatedId).map(n => n.relatedId!)
   );
 
   const myTasks = allTasks
