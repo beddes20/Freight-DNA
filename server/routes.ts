@@ -10238,7 +10238,14 @@ Respond with valid JSON only:
         return res.json({ levels: [], recentAdvances: [], totalCompanies: 0, totalContacts: 0 });
       }
 
-      const allContacts = (await Promise.all(visibleCompanyIds.map(id => storage.getContactsByCompany(id)))).flat();
+      const [allContacts, visibleCompanies] = await Promise.all([
+        Promise.all(visibleCompanyIds.map(id => storage.getContactsByCompany(id))).then(r => r.flat()),
+        storage.getCompaniesByIds(visibleCompanyIds, user.organizationId),
+      ]);
+
+      // Build company name map
+      const companyNameById: Record<string, string> = {};
+      for (const c of visibleCompanies) companyNameById[c.id] = c.name;
 
       function normB(raw: string | null | undefined): string {
         if (!raw) return "unknown";
@@ -10253,30 +10260,43 @@ Respond with valid JSON only:
       const BASE_ORDER = ["hr", "3rd", "2nd", "1st", "unknown"];
       const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "unknown": "Unassigned" };
 
-      // Companies & contacts per level
-      const companiesPerLevel: Record<string, Set<string>> = {};
-      const contactsPerLevel: Record<string, number> = {};
-      for (const b of BASE_ORDER) { companiesPerLevel[b] = new Set(); contactsPerLevel[b] = 0; }
-
-      for (const contact of allContacts) {
-        const base = normB(contact.relationshipBase);
-        companiesPerLevel[base].add(contact.companyId);
-        contactsPerLevel[base]++;
-      }
-
-      // Contacts that advanced in last 30 days (baseAdvancedAt within 30 days)
+      // 30-day cutoff for recent advances
       const cutoff = new Date();
       cutoff.setDate(cutoff.getDate() - 30);
       const cutoffStr = cutoff.toISOString().slice(0, 10);
 
+      // Group contacts + build contact list per level
+      const companiesPerLevel: Record<string, Set<string>> = {};
+      const contactListPerLevel: Record<string, any[]> = {};
       const advancesPerLevel: Record<string, number> = {};
-      for (const b of BASE_ORDER) advancesPerLevel[b] = 0;
+      for (const b of BASE_ORDER) {
+        companiesPerLevel[b] = new Set();
+        contactListPerLevel[b] = [];
+        advancesPerLevel[b] = 0;
+      }
 
       for (const contact of allContacts) {
-        if (contact.baseAdvancedAt && contact.baseAdvancedAt >= cutoffStr) {
-          const base = normB(contact.relationshipBase);
-          advancesPerLevel[base]++;
-        }
+        const base = normB(contact.relationshipBase);
+        companiesPerLevel[base].add(contact.companyId);
+        const recentlyAdvanced = !!(contact.baseAdvancedAt && contact.baseAdvancedAt >= cutoffStr);
+        if (recentlyAdvanced) advancesPerLevel[base]++;
+        contactListPerLevel[base].push({
+          contactId: contact.id,
+          contactName: contact.name,
+          contactTitle: contact.title ?? null,
+          companyId: contact.companyId,
+          companyName: companyNameById[contact.companyId] ?? "Unknown",
+          baseAdvancedAt: contact.baseAdvancedAt ?? null,
+          recentlyAdvanced,
+        });
+      }
+
+      // Sort each level's contact list: recently advanced first, then alpha by company
+      for (const b of BASE_ORDER) {
+        contactListPerLevel[b].sort((a: any, b: any) => {
+          if (a.recentlyAdvanced !== b.recentlyAdvanced) return a.recentlyAdvanced ? -1 : 1;
+          return a.companyName.localeCompare(b.companyName);
+        });
       }
 
       const totalCompanies = visibleCompanyIds.length;
@@ -10286,8 +10306,9 @@ Respond with valid JSON only:
         base,
         label: BASE_LABELS[base],
         companies: companiesPerLevel[base].size,
-        contacts: contactsPerLevel[base],
-      })).filter(r => r.contacts > 0 || r.base !== "unknown");
+        contacts: contactListPerLevel[base].length,
+        contactList: contactListPerLevel[base],
+      })).filter(r => r.contacts > 0);
 
       const recentAdvances = BASE_ORDER
         .filter(b => advancesPerLevel[b] > 0)

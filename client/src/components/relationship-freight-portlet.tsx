@@ -496,7 +496,16 @@ export function ContactLaneManager({ contactId }: ContactLaneManagerProps) {
 }
 
 // ── Relationship Base Distribution portlet ────────────────────────────────────
-type BaseLevel = { base: string; label: string; companies: number; contacts: number };
+type ContactEntry = {
+  contactId: string;
+  contactName: string;
+  contactTitle: string | null;
+  companyId: string;
+  companyName: string;
+  baseAdvancedAt: string | null;
+  recentlyAdvanced: boolean;
+};
+type BaseLevel = { base: string; label: string; companies: number; contacts: number; contactList: ContactEntry[] };
 type RecentAdvance = { base: string; label: string; count: number };
 type DistributionData = {
   levels: BaseLevel[];
@@ -505,8 +514,27 @@ type DistributionData = {
   totalContacts: number;
 };
 
+// Light-mode–safe progress bar colors keyed by level
+const BAR_COLOR: Record<string, string> = {
+  hr: "bg-blue-500",
+  "3rd": "bg-yellow-500",
+  "2nd": "bg-orange-500",
+  "1st": "bg-emerald-500",
+  unknown: "bg-muted-foreground/40",
+};
+
+// Light-mode–safe label colors
+const LABEL_COLOR: Record<string, string> = {
+  hr: "text-blue-600 dark:text-blue-400",
+  "3rd": "text-yellow-600 dark:text-yellow-400",
+  "2nd": "text-orange-600 dark:text-orange-400",
+  "1st": "text-emerald-600 dark:text-emerald-400",
+  unknown: "text-muted-foreground",
+};
+
 export function RelationshipBaseDistributionPortlet() {
   const [collapsed, setCollapsed] = useState(false);
+  const [expandedBase, setExpandedBase] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<DistributionData>({
     queryKey: ["/api/relationship-base-distribution"],
@@ -514,86 +542,139 @@ export function RelationshipBaseDistributionPortlet() {
 
   const maxCompanies = Math.max(1, ...(data?.levels ?? []).map(l => l.companies));
 
+  function toggleLevel(base: string) {
+    setExpandedBase(prev => (prev === base ? null : base));
+  }
+
   return (
-    <Card className="bg-zinc-900 border-zinc-800" data-testid="card-relationship-base-distribution">
+    <Card data-testid="card-relationship-base-distribution">
       <CardHeader className="pb-2 cursor-pointer" onClick={() => setCollapsed(p => !p)}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-amber-400" />
-            <CardTitle className="text-sm font-semibold text-white">Relationship Coverage by Level</CardTitle>
+            <Building2 className="w-4 h-4 text-amber-500" />
+            <CardTitle className="text-sm font-semibold">Relationship Coverage by Level</CardTitle>
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Info className="w-3.5 h-3.5 text-zinc-500 cursor-help" />
+                  <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  How many customers have contacts at each relationship level, and how many contacts have advanced in the last 30 days.
+                  How many customers have contacts at each relationship level. Click any level to see the contacts. Contacts advanced in the last 30 days are highlighted.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
           </div>
           <div className="flex items-center gap-3">
             {!collapsed && data && (
-              <span className="text-xs text-zinc-500">
-                {data.totalContacts} contacts across {data.totalCompanies} customers
+              <span className="text-xs text-muted-foreground">
+                {data.totalContacts} contacts · {data.totalCompanies} customers
               </span>
             )}
-            {collapsed ? <ChevronDown className="w-4 h-4 text-zinc-500" /> : <ChevronUp className="w-4 h-4 text-zinc-500" />}
+            {collapsed
+              ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
+              : <ChevronUp className="w-4 h-4 text-muted-foreground" />}
           </div>
         </div>
       </CardHeader>
 
       {!collapsed && (
-        <CardContent className="pt-0 space-y-4">
+        <CardContent className="pt-0 space-y-1">
           {isLoading ? (
-            <div className="flex items-center justify-center py-6 text-zinc-500">
+            <div className="flex items-center justify-center py-6 text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !data || data.levels.length === 0 ? (
             <EmptyState message="No contacts assigned to relationship levels yet." />
           ) : (
             <>
-              {/* Level distribution */}
-              <div className="space-y-2">
+              {/* Level rows */}
+              <div className="space-y-1">
                 {data.levels.map(level => {
                   const cfg = BASE_CONFIG[level.base] ?? BASE_CONFIG["unknown"];
                   const barPct = Math.round((level.companies / maxCompanies) * 100);
                   const advance = data.recentAdvances.find(r => r.base === level.base);
+                  const isOpen = expandedBase === level.base;
+
                   return (
-                    <div key={level.base} className="space-y-1" data-testid={`row-distribution-${level.base}`}>
-                      <div className="flex items-center justify-between text-xs">
-                        <span className={`font-semibold ${cfg.color}`}>{cfg.emoji} {cfg.label}</span>
-                        <div className="flex items-center gap-3">
-                          {advance && (
-                            <span className="flex items-center gap-1 text-emerald-400 font-medium">
-                              <ArrowUpCircle className="w-3 h-3" />
-                              +{advance.count} this month
+                    <div key={level.base} data-testid={`row-distribution-${level.base}`}>
+                      {/* Clickable level row */}
+                      <button
+                        className="w-full text-left rounded-md px-2 py-1.5 hover:bg-muted/60 transition-colors group"
+                        onClick={() => toggleLevel(level.base)}
+                        data-testid={`btn-expand-level-${level.base}`}
+                      >
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className={`font-semibold flex items-center gap-1.5 ${LABEL_COLOR[level.base] ?? "text-muted-foreground"}`}>
+                            {cfg.emoji} {cfg.label}
+                            {isOpen
+                              ? <ChevronUp className="w-3 h-3 opacity-60" />
+                              : <ChevronDown className="w-3 h-3 opacity-0 group-hover:opacity-60 transition-opacity" />}
+                          </span>
+                          <div className="flex items-center gap-3">
+                            {advance && (
+                              <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                                <ArrowUpCircle className="w-3 h-3" />
+                                +{advance.count} this month
+                              </span>
+                            )}
+                            <span className="text-foreground font-mono">
+                              {level.companies} customer{level.companies !== 1 ? "s" : ""}
                             </span>
-                          )}
-                          <span className="text-zinc-300 font-mono w-20 text-right">
-                            {level.companies} customer{level.companies !== 1 ? "s" : ""}
-                          </span>
-                          <span className="text-zinc-500 font-mono w-20 text-right">
-                            {level.contacts} contact{level.contacts !== 1 ? "s" : ""}
-                          </span>
+                            <span className="text-muted-foreground font-mono">
+                              {level.contacts} contact{level.contacts !== 1 ? "s" : ""}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all duration-500 ${cfg.color.replace("text-", "bg-").replace("-400", "-500")}`}
-                          style={{ width: `${barPct}%` }}
-                        />
-                      </div>
+                        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${BAR_COLOR[level.base] ?? "bg-muted-foreground/40"}`}
+                            style={{ width: `${barPct}%` }}
+                          />
+                        </div>
+                      </button>
+
+                      {/* Expanded contact list */}
+                      {isOpen && level.contactList.length > 0 && (
+                        <div className="mt-1 mb-2 mx-1 rounded-md border bg-muted/30 overflow-hidden">
+                          <div className="max-h-64 overflow-y-auto divide-y divide-border">
+                            {level.contactList.map(c => (
+                              <a
+                                key={c.contactId}
+                                href={`/companies/${c.companyId}`}
+                                className="flex items-center justify-between px-3 py-2 text-xs hover:bg-muted/60 transition-colors"
+                                data-testid={`link-contact-${c.contactId}`}
+                              >
+                                <div className="min-w-0">
+                                  <span className="font-medium text-foreground truncate block">{c.contactName}</span>
+                                  <span className="text-muted-foreground truncate block">
+                                    {c.contactTitle ? `${c.contactTitle} · ` : ""}{c.companyName}
+                                  </span>
+                                </div>
+                                {c.recentlyAdvanced && (
+                                  <span className="ml-2 shrink-0 flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium whitespace-nowrap">
+                                    <ArrowUpCircle className="w-3 h-3" />
+                                    {c.baseAdvancedAt
+                                      ? new Date(c.baseAdvancedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                                      : "Recently"}
+                                  </span>
+                                )}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
 
-              {/* Recent advances summary */}
+              {/* Recent advances footer */}
               {data.recentAdvances.length > 0 && (
-                <div className="pt-1 border-t border-zinc-800">
-                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-2">Last 30 Days — Relationship Advances</p>
-                  <div className="flex flex-wrap gap-2">
+                <div className="pt-2 border-t">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold mb-2 px-2">
+                    Last 30 Days — Relationship Advances
+                  </p>
+                  <div className="flex flex-wrap gap-2 px-2 pb-1">
                     {data.recentAdvances.map(adv => {
                       const cfg = BASE_CONFIG[adv.base] ?? BASE_CONFIG["unknown"];
                       return (
