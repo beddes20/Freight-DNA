@@ -21,7 +21,8 @@ const BASE_CONFIG: Record<string, { label: string; color: string; bg: string; bo
   "unknown": { label: "Unassigned", color: "text-muted-foreground", bg: "bg-muted/40", border: "border-border/40", emoji: "⬜" },
 };
 
-function fmt$(n: number) {
+function fmt$(n: number | null | undefined) {
+  if (n == null || isNaN(n as number)) return "—";
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
   return `$${n.toFixed(0)}`;
@@ -252,10 +253,10 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
           <>
             <span className="text-xs text-foreground font-mono">{contact.loads.toLocaleString()} loads</span>
             <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono">{fmt$(contact.margin)}</span>
-            {contact.marginPerLoad !== null && (
+            {contact.marginPerLoad != null && (
               <span className="text-[10px] text-muted-foreground font-mono">{fmt$(contact.marginPerLoad)}/ld</span>
             )}
-            {contact.contractedPct !== null && (
+            {contact.contractedPct != null && (
               <span className="text-[10px] text-muted-foreground">{contact.contractedPct.toFixed(0)}% ct</span>
             )}
           </>
@@ -302,13 +303,13 @@ function SummaryTable({ rows }: { rows: SummaryRow[] }) {
                   {row.loads > 0 ? <span className="text-emerald-600 dark:text-emerald-400">{fmt$(row.margin)}</span> : <span className="text-muted-foreground">—</span>}
                 </td>
                 <td className="text-right py-2 px-2 font-mono">
-                  {row.marginPct !== null ? <span className="text-amber-600 dark:text-amber-400">{fmt$(row.marginPct)}</span> : <span className="text-muted-foreground">—</span>}
+                  {row.marginPct != null ? <span className="text-amber-600 dark:text-amber-400">{fmt$(row.marginPct)}</span> : <span className="text-muted-foreground">—</span>}
                 </td>
                 <td className="text-right py-2 px-2 text-foreground">
-                  {row.contractedPct !== null ? `${row.contractedPct.toFixed(0)}%` : <span className="text-muted-foreground">—</span>}
+                  {row.contractedPct != null ? `${row.contractedPct.toFixed(0)}%` : <span className="text-muted-foreground">—</span>}
                 </td>
                 <td className="text-right py-2 px-2 text-foreground">
-                  {row.spotPct !== null ? `${row.spotPct.toFixed(0)}%` : <span className="text-muted-foreground">—</span>}
+                  {row.spotPct != null ? `${row.spotPct.toFixed(0)}%` : <span className="text-muted-foreground">—</span>}
                 </td>
               </tr>
             );
