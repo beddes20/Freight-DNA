@@ -10047,8 +10047,19 @@ Respond with valid JSON only:
       let rawRows: any[] = upload?.rows ?? [];
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
 
-      const BASE_ORDER = ["1st", "2nd", "3rd", "hr", "home"];
-      const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "home": "Home Run" };
+      const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
+      const VALID_BASES = new Set(["1st", "2nd", "3rd", "hr", "unknown"]);
+
+      function normalizeBase(raw: string | null | undefined): string {
+        if (!raw) return "unknown";
+        const v = raw.trim().toLowerCase();
+        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
+        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
+        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
+        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
+        if (VALID_BASES.has(v)) return v;
+        return "unknown";
+      }
 
       const contactResults = contacts.map(contact => {
         const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
@@ -10056,7 +10067,7 @@ Respond with valid JSON only:
         if (contactAttribs.length > 0 && rawRows.length > 0) {
           freightMetrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
         }
-        const base = contact.relationshipBase || "unknown";
+        const base = normalizeBase(contact.relationshipBase);
         return {
           contactId: contact.id,
           contactName: contact.name,
