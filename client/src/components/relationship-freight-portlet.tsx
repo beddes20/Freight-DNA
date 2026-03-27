@@ -64,7 +64,7 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
                   <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Contacts with lane attributions assigned, grouped by relationship level. Only contacts with business (lanes) assigned are counted. Loads and margin come from financial data matching those lanes.
+                  Contacts grouped by relationship level (1st/2nd/3rd/HR). Each level shows the total freight for the companies where you have relationships at that tier.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -84,12 +84,12 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !data || data.summary.length === 0 ? (
-            <EmptyState message="No lane attributions yet. Open a contact and assign lanes to start tracking." />
+            <EmptyState message="No contacts have a relationship level set yet. Set a contact's base level (1st/2nd/3rd/HR) in their contact sheet to start tracking." />
           ) : (
             <div className="space-y-2">
               {!hasAnyLoads && (
                 <div className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2 mb-3">
-                  Lane attributions exist but no matching loads found in financial data. Make sure financial data is uploaded and company names match.
+                  Contacts have base levels set but no matching financial data found. Make sure a financial upload is on file and company names match.
                 </div>
               )}
               <SummaryTable rows={data.summary} />
@@ -136,11 +136,11 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
     queryFn: () => fetch(`/api/companies/${companyId}/relationship-freight-summary`, { credentials: "include" }).then(r => r.json()),
   });
 
-  // Backend now only returns contacts with lane attributions (business assigned)
+  // Each contact shares the company's total freight — use the first contact's metrics as the company total
   const contacts = data?.contacts ?? [];
   const hasContacts = contacts.length > 0;
-  const totalLoads = contacts.reduce((s, c) => s + c.loads, 0);
-  const totalMargin = contacts.reduce((s, c) => s + c.margin, 0);
+  const totalLoads = contacts[0]?.loads ?? 0;
+  const totalMargin = contacts[0]?.margin ?? 0;
   const hasAnyAttributions = hasContacts && totalLoads > 0;
 
   // Group contacts by base
@@ -165,7 +165,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
                   <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Freight loads attributed to each contact based on their lane patterns. Go deeper in relationships to see these numbers grow.
+                  Shows total company freight alongside each contact's relationship level. All contacts at this company share the same freight volume.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -185,7 +185,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !hasContacts ? (
-            <EmptyState message="No contacts with lane attributions yet. Open a contact and assign their lanes to start attributing freight." />
+            <EmptyState message="No contacts have a relationship level set at this company. Open a contact and set their base level (1st/2nd/3rd/HR) to start tracking." />
           ) : (
             <div className="space-y-4">
               {baseOrder.filter(b => grouped[b]?.length).map(base => {
@@ -259,7 +259,7 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
             )}
           </>
         ) : (
-          <span className="text-[10px] text-muted-foreground italic">{contact.attributionCount} lane{contact.attributionCount !== 1 ? "s" : ""} · no data</span>
+          <span className="text-[10px] text-muted-foreground italic">No financial data</span>
         )}
         <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-500 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`} title="Add lane attribution">
           <Plus className="w-3 h-3" />
