@@ -10211,6 +10211,95 @@ Respond with valid JSON only:
     }
   });
 
+  // ── Relationship Base Distribution — counts companies & contacts per level ──
+  app.get("/api/relationship-base-distribution", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const isAdmin = user.role === "admin";
+      const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
+
+      let visibleCompanyIds: string[] = [];
+      if (isAdmin) {
+        const all = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = all.map(c => c.id);
+      } else if (isDirector) {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const repIds = [user.id, ...teamIds];
+        const all = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = all.filter(c => repIds.includes(c.assignedTo ?? "")).map(c => c.id);
+      } else {
+        const all = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = all.filter(c => c.assignedTo === user.id).map(c => c.id);
+      }
+
+      if (visibleCompanyIds.length === 0) {
+        return res.json({ levels: [], recentAdvances: [], totalCompanies: 0, totalContacts: 0 });
+      }
+
+      const allContacts = (await Promise.all(visibleCompanyIds.map(id => storage.getContactsByCompany(id)))).flat();
+
+      function normB(raw: string | null | undefined): string {
+        if (!raw) return "unknown";
+        const v = raw.trim().toLowerCase();
+        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
+        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
+        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
+        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
+        return "unknown";
+      }
+
+      const BASE_ORDER = ["hr", "3rd", "2nd", "1st", "unknown"];
+      const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "unknown": "Unassigned" };
+
+      // Companies & contacts per level
+      const companiesPerLevel: Record<string, Set<string>> = {};
+      const contactsPerLevel: Record<string, number> = {};
+      for (const b of BASE_ORDER) { companiesPerLevel[b] = new Set(); contactsPerLevel[b] = 0; }
+
+      for (const contact of allContacts) {
+        const base = normB(contact.relationshipBase);
+        companiesPerLevel[base].add(contact.companyId);
+        contactsPerLevel[base]++;
+      }
+
+      // Contacts that advanced in last 30 days (baseAdvancedAt within 30 days)
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+      const advancesPerLevel: Record<string, number> = {};
+      for (const b of BASE_ORDER) advancesPerLevel[b] = 0;
+
+      for (const contact of allContacts) {
+        if (contact.baseAdvancedAt && contact.baseAdvancedAt >= cutoffStr) {
+          const base = normB(contact.relationshipBase);
+          advancesPerLevel[base]++;
+        }
+      }
+
+      const totalCompanies = visibleCompanyIds.length;
+      const totalContacts = allContacts.length;
+
+      const levels = BASE_ORDER.map(base => ({
+        base,
+        label: BASE_LABELS[base],
+        companies: companiesPerLevel[base].size,
+        contacts: contactsPerLevel[base],
+      })).filter(r => r.contacts > 0 || r.base !== "unknown");
+
+      const recentAdvances = BASE_ORDER
+        .filter(b => advancesPerLevel[b] > 0)
+        .map(base => ({ base, label: BASE_LABELS[base], count: advancesPerLevel[base] }));
+
+      res.json({ levels, recentAdvances, totalCompanies, totalContacts });
+    } catch (e: any) {
+      console.error("[relationship-base-distribution]", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {
       if (err.code === "LIMIT_FILE_SIZE") {

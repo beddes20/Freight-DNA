@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ChevronDown, ChevronUp, TrendingUp, Users, Package, DollarSign, Truck, Plus, Info, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronUp, TrendingUp, Users, Package, DollarSign, Truck, Plus, Info, Loader2, ArrowUpCircle, Building2 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -492,5 +492,128 @@ export function ContactLaneManager({ contactId }: ContactLaneManagerProps) {
         />
       )}
     </div>
+  );
+}
+
+// ── Relationship Base Distribution portlet ────────────────────────────────────
+type BaseLevel = { base: string; label: string; companies: number; contacts: number };
+type RecentAdvance = { base: string; label: string; count: number };
+type DistributionData = {
+  levels: BaseLevel[];
+  recentAdvances: RecentAdvance[];
+  totalCompanies: number;
+  totalContacts: number;
+};
+
+export function RelationshipBaseDistributionPortlet() {
+  const [collapsed, setCollapsed] = useState(false);
+
+  const { data, isLoading } = useQuery<DistributionData>({
+    queryKey: ["/api/relationship-base-distribution"],
+  });
+
+  const maxCompanies = Math.max(1, ...(data?.levels ?? []).map(l => l.companies));
+
+  return (
+    <Card className="bg-zinc-900 border-zinc-800" data-testid="card-relationship-base-distribution">
+      <CardHeader className="pb-2 cursor-pointer" onClick={() => setCollapsed(p => !p)}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-amber-400" />
+            <CardTitle className="text-sm font-semibold text-white">Relationship Coverage by Level</CardTitle>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="w-3.5 h-3.5 text-zinc-500 cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-xs">
+                  How many customers have contacts at each relationship level, and how many contacts have advanced in the last 30 days.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+          <div className="flex items-center gap-3">
+            {!collapsed && data && (
+              <span className="text-xs text-zinc-500">
+                {data.totalContacts} contacts across {data.totalCompanies} customers
+              </span>
+            )}
+            {collapsed ? <ChevronDown className="w-4 h-4 text-zinc-500" /> : <ChevronUp className="w-4 h-4 text-zinc-500" />}
+          </div>
+        </div>
+      </CardHeader>
+
+      {!collapsed && (
+        <CardContent className="pt-0 space-y-4">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-6 text-zinc-500">
+              <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
+            </div>
+          ) : !data || data.levels.length === 0 ? (
+            <EmptyState message="No contacts assigned to relationship levels yet." />
+          ) : (
+            <>
+              {/* Level distribution */}
+              <div className="space-y-2">
+                {data.levels.map(level => {
+                  const cfg = BASE_CONFIG[level.base] ?? BASE_CONFIG["unknown"];
+                  const barPct = Math.round((level.companies / maxCompanies) * 100);
+                  const advance = data.recentAdvances.find(r => r.base === level.base);
+                  return (
+                    <div key={level.base} className="space-y-1" data-testid={`row-distribution-${level.base}`}>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className={`font-semibold ${cfg.color}`}>{cfg.emoji} {cfg.label}</span>
+                        <div className="flex items-center gap-3">
+                          {advance && (
+                            <span className="flex items-center gap-1 text-emerald-400 font-medium">
+                              <ArrowUpCircle className="w-3 h-3" />
+                              +{advance.count} this month
+                            </span>
+                          )}
+                          <span className="text-zinc-300 font-mono w-20 text-right">
+                            {level.companies} customer{level.companies !== 1 ? "s" : ""}
+                          </span>
+                          <span className="text-zinc-500 font-mono w-20 text-right">
+                            {level.contacts} contact{level.contacts !== 1 ? "s" : ""}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${cfg.color.replace("text-", "bg-").replace("-400", "-500")}`}
+                          style={{ width: `${barPct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Recent advances summary */}
+              {data.recentAdvances.length > 0 && (
+                <div className="pt-1 border-t border-zinc-800">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-2">Last 30 Days — Relationship Advances</p>
+                  <div className="flex flex-wrap gap-2">
+                    {data.recentAdvances.map(adv => {
+                      const cfg = BASE_CONFIG[adv.base] ?? BASE_CONFIG["unknown"];
+                      return (
+                        <div
+                          key={adv.base}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium ${cfg.bg} ${cfg.border} ${cfg.color}`}
+                          data-testid={`badge-advance-${adv.base}`}
+                        >
+                          <ArrowUpCircle className="w-3 h-3" />
+                          {adv.count} → {cfg.label}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      )}
+    </Card>
   );
 }
