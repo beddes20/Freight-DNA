@@ -10149,9 +10149,18 @@ Respond with valid JSON only:
       for (const base of BASE_ORDER) grouped[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
       grouped["unknown"] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
+      function normBase(raw: string | null | undefined): string {
+        if (!raw) return "unknown";
+        const v = raw.trim().toLowerCase();
+        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
+        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
+        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
+        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
+        return "unknown";
+      }
+
       for (const contact of allContacts) {
-        const base = contact.relationshipBase === "home" ? "hr" : (contact.relationshipBase || "unknown");
-        if (!grouped[base]) grouped[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+        const base = normBase(contact.relationshipBase);
         grouped[base].contacts++;
 
         const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
