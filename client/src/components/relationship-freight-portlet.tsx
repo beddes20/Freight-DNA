@@ -84,7 +84,7 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !data || data.summary.length === 0 ? (
-            <EmptyState message="No contacts have a relationship level set yet. Set a contact's base level (1st/2nd/3rd/HR) in their contact sheet to start tracking." />
+            <EmptyState message="No lanes assigned yet. Go to a contact sheet, set their relationship base (1st/2nd/3rd/HR), then assign their lanes using the + button. Freight is only counted when specific lanes are attributed to a contact." />
           ) : (
             <div className="space-y-2">
               {!hasAnyLoads && (
@@ -165,7 +165,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
                   <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Contacts with a relationship level set. Freight shown is lane-specific if lanes are assigned (blue "lane" tag), or company total as a preview if not (grey "co." tag). Assign lanes via the + button to track precise load attribution per contact.
+                  Shows freight attributed to each contact based on their assigned lanes. To track a contact, set their relationship base (1st/2nd/3rd/HR) in their contact sheet, then assign lanes using the + button. Only lane-assigned freight is counted here.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -185,7 +185,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !hasContacts ? (
-            <EmptyState message="No contacts have a relationship level set at this company. Open a contact and set their base level (1st/2nd/3rd/HR) to start tracking." />
+            <EmptyState message="No lanes assigned yet. Open a contact, set their relationship base (1st/2nd/3rd/HR), then use the + button to assign their lanes. Freight is tracked per contact based on their specific lanes." />
           ) : (
             <div className="space-y-4">
               {baseOrder.filter(b => grouped[b]?.length).map(base => {
