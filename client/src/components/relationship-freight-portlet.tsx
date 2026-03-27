@@ -118,6 +118,7 @@ interface CompanyContact {
   contractedPct: number | null;
   spotPct: number | null;
   attributions: any[];
+  laneFiltered?: boolean; // true = precise lane-matched, false/undefined = company total fallback
 }
 
 interface CompanyPortletProps {
@@ -165,7 +166,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
                   <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Shows total company freight alongside each contact's relationship level. All contacts at this company share the same freight volume.
+                  Contacts with a relationship level set. Freight shown is lane-specific if lanes are assigned (blue "lane" tag), or company total as a preview if not (grey "co." tag). Assign lanes via the + button to track precise load attribution per contact.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -236,6 +237,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
 function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; onAddLane: () => void }) {
   const cfg = BASE_CONFIG[contact.relationshipBase] ?? BASE_CONFIG["unknown"];
   const hasLoads = contact.loads > 0;
+  const isLaneFiltered = contact.laneFiltered === true;
 
   return (
     <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-muted/50 group" data-testid={`row-contact-freight-${contact.contactId}`}>
@@ -257,11 +259,25 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
             {contact.contractedPct !== null && (
               <span className="text-[10px] text-muted-foreground">{contact.contractedPct.toFixed(0)}% ct</span>
             )}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${isLaneFiltered ? "bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400" : "bg-muted text-muted-foreground"}`}>
+                    {isLaneFiltered ? "lane" : "co."}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs max-w-[200px]">
+                  {isLaneFiltered
+                    ? `Lane-matched: ${contact.attributionCount} lane${contact.attributionCount !== 1 ? "s" : ""} attributed to this contact`
+                    : "Company total: no specific lanes assigned yet — showing all company freight as a preview"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </>
         ) : (
           <span className="text-[10px] text-muted-foreground italic">No financial data</span>
         )}
-        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-500 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`} title="Add lane attribution">
+        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-500 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`} title="Assign lanes to this contact">
           <Plus className="w-3 h-3" />
         </Button>
       </div>

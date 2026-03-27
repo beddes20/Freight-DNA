@@ -10081,8 +10081,9 @@ Respond with valid JSON only:
       const company = await storage.getCompanyInOrg(req.params.id as string, user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
-      const [contacts, upload] = await Promise.all([
+      const [contacts, allAttributions, upload] = await Promise.all([
         storage.getContactsByCompany(company.id),
+        storage.getLaneAttributionsByCompany(company.id),
         storage.getLatestFinancialUploadForOrg(user.organizationId),
       ]);
 
@@ -10102,32 +10103,35 @@ Respond with valid JSON only:
         return "unknown";
       }
 
-      // Compute company total freight once (shared across all contacts — no lane filtering required)
-      const companyFreight = rawRows.length > 0
+      // Compute company total once (fallback when no lane attributions)
+      const companyTotalFreight = rawRows.length > 0
         ? computeCompanyFreightTotal(rawRows, cols, companyNames)
         : { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
-      const marginPerLoad = companyFreight.loads > 0
-        ? Math.round((companyFreight.margin / companyFreight.loads) * 100) / 100 : null;
-      const contractedPct = companyFreight.loads > 0
-        ? Math.round(companyFreight.contractedLoads / companyFreight.loads * 1000) / 10 : null;
-      const spotPct = companyFreight.loads > 0
-        ? Math.round(companyFreight.spotLoads / companyFreight.loads * 1000) / 10 : null;
-
-      // Include any contact with a relationship base set (lane attributions no longer required)
+      // Include contacts with a relationship base set (lane attributions optional)
       const contactResults = contacts
         .filter(contact => contact.relationshipBase && contact.relationshipBase.trim())
         .map(contact => {
+          const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
+          const hasLanes = contactAttribs.length > 0;
+          // Use lane-filtered freight if lanes assigned, otherwise fall back to company total
+          const freight = rawRows.length > 0
+            ? (hasLanes ? computeFreightMetrics(rawRows, cols, companyNames, contactAttribs) : companyTotalFreight)
+            : { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
           const base = normalizeBase(contact.relationshipBase);
+          const marginPerLoad = freight.loads > 0 ? Math.round((freight.margin / freight.loads) * 100) / 100 : null;
+          const contractedPct = freight.loads > 0 ? Math.round(freight.contractedLoads / freight.loads * 1000) / 10 : null;
+          const spotPct = freight.loads > 0 ? Math.round(freight.spotLoads / freight.loads * 1000) / 10 : null;
           return {
             contactId: contact.id,
             contactName: contact.name,
             contactTitle: contact.title,
             relationshipBase: base,
             baseLabel: BASE_LABELS[base] || base,
-            attributionCount: 0,
-            attributions: [],
-            ...companyFreight,
+            attributionCount: contactAttribs.length,
+            attributions: contactAttribs,
+            laneFiltered: hasLanes, // true = lane-matched freight, false = company total fallback
+            ...freight,
             marginPerLoad,
             contractedPct,
             spotPct,
@@ -10180,8 +10184,9 @@ Respond with valid JSON only:
         companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
       }
 
-      // Load contacts for all visible companies (bulk query — no N+1)
+      // Load contacts + lane attributions for all visible companies (bulk queries)
       const allContacts = await storage.getContactsByCompanyIds(visibleCompanyIds);
+      const allAttributionsList = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
 
       const rawRows: any[] = upload?.rows ?? [];
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
@@ -10204,22 +10209,29 @@ Respond with valid JSON only:
         return "unknown";
       }
 
-      // Cache company freight totals so we don't recompute for every contact at the same company
+      // Cache company total freight (fallback for contacts with no lane attributions)
       const companyFreightCache: Record<string, { loads: number; margin: number; contractedLoads: number; spotLoads: number }> = {};
 
       for (const contact of allContacts) {
-        // Only include contacts with a relationship base set
         if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
 
         const base = normBase(contact.relationshipBase);
         grouped[base].contacts++;
 
         if (rawRows.length > 0) {
-          if (!companyFreightCache[contact.companyId]) {
-            const companyNames = companyNameMap[contact.companyId] ?? [];
-            companyFreightCache[contact.companyId] = computeCompanyFreightTotal(rawRows, cols, companyNames);
+          const companyNames = companyNameMap[contact.companyId] ?? [];
+          const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
+          let metrics: { loads: number; margin: number; contractedLoads: number; spotLoads: number };
+          if (contactAttribs.length > 0) {
+            // Precise: use only the lanes assigned to this contact
+            metrics = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+          } else {
+            // Fallback: company total (no lanes set up yet)
+            if (!companyFreightCache[contact.companyId]) {
+              companyFreightCache[contact.companyId] = computeCompanyFreightTotal(rawRows, cols, companyNames);
+            }
+            metrics = companyFreightCache[contact.companyId];
           }
-          const metrics = companyFreightCache[contact.companyId];
           grouped[base].loads += metrics.loads;
           grouped[base].margin += metrics.margin;
           grouped[base].contractedLoads += metrics.contractedLoads;
@@ -10463,18 +10475,27 @@ Respond with valid JSON only:
       for (const base of BASE_ORDER_S) groupedS[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
       groupedS["unknown"] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
-      // Cache company freight totals to avoid recomputing per contact
+      // Cache company total freight (fallback when no lane attributions)
       const companyFreightCacheS: Record<string, { loads: number; margin: number; contractedLoads: number; spotLoads: number }> = {};
+      // Load all lane attributions for visible companies
+      const allAttributionsListS = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
 
       for (const contact of allContacts) {
         if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
         const base = normBaseS(contact.relationshipBase);
         groupedS[base].contacts++;
         if (rawRows.length > 0) {
-          if (!companyFreightCacheS[contact.companyId]) {
-            companyFreightCacheS[contact.companyId] = computeCompanyFreightTotal(rawRows, cols, companyNameMap[contact.companyId] ?? []);
+          const companyNames = companyNameMap[contact.companyId] ?? [];
+          const contactAttribs = allAttributionsListS.filter(a => a.contactId === contact.id);
+          let m: { loads: number; margin: number; contractedLoads: number; spotLoads: number };
+          if (contactAttribs.length > 0) {
+            m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+          } else {
+            if (!companyFreightCacheS[contact.companyId]) {
+              companyFreightCacheS[contact.companyId] = computeCompanyFreightTotal(rawRows, cols, companyNames);
+            }
+            m = companyFreightCacheS[contact.companyId];
           }
-          const m = companyFreightCacheS[contact.companyId];
           groupedS[base].loads += m.loads;
           groupedS[base].margin += m.margin;
           groupedS[base].contractedLoads += m.contractedLoads;
