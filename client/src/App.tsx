@@ -45,6 +45,7 @@ import CoordinatorsCornerPage from "@/pages/coordinators-corner";
 import FeedbackInboxPage from "@/pages/feedback-inbox";
 import ProspectsPage from "@/pages/prospects";
 import PipelineAnalyticsPage from "@/pages/pipeline-analytics";
+import CheckoutSuccessPage from "@/pages/checkout-success";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -166,6 +167,7 @@ function AuthenticatedApp() {
       <Switch>
         <Route path="/login" component={LoginPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
+        <Route path="/checkout/success" component={CheckoutSuccessPage} />
         <Route component={LandingPage} />
       </Switch>
     );

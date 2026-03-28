@@ -14,6 +14,9 @@ import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
+import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+import { db } from "./storage";
+import { sql } from "drizzle-orm";
 
 // Customer/ops-user codes that must never appear in any financial report, summary, or aggregation.
 const EXCLUDED_FINANCIAL_CODES = new Set(["valubuaz"]);
@@ -720,6 +723,11 @@ export async function registerRoutes(
   app.use("/api", (req, res, next) => {
     if (req.path.startsWith("/auth/")) return next();
     if (req.path === "/demo-requests" && req.method === "POST") return next();
+    // Public Stripe endpoints (no auth required — landing page checkout flow)
+    if (req.path === "/stripe/config" && req.method === "GET") return next();
+    if (req.path === "/stripe/products" && req.method === "GET") return next();
+    if (req.path === "/stripe/checkout" && req.method === "POST") return next();
+    if (req.path === "/stripe/confirm-checkout" && req.method === "GET") return next();
     requireAuth(req, res, next);
   });
 
@@ -11216,6 +11224,267 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
     } catch (err) {
       console.error("POST /api/prospects/:id/convert error:", err);
       res.status(500).json({ error: "Failed to convert prospect" });
+    }
+  });
+
+  // ─── Stripe Billing Routes ────────────────────────────────────────────────────
+
+  // Get Stripe publishable key (public, no auth)
+  app.get("/api/stripe/config", async (_req, res) => {
+    try {
+      const publishableKey = await getStripePublishableKey();
+      res.json({ publishableKey });
+    } catch {
+      res.status(500).json({ error: "Stripe not configured" });
+    }
+  });
+
+  interface ProductRow {
+    product_id: string;
+    product_name: string;
+    product_description: string | null;
+    product_metadata: Record<string, string> | null;
+    price_id: string | null;
+    unit_amount: number | null;
+    currency: string | null;
+    recurring: { interval: string; interval_count: number } | null;
+  }
+
+  interface ProductEntry {
+    id: string;
+    name: string;
+    description: string | null;
+    metadata: Record<string, string>;
+    prices: Array<{ id: string; unitAmount: number | null; currency: string; recurring: { interval: string; interval_count: number } | null }>;
+  }
+
+  // List products with prices from the stripe schema (public, no auth)
+  app.get("/api/stripe/products", async (_req, res) => {
+    try {
+      const result = await db.execute(sql`
+        SELECT
+          p.id as product_id,
+          p.name as product_name,
+          p.description as product_description,
+          p.metadata as product_metadata,
+          pr.id as price_id,
+          pr.unit_amount,
+          pr.currency,
+          pr.recurring,
+          pr.active as price_active
+        FROM stripe.products p
+        LEFT JOIN stripe.prices pr ON pr.product = p.id AND pr.active = true
+        WHERE p.active = true
+        ORDER BY p.name, pr.unit_amount
+      `);
+
+      const productsMap = new Map<string, ProductEntry>();
+      for (const row of result.rows as ProductRow[]) {
+        if (!productsMap.has(row.product_id)) {
+          productsMap.set(row.product_id, {
+            id: row.product_id,
+            name: row.product_name,
+            description: row.product_description,
+            metadata: row.product_metadata ?? {},
+            prices: [],
+          });
+        }
+        if (row.price_id && row.currency) {
+          productsMap.get(row.product_id)!.prices.push({
+            id: row.price_id,
+            unitAmount: row.unit_amount,
+            currency: row.currency,
+            recurring: row.recurring,
+          });
+        }
+      }
+
+      res.json({ products: Array.from(productsMap.values()) });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("GET /api/stripe/products error:", message);
+      res.json({ products: [] });
+    }
+  });
+
+  // Simple in-memory rate limiter for the public checkout endpoint.
+  // Limits each IP to 5 checkout session requests per hour to prevent abuse.
+  const checkoutRateLimit = new Map<string, { count: number; windowStart: number }>();
+  const CHECKOUT_LIMIT = 5;
+  const CHECKOUT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+  // Create a Stripe Checkout session (public, no auth required — prospect is signing up)
+  app.post("/api/stripe/checkout", async (req, res) => {
+    const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
+    const now = Date.now();
+    const bucket = checkoutRateLimit.get(ip);
+
+    if (bucket) {
+      if (now - bucket.windowStart < CHECKOUT_WINDOW_MS) {
+        if (bucket.count >= CHECKOUT_LIMIT) {
+          return res.status(429).json({ error: "Too many checkout requests. Please try again later." });
+        }
+        bucket.count += 1;
+      } else {
+        checkoutRateLimit.set(ip, { count: 1, windowStart: now });
+      }
+    } else {
+      checkoutRateLimit.set(ip, { count: 1, windowStart: now });
+    }
+
+    try {
+      const { priceId, companyName, adminEmail } = req.body as {
+        priceId: string;
+        companyName?: string;
+        adminEmail?: string;
+      };
+      if (!priceId) return res.status(400).json({ error: "priceId is required" });
+
+      // Basic shape validation on optional identity fields to prevent malformed org records
+      if (companyName !== undefined && (typeof companyName !== "string" || companyName.length > 200)) {
+        return res.status(400).json({ error: "Invalid companyName" });
+      }
+      if (adminEmail !== undefined) {
+        const emailOk = typeof adminEmail === "string" && adminEmail.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail);
+        if (!emailOk) return res.status(400).json({ error: "Invalid adminEmail" });
+      }
+
+      // Allowlist: only permit prices that are synced, active, and belong to one of our
+      // explicitly typed products (subscription plan or one-time add-on). This prevents
+      // a client from passing arbitrary price IDs from unrelated Stripe products.
+      const priceCheckResult = await db.execute(sql`
+        SELECT pr.id, pr.recurring
+        FROM stripe.prices pr
+        INNER JOIN stripe.products p ON p.id = pr.product
+        WHERE pr.id = ${priceId}
+          AND pr.active = true
+          AND p.active = true
+          AND (p.metadata->>'type' = 'subscription' OR p.metadata->>'type' = 'one_time')
+      `);
+
+      if (priceCheckResult.rows.length === 0) {
+        return res.status(400).json({ error: "Invalid or inactive price" });
+      }
+
+      // Derive mode from price type so the client cannot override it
+      const priceRow = priceCheckResult.rows[0] as { recurring: { interval: string } | null };
+      const resolvedMode: "subscription" | "payment" = priceRow.recurring ? "subscription" : "payment";
+
+      const stripe = await getUncachableStripeClient();
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items: [{ price: priceId, quantity: 1 }],
+        mode: resolvedMode,
+        success_url: `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${baseUrl}/?checkout=cancelled`,
+        metadata: {
+          companyName: companyName ?? "",
+          adminEmail: adminEmail ?? "",
+        },
+        ...(adminEmail ? { customer_email: adminEmail } : {}),
+      });
+      res.json({ url: session.url });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("POST /api/stripe/checkout error:", message);
+      res.status(500).json({ error: "Failed to create checkout session" });
+    }
+  });
+
+  // Read a completed checkout session for the success page — informational only.
+  // Org creation and billing activation are handled by the webhook (checkout.session.completed),
+  // which fires reliably even if the buyer closes the tab before reaching this URL.
+  app.get("/api/stripe/confirm-checkout", async (req, res) => {
+    try {
+      const { session_id } = req.query as { session_id?: string };
+      if (!session_id) return res.status(400).json({ error: "session_id required" });
+
+      const stripe = await getUncachableStripeClient();
+      const session = await stripe.checkout.sessions.retrieve(session_id);
+
+      // Require the session to be fully complete (Stripe sets status="complete" once paid).
+      // Additionally allow "no_payment_required" for free-trial subscriptions.
+      const succeeded =
+        session.status === "complete" &&
+        (session.payment_status === "paid" || session.payment_status === "no_payment_required");
+
+      if (!succeeded) {
+        return res.status(402).json({ error: "Payment not completed" });
+      }
+
+      const companyName =
+        session.metadata?.companyName ||
+        session.customer_details?.name ||
+        "New Organization";
+      const adminEmail =
+        session.metadata?.adminEmail ||
+        session.customer_details?.email ||
+        "";
+
+      res.json({
+        success: true,
+        companyName,
+        adminEmail,
+        planName: "Freight DNA Subscription",
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("GET /api/stripe/confirm-checkout error:", message);
+      res.status(500).json({ error: "Failed to confirm checkout" });
+    }
+  });
+
+  // Admin: get own organization's billing status
+  app.get("/api/admin/billing", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+      // Scope to the admin's own organization — never leak cross-tenant data
+      const org = user.organizationId ? await storage.getOrganizationById(user.organizationId) : null;
+      res.json({ organization: org ?? null });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("GET /api/admin/billing error:", message);
+      res.status(500).json({ error: "Failed to fetch billing data" });
+    }
+  });
+
+  // Admin: list invoices for own organization (admin only)
+  app.get("/api/admin/billing/invoices", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+
+      const org = user.organizationId ? await storage.getOrganizationById(user.organizationId) : null;
+      if (!org?.stripeCustomerId) return res.json({ invoices: [] });
+
+      const stripe = await getUncachableStripeClient();
+      const invoiceList = await stripe.invoices.list({
+        customer: org.stripeCustomerId,
+        limit: 24,
+        status: "paid",
+      });
+
+      const invoices = invoiceList.data.map(inv => ({
+        id: inv.id,
+        number: inv.number,
+        amountPaid: inv.amount_paid,
+        currency: inv.currency,
+        status: inv.status,
+        created: inv.created,
+        periodStart: inv.period_start,
+        periodEnd: inv.period_end,
+        invoicePdf: inv.invoice_pdf,
+        hostedInvoiceUrl: inv.hosted_invoice_url,
+      }));
+
+      res.json({ invoices });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("GET /api/admin/billing/invoices error:", message);
+      res.status(500).json({ error: "Failed to fetch invoices" });
     }
   });
 

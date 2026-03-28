@@ -136,6 +136,7 @@ export interface RepReportData {
 export interface IStorage {
   getDefaultOrganization(): Promise<Organization | undefined>;
   getOrganizationById(id: string): Promise<Organization | undefined>;
+  createOrganization(data: { name: string; slug: string }): Promise<Organization>;
 
   /** Auth-only lookup by PK — trusted IDs only (session, FK chains). No org filter. */
   getUser(id: string): Promise<User | undefined>;
@@ -381,6 +382,16 @@ export interface IStorage {
   createProspectContact(data: import('../shared/schema').InsertProspectContact): Promise<import('../shared/schema').ProspectContact>;
   updateProspectContact(prospectId: number, contactId: number, data: Partial<import('../shared/schema').InsertProspectContact>): Promise<import('../shared/schema').ProspectContact | undefined>;
   deleteProspectContact(prospectId: number, contactId: number): Promise<boolean>;
+
+  // Stripe billing
+  updateOrganizationBilling(id: string, data: {
+    stripeCustomerId?: string | null;
+    stripeSubscriptionId?: string | null;
+    billingStatus?: string;
+    planName?: string | null;
+    currentPeriodEnd?: Date | null;
+  }): Promise<Organization | undefined>;
+  getOrganizationByStripeCustomerId(stripeCustomerId: string): Promise<Organization | undefined>;
 }
 
 const pool = new Pool({
@@ -400,6 +411,11 @@ export class DatabaseStorage implements IStorage {
 
   async getOrganizationById(id: string): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.id, id));
+    return org;
+  }
+
+  async createOrganization(data: { name: string; slug: string }): Promise<Organization> {
+    const [org] = await db.insert(organizations).values(data).returning();
     return org;
   }
 
@@ -2267,6 +2283,32 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(prospectContacts.id, contactId), eq(prospectContacts.prospectId, prospectId)))
       .returning();
     return result.length > 0;
+  }
+
+  // ── Stripe Billing ────────────────────────────────────────────────────────────
+
+  async updateOrganizationBilling(id: string, data: {
+    stripeCustomerId?: string | null;
+    stripeSubscriptionId?: string | null;
+    billingStatus?: string;
+    planName?: string | null;
+    currentPeriodEnd?: Date | null;
+  }): Promise<Organization | undefined> {
+    type OrgUpdate = Partial<Pick<typeof organizations.$inferInsert,
+      "stripeCustomerId" | "stripeSubscriptionId" | "billingStatus" | "planName" | "currentPeriodEnd">>;
+    const updateData: OrgUpdate = {};
+    if (data.stripeCustomerId !== undefined) updateData.stripeCustomerId = data.stripeCustomerId;
+    if (data.stripeSubscriptionId !== undefined) updateData.stripeSubscriptionId = data.stripeSubscriptionId;
+    if (data.billingStatus !== undefined) updateData.billingStatus = data.billingStatus;
+    if (data.planName !== undefined) updateData.planName = data.planName;
+    if (data.currentPeriodEnd !== undefined) updateData.currentPeriodEnd = data.currentPeriodEnd;
+    const [updated] = await db.update(organizations).set(updateData).where(eq(organizations.id, id)).returning();
+    return updated;
+  }
+
+  async getOrganizationByStripeCustomerId(stripeCustomerId: string): Promise<Organization | undefined> {
+    const [org] = await db.select().from(organizations).where(eq(organizations.stripeCustomerId, stripeCustomerId));
+    return org;
   }
 }
 

@@ -15,6 +15,7 @@ import { initPtoReturnScheduler } from "./ptoReturnScheduler";
 import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
+import { WebhookHandlers } from "./webhookHandlers";
 
 const app = express();
 const httpServer = createServer(app);
@@ -28,6 +29,28 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+// Stripe webhook route MUST be registered BEFORE express.json() parses the body
+app.post(
+  '/api/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const signature = req.headers['stripe-signature'];
+    if (!signature) {
+      return res.status(400).json({ error: 'Missing stripe-signature' });
+    }
+    const sig = Array.isArray(signature) ? signature[0] : signature;
+    try {
+      await WebhookHandlers.processWebhook(req.body as Buffer, sig);
+      res.status(200).json({ received: true });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('Stripe webhook error:', message);
+      // Return 500 (not 400) so Stripe retries transient failures
+      res.status(500).json({ error: 'Webhook processing error' });
+    }
+  }
+);
 
 app.use(
   express.json({
@@ -77,11 +100,42 @@ app.use((req, res, next) => {
   next();
 });
 
+async function initStripe() {
+  try {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      log("DATABASE_URL not set — skipping Stripe initialization", "stripe");
+      return;
+    }
+    const { runMigrations: stripeRunMigrations } = await import("stripe-replit-sync");
+    await stripeRunMigrations({ databaseUrl, schema: "stripe" });
+    log("Stripe schema ready", "stripe");
+
+    const { getStripeSync } = await import("./stripeClient");
+    const stripeSync = await getStripeSync();
+
+    const webhookBaseUrl = `https://${process.env.REPLIT_DOMAINS?.split(",")[0] || "localhost"}`;
+    await stripeSync.findOrCreateManagedWebhook(`${webhookBaseUrl}/api/stripe/webhook`);
+    log("Stripe webhook configured", "stripe");
+
+    stripeSync.syncBackfill()
+      .then(() => log("Stripe data synced", "stripe"))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log(`Stripe backfill error: ${message}`, "stripe");
+      });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(`Stripe initialization warning: ${message}`, "stripe");
+  }
+}
+
 (async () => {
   await runMigrations();
   await storage.deleteEmptyFinancialUploads();
   setupAuth(app);
   await registerRoutes(httpServer, app);
+  await initStripe();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

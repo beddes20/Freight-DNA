@@ -56,7 +56,7 @@ path = "scripts/post-merge.sh"
 timeoutMs = 20000
 
 [agent]
-integrations = ["javascript_openai_ai_integrations:2.0.0", "javascript_anthropic_ai_integrations:2.0.0"]
+integrations = ["javascript_openai_ai_integrations:2.0.0", "javascript_anthropic_ai_integrations:2.0.0", "stripe:1.0.0"]
 
 [userenv]
 

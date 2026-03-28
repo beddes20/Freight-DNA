@@ -676,4 +676,19 @@ export async function runMigrations() {
   } finally {
     clientIdx.release();
   }
+
+  // Stripe billing fields on organizations table (Task #110)
+  const clientStripe = await pool.connect();
+  try {
+    await clientStripe.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS stripe_customer_id text`);
+    await clientStripe.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS stripe_subscription_id text`);
+    await clientStripe.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS billing_status text DEFAULT 'pending'`);
+    await clientStripe.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_name text`);
+    await clientStripe.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS current_period_end timestamp`);
+    console.log("[migrations] organizations stripe billing columns ensured");
+  } catch (err) {
+    console.error("[migrations] stripe billing columns error:", err);
+  } finally {
+    clientStripe.release();
+  }
 }

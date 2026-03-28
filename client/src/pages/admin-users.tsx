@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink } from "lucide-react";
 import type { User } from "@shared/schema";
 
 interface PromotionCriteria {
@@ -635,6 +635,176 @@ function BulkImportDialog() {
   );
 }
 
+// ─── Billing Panel ────────────────────────────────────────────────────────────
+
+const BILLING_STATUS_COLORS: Record<string, string> = {
+  active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+  pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+  past_due: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  cancelled: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+};
+
+interface Invoice {
+  id: string;
+  number: string | null;
+  amountPaid: number;
+  currency: string;
+  status: string | null;
+  created: number;
+  periodStart: number;
+  periodEnd: number;
+  invoicePdf: string | null;
+  hostedInvoiceUrl: string | null;
+}
+
+function formatCurrency(cents: number, currency: string) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: currency.toUpperCase(),
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(cents / 100);
+}
+
+function BillingPanel() {
+  const { data, isLoading } = useQuery<{
+    organization: {
+      id: string;
+      name: string;
+      billingStatus: string | null;
+      planName: string | null;
+      stripeCustomerId: string | null;
+      currentPeriodEnd: string | null;
+    } | null;
+  }>({
+    queryKey: ["/api/admin/billing"],
+  });
+
+  const { data: invoiceData, isLoading: invoicesLoading } = useQuery<{ invoices: Invoice[] }>({
+    queryKey: ["/api/admin/billing/invoices"],
+  });
+
+  const org = data?.organization ?? null;
+  const invoices = invoiceData?.invoices ?? [];
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-6">
+        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!org) {
+    return (
+      <p className="text-sm text-muted-foreground" data-testid="section-billing-panel">
+        No billing information found for your organization.
+      </p>
+    );
+  }
+
+  const status = org.billingStatus || "pending";
+
+  return (
+    <div className="space-y-4" data-testid="section-billing-panel">
+      {/* Subscription status card */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border border-border bg-background">
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold truncate" data-testid={`text-org-name-${org.id}`}>{org.name || "—"}</p>
+          {org.planName && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+              <CreditCard className="w-3 h-3" />
+              {org.planName}
+            </p>
+          )}
+          {org.currentPeriodEnd && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+              <CalendarDays className="w-3 h-3" />
+              Renews {new Date(org.currentPeriodEnd).toLocaleDateString()}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {org.stripeCustomerId && (
+            <Badge variant="outline" className="text-[10px] font-mono">{org.stripeCustomerId.slice(0, 14)}…</Badge>
+          )}
+          <Badge className={`text-xs capitalize ${BILLING_STATUS_COLORS[status] ?? BILLING_STATUS_COLORS.pending}`} data-testid={`badge-billing-status-${org.id}`}>
+            {status}
+          </Badge>
+        </div>
+      </div>
+
+      {/* Invoice history */}
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
+          <FileText className="w-3.5 h-3.5" /> Invoice History
+        </p>
+
+        {invoicesLoading ? (
+          <div className="flex items-center gap-2 py-3 text-muted-foreground text-sm">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading invoices…
+          </div>
+        ) : invoices.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-2" data-testid="text-no-invoices">
+            No invoices yet — they'll appear here once your first billing cycle completes.
+          </p>
+        ) : (
+          <div className="divide-y divide-border rounded-lg border border-border overflow-hidden" data-testid="list-invoices">
+            {invoices.map((inv) => {
+              const periodLabel = `${new Date(inv.periodStart * 1000).toLocaleDateString("en-US", { month: "short", year: "numeric" })} – ${new Date(inv.periodEnd * 1000).toLocaleDateString("en-US", { month: "short", year: "numeric" })}`;
+              return (
+                <div
+                  key={inv.id}
+                  className="flex items-center justify-between gap-3 px-4 py-3 bg-background hover:bg-muted/40 transition-colors"
+                  data-testid={`row-invoice-${inv.id}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">{inv.number || inv.id}</p>
+                    <p className="text-xs text-muted-foreground">{periodLabel}</p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-sm font-semibold">
+                      {formatCurrency(inv.amountPaid, inv.currency)}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {inv.invoicePdf && (
+                        <a
+                          href={inv.invoicePdf}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Download PDF"
+                          data-testid={`button-invoice-pdf-${inv.id}`}
+                        >
+                          <Button size="sm" variant="outline" className="h-7 px-2 gap-1 text-xs">
+                            <Download className="w-3.5 h-3.5" /> PDF
+                          </Button>
+                        </a>
+                      )}
+                      {inv.hostedInvoiceUrl && (
+                        <a
+                          href={inv.hostedInvoiceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="View invoice"
+                          data-testid={`button-invoice-view-${inv.id}`}
+                        >
+                          <Button size="sm" variant="ghost" className="h-7 px-2">
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </Button>
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AdminUsers() {
@@ -927,6 +1097,18 @@ export default function AdminUsers() {
               </span>
             )}
           </div>
+        </div>
+      )}
+
+      {currentUser?.role === "admin" && (
+        <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 p-5 space-y-4" data-testid="section-billing-wrapper">
+          <div>
+            <p className="font-semibold text-sm flex items-center gap-1.5 text-blue-800 dark:text-blue-300 mb-1">
+              <CreditCard className="w-4 h-4" /> Billing &amp; Subscriptions
+            </p>
+            <p className="text-xs text-blue-700 dark:text-blue-400">Organization subscription status managed through Stripe.</p>
+          </div>
+          <BillingPanel />
         </div>
       )}
 
