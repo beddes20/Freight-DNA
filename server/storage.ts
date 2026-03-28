@@ -376,6 +376,10 @@ export interface IStorage {
   deleteProspect(id: number): Promise<boolean>;
   getProspectActivities(prospectId: number): Promise<import('../shared/schema').ProspectActivity[]>;
   createProspectActivity(data: import('../shared/schema').InsertProspectActivity): Promise<import('../shared/schema').ProspectActivity>;
+  getProspectContacts(prospectId: number): Promise<import('../shared/schema').ProspectContact[]>;
+  createProspectContact(data: import('../shared/schema').InsertProspectContact): Promise<import('../shared/schema').ProspectContact>;
+  updateProspectContact(prospectId: number, contactId: number, data: Partial<import('../shared/schema').InsertProspectContact>): Promise<import('../shared/schema').ProspectContact | undefined>;
+  deleteProspectContact(prospectId: number, contactId: number): Promise<boolean>;
 }
 
 const pool = new Pool({
