@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -14,12 +14,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Plus, Phone, Mail, MessageSquare, Calendar, Building2, User, Globe,
   ChevronRight, Trophy, Pencil, Trash2, PhoneCall, Send, NotebookPen,
   Users, AlertCircle, CheckCircle2, Loader2, Link as LinkIcon, Flame,
   Thermometer, Snowflake, ChevronDown, ChevronUp, Filter, TrendingUp,
-  Truck, Clock,
+  Truck, Clock, Upload, Sparkles, RefreshCw, FileUp, CheckCircle, XCircle,
 } from "lucide-react";
 import type { Prospect, ProspectStage, ProspectContact } from "@shared/schema";
 import {
@@ -641,6 +642,391 @@ function ConvertDialog({ prospect, onClose, users }: { prospect: EnrichedProspec
   );
 }
 
+// ─── Import Dialog ────────────────────────────────────────────────────────────
+
+const IMPORT_FIELDS = [
+  { key: "name",               label: "Company Name *",      required: true  },
+  { key: "industry",           label: "Industry",            required: false },
+  { key: "estimatedSpend",     label: "Est. Freight Spend",  required: false },
+  { key: "primaryContactName", label: "Contact Name",        required: false },
+  { key: "primaryContactTitle",label: "Contact Title",       required: false },
+  { key: "primaryContactEmail",label: "Contact Email",       required: false },
+  { key: "primaryContactPhone",label: "Contact Phone",       required: false },
+  { key: "website",            label: "Website",             required: false },
+  { key: "currentCarrier",     label: "Current Carrier",     required: false },
+  { key: "topLanes",           label: "Top Lanes",           required: false },
+  { key: "commodity",          label: "Commodity",           required: false },
+  { key: "leadSource",         label: "Lead Source",         required: false },
+  { key: "notes",              label: "Notes",               required: false },
+] as const;
+
+type ImportFieldKey = typeof IMPORT_FIELDS[number]["key"];
+
+const HEADER_SYNONYMS: Record<ImportFieldKey, string[]> = {
+  name:                ["company", "company name", "account", "organization", "business", "account name"],
+  industry:            ["industry", "sector", "vertical", "market"],
+  estimatedSpend:      ["spend", "freight spend", "monthly spend", "estimated spend", "budget", "est spend"],
+  primaryContactName:  ["contact", "contact name", "primary contact", "name", "first name", "full name", "person"],
+  primaryContactTitle: ["title", "contact title", "job title", "position", "role"],
+  primaryContactEmail: ["email", "e-mail", "email address", "contact email"],
+  primaryContactPhone: ["phone", "phone number", "telephone", "mobile", "contact phone", "cell"],
+  website:             ["website", "url", "web", "site", "domain"],
+  currentCarrier:      ["carrier", "current carrier", "incumbent", "current broker", "broker"],
+  topLanes:            ["lanes", "top lanes", "routes", "corridors", "freight lanes"],
+  commodity:           ["commodity", "product", "freight type", "product type", "goods", "cargo"],
+  leadSource:          ["source", "lead source", "how found", "channel", "origin"],
+  notes:               ["notes", "comments", "note", "description", "remarks"],
+};
+
+function autoDetectMapping(headers: string[]): Record<string, string> {
+  const norm = headers.map(h => h.toLowerCase().trim());
+  const mapping: Record<string, string> = {};
+  IMPORT_FIELDS.forEach(f => {
+    for (const syn of HEADER_SYNONYMS[f.key]) {
+      const idx = norm.indexOf(syn);
+      if (idx !== -1) { mapping[f.key] = headers[idx]; break; }
+    }
+  });
+  return mapping;
+}
+
+function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [step, setStep] = useState<"upload" | "map" | "result">("upload");
+  const [rawHeaders, setRawHeaders] = useState<string[]>([]);
+  const [rawRows, setRawRows] = useState<string[][]>([]);
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [importResult, setImportResult] = useState<{ created: number; errors: { row: number; error: string }[] } | null>(null);
+
+  const handleFile = async (file: File) => {
+    const XLSX = await import("xlsx");
+    const buffer = await file.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const data: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false }) as string[][];
+    if (!data || data.length < 2) {
+      toast({ title: "File must have at least a header row and one data row.", variant: "destructive" });
+      return;
+    }
+    const headers = data[0].map(h => String(h ?? "").trim()).filter(Boolean);
+    const rows = data.slice(1).filter(r => r.some(c => c != null && String(c).trim() !== ""));
+    setRawHeaders(headers);
+    setRawRows(rows as string[][]);
+    setMapping(autoDetectMapping(headers));
+    setStep("map");
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  };
+
+  const importMutation = useMutation({
+    mutationFn: async () => {
+      const rows = rawRows.map(row => {
+        const obj: Record<string, string> = {};
+        IMPORT_FIELDS.forEach(f => {
+          const col = mapping[f.key];
+          if (col) {
+            const colIdx = rawHeaders.indexOf(col);
+            if (colIdx !== -1 && row[colIdx] != null) {
+              obj[f.key] = String(row[colIdx]).trim();
+            }
+          }
+        });
+        return obj;
+      }).filter(r => r.name?.trim());
+
+      const res = await apiRequest("POST", "/api/prospects/import", { rows });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setImportResult(data);
+      setStep("result");
+      queryClient.invalidateQueries({ queryKey: ["/api/prospects"] });
+    },
+    onError: () => toast({ title: "Import failed", variant: "destructive" }),
+  });
+
+  const previewRows = rawRows.slice(0, 5);
+  const mappedFields = IMPORT_FIELDS.filter(f => mapping[f.key]);
+
+  const handleClose = () => {
+    setStep("upload");
+    setRawHeaders([]);
+    setRawRows([]);
+    setMapping({});
+    setImportResult(null);
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) handleClose(); }}>
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <FileUp className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+            {step === "upload" ? "Import Prospects" : step === "map" ? "Map Columns" : "Import Complete"}
+          </DialogTitle>
+        </DialogHeader>
+
+        {step === "upload" && (
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">Upload a CSV or Excel file exported from ZoomInfo, LinkedIn Sales Navigator, or any spreadsheet.</p>
+            <div
+              className="border-2 border-dashed border-border rounded-xl p-10 text-center hover:border-primary/50 transition-colors cursor-pointer"
+              onDrop={onDrop}
+              onDragOver={e => e.preventDefault()}
+              onClick={() => fileInputRef.current?.click()}
+              data-testid="import-dropzone"
+            >
+              <Upload className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="font-medium text-sm">Drag & drop or click to upload</p>
+              <p className="text-xs text-muted-foreground mt-1">Supports .csv and .xlsx files</p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+                data-testid="input-import-file"
+              />
+            </div>
+            <div className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+              <p className="font-medium text-foreground">Supported columns (auto-detected):</p>
+              <p>{IMPORT_FIELDS.map(f => f.label.replace(" *", "")).join(" · ")}</p>
+            </div>
+          </div>
+        )}
+
+        {step === "map" && (
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Match your spreadsheet columns to prospect fields. <span className="font-medium text-foreground">{rawRows.length} rows detected.</span>
+            </p>
+
+            {/* Mapping table */}
+            <div className="border rounded-lg overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-xs">Prospect Field</TableHead>
+                    <TableHead className="text-xs">Your Column</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {IMPORT_FIELDS.map(f => (
+                    <TableRow key={f.key}>
+                      <TableCell className="text-xs py-1.5 font-medium">
+                        {f.label}
+                      </TableCell>
+                      <TableCell className="py-1.5">
+                        <Select
+                          value={mapping[f.key] ?? "__none__"}
+                          onValueChange={v => setMapping(prev => ({ ...prev, [f.key]: v === "__none__" ? "" : v }))}
+                        >
+                          <SelectTrigger className="h-7 text-xs" data-testid={`mapping-select-${f.key}`}>
+                            <SelectValue placeholder="— skip —" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__" className="text-xs text-muted-foreground">— skip —</SelectItem>
+                            {rawHeaders.map(h => (
+                              <SelectItem key={h} value={h} className="text-xs">{h}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            {/* Preview */}
+            {mappedFields.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Preview (first {Math.min(5, previewRows.length)} rows)</p>
+                <div className="border rounded-lg overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        {mappedFields.map(f => (
+                          <TableHead key={f.key} className="text-xs whitespace-nowrap">{f.label.replace(" *", "")}</TableHead>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {previewRows.map((row, i) => (
+                        <TableRow key={i}>
+                          {mappedFields.map(f => {
+                            const colIdx = rawHeaders.indexOf(mapping[f.key] ?? "");
+                            return (
+                              <TableCell key={f.key} className="text-xs py-1.5 max-w-[140px] truncate">
+                                {colIdx !== -1 ? (row[colIdx] ?? "") : ""}
+                              </TableCell>
+                            );
+                          })}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === "result" && importResult && (
+          <div className="space-y-4 py-2">
+            <div className="flex items-center gap-3 p-4 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800">
+              <CheckCircle className="h-8 w-8 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <div>
+                <p className="font-semibold text-emerald-700 dark:text-emerald-300">{importResult.created} prospect{importResult.created !== 1 ? "s" : ""} imported</p>
+                {importResult.errors.length > 0 && (
+                  <p className="text-sm text-muted-foreground">{importResult.errors.length} row{importResult.errors.length !== 1 ? "s" : ""} skipped due to errors</p>
+                )}
+              </div>
+            </div>
+            {importResult.errors.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Skipped Rows</p>
+                {importResult.errors.map(e => (
+                  <div key={e.row} className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
+                    <XCircle className="h-3.5 w-3.5 shrink-0" />
+                    <span>Row {e.row}: {e.error}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          {step === "upload" && (
+            <Button variant="outline" onClick={handleClose} data-testid="button-import-cancel">Cancel</Button>
+          )}
+          {step === "map" && (
+            <>
+              <Button variant="outline" onClick={() => setStep("upload")} data-testid="button-import-back">Back</Button>
+              <Button
+                onClick={() => importMutation.mutate()}
+                disabled={!mapping["name"] || importMutation.isPending}
+                data-testid="button-import-confirm"
+              >
+                {importMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Importing…</> : <>Import {rawRows.length} Prospects</>}
+              </Button>
+            </>
+          )}
+          {step === "result" && (
+            <Button onClick={handleClose} data-testid="button-import-done">Done</Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── AI Sales Intel Tab ───────────────────────────────────────────────────────
+function SalesIntelTab({ prospect }: { prospect: EnrichedProspect }) {
+  const { toast } = useToast();
+  const [brief, setBrief] = useState<string>(prospect.intelBrief ?? "");
+  const [loading, setLoading] = useState(false);
+
+  const generate = async (force: boolean) => {
+    setLoading(true);
+    try {
+      const res = await apiRequest("POST", `/api/prospects/${prospect.id}/intel`, { force });
+      const data = await res.json();
+      if (data.brief) {
+        setBrief(data.brief);
+        queryClient.invalidateQueries({ queryKey: ["/api/prospects"] });
+        if (!force) toast({ title: "Sales Intel Brief generated!" });
+        else toast({ title: "Brief regenerated" });
+      }
+    } catch {
+      toast({ title: "Failed to generate brief", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Parse brief into sections: split on lines starting with "## "
+  const sections = brief
+    ? brief.split(/\n(?=##\s)/).map(block => {
+        const lines = block.trim().split("\n");
+        const header = lines[0].replace(/^##\s+/, "").trim();
+        const bullets = lines.slice(1).filter(l => l.trim()).map(l => l.replace(/^[-*]\s*/, "").trim());
+        return { header, bullets };
+      }).filter(s => s.header)
+    : [];
+
+  return (
+    <div className="space-y-4">
+      {/* Generate / Regenerate button */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold">AI Sales Intel Brief</p>
+          <p className="text-xs text-muted-foreground mt-0.5">GPT-4o-mini cross-references your customer network to surface overlap and talking points</p>
+        </div>
+        {brief ? (
+          <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs shrink-0" onClick={() => generate(true)} disabled={loading} data-testid="button-intel-regenerate">
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            Regenerate
+          </Button>
+        ) : (
+          <Button size="sm" className="gap-1.5 h-8 text-xs shrink-0 bg-violet-600 hover:bg-violet-700 text-white" onClick={() => generate(false)} disabled={loading} data-testid="button-intel-generate">
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+            Generate Brief
+          </Button>
+        )}
+      </div>
+
+      {loading && (
+        <div className="space-y-2">
+          <Skeleton className="h-20 w-full" />
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+        </div>
+      )}
+
+      {!loading && !brief && (
+        <div className="rounded-xl border border-dashed border-border p-8 text-center">
+          <Sparkles className="h-8 w-8 text-violet-400 mx-auto mb-2" />
+          <p className="text-sm font-medium text-foreground">No brief yet</p>
+          <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">
+            Generate a brief to see network overlap, conversation starters, industry pain points, and competitive tips.
+          </p>
+        </div>
+      )}
+
+      {!loading && sections.length > 0 && (
+        <div className="space-y-4">
+          {sections.map((section, i) => (
+            <div key={i} className="border rounded-lg p-3 space-y-2">
+              <p className="text-sm font-semibold text-foreground">{section.header}</p>
+              <ul className="space-y-1.5">
+                {section.bullets.map((bullet, j) => (
+                  <li key={j} className="flex gap-2 text-xs text-foreground/80">
+                    <span className="text-violet-500 mt-0.5 shrink-0">•</span>
+                    <span>{bullet}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <p className="text-[10px] text-muted-foreground text-right">Powered by GPT-4o-mini · Cached result</p>
+        </div>
+      )}
+
+      {!loading && brief && sections.length === 0 && (
+        <div className="text-sm text-foreground/80 whitespace-pre-wrap bg-muted/30 rounded-lg p-3">{brief}</div>
+      )}
+    </div>
+  );
+}
+
 // ─── Prospect Detail Sheet ────────────────────────────────────────────────────
 function ProspectDetailSheet({
   prospect, onClose, users, currentUser,
@@ -766,6 +1152,9 @@ function ProspectDetailSheet({
               <TabsTrigger value="overview" className="flex-1 text-xs">Overview</TabsTrigger>
               <TabsTrigger value="contacts" className="flex-1 text-xs" data-testid="tab-contacts">Contacts</TabsTrigger>
               <TabsTrigger value="activity" className="flex-1 text-xs" data-testid="tab-activity">Activity</TabsTrigger>
+              <TabsTrigger value="intel" className="flex-1 text-xs gap-1" data-testid="tab-intel">
+                <Sparkles className="h-3 w-3" />Intel
+              </TabsTrigger>
             </TabsList>
 
             {/* Overview Tab */}
@@ -861,6 +1250,11 @@ function ProspectDetailSheet({
             {/* Contacts Tab */}
             <TabsContent value="contacts" className="mt-0">
               <ContactsTab prospectId={prospect.id} />
+            </TabsContent>
+
+            {/* Intel Tab */}
+            <TabsContent value="intel" className="mt-0">
+              <SalesIntelTab prospect={prospect} />
             </TabsContent>
 
             {/* Activity Tab */}
@@ -1004,6 +1398,7 @@ function ProspectCard({ prospect, onClick }: { prospect: EnrichedProspect; onCli
 export default function ProspectsPage() {
   const { user } = useAuth();
   const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [selected, setSelected] = useState<EnrichedProspect | null>(null);
   const [lostOpen, setLostOpen] = useState(false);
   const [filterOwner, setFilterOwner] = useState("all");
@@ -1066,9 +1461,14 @@ export default function ProspectsPage() {
             {totalWeightedValue > 0 && <> · <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{formatCurrency(totalWeightedValue)} weighted</span></>}
           </p>
         </div>
-        <Button onClick={() => setAddOpen(true)} className="gap-2" data-testid="button-add-prospect">
-          <Plus className="h-4 w-4" /> Add Prospect
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setImportOpen(true)} className="gap-2" data-testid="button-import-prospects">
+            <Upload className="h-4 w-4" /> Import
+          </Button>
+          <Button onClick={() => setAddOpen(true)} className="gap-2" data-testid="button-add-prospect">
+            <Plus className="h-4 w-4" /> Add Prospect
+          </Button>
+        </div>
       </div>
 
       {/* Stats bar */}
@@ -1221,6 +1621,9 @@ export default function ProspectsPage() {
 
       {/* Add dialog */}
       {addOpen && <ProspectFormDialog open={addOpen} onClose={() => setAddOpen(false)} currentUserId={user.id} users={allUsers} />}
+
+      {/* Import dialog */}
+      {importOpen && <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} />}
 
       {/* Detail sheet */}
       {selected && <ProspectDetailSheet prospect={selected} onClose={() => setSelected(null)} users={allUsers} currentUser={user} />}

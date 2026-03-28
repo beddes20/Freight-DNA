@@ -10829,6 +10829,44 @@ Respond with valid JSON only:
     }
   });
 
+  // ── Prospect Mass Import ─────────────────────────────────────────────────────
+  app.post("/api/prospects/import", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const rows: any[] = req.body.rows;
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return res.status(400).json({ error: "rows must be a non-empty array" });
+      }
+      let created = 0;
+      const errors: { row: number; error: string }[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row.name || typeof row.name !== "string" || !row.name.trim()) {
+          errors.push({ row: i + 1, error: "Company name is required" });
+          continue;
+        }
+        try {
+          await storage.createProspect({
+            ...row,
+            name: row.name.trim(),
+            organizationId: user.organizationId,
+            ownerId: row.ownerId || user.id,
+            stage: "new_lead",
+            dealProbability: row.dealProbability != null ? parseInt(row.dealProbability) : null,
+          });
+          created++;
+        } catch (err: any) {
+          errors.push({ row: i + 1, error: err.message ?? "Failed to create" });
+        }
+      }
+      res.json({ created, errors });
+    } catch (err) {
+      console.error("POST /api/prospects/import error:", err);
+      res.status(500).json({ error: "Import failed" });
+    }
+  });
+
   app.patch("/api/prospects/:id", requireAuth, requireProspectRole, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
@@ -10966,6 +11004,80 @@ Respond with valid JSON only:
     } catch (err) {
       console.error("DELETE /api/prospects/:id/contacts/:contactId error:", err);
       res.status(500).json({ error: "Failed to delete contact" });
+    }
+  });
+
+  // ── AI Sales Intel Brief ─────────────────────────────────────────────────────
+  app.post("/api/prospects/:id/intel", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const prospect = await storage.getProspect(id);
+      if (!prospect || prospect.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+
+      const forceRegen = req.body?.force === true;
+      if (prospect.intelBrief && !forceRegen) {
+        return res.json({ brief: prospect.intelBrief });
+      }
+
+      const allCompanies = await storage.getCompanies(user.organizationId);
+      const industryKey = (prospect.industry ?? "").toLowerCase().slice(0, 12);
+      const similar = industryKey
+        ? allCompanies.filter(c => c.industry && c.industry.toLowerCase().includes(industryKey)).slice(0, 6)
+        : allCompanies.slice(0, 4);
+
+      const networkLines = similar.length > 0
+        ? similar.map(c => `- ${c.name}${c.industry ? ` (${c.industry})` : ""}${(c as any).estimatedSpend ? ` ~${(c as any).estimatedSpend}/mo` : ""}`).join("\n")
+        : "- No closely matching customers found yet";
+
+      const prompt = `You are a strategic sales intelligence analyst for Value Truck, a top-tier transportation brokerage. Prepare a concise, actionable Sales Intel Brief for a prospect the sales team is pursuing.
+
+PROSPECT PROFILE:
+- Company: ${prospect.name}
+- Industry: ${prospect.industry ?? "Unknown"}
+- Estimated Freight Spend: ${prospect.estimatedSpend ? prospect.estimatedSpend + "/mo" : "Unknown"}
+- Top Lanes: ${prospect.topLanes ?? "Not specified"}
+- Commodity: ${prospect.commodity ?? "Not specified"}
+- Current Carrier: ${prospect.currentCarrier ?? "Not specified"}
+- Known Pain Points: ${prospect.painPoints ?? "Not specified"}
+
+EXISTING VALUE TRUCK CUSTOMER NETWORK (similar companies already with us):
+${networkLines}
+
+Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be specific, practical, and concise:
+
+## 🔗 Network Overlap
+(Which existing VT customers are similar to this prospect and what that reveals about needs, patterns, and buying behavior)
+
+## 💬 Conversation Starters
+(3-4 specific opening questions or statements tailored to their freight profile, industry, and lanes)
+
+## ⚠️ Industry Pain Points
+(Top 3 freight challenges common in their vertical that Value Truck directly solves)
+
+## 🏆 Competitive Positioning
+(How to position Value Truck vs their current carrier — be specific if the carrier is named, otherwise give general tips)`;
+
+      const OpenAI = (await import("openai")).default;
+      const openai = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 700,
+        temperature: 0.7,
+      });
+
+      const brief = completion.choices[0].message.content ?? "";
+      await storage.updateProspect(id, { intelBrief: brief } as any);
+      res.json({ brief });
+    } catch (err) {
+      console.error("POST /api/prospects/:id/intel error:", err);
+      res.status(500).json({ error: "Failed to generate intel brief" });
     }
   });
 
