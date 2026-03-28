@@ -737,8 +737,8 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
           }
         });
         return obj;
-      }).filter(r => r.name?.trim());
-
+      });
+      // Send all rows — backend validates and returns per-row errors
       const res = await apiRequest("POST", "/api/prospects/import", { rows });
       return res.json();
     },

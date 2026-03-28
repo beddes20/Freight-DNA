@@ -10830,6 +10830,13 @@ Respond with valid JSON only:
   });
 
   // ── Prospect Mass Import ─────────────────────────────────────────────────────
+  // Allowed text columns that may be passed per-row (no ownerId, no organizationId)
+  const IMPORT_ALLOWED_FIELDS = new Set([
+    "name", "industry", "estimatedSpend", "website",
+    "primaryContactName", "primaryContactTitle", "primaryContactEmail", "primaryContactPhone", "primaryContactLinkedin",
+    "currentCarrier", "topLanes", "commodity", "leadSource", "notes", "nextSteps", "painPoints",
+  ]);
+
   app.post("/api/prospects/import", requireAuth, requireProspectRole, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
@@ -10838,23 +10845,54 @@ Respond with valid JSON only:
       if (!Array.isArray(rows) || rows.length === 0) {
         return res.status(400).json({ error: "rows must be a non-empty array" });
       }
+
+      // Pre-load existing prospect names for duplicate detection
+      const existingProspects = await storage.getProspects(user.organizationId);
+      const existingNames = new Set(existingProspects.map(p => p.name.toLowerCase().trim()));
+
+      // Track names seen in this batch for in-batch duplicate detection
+      const batchNames = new Set<string>();
+
       let created = 0;
       const errors: { row: number; error: string }[] = [];
+
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        if (!row.name || typeof row.name !== "string" || !row.name.trim()) {
+        const rawName = typeof row.name === "string" ? row.name.trim() : "";
+
+        if (!rawName) {
           errors.push({ row: i + 1, error: "Company name is required" });
           continue;
         }
+        const nameLower = rawName.toLowerCase();
+        if (existingNames.has(nameLower)) {
+          errors.push({ row: i + 1, error: `Duplicate: "${rawName}" already exists in your pipeline` });
+          continue;
+        }
+        if (batchNames.has(nameLower)) {
+          errors.push({ row: i + 1, error: `Duplicate within file: "${rawName}" appears more than once` });
+          continue;
+        }
+        batchNames.add(nameLower);
+
+        // Whitelist allowed fields — never let caller inject ownerId / organizationId
+        const safeRow: Record<string, string | null> = {};
+        for (const [k, v] of Object.entries(row)) {
+          if (IMPORT_ALLOWED_FIELDS.has(k) && typeof v === "string" && v.trim()) {
+            safeRow[k] = v.trim();
+          }
+        }
+
         try {
           await storage.createProspect({
-            ...row,
-            name: row.name.trim(),
+            ...safeRow,
+            name: rawName,
             organizationId: user.organizationId,
-            ownerId: row.ownerId || user.id,
+            ownerId: user.id,
             stage: "new_lead",
-            dealProbability: row.dealProbability != null ? parseInt(row.dealProbability) : null,
+            dealProbability: null,
           });
+          existingNames.add(nameLower); // prevent same name in later rows of same batch
           created++;
         } catch (err: any) {
           errors.push({ row: i + 1, error: err.message ?? "Failed to create" });
@@ -11028,7 +11066,7 @@ Respond with valid JSON only:
         : allCompanies.slice(0, 4);
 
       const networkLines = similar.length > 0
-        ? similar.map(c => `- ${c.name}${c.industry ? ` (${c.industry})` : ""}${(c as any).estimatedSpend ? ` ~${(c as any).estimatedSpend}/mo` : ""}`).join("\n")
+        ? similar.map(c => `- ${c.name}${c.industry ? ` (${c.industry})` : ""}${c.estimatedFreightSpend ? ` ~$${Number(c.estimatedFreightSpend).toLocaleString()}/mo` : ""}`).join("\n")
         : "- No closely matching customers found yet";
 
       const prompt = `You are a strategic sales intelligence analyst for Value Truck, a top-tier transportation brokerage. Prepare a concise, actionable Sales Intel Brief for a prospect the sales team is pursuing.
@@ -11056,8 +11094,8 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 ## ⚠️ Industry Pain Points
 (Top 3 freight challenges common in their vertical that Value Truck directly solves)
 
-## 🏆 Competitive Positioning
-(How to position Value Truck vs their current carrier — be specific if the carrier is named, otherwise give general tips)`;
+## 🏆 Competitive Tips
+(How to position Value Truck vs their current carrier — be specific if the carrier is named, otherwise give general differentiation tips)`;
 
       const OpenAI = (await import("openai")).default;
       const openai = new OpenAI({
@@ -11073,7 +11111,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
       });
 
       const brief = completion.choices[0].message.content ?? "";
-      await storage.updateProspect(id, { intelBrief: brief } as any);
+      await storage.updateProspect(id, { intelBrief: brief });
       res.json({ brief });
     } catch (err) {
       console.error("POST /api/prospects/:id/intel error:", err);
