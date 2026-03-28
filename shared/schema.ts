@@ -810,6 +810,7 @@ export const prospects = pgTable("prospects", {
   currentCarrier: text("current_carrier"),
   painPoints: text("pain_points"),
   intelBrief: text("intel_brief"),
+  stageChangedAt: timestamp("stage_changed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

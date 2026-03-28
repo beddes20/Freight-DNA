@@ -10736,9 +10736,11 @@ Respond with valid JSON only:
         const weighted = spend * prob;
         stageTotalSpends[s] = (stageTotalSpends[s] || 0) + spend;
         stageWeightedValues[s] = (stageWeightedValues[s] || 0) + weighted;
-        // For stage velocity: use updatedAt as proxy for when the deal entered current stage.
-        // updatedAt is bumped on stage changes, so now - updatedAt ≈ days spent in current stage.
-        const stageEntryMs = now - new Date(p.updatedAt as unknown as string).getTime();
+        // For stage velocity: use stageChangedAt (stamped only on actual stage transitions)
+        // to compute days in current stage. Fall back to createdAt for new prospects that
+        // have never moved stages.
+        const stageEntry = p.stageChangedAt ?? p.createdAt;
+        const stageEntryMs = now - new Date(stageEntry as unknown as string).getTime();
         const stageDays = Math.floor(stageEntryMs / 86400000);
         stageAgeSums[s] = (stageAgeSums[s] || 0) + stageDays;
         stageAgeCounts[s] = (stageAgeCounts[s] || 0) + 1;

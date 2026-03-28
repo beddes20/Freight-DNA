@@ -2192,8 +2192,17 @@ export class DatabaseStorage implements IStorage {
 
   async updateProspect(id: number, data: Partial<import('../shared/schema').InsertProspect>): Promise<import('../shared/schema').Prospect | undefined> {
     const { prospects } = await import('../shared/schema');
+    // If the stage is changing, stamp stageChangedAt so analytics can compute
+    // time-in-stage as (now - stageChangedAt) instead of using updatedAt.
+    let stageChangedAt: Date | undefined;
+    if (data.stage !== undefined) {
+      const [existing] = await db.select({ stage: prospects.stage }).from(prospects).where(eq(prospects.id, id));
+      if (existing && existing.stage !== data.stage) {
+        stageChangedAt = new Date();
+      }
+    }
     const [row] = await db.update(prospects)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...data, updatedAt: new Date(), ...(stageChangedAt ? { stageChangedAt } : {}) })
       .where(eq(prospects.id, id))
       .returning();
     return row;

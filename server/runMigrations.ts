@@ -644,6 +644,16 @@ export async function runMigrations() {
     clientSugResp.release();
   }
 
+  const clientProspectStage = await pool.connect();
+  try {
+    await clientProspectStage.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS stage_changed_at TIMESTAMP`);
+    console.log("[migrations] prospects stage_changed_at column ensured");
+  } catch (err) {
+    console.error("[migrations] prospects stage_changed_at error:", err);
+  } finally {
+    clientProspectStage.release();
+  }
+
   const clientIdx = await pool.connect();
   try {
     await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_company_id      ON touchpoints(company_id)`);

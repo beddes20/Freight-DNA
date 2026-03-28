@@ -314,7 +314,7 @@ export default function PipelineAnalyticsPage() {
             </table>
           </div>
           <p className="text-xs text-muted-foreground">
-            Estimated from last stage update.{" "}
+            Measured from last stage transition.{" "}
             <Flame className="h-3 w-3 inline text-amber-500 mx-0.5" />
             Amber = bottleneck (&gt;30 days in current stage)
           </p>
