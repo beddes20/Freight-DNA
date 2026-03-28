@@ -884,7 +884,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="flex flex-col gap-6 p-4 sm:p-6">
+    <div className="flex flex-col gap-4 sm:gap-6 p-3 sm:p-6">
 
       {/* Daily Briefing Popup — hidden for management roles via skip flag */}
       {!briefingDismissed && briefingData && !briefingData.skip && (
@@ -986,7 +986,7 @@ export default function Dashboard() {
 
       {/* Hero Banner */}
       <div
-        className="relative overflow-hidden rounded-xl px-6 py-5 text-white"
+        className="relative overflow-hidden rounded-xl px-4 py-4 sm:px-6 sm:py-5 text-white"
         style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}
         data-testid="banner-hero"
       >
@@ -2418,7 +2418,7 @@ export default function Dashboard() {
       <div style={{ order: getOrder("cold-contacts") }} className={!isVisible("cold-contacts") ? "hidden" : ""}>
       {coldContacts.length > 0 && (
         <Card data-testid="card-cold-contacts">
-          <CardHeader className="pb-3">
+          <CardHeader className={coldContactsCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_cold_contacts_collapsed", !coldContactsCollapsed, setColdContactsCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-cold-contacts">
               {coldContactsCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base">
@@ -2483,7 +2483,7 @@ export default function Dashboard() {
       <div style={{ order: getOrder("meaningful-overdue") }} className={!isVisible("meaningful-overdue") ? "hidden" : ""}>
       {meaningfulOverdue.length > 0 && (
         <Card data-testid="card-meaningful-overdue">
-          <CardHeader className="pb-3">
+          <CardHeader className={meaningfulOverdueCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_meaningful_overdue_collapsed", !meaningfulOverdueCollapsed, setMeaningfulOverdueCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-meaningful-overdue">
               {meaningfulOverdueCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base">
@@ -2523,7 +2523,7 @@ export default function Dashboard() {
       <div style={{ order: getOrder("top-opportunities") }} className={!isVisible("top-opportunities") ? "hidden" : ""}>
       {opportunityLeaderboard.length > 0 && (
         <Card data-testid="card-opportunity-leaderboard">
-          <CardHeader className="pb-3">
+          <CardHeader className={topOppsCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_top_opps_collapsed", !topOppsCollapsed, setTopOppsCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-top-opps">
               {topOppsCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base">
@@ -2563,8 +2563,8 @@ export default function Dashboard() {
 
       <div style={{ order: getOrder("churn-risk") }} className={!isVisible("churn-risk") ? "hidden" : ""}>
       {churnRisk.length > 0 && !isLmRole && (
-        <Card className="border-orange-300 dark:border-orange-700" data-testid="card-churn-risk">
-          <CardHeader className="pb-3">
+        <Card className="border-l-4 border-l-orange-500 dark:border-l-orange-500 bg-orange-50/30 dark:bg-orange-950/20" data-testid="card-churn-risk">
+          <CardHeader className={churnRiskCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_churn_risk_collapsed", !churnRiskCollapsed, setChurnRiskCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-churn-risk">
               {churnRiskCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base text-orange-700 dark:text-orange-400">
@@ -2601,8 +2601,8 @@ export default function Dashboard() {
       </div>{/* end churn-risk */}
 
       {urgentRfps.length > 0 && (
-        <Card className="border-red-300 dark:border-red-700" data-testid="card-rfp-deadline-alert">
-          <CardHeader className="pb-3">
+        <Card className="border-l-4 border-l-red-500 dark:border-l-red-500 bg-red-50/30 dark:bg-red-950/20" data-testid="card-rfp-deadline-alert">
+          <CardHeader className={rfpDeadlineCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_rfp_deadline_collapsed", !rfpDeadlineCollapsed, setRfpDeadlineCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-rfp-deadline">
               {rfpDeadlineCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base text-red-700 dark:text-red-400">
@@ -2642,8 +2642,8 @@ export default function Dashboard() {
       )}
 
       {behindGoals.length > 0 && !isLmRole && (
-        <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goals-nudge">
-          <CardHeader className="pb-3">
+        <Card className="border-l-4 border-l-amber-500 dark:border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/20" data-testid="card-goals-nudge">
+          <CardHeader className={goalsNudgeCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_goals_nudge_collapsed", !goalsNudgeCollapsed, setGoalsNudgeCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-goals-nudge">
               {goalsNudgeCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
@@ -2714,8 +2714,8 @@ export default function Dashboard() {
       </div>{/* end feed (comms) */}
 
       {canSeeTeam && missingMonthlyGoals.length > 0 && (
-        <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goal-alert">
-          <CardHeader className="pb-3">
+        <Card className="border-l-4 border-l-amber-500 dark:border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/20" data-testid="card-goal-alert">
+          <CardHeader className={goalsAlertCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_goals_alert_collapsed", !goalsAlertCollapsed, setGoalsAlertCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-goals-alert">
               {goalsAlertCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
@@ -2761,7 +2761,7 @@ export default function Dashboard() {
             >
               <CardTitle className="text-base flex items-center gap-2">
                 <Lightbulb className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                Trends / Growth / Ideas / Celebrate
+                Team Feed
                 {!feedLoading && feedPosts.length > 0 && (
                   <Badge variant="secondary" className="ml-1 font-normal">{feedPosts.length}</Badge>
                 )}

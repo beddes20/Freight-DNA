@@ -192,7 +192,7 @@ export default function LandingPage() {
           style={{ letterSpacing: "-0.03em" }}
           data-testid="text-hero-headline"
         >
-          Know your accounts
+          Know your customers
           <br />
           <span style={{ color: "#ffc333" }}>down, not across.</span>
         </h1>
