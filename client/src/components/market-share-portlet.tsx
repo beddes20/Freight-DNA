@@ -37,14 +37,14 @@ function TrendIcon({ trend, delta }: { trend: string; delta: number | null }) {
     return (
       <span className="flex items-center gap-0.5 text-green-600 dark:text-green-400 text-[11px] font-medium">
         <TrendingUp className="h-3 w-3" />
-        {delta !== null ? `+${delta.toFixed(1)}` : ""}
+        {delta != null ? `+${delta.toFixed(1)}` : ""}
       </span>
     );
   if (trend === "down")
     return (
       <span className="flex items-center gap-0.5 text-red-500 dark:text-red-400 text-[11px] font-medium">
         <TrendingDown className="h-3 w-3" />
-        {delta !== null ? delta.toFixed(1) : ""}
+        {delta != null ? delta.toFixed(1) : ""}
       </span>
     );
   if (trend === "flat")
@@ -120,7 +120,7 @@ export default function MarketSharePortlet() {
           <div className="divide-y">
             {rows.map((row, idx) => {
               const delta =
-                row.currentPct !== null && row.prevPct !== null
+                row.currentPct != null && row.prevPct != null
                   ? Math.round((row.currentPct - row.prevPct) * 10) / 10
                   : null;
               return (

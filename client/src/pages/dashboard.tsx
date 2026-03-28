@@ -44,6 +44,7 @@ import { DashboardActivitySheet, type PortletType } from "@/components/dashboard
 import { RelationshipDashboardSection } from "@/components/relationship-freight-portlet";
 import { useDashboardLayout } from "@/hooks/use-dashboard-layout";
 import { DashboardLayoutPanel } from "@/components/dashboard-layout-panel";
+import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -1086,6 +1087,7 @@ export default function Dashboard() {
       />
 
       {/* ── Director/Admin Portlets ─────────────────────────────────────────── */}
+      <PortletErrorBoundary label="Director metrics">
       {isDirector && (
         <>
           {/* Director filter toggle — admin only */}
@@ -1427,6 +1429,7 @@ export default function Dashboard() {
           </div>{/* end dir-recent-wins */}
         </>
       )}
+      </PortletErrorBoundary>
 
       {/* ── NAM Dashboard Portlets ──────────────────────────────────────────── */}
       {isNam && (
@@ -2692,6 +2695,7 @@ export default function Dashboard() {
       )}
 
       <div style={{ order: getOrder("one-on-one") }} className={!isVisible("one-on-one") ? "hidden" : ""}>
+      <PortletErrorBoundary label="1:1 Sessions">
       <div className="relative">
         {pendingTopicsCount > 0 && (
           <div className="absolute -top-2 -right-2 z-10">
@@ -2702,6 +2706,7 @@ export default function Dashboard() {
         )}
         <OneOnOnePortlet />
       </div>
+      </PortletErrorBoundary>
       </div>{/* end one-on-one */}
 
       <div style={{ order: getOrder("feed") }} className={!isVisible("feed") ? "hidden" : ""}>
@@ -3289,11 +3294,15 @@ export default function Dashboard() {
       </div>{/* end team-directory */}
 
       <div style={{ order: getOrder("market-share") }} className={!isVisible("market-share") ? "hidden" : ""}>
+      <PortletErrorBoundary label="Market Share">
       {canSeeTeam && <MarketSharePortlet />}
+      </PortletErrorBoundary>
       </div>{/* end market-share */}
 
       <div style={{ order: getOrder("relationship") }} className={!isVisible("relationship") ? "hidden" : ""}>
+      <PortletErrorBoundary label="Relationship Intel">
       <RelationshipDashboardSection />
+      </PortletErrorBoundary>
       </div>{/* end relationship */}
 
       <div style={{ order: getOrder("goals-leaderboard") }} className={!isVisible("goals-leaderboard") ? "hidden" : ""}>
