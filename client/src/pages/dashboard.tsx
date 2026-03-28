@@ -19,7 +19,7 @@ import {
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
   Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search, MoreHorizontal,
   Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell, Pencil, ArrowUpRight, ArrowDownRight,
-  Activity, UserPlus, Repeat2, Trophy,
+  Activity, UserPlus, Repeat2, Trophy, Settings2,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -42,6 +42,8 @@ import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
 import { DashboardActivitySheet, type PortletType } from "@/components/dashboard-activity-sheet";
 import { RelationshipDashboardSection } from "@/components/relationship-freight-portlet";
+import { useDashboardLayout } from "@/hooks/use-dashboard-layout";
+import { DashboardLayoutPanel } from "@/components/dashboard-layout-panel";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -311,6 +313,9 @@ export default function Dashboard() {
 
   const isAdmin = currentUser?.role === "admin";
   const directorFilterParam = isAdmin && selectedDirectorId ? `?directorId=${encodeURIComponent(selectedDirectorId)}` : "";
+
+  const { layout, saveLayout, isVisible, getOrder, resetLayout } = useDashboardLayout(currentUser?.id);
+  const [layoutPanelOpen, setLayoutPanelOpen] = useState(false);
 
   // Apply role-based portlet defaults once after user loads — directors default to collapsed
   useEffect(() => {
@@ -1042,12 +1047,25 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Right: VT logo */}
-          <div
-            className="shrink-0 hidden sm:flex items-center justify-center h-16 w-16 rounded-full p-2.5"
-            style={{ border: "2px solid #ffb400", background: "#111", boxShadow: "0 0 20px rgba(255,180,0,0.2)" }}
-          >
-            <img src={vtLogoWhite} alt="Value Truck" className="w-full h-full object-contain" />
+          {/* Right: VT logo + edit layout button */}
+          <div className="shrink-0 flex items-center gap-3">
+            {isDirector && (
+              <button
+                onClick={() => setLayoutPanelOpen(true)}
+                className="hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-white/10 text-white/60 hover:text-white hover:border-white/30 hover:bg-white/5 transition-all"
+                title="Customize dashboard layout"
+                data-testid="button-edit-dashboard-layout"
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+                Customize
+              </button>
+            )}
+            <div
+              className="hidden sm:flex items-center justify-center h-16 w-16 rounded-full p-2.5"
+              style={{ border: "2px solid #ffb400", background: "#111", boxShadow: "0 0 20px rgba(255,180,0,0.2)" }}
+            >
+              <img src={vtLogoWhite} alt="Value Truck" className="w-full h-full object-contain" />
+            </div>
           </div>
         </div>
       </div>
@@ -1056,6 +1074,15 @@ export default function Dashboard() {
       <TouchpointsTodayPortlet
         collapsed={touchpointsTodayCollapsed}
         onToggle={toggleTouchpointsToday}
+      />
+
+      {/* ── Dashboard Layout Editor ──────────────────────────────────────────── */}
+      <DashboardLayoutPanel
+        open={layoutPanelOpen}
+        onClose={() => setLayoutPanelOpen(false)}
+        layout={layout}
+        onSave={saveLayout}
+        onReset={resetLayout}
       />
 
       {/* ── Director/Admin Portlets ─────────────────────────────────────────── */}
@@ -1092,6 +1119,7 @@ export default function Dashboard() {
           })()}
 
           {/* Row 1: Small activity count portlets */}
+          <div style={{ order: getOrder("dir-activity") }} className={!isVisible("dir-activity") ? "hidden" : ""}>
           <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="director-activity-row">
 
             {/* Relationships Moved Up */}
@@ -1170,8 +1198,10 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           </div>
+          </div>{/* end dir-activity */}
 
           {/* Row 2: Trending accounts up & down */}
+          <div style={{ order: getOrder("dir-trending") }} className={!isVisible("dir-trending") ? "hidden" : ""}>
           <div className="grid gap-4 md:grid-cols-2" data-testid="director-trending-row">
 
             {/* Trending Up */}
@@ -1276,8 +1306,10 @@ export default function Dashboard() {
               )}
             </Card>
           </div>
+          </div>{/* end dir-trending */}
 
           {/* Row 3: NAM & AM Margin Metrics */}
+          <div style={{ order: getOrder("dir-margin") }} className={!isVisible("dir-margin") ? "hidden" : ""}>
           <div className="grid gap-4 md:grid-cols-2" data-testid="director-margin-row">
             {(["nams", "ams"] as const).map(group => {
               const label = group === "nams" ? "NAM Margin Metrics" : "AM Margin Metrics";
@@ -1353,7 +1385,10 @@ export default function Dashboard() {
               );
             })}
           </div>
+          </div>{/* end dir-margin */}
+
           {/* Recent Wins (Director view - MTD) */}
+          <div style={{ order: getOrder("dir-recent-wins") }} className={!isVisible("dir-recent-wins") ? "hidden" : ""}>
           {recentWins.length > 0 && (
             <Card data-testid="portlet-director-recent-wins">
               <CardHeader className="pb-3">
@@ -1389,6 +1424,7 @@ export default function Dashboard() {
               </CardContent>}
             </Card>
           )}
+          </div>{/* end dir-recent-wins */}
         </>
       )}
 
@@ -2158,6 +2194,7 @@ export default function Dashboard() {
         );
       })}
 
+      <div style={{ order: getOrder("tasks") }} className={!isVisible("tasks") ? "hidden" : ""}>
       <Card data-testid="card-my-tasks">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
@@ -2373,7 +2410,9 @@ export default function Dashboard() {
         </CardContent>
         )}
       </Card>
+      </div>{/* end tasks */}
 
+      <div style={{ order: getOrder("cold-contacts") }} className={!isVisible("cold-contacts") ? "hidden" : ""}>
       {coldContacts.length > 0 && (
         <Card data-testid="card-cold-contacts">
           <CardHeader className="pb-3">
@@ -2436,7 +2475,9 @@ export default function Dashboard() {
           </CardContent>}
         </Card>
       )}
+      </div>{/* end cold-contacts */}
 
+      <div style={{ order: getOrder("meaningful-overdue") }} className={!isVisible("meaningful-overdue") ? "hidden" : ""}>
       {meaningfulOverdue.length > 0 && (
         <Card data-testid="card-meaningful-overdue">
           <CardHeader className="pb-3">
@@ -2474,7 +2515,9 @@ export default function Dashboard() {
           </CardContent>}
         </Card>
       )}
+      </div>{/* end meaningful-overdue */}
 
+      <div style={{ order: getOrder("top-opportunities") }} className={!isVisible("top-opportunities") ? "hidden" : ""}>
       {opportunityLeaderboard.length > 0 && (
         <Card data-testid="card-opportunity-leaderboard">
           <CardHeader className="pb-3">
@@ -2513,7 +2556,9 @@ export default function Dashboard() {
           </CardContent>}
         </Card>
       )}
+      </div>{/* end top-opportunities */}
 
+      <div style={{ order: getOrder("churn-risk") }} className={!isVisible("churn-risk") ? "hidden" : ""}>
       {churnRisk.length > 0 && !isLmRole && (
         <Card className="border-orange-300 dark:border-orange-700" data-testid="card-churn-risk">
           <CardHeader className="pb-3">
@@ -2550,6 +2595,7 @@ export default function Dashboard() {
           </CardContent>}
         </Card>
       )}
+      </div>{/* end churn-risk */}
 
       {urgentRfps.length > 0 && (
         <Card className="border-red-300 dark:border-red-700" data-testid="card-rfp-deadline-alert">
@@ -2645,6 +2691,7 @@ export default function Dashboard() {
         </Card>
       )}
 
+      <div style={{ order: getOrder("one-on-one") }} className={!isVisible("one-on-one") ? "hidden" : ""}>
       <div className="relative">
         {pendingTopicsCount > 0 && (
           <div className="absolute -top-2 -right-2 z-10">
@@ -2655,8 +2702,11 @@ export default function Dashboard() {
         )}
         <OneOnOnePortlet />
       </div>
+      </div>{/* end one-on-one */}
 
+      <div style={{ order: getOrder("feed") }} className={!isVisible("feed") ? "hidden" : ""}>
       <InternalCommsPortlet />
+      </div>{/* end feed (comms) */}
 
       {canSeeTeam && missingMonthlyGoals.length > 0 && (
         <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goal-alert">
@@ -2695,6 +2745,7 @@ export default function Dashboard() {
         </Card>
       )}
 
+      <div style={{ order: getOrder("feed") }} className={!isVisible("feed") ? "hidden" : ""}>
       <Card data-testid="card-feed">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
@@ -3063,7 +3114,9 @@ export default function Dashboard() {
         </CardContent>
         )}
       </Card>
+      </div>{/* end feed */}
 
+      <div style={{ order: getOrder("team-directory") }} className={!isVisible("team-directory") ? "hidden" : ""}>
       {canSeeTeam && (
         <div className="grid gap-4 md:grid-cols-2">
           <Card>
@@ -3233,11 +3286,17 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+      </div>{/* end team-directory */}
 
+      <div style={{ order: getOrder("market-share") }} className={!isVisible("market-share") ? "hidden" : ""}>
       {canSeeTeam && <MarketSharePortlet />}
+      </div>{/* end market-share */}
 
+      <div style={{ order: getOrder("relationship") }} className={!isVisible("relationship") ? "hidden" : ""}>
       <RelationshipDashboardSection />
+      </div>{/* end relationship */}
 
+      <div style={{ order: getOrder("goals-leaderboard") }} className={!isVisible("goals-leaderboard") ? "hidden" : ""}>
       {canSeeTeam && (leaderboardLoading || leaderboard.length > 0) && (
         <Card data-testid="card-leaderboard">
           <CardHeader className="pb-3">
@@ -3309,6 +3368,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       )}
+      </div>{/* end goals-leaderboard */}
 
       {/* Weekly Touchpoint Leaderboard */}
       {canSeeTeam && (weeklyLoading || weeklyResults.length > 0) && (
