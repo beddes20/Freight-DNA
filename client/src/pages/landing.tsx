@@ -3,18 +3,18 @@ import { useLocation } from "wouter";
 import {
   TrendingUp, Network, FileSearch, MousePointerClick, BarChart3,
   Target, Map, Users, CheckCircle, ClipboardList, CalendarCheck,
-  BookOpen, Zap, ChevronRight, TrendingUp as CareerIcon,
-  GitBranch, Phone, Key, Megaphone, Sparkles, Bot, ArrowRight,
+  BookOpen, Zap, TrendingUp as CareerIcon,
+  GitBranch, Phone, Sparkles, Bot, ArrowRight,
   LayoutGrid, MessagesSquare, ListTodo, Trophy, Wrench, GraduationCap,
-  UserCog, LineChart, Loader2,
+  UserCog, LineChart, Loader2, Kanban,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
 
 const stats = [
-  { value: "15+", label: "Platform Modules" },
+  { value: "20+", label: "Platform Modules" },
   { value: "360°", label: "Account Visibility" },
-  { value: "AI-Powered", label: "Analysis & Alerts" },
+  { value: "AI-Powered", label: "Sales Intelligence" },
   { value: "Built for", label: "Freight Brokers" },
 ];
 
@@ -25,6 +25,11 @@ const features = [
     description: "Map every stakeholder — procurement, operations, finance — and track who owns each decision. Know your accounts down, not across.",
   },
   {
+    icon: Kanban,
+    title: "Sales Pipeline & AI Prospect Intel",
+    description: "Manage every prospect through a visual Kanban pipeline. One click generates an AI-powered brief: network overlap, conversation starters, industry pain points, and competitive tips — before you ever pick up the phone.",
+  },
+  {
     icon: FileSearch,
     title: "RFP Intelligence Engine",
     description: "Upload RFP lane data, analyze corridors, track bid history, and compare awards. Walk into every bid knowing exactly how to win.",
@@ -32,7 +37,7 @@ const features = [
   {
     icon: MousePointerClick,
     title: "Touchpoint Tracking",
-    description: "Log a touchpoint in seconds from anywhere in the platform with the global Log Touch button. Calls, emails, texts, and site visits tracked in one click — automated \"Needs Attention\" alerts surface contacts going cold before it costs you freight.",
+    description: "Log a touchpoint in seconds from anywhere in the platform. Calls, emails, texts, and site visits in one click — automated alerts surface contacts going cold before it costs you freight.",
   },
   {
     icon: BarChart3,
@@ -44,54 +49,21 @@ const features = [
     title: "Goals & Accountability",
     description: "Set quarterly targets for load count, margin, touchpoints, and new contacts — then watch progress auto-track against live data.",
   },
-  {
-    icon: Map,
-    title: "Lane Analytics",
-    description: "Identify top-volume corridors, spot market gaps, and build targeted proposals backed by historical freight data.",
-  },
-  {
-    icon: CareerIcon,
-    title: "Career Progression",
-    description: "Track talent development from day one. Career conversations, progression milestones, and historical performance logs give managers a complete picture of every rep's growth trajectory — not just last quarter's numbers.",
-  },
 ];
 
 const modules = [
+  { icon: Kanban, name: "Sales Pipeline", desc: "Kanban board for every prospect — import via CSV, track stages, and generate AI Sales Intel Briefs in one click." },
   { icon: Users, name: "Customers", desc: "Full account profiles with financials, contacts, modes, and intelligence notes." },
   { icon: Zap, name: "Top Opportunities", desc: "Auto-surfaced accounts with the highest untapped wallet share potential." },
-  { icon: CalendarCheck, name: "1:1's", desc: "Structured NAM-AM session topics, follow-ups, and threaded discussion threads." },
-  { icon: ClipboardList, name: "Tasks", desc: "Assign and track account-linked tasks with due dates and priority levels." },
-  { icon: BarChart3, name: "Report Cards", desc: "Per-rep scorecards showing load count, margin, touchpoints, and goal progress." },
-  { icon: BookOpen, name: "PTO Passoff", desc: "Structured handoff documents so accounts never slip during out-of-office periods." },
-  { icon: FileSearch, name: "RFP & Awards", desc: "Full pipeline management for bids, awards, and lane-level analysis." },
-  { icon: Map, name: "Lane Analytics", desc: "Heat maps and corridor analysis from financial and RFP upload data." },
-  { icon: CareerIcon, name: "Career Progression", desc: "Career conversations, progression tracking, and performance history for every rep on your team." },
-  { icon: BookOpen, name: "Playbook & Buckets", desc: "External resource links, sales playbooks, and account segmentation buckets for structured selling." },
-  { icon: GitBranch, name: "Org Charts & Contacts", desc: "Visual org charts for every account — map decision-makers, influencers, and key contacts across the organization." },
+  { icon: GitBranch, name: "Org Charts & Contacts", desc: "Visual org charts for every account — map decision-makers, influencers, and key contacts." },
   { icon: Phone, name: "Touchpoint Log", desc: "Every call, email, text, and site visit in a unified timeline. AI flags cold contacts before they cost you freight." },
-  { icon: Key, name: "Portal Credentials (Coordinator's Corner)", desc: "Securely store and access customer portal logins, carrier onboarding credentials, and spot process details in one place." },
-  { icon: BarChart3, name: "Team Performance", desc: "Period-over-period activity and revenue tracking with rep rankings — turn coaching from opinions into evidence." },
+  { icon: CalendarCheck, name: "1:1's", desc: "Structured NAM-AM session topics, follow-ups, and threaded discussion threads." },
+  { icon: BarChart3, name: "Report Cards", desc: "Per-rep scorecards showing load count, margin, touchpoints, and goal progress." },
+  { icon: FileSearch, name: "RFP & Awards", desc: "Full pipeline management for bids, awards, and lane-level analysis." },
   { icon: Target, name: "Goals & Accountability", desc: "Set and auto-track targets for loads, margin, touchpoints, and new contacts against live platform data." },
-  { icon: Megaphone, name: "Callouts / Trends Feed", desc: "Broadcast wins, flag at-risk accounts, and share market intel across your team in real time." },
+  { icon: BarChart3, name: "Team Performance", desc: "Period-over-period activity and revenue tracking with rep rankings — turn coaching from opinions into evidence." },
 ];
 
-const howItWorks = [
-  {
-    step: "01",
-    title: "Map your accounts",
-    body: "Build visual org charts, capture every contact's role and influence, log portal credentials and carrier intel in Coordinator's Corner — all the account DNA your team needs, right where they work.",
-  },
-  {
-    step: "02",
-    title: "Track every touchpoint",
-    body: "Every call, email, text, and site visit is logged in seconds. Freight DNA's AI automatically flags contacts going cold — so your reps engage before the relationship costs you freight.",
-  },
-  {
-    step: "03",
-    title: "Win more freight",
-    body: "AI-powered analysis surfaces wallet share gaps, RFP intelligence shows you where to bid and how to win, and real-time scoring tells you which accounts to prioritize today — not next quarter.",
-  },
-];
 
 const personas = [
   {
@@ -102,6 +74,7 @@ const personas = [
       "One-click touchpoint logging from anywhere — calls, emails, texts, site visits",
       "AI-flagged cold contacts so no relationship slips through the cracks",
       "Wallet share scoring and RFP history to walk into every conversation prepared",
+      "AI Sales Intel Brief for every prospect — network overlap, conversation starters, and competitive tips before the pitch",
     ],
   },
   {
@@ -500,6 +473,16 @@ export default function LandingPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setDemoOpen(true)}
+            className="text-sm font-semibold px-4 py-2 rounded transition-all duration-150"
+            style={{ color: "rgba(255,255,255,0.65)", background: "transparent" }}
+            data-testid="link-nav-schedule-demo"
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#fff"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.65)"; }}
+          >
+            Schedule Demo
+          </button>
           <a
             href="/login"
             onClick={e => { e.preventDefault(); navigate("/login"); }}
@@ -701,10 +684,18 @@ export default function LandingPage() {
               ))}
               <p className="text-[8px] uppercase tracking-widest px-2 pt-3 pb-1" style={{ color: "rgba(255,180,0,0.4)" }}>Pipeline</p>
               {[
+                { icon: Kanban, label: "Sales Pipeline", active: true },
                 { icon: Trophy, label: "RFP & Awards" },
                 { icon: ClipboardList, label: "Lane Research" },
               ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded text-[10px] font-medium" style={{ color: "rgba(255,255,255,0.55)" }}>
+                <div
+                  key={i}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded text-[10px] font-medium"
+                  style={{
+                    background: item.active ? "rgba(255,180,0,0.12)" : "transparent",
+                    color: item.active ? "#ffb400" : "rgba(255,255,255,0.55)",
+                  }}
+                >
                   <item.icon className="w-3 h-3 flex-shrink-0" />
                   <span>{item.label}</span>
                 </div>
@@ -809,44 +800,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Divider */}
-      <div className="w-full px-6 md:px-12">
-        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
-      </div>
-
-      {/* How it works */}
-      <section className="py-24 px-6 md:px-12 max-w-5xl mx-auto w-full">
-        <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
-          How It Works
-        </p>
-        <h2
-          className="text-3xl md:text-4xl font-bold text-center mb-16 tracking-tight"
-          style={{ letterSpacing: "-0.02em" }}
-        >
-          Three steps to winning more freight.
-        </h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {howItWorks.map((step, i) => (
-            <div key={i} className="flex flex-col gap-4" data-testid={`card-step-${i}`}>
-              <div className="flex items-center gap-3">
-                <span className="text-4xl font-extrabold" style={{ color: "rgba(255,180,0,0.2)", letterSpacing: "-0.04em" }}>{step.step}</span>
-                {i < howItWorks.length - 1 && (
-                  <ChevronRight className="w-4 h-4 hidden md:block" style={{ color: "rgba(255,180,0,0.2)" }} />
-                )}
-              </div>
-              <h3 className="text-lg font-bold">{step.title}</h3>
-              <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>{step.body}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Divider */}
-      <div className="w-full px-6 md:px-12">
-        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
-      </div>
-
       {/* AI Feature Teaser */}
       <section className="py-20 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-ai-teaser">
         <div
@@ -878,7 +831,7 @@ export default function LandingPage() {
                 style={{ background: "rgba(255,195,51,0.15)", color: "#ffc333", border: "1px solid rgba(255,195,51,0.3)" }}
                 data-testid="badge-ai-status"
               >
-                Early Access
+                Now Live
               </span>
             </div>
             <h2
@@ -960,26 +913,6 @@ export default function LandingPage() {
           })}
         </div>
       </section>
-
-      {/* Why Freight DNA highlight strip */}
-      <div style={{ background: "#0d0d0d", borderTop: "1px solid rgba(255,180,0,0.12)", borderBottom: "1px solid rgba(255,180,0,0.12)" }}>
-        <div className="max-w-6xl mx-auto py-16 px-6 md:px-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10">
-          {[
-            { check: "Built for freight", body: "Not a generic CRM. Every field, workflow, and report is designed around how transportation brokers actually sell — not retrofitted from a software playbook." },
-            { check: "Grow the book you have", body: "The average broker sees less than 20% of a shipper's total spend. Freight DNA surfaces the wallet share you're missing and gives your team the intelligence to go capture it — without adding a single new logo." },
-            { check: "Develops your people", body: "1:1 tooling, career conversations, and historical report card logs give managers the full development picture. The period toggle on Team Performance turns coaching sessions from opinions into evidence." },
-            { check: "Enterprise-ready", body: "Multi-team and multi-org support means Freight DNA scales with you — from a single brokerage desk to a national enterprise with dozens of teams operating independently under one platform." },
-          ].map((item, i) => (
-            <div key={i} className="flex flex-col gap-3" data-testid={`card-why-${i}`}>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 flex-shrink-0" style={{ color: "#ffc333" }} />
-                <span className="text-sm font-bold">{item.check}</span>
-              </div>
-              <p className="text-sm leading-relaxed pl-6" style={{ color: "rgba(255,255,255,0.4)" }}>{item.body}</p>
-            </div>
-          ))}
-        </div>
-      </div>
 
       {/* Footer CTA */}
       <section className="py-24 px-6 flex flex-col items-center text-center">

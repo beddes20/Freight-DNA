@@ -252,6 +252,16 @@ export default function Dashboard() {
     enabled: currentUser?.role === "admin",
   });
 
+  const { data: billingInfo } = useQuery<{ billingStatus: string | null; planName: string | null } | null>({
+    queryKey: ["/api/admin/billing"],
+    enabled: currentUser?.role === "admin",
+    staleTime: 5 * 60 * 1000,
+  });
+  const [billingBannerDismissed, setBillingBannerDismissed] = useState(false);
+  const showBillingBanner = !billingBannerDismissed &&
+    currentUser?.role === "admin" &&
+    (billingInfo?.billingStatus === "trialing" || billingInfo?.billingStatus === "past_due");
+
   const { data: allRfps = [] } = useQuery<any[]>({
     queryKey: ["/api/rfps"],
   });
@@ -948,6 +958,30 @@ export default function Dashboard() {
             className="shrink-0 text-red-400 hover:text-red-600 dark:hover:text-red-300"
             data-testid="button-dismiss-sync-alert"
           >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {showBillingBanner && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40 p-4" data-testid="banner-billing-alert">
+          <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm text-amber-800 dark:text-amber-200">
+              {billingInfo?.billingStatus === "past_due" ? "Subscription payment past due" : "Trial period active"}
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-300 mt-0.5">
+              {billingInfo?.billingStatus === "past_due"
+                ? "Your subscription payment could not be processed. Update your payment method to avoid service interruption."
+                : `You're on a trial${billingInfo?.planName ? ` of ${billingInfo.planName}` : ""}. Visit the Admin panel to manage your subscription.`}
+            </p>
+            <Link href="/admin/users">
+              <Button size="sm" variant="outline" className="mt-2 gap-1.5 text-amber-700 border-amber-300 hover:bg-amber-100 dark:text-amber-300 dark:border-amber-700 dark:hover:bg-amber-900/50" data-testid="button-billing-manage">
+                Manage Subscription
+              </Button>
+            </Link>
+          </div>
+          <button onClick={() => setBillingBannerDismissed(true)} className="shrink-0 text-amber-400 hover:text-amber-600 dark:hover:text-amber-300" data-testid="button-dismiss-billing-banner">
             <X className="h-4 w-4" />
           </button>
         </div>

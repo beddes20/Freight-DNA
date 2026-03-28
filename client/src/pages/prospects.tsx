@@ -20,7 +20,7 @@ import {
   ChevronRight, Trophy, Pencil, Trash2, PhoneCall, Send, NotebookPen,
   Users, AlertCircle, CheckCircle2, Loader2, Link as LinkIcon, Flame,
   Thermometer, Snowflake, ChevronDown, ChevronUp, Filter, TrendingUp,
-  Truck, Clock, Upload, Sparkles, RefreshCw, FileUp, CheckCircle, XCircle,
+  Truck, Clock, Upload, Sparkles, RefreshCw, FileUp, CheckCircle, XCircle, Download,
 } from "lucide-react";
 import type { Prospect, ProspectStage, ProspectContact } from "@shared/schema";
 import {
@@ -774,6 +774,41 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
     onClose();
   };
 
+  const downloadTemplate = () => {
+    const headers = IMPORT_FIELDS.map(f => f.label.replace(" *", ""));
+    const exampleRow = ["Acme Logistics", "Manufacturing", "Chicago, IL", "TL, LTL", "500000", "Jane Smith", "VP of Logistics", "jane@acmelogistics.com", "312-555-0100", "Chicago-Dallas, Memphis-Atlanta"];
+    const csv = [headers, exampleRow].map(row => row.map(v => `"${v}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "freight-dna-prospect-import-template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadFailedRows = () => {
+    if (!importResult?.errors?.length || !rawRows.length) return;
+    const headers = [...IMPORT_FIELDS.map(f => f.label.replace(" *", "")), "Import Error"];
+    const rows = importResult.errors.map(e => {
+      const row = rawRows[e.row - 1] ?? [];
+      const values = IMPORT_FIELDS.map(f => {
+        const hdrIdx = rawHeaders.indexOf(mapping[f.key] ?? "");
+        const origIdx = hdrIdx !== -1 ? headerOriginalIndex[hdrIdx] : -1;
+        return origIdx !== -1 ? (row[origIdx] ?? "") : "";
+      });
+      return [...values, e.error];
+    });
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "freight-dna-import-failed-rows.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) handleClose(); }}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -786,7 +821,12 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
 
         {step === "upload" && (
           <div className="space-y-4 py-2">
-            <p className="text-sm text-muted-foreground">Upload a CSV or Excel file exported from ZoomInfo, LinkedIn Sales Navigator, or any spreadsheet.</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm text-muted-foreground">Upload a CSV or Excel file exported from ZoomInfo, LinkedIn Sales Navigator, or any spreadsheet.</p>
+              <Button size="sm" variant="outline" className="shrink-0 gap-1.5 text-xs h-8" onClick={downloadTemplate} data-testid="button-download-template">
+                <Download className="h-3.5 w-3.5" /> Template
+              </Button>
+            </div>
             <div
               className="border-2 border-dashed border-border rounded-xl p-10 text-center hover:border-primary/50 transition-colors cursor-pointer"
               onDrop={onDrop}
@@ -937,7 +977,14 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
             </>
           )}
           {step === "result" && (
-            <Button onClick={handleClose} data-testid="button-import-done">Done</Button>
+            <>
+              {(importResult?.errors?.length ?? 0) > 0 && (
+                <Button variant="outline" className="gap-1.5" onClick={downloadFailedRows} data-testid="button-download-failed-rows">
+                  <Download className="h-4 w-4" /> Download Failed Rows
+                </Button>
+              )}
+              <Button onClick={handleClose} data-testid="button-import-done">Done</Button>
+            </>
           )}
         </DialogFooter>
       </DialogContent>
@@ -1079,7 +1126,13 @@ function ProspectDetailSheet({
   const stageMutation = useMutation({
     mutationFn: async (payload: { stage: string; lostReason?: string }) =>
       (await apiRequest("PATCH", `/api/prospects/${prospect.id}`, payload)).json(),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/prospects"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/prospects"] });
+      // Silently generate intel brief if one doesn't exist yet (force: false = use cache)
+      if (!prospect.intelBrief) {
+        apiRequest("POST", `/api/prospects/${prospect.id}/intel`, { force: false }).catch(() => {});
+      }
+    },
     onError: () => toast({ title: "Failed to update stage", variant: "destructive" }),
   });
 
