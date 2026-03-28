@@ -2228,18 +2228,20 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async updateProspectContact(id: number, data: Partial<import('../shared/schema').InsertProspectContact>): Promise<import('../shared/schema').ProspectContact | undefined> {
+  async updateProspectContact(prospectId: number, contactId: number, data: Partial<import('../shared/schema').InsertProspectContact>): Promise<import('../shared/schema').ProspectContact | undefined> {
     const { prospectContacts } = await import('../shared/schema');
     const [row] = await db.update(prospectContacts)
       .set(data)
-      .where(eq(prospectContacts.id, id))
+      .where(and(eq(prospectContacts.id, contactId), eq(prospectContacts.prospectId, prospectId)))
       .returning();
     return row;
   }
 
-  async deleteProspectContact(id: number): Promise<boolean> {
+  async deleteProspectContact(prospectId: number, contactId: number): Promise<boolean> {
     const { prospectContacts } = await import('../shared/schema');
-    const result = await db.delete(prospectContacts).where(eq(prospectContacts.id, id)).returning();
+    const result = await db.delete(prospectContacts)
+      .where(and(eq(prospectContacts.id, contactId), eq(prospectContacts.prospectId, prospectId)))
+      .returning();
     return result.length > 0;
   }
 }

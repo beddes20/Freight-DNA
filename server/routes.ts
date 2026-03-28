@@ -10788,7 +10788,13 @@ Respond with valid JSON only:
       const contactId = parseInt(req.params.contactId);
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
-      const updated = await storage.updateProspectContact(contactId, req.body);
+      // Validate deal_probability range if provided
+      if (req.body.dealProbability != null) {
+        const p = Number(req.body.dealProbability);
+        if (isNaN(p) || p < 0 || p > 100) return res.status(400).json({ error: "deal_probability must be 0–100" });
+      }
+      const updated = await storage.updateProspectContact(id, contactId, req.body);
+      if (!updated) return res.status(404).json({ error: "Contact not found under this prospect" });
       res.json(updated);
     } catch (err) {
       console.error("PATCH /api/prospects/:id/contacts/:contactId error:", err);
@@ -10804,7 +10810,8 @@ Respond with valid JSON only:
       const contactId = parseInt(req.params.contactId);
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
-      await storage.deleteProspectContact(contactId);
+      const deleted = await storage.deleteProspectContact(id, contactId);
+      if (!deleted) return res.status(404).json({ error: "Contact not found under this prospect" });
       res.json({ ok: true });
     } catch (err) {
       console.error("DELETE /api/prospects/:id/contacts/:contactId error:", err);
