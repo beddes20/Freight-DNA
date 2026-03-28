@@ -10748,6 +10748,70 @@ Respond with valid JSON only:
     }
   });
 
+  // ── Prospect Contacts sub-resource ──────────────────────────────────────────
+
+  app.get("/api/prospects/:id/contacts", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      const contacts = await storage.getProspectContacts(id);
+      res.json(contacts);
+    } catch (err) {
+      console.error("GET /api/prospects/:id/contacts error:", err);
+      res.status(500).json({ error: "Failed to fetch contacts" });
+    }
+  });
+
+  app.post("/api/prospects/:id/contacts", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      const contact = await storage.createProspectContact({ ...req.body, prospectId: id });
+      res.status(201).json(contact);
+    } catch (err) {
+      console.error("POST /api/prospects/:id/contacts error:", err);
+      res.status(500).json({ error: "Failed to create contact" });
+    }
+  });
+
+  app.patch("/api/prospects/:id/contacts/:contactId", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const contactId = parseInt(req.params.contactId);
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      const updated = await storage.updateProspectContact(contactId, req.body);
+      res.json(updated);
+    } catch (err) {
+      console.error("PATCH /api/prospects/:id/contacts/:contactId error:", err);
+      res.status(500).json({ error: "Failed to update contact" });
+    }
+  });
+
+  app.delete("/api/prospects/:id/contacts/:contactId", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const contactId = parseInt(req.params.contactId);
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      await storage.deleteProspectContact(contactId);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("DELETE /api/prospects/:id/contacts/:contactId error:", err);
+      res.status(500).json({ error: "Failed to delete contact" });
+    }
+  });
+
   // Convert prospect → company
   app.post("/api/prospects/:id/convert", requireAuth, requireProspectRole, async (req, res) => {
     try {

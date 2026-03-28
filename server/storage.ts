@@ -2212,6 +2212,36 @@ export class DatabaseStorage implements IStorage {
     const [row] = await db.insert(prospectActivities).values({ ...data, createdAt: new Date() }).returning();
     return row;
   }
+
+  // ── Prospect Contacts ────────────────────────────────────────────────────────
+
+  async getProspectContacts(prospectId: number): Promise<import('../shared/schema').ProspectContact[]> {
+    const { prospectContacts } = await import('../shared/schema');
+    return db.select().from(prospectContacts)
+      .where(eq(prospectContacts.prospectId, prospectId))
+      .orderBy(prospectContacts.createdAt);
+  }
+
+  async createProspectContact(data: import('../shared/schema').InsertProspectContact): Promise<import('../shared/schema').ProspectContact> {
+    const { prospectContacts } = await import('../shared/schema');
+    const [row] = await db.insert(prospectContacts).values({ ...data, createdAt: new Date() }).returning();
+    return row;
+  }
+
+  async updateProspectContact(id: number, data: Partial<import('../shared/schema').InsertProspectContact>): Promise<import('../shared/schema').ProspectContact | undefined> {
+    const { prospectContacts } = await import('../shared/schema');
+    const [row] = await db.update(prospectContacts)
+      .set(data)
+      .where(eq(prospectContacts.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteProspectContact(id: number): Promise<boolean> {
+    const { prospectContacts } = await import('../shared/schema');
+    const result = await db.delete(prospectContacts).where(eq(prospectContacts.id, id)).returning();
+    return result.length > 0;
+  }
 }
 
 export const storage = new DatabaseStorage();

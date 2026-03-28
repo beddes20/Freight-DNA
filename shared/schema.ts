@@ -708,6 +708,8 @@ export const prospectStages = [
   "follow_up",
   "opportunity_sent",
   "first_load_won",
+  "lost",
+  "disqualified",
 ] as const;
 export type ProspectStage = typeof prospectStages[number];
 
@@ -718,7 +720,60 @@ export const PROSPECT_STAGE_LABELS: Record<ProspectStage, string> = {
   follow_up: "Active Follow-Up",
   opportunity_sent: "Opportunity Sent",
   first_load_won: "First Load Won",
+  lost: "Lost",
+  disqualified: "Disqualified",
 };
+
+export const PROSPECT_LEAD_SOURCES = [
+  "cold_call",
+  "zoominfo",
+  "linkedin",
+  "referral",
+  "conference",
+  "website_inbound",
+  "email_campaign",
+  "other",
+] as const;
+
+export const PROSPECT_LEAD_SOURCE_LABELS: Record<typeof PROSPECT_LEAD_SOURCES[number], string> = {
+  cold_call: "Cold Call",
+  zoominfo: "ZoomInfo",
+  linkedin: "LinkedIn",
+  referral: "Referral",
+  conference: "Conference",
+  website_inbound: "Website Inbound",
+  email_campaign: "Email Campaign",
+  other: "Other",
+};
+
+export const PROSPECT_LOST_REASONS = [
+  "price",
+  "timing",
+  "incumbent",
+  "no_volume",
+  "ghosted",
+  "wrong_fit",
+  "other",
+] as const;
+
+export const PROSPECT_LOST_REASON_LABELS: Record<typeof PROSPECT_LOST_REASONS[number], string> = {
+  price: "Price / Rates",
+  timing: "Bad Timing",
+  incumbent: "Incumbent Too Entrenched",
+  no_volume: "No Real Volume",
+  ghosted: "Ghosted / Unresponsive",
+  wrong_fit: "Wrong Fit",
+  other: "Other",
+};
+
+export const PROSPECT_PRIORITIES = ["hot", "warm", "cold"] as const;
+export const PROSPECT_CONTACT_ROLES = [
+  "champion",
+  "decision_maker",
+  "gatekeeper",
+  "influencer",
+  "other",
+] as const;
 
 export const prospects = pgTable("prospects", {
   id: serial("id").primaryKey(),
@@ -743,6 +798,18 @@ export const prospects = pgTable("prospects", {
   opportunityNotes: text("opportunity_notes"),
   convertedToCompanyId: varchar("converted_to_company_id"),
   convertedAt: timestamp("converted_at"),
+  // Phase 2 qualifying fields
+  lostReason: text("lost_reason"),
+  leadSource: text("lead_source"),
+  priority: text("priority"),
+  expectedCloseDate: text("expected_close_date"),
+  dealProbability: integer("deal_probability"),
+  estLoadsPerWeek: text("est_loads_per_week"),
+  topLanes: text("top_lanes"),
+  commodity: text("commodity"),
+  currentCarrier: text("current_carrier"),
+  painPoints: text("pain_points"),
+  intelBrief: text("intel_brief"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -763,6 +830,23 @@ export const prospectActivities = pgTable("prospect_activities", {
 export const insertProspectActivitySchema = createInsertSchema(prospectActivities).omit({ id: true, createdAt: true });
 export type InsertProspectActivity = typeof insertProspectActivitySchema._type;
 export type ProspectActivity = typeof prospectActivities.$inferSelect;
+
+export const prospectContacts = pgTable("prospect_contacts", {
+  id: serial("id").primaryKey(),
+  prospectId: integer("prospect_id").notNull().references(() => prospects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  title: text("title"),
+  email: text("email"),
+  phone: text("phone"),
+  linkedin: text("linkedin"),
+  role: text("role").default("other"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertProspectContactSchema = createInsertSchema(prospectContacts).omit({ id: true, createdAt: true });
+export type InsertProspectContact = typeof insertProspectContactSchema._type;
+export type ProspectContact = typeof prospectContacts.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
