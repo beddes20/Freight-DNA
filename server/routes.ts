@@ -10663,10 +10663,20 @@ Respond with valid JSON only:
     }
   });
 
+  function validateProspectPayload(body: any): string | null {
+    if (body.dealProbability != null) {
+      const p = Number(body.dealProbability);
+      if (!Number.isInteger(p) || p < 0 || p > 100) return "dealProbability must be an integer between 0 and 100";
+    }
+    return null;
+  }
+
   app.post("/api/prospects", requireAuth, requireProspectRole, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const validationError = validateProspectPayload(req.body);
+      if (validationError) return res.status(400).json({ error: validationError });
       const data = { ...req.body, organizationId: user.organizationId, ownerId: req.body.ownerId || user.id };
       const prospect = await storage.createProspect(data);
       res.status(201).json(prospect);
@@ -10680,6 +10690,8 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const validationError = validateProspectPayload(req.body);
+      if (validationError) return res.status(400).json({ error: validationError });
       const id = parseInt(req.params.id);
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
@@ -10788,11 +10800,6 @@ Respond with valid JSON only:
       const contactId = parseInt(req.params.contactId);
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
-      // Validate deal_probability range if provided
-      if (req.body.dealProbability != null) {
-        const p = Number(req.body.dealProbability);
-        if (isNaN(p) || p < 0 || p > 100) return res.status(400).json({ error: "deal_probability must be 0–100" });
-      }
       const updated = await storage.updateProspectContact(id, contactId, req.body);
       if (!updated) return res.status(404).json({ error: "Contact not found under this prospect" });
       res.json(updated);
