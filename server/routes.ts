@@ -10740,7 +10740,7 @@ Respond with valid JSON only:
         // to compute days in current stage. Fall back to createdAt for new prospects that
         // have never moved stages.
         const stageEntry = p.stageChangedAt ?? p.createdAt;
-        const stageEntryMs = now - new Date(stageEntry as unknown as string).getTime();
+        const stageEntryMs = now - new Date(stageEntry).getTime();
         const stageDays = Math.floor(stageEntryMs / 86400000);
         stageAgeSums[s] = (stageAgeSums[s] || 0) + stageDays;
         stageAgeCounts[s] = (stageAgeCounts[s] || 0) + 1;

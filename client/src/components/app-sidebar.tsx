@@ -21,9 +21,8 @@ import vtLogoWhite from "@assets/value-truck-logo-white.png";
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
 
 const navItems = [
-  { title: "Dashboard",           url: "/",                    icon: LayoutGrid    },
-  { title: "Sales Pipeline",      url: "/prospects",           icon: Crosshair,   roles: ["admin", "sales", "sales_director"] },
-  { title: "Pipeline Analytics",  url: "/pipeline-analytics",  icon: LineChart,   roles: ["admin", "sales_director"] },
+  { title: "Dashboard",         url: "/",                 icon: LayoutGrid    },
+  { title: "Sales Pipeline",    url: "/prospects",        icon: Crosshair,     roles: ["admin", "sales", "sales_director"] },
   { title: "Customers",         url: "/customers",        icon: Network,       roles: SALES_ROLES },
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
   { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare },
@@ -47,8 +46,9 @@ const navItems = [
 ];
 
 const pipelineItems = [
-  { title: "RFP & Awards",   url: "/rfp-awards",     icon: Trophy       },
-  { title: "Lane Research",  url: "/research-tasks", icon: ClipboardList },
+  { title: "RFP & Awards",        url: "/rfp-awards",          icon: Trophy,       roles: undefined },
+  { title: "Lane Research",       url: "/research-tasks",      icon: ClipboardList, roles: undefined },
+  { title: "Pipeline Analytics",  url: "/pipeline-analytics",  icon: LineChart,    roles: ["admin", "sales_director"] },
 ];
 
 const toolItems = [
@@ -204,7 +204,9 @@ export function AppSidebar() {
             <SidebarGroupLabel>Pipeline</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {pipelineItems.map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
+                {pipelineItems
+                .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
+                .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

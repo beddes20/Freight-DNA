@@ -283,7 +283,7 @@ export default function PipelineAnalyticsPage() {
                 <tr className="border-b border-border">
                   <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Stage</th>
                   <th className="text-right py-2 pr-4 text-xs font-medium text-muted-foreground">Deals</th>
-                  <th className="text-right py-2 text-xs font-medium text-muted-foreground">Avg Days in Stage</th>
+                  <th className="text-right py-2 text-xs font-medium text-muted-foreground">Days in Current Stage</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
