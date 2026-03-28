@@ -275,7 +275,7 @@ export default function PipelineAnalyticsPage() {
           <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
             <h2 className="font-semibold text-foreground">Stage Velocity</h2>
-            <span className="text-xs text-muted-foreground ml-auto">Avg. deal age per stage</span>
+            <span className="text-xs text-muted-foreground ml-auto">Days stuck in stage</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -283,7 +283,7 @@ export default function PipelineAnalyticsPage() {
                 <tr className="border-b border-border">
                   <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Stage</th>
                   <th className="text-right py-2 pr-4 text-xs font-medium text-muted-foreground">Deals</th>
-                  <th className="text-right py-2 text-xs font-medium text-muted-foreground">Avg Age</th>
+                  <th className="text-right py-2 text-xs font-medium text-muted-foreground">Avg Days in Stage</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
@@ -314,8 +314,9 @@ export default function PipelineAnalyticsPage() {
             </table>
           </div>
           <p className="text-xs text-muted-foreground">
-            <Flame className="h-3 w-3 inline text-amber-500 mr-1" />
-            Amber = potential bottleneck (&gt;30 days avg age)
+            Estimated from last stage update.{" "}
+            <Flame className="h-3 w-3 inline text-amber-500 mx-0.5" />
+            Amber = bottleneck (&gt;30 days in current stage)
           </p>
         </Card>
 
