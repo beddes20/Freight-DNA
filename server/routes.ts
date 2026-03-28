@@ -10635,8 +10635,8 @@ Respond with valid JSON only:
 
   const PROSPECT_ROLES = ["admin", "sales", "sales_director"];
 
-  function requireProspectRole(req: any, res: any, next: any) {
-    const user = (req as any).user;
+  async function requireProspectRole(req: any, res: any, next: any) {
+    const user = await getCurrentUser(req);
     if (!user || !PROSPECT_ROLES.includes(user.role)) {
       return res.status(403).json({ error: "Access restricted to sales team" });
     }
