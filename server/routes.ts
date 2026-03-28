@@ -10668,6 +10668,11 @@ Respond with valid JSON only:
       const p = Number(body.dealProbability);
       if (!Number.isInteger(p) || p < 0 || p > 100) return "dealProbability must be an integer between 0 and 100";
     }
+    if (body.stage === "lost" || body.stage === "disqualified") {
+      if (!body.lostReason || typeof body.lostReason !== "string" || body.lostReason.trim() === "") {
+        return "lostReason is required when marking a prospect as lost or disqualified";
+      }
+    }
     return null;
   }
 

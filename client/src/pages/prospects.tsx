@@ -403,10 +403,17 @@ function ProspectFormDialog({
 
   const buildPayload = () => {
     const p: any = { ...values };
+    // Convert dealProbability to integer or null
     if (p.dealProbability !== "") p.dealProbability = parseInt(p.dealProbability);
-    else delete p.dealProbability;
-    // clear empty strings for optional fields
-    Object.keys(p).forEach(k => { if (p[k] === "") delete p[k]; });
+    else p.dealProbability = null;
+    // For optional text fields: send null instead of empty string so editing can clear values
+    const optionalTextFields = [
+      "industry", "website", "estimatedSpend", "primaryContactName", "primaryContactTitle",
+      "primaryContactEmail", "primaryContactPhone", "primaryContactLinkedin",
+      "notes", "nextSteps", "followUpDate", "leadSource", "currentCarrier",
+      "estLoadsPerWeek", "topLanes", "commodity", "painPoints", "priority", "expectedCloseDate",
+    ];
+    optionalTextFields.forEach(k => { if (p[k] === "") p[k] = null; });
     return p;
   };
 
