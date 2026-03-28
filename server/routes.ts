@@ -10691,6 +10691,140 @@ Respond with valid JSON only:
     }
   });
 
+  // ── Pipeline Analytics (must be before /:id routes) ──────────────────────────
+  app.get("/api/prospects/analytics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Access restricted to sales directors and admins" });
+      }
+
+      // All prospects for the org
+      const allProspects = await storage.getProspects(user.organizationId);
+
+      // Activities in last 30 days across all org prospects
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const prospectIds = allProspects.map(p => p.id);
+      const recentActivities = await storage.getOrgProspectActivitiesSince(prospectIds, thirtyDaysAgo);
+
+      // Users for name lookup
+      const allUsers = await storage.getUsers(user.organizationId);
+      const userMap = new Map(allUsers.map(u => [u.id, u.name]));
+
+      const ACTIVE_STAGES = ["new_lead", "intro_scheduled", "intro_completed", "follow_up", "opportunity_sent", "first_load_won"];
+      const CLOSED_STAGES = ["lost", "disqualified"];
+      const now = Date.now();
+
+      const parseSpend = (s?: string | null) => {
+        if (!s) return 0;
+        return parseFloat(s.replace(/[^0-9.]/g, "")) || 0;
+      };
+
+      // Stage counts
+      const stageCounts: Record<string, number> = {};
+      const stageWeightedValues: Record<string, number> = {};
+      const stageTotalSpends: Record<string, number> = {};
+      const stageAgeSums: Record<string, number> = {};
+      const stageAgeCounts: Record<string, number> = {};
+
+      allProspects.forEach(p => {
+        const s = p.stage;
+        stageCounts[s] = (stageCounts[s] || 0) + 1;
+        const spend = parseSpend(p.estimatedSpend);
+        const prob = p.dealProbability != null ? p.dealProbability / 100 : 0.5;
+        const weighted = spend * prob;
+        stageTotalSpends[s] = (stageTotalSpends[s] || 0) + spend;
+        stageWeightedValues[s] = (stageWeightedValues[s] || 0) + weighted;
+        const ageMs = now - new Date(p.createdAt).getTime();
+        const ageDays = Math.floor(ageMs / 86400000);
+        stageAgeSums[s] = (stageAgeSums[s] || 0) + ageDays;
+        stageAgeCounts[s] = (stageAgeCounts[s] || 0) + 1;
+      });
+
+      const avgDaysInStage: Record<string, number> = {};
+      ACTIVE_STAGES.forEach(s => {
+        avgDaysInStage[s] = stageAgeCounts[s] ? Math.round(stageAgeSums[s] / stageAgeCounts[s]) : 0;
+      });
+
+      // Lost reason breakdown
+      const lostReasonCounts: Record<string, number> = {};
+      allProspects.filter(p => CLOSED_STAGES.includes(p.stage)).forEach(p => {
+        const r = p.lostReason || "other";
+        lostReasonCounts[r] = (lostReasonCounts[r] || 0) + 1;
+      });
+
+      // Win rate
+      const converted = allProspects.filter(p => p.convertedToCompanyId).length;
+      const lost = allProspects.filter(p => CLOSED_STAGES.includes(p.stage)).length;
+      const totalClosed = converted + lost;
+      const winRate = totalClosed > 0 ? Math.round((converted / totalClosed) * 100) : 0;
+
+      // Total weighted pipeline (active, non-converted only)
+      const totalWeighted = allProspects
+        .filter(p => ACTIVE_STAGES.includes(p.stage) && !p.convertedToCompanyId)
+        .reduce((sum, p) => {
+          const spend = parseSpend(p.estimatedSpend);
+          const prob = p.dealProbability != null ? p.dealProbability / 100 : 0.5;
+          return sum + spend * prob;
+        }, 0);
+
+      // Activities by rep (last 30d)
+      const activityByRep: Record<string, number> = {};
+      recentActivities.forEach(a => {
+        activityByRep[a.createdById] = (activityByRep[a.createdById] || 0) + 1;
+      });
+
+      // Rep stats
+      const repMap: Record<string, {
+        name: string; prospectsOwned: number; converted: number; lost: number;
+        totalAgeDays: number; ageCount: number;
+      }> = {};
+
+      allProspects.forEach(p => {
+        if (!repMap[p.ownerId]) {
+          repMap[p.ownerId] = { name: userMap.get(p.ownerId) ?? p.ownerId, prospectsOwned: 0, converted: 0, lost: 0, totalAgeDays: 0, ageCount: 0 };
+        }
+        repMap[p.ownerId].prospectsOwned++;
+        if (p.convertedToCompanyId) repMap[p.ownerId].converted++;
+        if (CLOSED_STAGES.includes(p.stage)) repMap[p.ownerId].lost++;
+        const ageMs = now - new Date(p.createdAt).getTime();
+        repMap[p.ownerId].totalAgeDays += Math.floor(ageMs / 86400000);
+        repMap[p.ownerId].ageCount++;
+      });
+
+      const repStats = Object.entries(repMap).map(([ownerId, data]) => {
+        const repTotal = data.converted + data.lost;
+        return {
+          ownerId,
+          ownerName: data.name,
+          prospectsOwned: data.prospectsOwned,
+          activitiesLast30d: activityByRep[ownerId] || 0,
+          avgDealAge: data.ageCount ? Math.round(data.totalAgeDays / data.ageCount) : 0,
+          conversionRate: repTotal > 0 ? Math.round((data.converted / repTotal) * 100) : 0,
+          converted: data.converted,
+        };
+      }).sort((a, b) => b.prospectsOwned - a.prospectsOwned);
+
+      res.json({
+        stageCounts,
+        stageWeightedValues,
+        stageTotalSpends,
+        avgDaysInStage,
+        lostReasonCounts,
+        winRate,
+        converted,
+        totalClosed,
+        totalWeighted,
+        totalProspects: allProspects.length,
+        repStats,
+      });
+    } catch (err) {
+      console.error("GET /api/prospects/analytics error:", err);
+      res.status(500).json({ error: "Failed to generate analytics" });
+    }
+  });
+
   app.patch("/api/prospects/:id", requireAuth, requireProspectRole, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

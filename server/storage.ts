@@ -375,6 +375,7 @@ export interface IStorage {
   updateProspect(id: number, data: Partial<import('../shared/schema').InsertProspect>): Promise<import('../shared/schema').Prospect | undefined>;
   deleteProspect(id: number): Promise<boolean>;
   getProspectActivities(prospectId: number): Promise<import('../shared/schema').ProspectActivity[]>;
+  getOrgProspectActivitiesSince(prospectIds: number[], since: Date): Promise<import('../shared/schema').ProspectActivity[]>;
   createProspectActivity(data: import('../shared/schema').InsertProspectActivity): Promise<import('../shared/schema').ProspectActivity>;
   getProspectContacts(prospectId: number): Promise<import('../shared/schema').ProspectContact[]>;
   createProspectContact(data: import('../shared/schema').InsertProspectContact): Promise<import('../shared/schema').ProspectContact>;
@@ -2209,6 +2210,13 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(prospectActivities)
       .where(eq(prospectActivities.prospectId, prospectId))
       .orderBy(prospectActivities.createdAt);
+  }
+
+  async getOrgProspectActivitiesSince(prospectIds: number[], since: Date): Promise<import('../shared/schema').ProspectActivity[]> {
+    if (prospectIds.length === 0) return [];
+    const { prospectActivities } = await import('../shared/schema');
+    return db.select().from(prospectActivities)
+      .where(and(inArray(prospectActivities.prospectId, prospectIds), gte(prospectActivities.createdAt, since)));
   }
 
   async createProspectActivity(data: import('../shared/schema').InsertProspectActivity): Promise<import('../shared/schema').ProspectActivity> {
