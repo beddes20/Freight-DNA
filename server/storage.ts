@@ -2212,8 +2212,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createProspectActivity(data: import('../shared/schema').InsertProspectActivity): Promise<import('../shared/schema').ProspectActivity> {
-    const { prospectActivities } = await import('../shared/schema');
+    const { prospectActivities, prospects } = await import('../shared/schema');
     const [row] = await db.insert(prospectActivities).values({ ...data, createdAt: new Date() }).returning();
+    // Bump prospect updatedAt so "days since last touch" reflects the new activity
+    await db.update(prospects).set({ updatedAt: new Date() }).where(eq(prospects.id, data.prospectId));
     return row;
   }
 

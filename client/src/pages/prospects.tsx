@@ -968,6 +968,12 @@ function ProspectCard({ prospect, onClick }: { prospect: EnrichedProspect; onCli
         </p>
       )}
 
+      {prospect.expectedCloseDate && (
+        <p className="text-[10px] text-muted-foreground flex items-center gap-0.5" data-testid={`close-date-badge-${prospect.id}`}>
+          <TrendingUp className="h-2.5 w-2.5 shrink-0" /> Close: {prospect.expectedCloseDate}
+        </p>
+      )}
+
       <div className="flex items-center justify-between pt-0.5 gap-2">
         {stale ? (
           <span className="text-[10px] text-amber-600 dark:text-amber-400 flex items-center gap-0.5" data-testid={`stale-badge-${prospect.id}`}>
@@ -1028,7 +1034,7 @@ export default function ProspectsPage() {
     );
   }
 
-  const activeProspects = filtered.filter(p => !CLOSED_STAGES.includes(p.stage as ProspectStage));
+  const activeProspects = filtered.filter(p => !CLOSED_STAGES.includes(p.stage as ProspectStage) && !p.convertedToCompanyId);
   const closedProspects = filtered.filter(p => CLOSED_STAGES.includes(p.stage as ProspectStage));
 
   const byStage = (stage: ProspectStage) => activeProspects.filter(p => p.stage === stage);
