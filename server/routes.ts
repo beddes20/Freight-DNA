@@ -11060,13 +11060,67 @@ Respond with valid JSON only:
       }
 
       const allCompanies = await storage.getCompanies(user.organizationId);
-      const industryKey = (prospect.industry ?? "").toLowerCase().slice(0, 12);
-      const similar = industryKey
-        ? allCompanies.filter(c => c.industry && c.industry.toLowerCase().includes(industryKey)).slice(0, 6)
-        : allCompanies.slice(0, 4);
 
-      const networkLines = similar.length > 0
-        ? similar.map(c => `- ${c.name}${c.industry ? ` (${c.industry})` : ""}${c.estimatedFreightSpend ? ` ~$${Number(c.estimatedFreightSpend).toLocaleString()}/mo` : ""}`).join("\n")
+      // Parse prospect's top lanes into searchable tokens (city/state keywords)
+      const laneTokens: string[] = (prospect.topLanes ?? "")
+        .split(/[,\-\/|→to]+/i)
+        .map(t => t.trim().toLowerCase())
+        .filter(t => t.length >= 3 && !["the", "and"].includes(t));
+
+      // Industry match set
+      const industryKey = (prospect.industry ?? "").toLowerCase().slice(0, 12);
+      const industryMatchIds = new Set<string>(
+        industryKey
+          ? allCompanies.filter(c => c.industry && c.industry.toLowerCase().includes(industryKey)).map(c => c.id)
+          : []
+      );
+
+      // Lane overlap match: find companies whose contacts have lanes containing prospect's lane tokens
+      const laneMatchIds = new Set<string>();
+      if (laneTokens.length > 0 && allCompanies.length > 0) {
+        const { db } = await import("./storage");
+        const { contacts: contactsTable } = await import("../shared/schema");
+        const { inArray: drizzleInArray } = await import("drizzle-orm");
+        const companyIds = allCompanies.map(c => c.id);
+        const contactRows = await db
+          .select({ companyId: contactsTable.companyId, lanes: contactsTable.lanes })
+          .from(contactsTable)
+          .where(drizzleInArray(contactsTable.companyId, companyIds));
+        contactRows.forEach(row => {
+          if (row.companyId && row.lanes && row.lanes.some(lane =>
+            laneTokens.some(token => lane.toLowerCase().includes(token))
+          )) {
+            laneMatchIds.add(row.companyId);
+          }
+        });
+      }
+
+      // Build combined similar set — industry OR lane overlap — prioritize dual matches, cap at 6
+      const combinedMap = new Map<string, { company: typeof allCompanies[number]; score: number }>();
+      allCompanies.forEach(c => {
+        const inIndustry = industryMatchIds.has(c.id);
+        const inLane = laneMatchIds.has(c.id);
+        if (inIndustry || inLane) {
+          combinedMap.set(c.id, { company: c, score: (inIndustry ? 1 : 0) + (inLane ? 1 : 0) });
+        }
+      });
+      const similar = [...combinedMap.values()]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 6)
+        .map(x => x.company);
+
+      // Fallback: if no matches, use first 4 companies for general context
+      const contextCompanies = similar.length > 0 ? similar : allCompanies.slice(0, 4);
+
+      const networkLines = contextCompanies.length > 0
+        ? contextCompanies.map(c => {
+            const tags: string[] = [];
+            if (industryMatchIds.has(c.id)) tags.push("same industry");
+            if (laneMatchIds.has(c.id)) tags.push("overlapping lanes");
+            const tag = tags.length > 0 ? ` [${tags.join(", ")}]` : "";
+            const spend = c.estimatedFreightSpend ? ` ~$${Number(c.estimatedFreightSpend).toLocaleString()}/mo` : "";
+            return `- ${c.name}${c.industry ? ` (${c.industry})` : ""}${spend}${tag}`;
+          }).join("\n")
         : "- No closely matching customers found yet";
 
       const prompt = `You are a strategic sales intelligence analyst for Value Truck, a top-tier transportation brokerage. Prepare a concise, actionable Sales Intel Brief for a prospect the sales team is pursuing.

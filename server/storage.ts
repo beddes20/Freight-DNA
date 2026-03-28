@@ -388,6 +388,7 @@ const pool = new Pool({
 });
 
 const db = drizzle(pool);
+export { db };
 
 export class DatabaseStorage implements IStorage {
   readonly pool = pool;
