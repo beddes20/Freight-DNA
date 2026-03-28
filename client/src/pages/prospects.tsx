@@ -699,6 +699,9 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importResult, setImportResult] = useState<{ created: number; errors: { row: number; error: string }[] } | null>(null);
 
+  // headerOriginalIndex[i] = original column index in the spreadsheet for rawHeaders[i]
+  const [headerOriginalIndex, setHeaderOriginalIndex] = useState<number[]>([]);
+
   const handleFile = async (file: File) => {
     const XLSX = await import("xlsx");
     const buffer = await file.arrayBuffer();
@@ -709,11 +712,19 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
       toast({ title: "File must have at least a header row and one data row.", variant: "destructive" });
       return;
     }
-    const headers = data[0].map(h => String(h ?? "").trim()).filter(Boolean);
+    // Build header list and keep track of original column indices so blank
+    // header columns in between don't cause index shift when reading row values
+    const hdrs: string[] = [];
+    const origIdxs: number[] = [];
+    data[0].forEach((h, i) => {
+      const cleaned = String(h ?? "").trim();
+      if (cleaned) { hdrs.push(cleaned); origIdxs.push(i); }
+    });
     const rows = data.slice(1).filter(r => r.some(c => c != null && String(c).trim() !== ""));
-    setRawHeaders(headers);
+    setRawHeaders(hdrs);
+    setHeaderOriginalIndex(origIdxs);
     setRawRows(rows as string[][]);
-    setMapping(autoDetectMapping(headers));
+    setMapping(autoDetectMapping(hdrs));
     setStep("map");
   };
 
@@ -730,9 +741,10 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
         IMPORT_FIELDS.forEach(f => {
           const col = mapping[f.key];
           if (col) {
-            const colIdx = rawHeaders.indexOf(col);
-            if (colIdx !== -1 && row[colIdx] != null) {
-              obj[f.key] = String(row[colIdx]).trim();
+            const hdrIdx = rawHeaders.indexOf(col);
+            const origIdx = hdrIdx !== -1 ? headerOriginalIndex[hdrIdx] : -1;
+            if (origIdx !== -1 && row[origIdx] != null) {
+              obj[f.key] = String(row[origIdx]).trim();
             }
           }
         });
@@ -825,7 +837,11 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
                       <TableCell className="py-1.5">
                         <Select
                           value={mapping[f.key] ?? "__none__"}
-                          onValueChange={v => setMapping(prev => ({ ...prev, [f.key]: v === "__none__" ? "" : v }))}
+                          onValueChange={v => setMapping(prev => {
+                            const next = { ...prev };
+                            if (v === "__none__") { delete next[f.key]; } else { next[f.key] = v; }
+                            return next;
+                          })}
                         >
                           <SelectTrigger className="h-7 text-xs" data-testid={`mapping-select-${f.key}`}>
                             <SelectValue placeholder="— skip —" />
@@ -861,10 +877,11 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
                       {previewRows.map((row, i) => (
                         <TableRow key={i}>
                           {mappedFields.map(f => {
-                            const colIdx = rawHeaders.indexOf(mapping[f.key] ?? "");
+                            const hdrIdx = rawHeaders.indexOf(mapping[f.key] ?? "");
+                            const origIdx = hdrIdx !== -1 ? headerOriginalIndex[hdrIdx] : -1;
                             return (
                               <TableCell key={f.key} className="text-xs py-1.5 max-w-[140px] truncate">
-                                {colIdx !== -1 ? (row[colIdx] ?? "") : ""}
+                                {origIdx !== -1 ? (row[origIdx] ?? "") : ""}
                               </TableCell>
                             );
                           })}
