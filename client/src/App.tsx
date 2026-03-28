@@ -43,6 +43,7 @@ import RepReportsRosterPage from "@/pages/rep-reports-roster";
 import NotificationsPage from "@/pages/notifications";
 import CoordinatorsCornerPage from "@/pages/coordinators-corner";
 import FeedbackInboxPage from "@/pages/feedback-inbox";
+import ProspectsPage from "@/pages/prospects";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -100,6 +101,7 @@ function Router() {
       <Route path="/notifications" component={NotificationsPage} />
       <Route path="/coordinators-corner" component={CoordinatorsCornerPage} />
       <Route path="/feedback-inbox" component={FeedbackInboxPage} />
+      <Route path="/prospects" component={ProspectsPage} />
       <Route component={NotFound} />
     </Switch>
   );

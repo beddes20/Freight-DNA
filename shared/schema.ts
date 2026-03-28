@@ -699,6 +699,73 @@ export const insertToolLinkSchema = createInsertSchema(toolLinks).omit({ id: tru
 export type InsertToolLink = z.infer<typeof insertToolLinkSchema>;
 export type ToolLink = typeof toolLinks.$inferSelect;
 
+// ── Sales Prospect Pipeline ───────────────────────────────────────────────────
+
+export const prospectStages = [
+  "new_lead",
+  "intro_scheduled",
+  "intro_completed",
+  "follow_up",
+  "opportunity_sent",
+  "first_load_won",
+] as const;
+export type ProspectStage = typeof prospectStages[number];
+
+export const PROSPECT_STAGE_LABELS: Record<ProspectStage, string> = {
+  new_lead: "New Lead",
+  intro_scheduled: "Intro Scheduled",
+  intro_completed: "Intro Completed",
+  follow_up: "Active Follow-Up",
+  opportunity_sent: "Opportunity Sent",
+  first_load_won: "First Load Won",
+};
+
+export const prospects = pgTable("prospects", {
+  id: serial("id").primaryKey(),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  industry: text("industry"),
+  website: text("website"),
+  estimatedSpend: text("estimated_spend"),
+  shippingModes: text("shipping_modes").array(),
+  stage: text("stage").notNull().default("new_lead"),
+  ownerId: varchar("owner_id").notNull().references(() => users.id),
+  assignedNamId: varchar("assigned_nam_id").references(() => users.id),
+  primaryContactName: text("primary_contact_name"),
+  primaryContactTitle: text("primary_contact_title"),
+  primaryContactEmail: text("primary_contact_email"),
+  primaryContactPhone: text("primary_contact_phone"),
+  primaryContactLinkedin: text("primary_contact_linkedin"),
+  notes: text("notes"),
+  nextSteps: text("next_steps"),
+  followUpDate: text("follow_up_date"),
+  opportunityType: text("opportunity_type"),
+  opportunityNotes: text("opportunity_notes"),
+  convertedToCompanyId: varchar("converted_to_company_id"),
+  convertedAt: timestamp("converted_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertProspectSchema = createInsertSchema(prospects).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertProspect = typeof insertProspectSchema._type;
+export type Prospect = typeof prospects.$inferSelect;
+
+export const prospectActivities = pgTable("prospect_activities", {
+  id: serial("id").primaryKey(),
+  prospectId: integer("prospect_id").notNull().references(() => prospects.id, { onDelete: "cascade" }),
+  type: text("type").notNull(),
+  notes: text("notes").notNull(),
+  createdById: varchar("created_by_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertProspectActivitySchema = createInsertSchema(prospectActivities).omit({ id: true, createdAt: true });
+export type InsertProspectActivity = typeof insertProspectActivitySchema._type;
+export type ProspectActivity = typeof prospectActivities.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Contact relationship base change history
 export const contactBaseHistory = pgTable("contact_base_history", {
   id: serial("id").primaryKey(),

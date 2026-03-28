@@ -10631,5 +10631,168 @@ Respond with valid JSON only:
     next(err);
   });
 
+  // ── Sales Prospect Pipeline ──────────────────────────────────────────────────
+
+  const PROSPECT_ROLES = ["admin", "sales", "sales_director"];
+
+  function requireProspectRole(req: any, res: any, next: any) {
+    const user = (req as any).user;
+    if (!user || !PROSPECT_ROLES.includes(user.role)) {
+      return res.status(403).json({ error: "Access restricted to sales team" });
+    }
+    next();
+  }
+
+  app.get("/api/prospects", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const isSalesDirectorOrAdmin = user.role === "admin" || user.role === "sales_director";
+      const ownerId = isSalesDirectorOrAdmin ? undefined : user.id;
+      const items = await storage.getProspects(user.organizationId, ownerId);
+      const allUsers = await storage.getUsers(user.organizationId);
+      const enriched = items.map(p => ({
+        ...p,
+        ownerName: allUsers.find(u => u.id === p.ownerId)?.name ?? null,
+        assignedNamName: allUsers.find(u => u.id === p.assignedNamId)?.name ?? null,
+      }));
+      res.json(enriched);
+    } catch (err) {
+      console.error("GET /api/prospects error:", err);
+      res.status(500).json({ error: "Failed to fetch prospects" });
+    }
+  });
+
+  app.post("/api/prospects", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const data = { ...req.body, organizationId: user.organizationId, ownerId: req.body.ownerId || user.id };
+      const prospect = await storage.createProspect(data);
+      res.status(201).json(prospect);
+    } catch (err) {
+      console.error("POST /api/prospects error:", err);
+      res.status(500).json({ error: "Failed to create prospect" });
+    }
+  });
+
+  app.patch("/api/prospects/:id", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      if (user.role === "sales" && existing.ownerId !== user.id) return res.status(403).json({ error: "Forbidden" });
+      const updated = await storage.updateProspect(id, req.body);
+      res.json(updated);
+    } catch (err) {
+      console.error("PATCH /api/prospects/:id error:", err);
+      res.status(500).json({ error: "Failed to update prospect" });
+    }
+  });
+
+  app.delete("/api/prospects/:id", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      if (user.role === "sales" && existing.ownerId !== user.id) return res.status(403).json({ error: "Forbidden" });
+      await storage.deleteProspect(id);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("DELETE /api/prospects/:id error:", err);
+      res.status(500).json({ error: "Failed to delete prospect" });
+    }
+  });
+
+  app.get("/api/prospects/:id/activities", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      const activities = await storage.getProspectActivities(id);
+      const allUsers = await storage.getUsers(user.organizationId);
+      const enriched = activities.map(a => ({
+        ...a,
+        createdByName: allUsers.find(u => u.id === a.createdById)?.name ?? "Unknown",
+      }));
+      res.json(enriched);
+    } catch (err) {
+      console.error("GET /api/prospects/:id/activities error:", err);
+      res.status(500).json({ error: "Failed to fetch activities" });
+    }
+  });
+
+  app.post("/api/prospects/:id/activities", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      const activity = await storage.createProspectActivity({
+        prospectId: id,
+        type: req.body.type,
+        notes: req.body.notes,
+        createdById: user.id,
+      });
+      res.status(201).json(activity);
+    } catch (err) {
+      console.error("POST /api/prospects/:id/activities error:", err);
+      res.status(500).json({ error: "Failed to log activity" });
+    }
+  });
+
+  // Convert prospect → company
+  app.post("/api/prospects/:id/convert", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(req.params.id);
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      const { assignedNamId } = req.body;
+      const { nanoid } = await import("nanoid");
+      const companyId = nanoid(10);
+      const company = await storage.createCompany({
+        id: companyId,
+        organizationId: user.organizationId,
+        name: existing.name,
+        industry: existing.industry ?? undefined,
+        website: existing.website ?? undefined,
+        assignedTo: assignedNamId || null,
+        shippingModes: existing.shippingModes ?? [],
+        estimatedSpend: existing.estimatedSpend ?? undefined,
+        notes: existing.notes ? `[Converted from prospect]\n${existing.notes}` : "[Converted from prospect]",
+      });
+      if (existing.primaryContactName) {
+        await storage.createContact({
+          id: nanoid(10),
+          companyId: company.id,
+          name: existing.primaryContactName,
+          title: existing.primaryContactTitle ?? undefined,
+          email: existing.primaryContactEmail ?? undefined,
+          phone: existing.primaryContactPhone ?? undefined,
+          linkedin: existing.primaryContactLinkedin ?? undefined,
+        });
+      }
+      await storage.updateProspect(id, {
+        convertedToCompanyId: company.id,
+        convertedAt: new Date() as any,
+        stage: "first_load_won",
+        assignedNamId: assignedNamId || existing.assignedNamId,
+      });
+      res.json({ company, prospectId: id });
+    } catch (err) {
+      console.error("POST /api/prospects/:id/convert error:", err);
+      res.status(500).json({ error: "Failed to convert prospect" });
+    }
+  });
+
   return httpServer;
 }

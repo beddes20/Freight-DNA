@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, Bell, KeyRound, Inbox } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, Bell, KeyRound, Inbox, Crosshair } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -22,6 +22,7 @@ const SALES_ROLES = ["admin", "director", "national_account_manager", "account_m
 
 const navItems = [
   { title: "Dashboard",         url: "/",                 icon: LayoutGrid    },
+  { title: "Sales Pipeline",    url: "/prospects",        icon: Crosshair,     roles: ["admin", "sales", "sales_director"] },
   { title: "Customers",         url: "/customers",        icon: Network,       roles: SALES_ROLES },
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
   { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare },

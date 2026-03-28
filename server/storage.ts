@@ -367,6 +367,15 @@ export interface IStorage {
   getOpportunityLogs(orgId: string, filters?: { repId?: string; companyId?: string; type?: string; startDate?: string; endDate?: string }): Promise<OpportunityLog[]>;
   deleteOpportunityLog(id: string): Promise<boolean>;
   getOpportunityLogSummary(repIds: string[], startDate: string, endDate: string): Promise<Array<{ repId: string; opportunities: number; wins: number }>>;
+
+  // Prospect pipeline
+  getProspects(organizationId: string, ownerId?: string): Promise<import('../shared/schema').Prospect[]>;
+  getProspect(id: number): Promise<import('../shared/schema').Prospect | undefined>;
+  createProspect(data: import('../shared/schema').InsertProspect): Promise<import('../shared/schema').Prospect>;
+  updateProspect(id: number, data: Partial<import('../shared/schema').InsertProspect>): Promise<import('../shared/schema').Prospect | undefined>;
+  deleteProspect(id: number): Promise<boolean>;
+  getProspectActivities(prospectId: number): Promise<import('../shared/schema').ProspectActivity[]>;
+  createProspectActivity(data: import('../shared/schema').InsertProspectActivity): Promise<import('../shared/schema').ProspectActivity>;
 }
 
 const pool = new Pool({
@@ -2150,6 +2159,58 @@ export class DatabaseStorage implements IStorage {
   async deleteLaneAttribution(id: string): Promise<boolean> {
     const result = await db.delete(contactLaneAttributions).where(eq(contactLaneAttributions.id, id)).returning();
     return result.length > 0;
+  }
+
+  // ── Prospect Pipeline ────────────────────────────────────────────────────────
+
+  async getProspects(organizationId: string, ownerId?: string): Promise<import('../shared/schema').Prospect[]> {
+    const { prospects } = await import('../shared/schema');
+    const conditions = [eq(prospects.organizationId, organizationId)];
+    if (ownerId) conditions.push(eq(prospects.ownerId, ownerId));
+    return db.select().from(prospects)
+      .where(and(...conditions))
+      .orderBy(prospects.createdAt);
+  }
+
+  async getProspect(id: number): Promise<import('../shared/schema').Prospect | undefined> {
+    const { prospects } = await import('../shared/schema');
+    const [row] = await db.select().from(prospects).where(eq(prospects.id, id));
+    return row;
+  }
+
+  async createProspect(data: import('../shared/schema').InsertProspect): Promise<import('../shared/schema').Prospect> {
+    const { prospects } = await import('../shared/schema');
+    const now = new Date();
+    const [row] = await db.insert(prospects).values({ ...data, createdAt: now, updatedAt: now }).returning();
+    return row;
+  }
+
+  async updateProspect(id: number, data: Partial<import('../shared/schema').InsertProspect>): Promise<import('../shared/schema').Prospect | undefined> {
+    const { prospects } = await import('../shared/schema');
+    const [row] = await db.update(prospects)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(prospects.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteProspect(id: number): Promise<boolean> {
+    const { prospects } = await import('../shared/schema');
+    const result = await db.delete(prospects).where(eq(prospects.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getProspectActivities(prospectId: number): Promise<import('../shared/schema').ProspectActivity[]> {
+    const { prospectActivities } = await import('../shared/schema');
+    return db.select().from(prospectActivities)
+      .where(eq(prospectActivities.prospectId, prospectId))
+      .orderBy(prospectActivities.createdAt);
+  }
+
+  async createProspectActivity(data: import('../shared/schema').InsertProspectActivity): Promise<import('../shared/schema').ProspectActivity> {
+    const { prospectActivities } = await import('../shared/schema');
+    const [row] = await db.insert(prospectActivities).values({ ...data, createdAt: new Date() }).returning();
+    return row;
   }
 }
 
