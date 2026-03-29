@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import {
   TrendingUp, Network, FileSearch, MousePointerClick, BarChart3,
@@ -6,7 +6,7 @@ import {
   BookOpen, Zap, TrendingUp as CareerIcon,
   GitBranch, Phone, Sparkles, Bot, ArrowRight,
   LayoutGrid, MessagesSquare, ListTodo, Trophy, Wrench, GraduationCap,
-  UserCog, LineChart, Loader2, Kanban, RefreshCw,
+  UserCog, LineChart, Loader2, Kanban, RefreshCw, Send, X,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
@@ -419,6 +419,201 @@ function PricingSection() {
         </div>
       )}
     </section>
+  );
+}
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+const GREETING: ChatMessage = {
+  role: "assistant",
+  content: "Hey there! I'm Dana, your Freight DNA guide. Whether you're curious about features, pricing, how we compare to other CRMs, or just want to know if this is right for your team — I'm here to help. What's on your mind?",
+};
+
+function MarketingChatWidget({ onScheduleDemo }: { onScheduleDemo: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([GREETING]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    const next: ChatMessage[] = [...messages, { role: "user", content: text }];
+    setMessages(next);
+    setInput("");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/marketing-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: next }),
+      });
+      const data = await res.json() as { reply?: string; error?: string };
+      setMessages(prev => [...prev, { role: "assistant", content: data.reply ?? "Sorry, something went wrong. Try again!" }]);
+    } catch {
+      setMessages(prev => [...prev, { role: "assistant", content: "Hmm, I had trouble connecting. Give it another try!" }]);
+    } finally {
+      setLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  };
+
+  return (
+    <>
+      {/* Floating button */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="fixed bottom-6 right-6 z-50 flex items-center justify-center w-14 h-14 rounded-full shadow-lg transition-all duration-200"
+        style={{ background: "#ffc333", color: "#0a0a0a", boxShadow: "0 4px 24px rgba(255,195,51,0.35)" }}
+        data-testid="button-marketing-chat-toggle"
+        aria-label="Chat with Dana"
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
+        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#ffc333"; }}
+      >
+        {open ? <X className="w-6 h-6" /> : <MessagesSquare className="w-6 h-6" />}
+      </button>
+
+      {/* Chat panel */}
+      {open && (
+        <div
+          className="fixed bottom-24 right-6 z-50 flex flex-col rounded-2xl overflow-hidden"
+          style={{
+            width: "min(380px, calc(100vw - 24px))",
+            height: "min(520px, calc(100vh - 120px))",
+            background: "#111",
+            border: "1px solid rgba(255,180,0,0.25)",
+            boxShadow: "0 8px 40px rgba(0,0,0,0.6), 0 0 60px rgba(255,180,0,0.08)",
+          }}
+          data-testid="panel-marketing-chat"
+        >
+          {/* Header */}
+          <div
+            className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+            style={{ background: "#0d0d0d", borderBottom: "1px solid rgba(255,180,0,0.15)" }}
+          >
+            <div className="flex items-center gap-2.5">
+              <div
+                className="flex items-center justify-center w-8 h-8 rounded-full"
+                style={{ background: "rgba(255,195,51,0.15)", border: "1px solid rgba(255,195,51,0.3)" }}
+              >
+                <Bot className="w-4 h-4" style={{ color: "#ffc333" }} />
+              </div>
+              <div>
+                <p className="text-sm font-bold leading-none" style={{ color: "#ffc333" }}>Dana</p>
+                <p className="text-[10px] mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>Freight DNA Sales Assistant</p>
+              </div>
+            </div>
+            <button
+              onClick={() => onScheduleDemo()}
+              className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded transition-all duration-150"
+              style={{ background: "rgba(255,195,51,0.12)", color: "#ffc333", border: "1px solid rgba(255,195,51,0.25)" }}
+              data-testid="button-chat-schedule-demo"
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,195,51,0.22)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,195,51,0.12)"; }}
+            >
+              Schedule Demo
+            </button>
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3" data-testid="list-chat-messages">
+            {messages.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                {msg.role === "assistant" && (
+                  <div
+                    className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mr-2 mt-0.5"
+                    style={{ background: "rgba(255,195,51,0.12)", border: "1px solid rgba(255,195,51,0.2)" }}
+                  >
+                    <Bot className="w-3 h-3" style={{ color: "#ffc333" }} />
+                  </div>
+                )}
+                <div
+                  className="max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed"
+                  style={
+                    msg.role === "user"
+                      ? { background: "#ffc333", color: "#0a0a0a", borderBottomRightRadius: "4px" }
+                      : { background: "#1a1a1a", color: "rgba(255,255,255,0.85)", border: "1px solid rgba(255,255,255,0.06)", borderBottomLeftRadius: "4px" }
+                  }
+                  data-testid={`msg-${msg.role}-${i}`}
+                >
+                  {msg.content}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div className="flex justify-start">
+                <div
+                  className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mr-2 mt-0.5"
+                  style={{ background: "rgba(255,195,51,0.12)", border: "1px solid rgba(255,195,51,0.2)" }}
+                >
+                  <Bot className="w-3 h-3" style={{ color: "#ffc333" }} />
+                </div>
+                <div
+                  className="rounded-xl px-3.5 py-2.5 flex items-center gap-1.5"
+                  style={{ background: "#1a1a1a", border: "1px solid rgba(255,255,255,0.06)", borderBottomLeftRadius: "4px" }}
+                  data-testid="msg-typing"
+                >
+                  {[0, 1, 2].map(d => (
+                    <span
+                      key={d}
+                      className="w-1.5 h-1.5 rounded-full animate-bounce"
+                      style={{ background: "rgba(255,195,51,0.6)", animationDelay: `${d * 0.15}s` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Input */}
+          <div
+            className="flex-shrink-0 flex items-center gap-2 px-3 py-3"
+            style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}
+          >
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+              placeholder="Ask anything about Freight DNA…"
+              disabled={loading}
+              className="flex-1 text-sm px-3 py-2 rounded-lg outline-none"
+              style={{ background: "#1a1a1a", border: "1px solid rgba(255,255,255,0.1)", color: "#fff" }}
+              data-testid="input-chat-message"
+            />
+            <button
+              onClick={send}
+              disabled={!input.trim() || loading}
+              className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 transition-all duration-150"
+              style={{
+                background: input.trim() && !loading ? "#ffc333" : "rgba(255,195,51,0.15)",
+                color: input.trim() && !loading ? "#0a0a0a" : "rgba(255,195,51,0.4)",
+              }}
+              data-testid="button-chat-send"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1051,6 +1246,7 @@ export default function LandingPage() {
         </a>
       </footer>
 
+      <MarketingChatWidget onScheduleDemo={() => setDemoOpen(true)} />
     </div>
   );
 }
