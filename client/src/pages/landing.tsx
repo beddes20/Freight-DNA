@@ -6,7 +6,7 @@ import {
   BookOpen, Zap, TrendingUp as CareerIcon,
   GitBranch, Phone, Sparkles, Bot, ArrowRight,
   LayoutGrid, MessagesSquare, ListTodo, Trophy, Wrench, GraduationCap,
-  UserCog, LineChart, Loader2, Kanban,
+  UserCog, LineChart, Loader2, Kanban, RefreshCw,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
@@ -15,7 +15,7 @@ const stats = [
   { value: "20+", label: "Platform Modules" },
   { value: "360°", label: "Account Visibility" },
   { value: "AI-Powered", label: "Sales Intelligence" },
-  { value: "Built for", label: "Freight Brokers" },
+  { value: "~2 Weeks", label: "Avg. Onboarding Time" },
 ];
 
 const features = [
@@ -73,8 +73,7 @@ const personas = [
       "Full account org charts with contact ownership and decision-maker mapping",
       "One-click touchpoint logging from anywhere — calls, emails, texts, site visits",
       "AI-flagged cold contacts so no relationship slips through the cracks",
-      "Wallet share scoring and RFP history to walk into every conversation prepared",
-      "AI Sales Intel Brief for every prospect — network overlap, conversation starters, and competitive tips before the pitch",
+      "AI Sales Intel Briefs with wallet share scoring, RFP history, network overlap, and conversation starters — before every pitch",
     ],
   },
   {
@@ -507,7 +506,7 @@ export default function LandingPage() {
       <section className="flex flex-col items-center justify-center text-center pt-40 pb-24 px-6 relative" style={{ minHeight: "88vh" }}>
         <div
           className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full"
-          style={{ background: "radial-gradient(ellipse, rgba(255,180,0,0.07) 0%, transparent 70%)" }}
+          style={{ background: "radial-gradient(ellipse, rgba(255,180,0,0.14) 0%, transparent 70%)" }}
         />
 
         <p
@@ -529,17 +528,17 @@ export default function LandingPage() {
         </h1>
 
         <p
-          className="max-w-xl text-lg md:text-xl leading-relaxed mb-10"
+          className="max-w-lg text-lg md:text-xl leading-relaxed mb-10"
           style={{ color: "rgba(255,255,255,0.5)" }}
           data-testid="text-hero-subheadline"
         >
-          In today's freight market, the fastest path to exponential growth isn't chasing new logos — it's unlocking the wallet share you're leaving behind in the accounts you already own. Freight DNA gives your team the relationship intelligence and competitive data to grow deeper, not just wider.
+          Stop chasing new logos. The freight you're leaving behind is already in your book — Freight DNA gives your team the intelligence to find it and win it.
         </p>
 
         <div className="flex items-center gap-4">
           <button
             onClick={() => setDemoOpen(true)}
-            className="text-sm font-bold px-7 py-3 rounded transition-all duration-150"
+            className="text-sm font-bold px-8 py-3.5 rounded transition-all duration-150"
             style={{ background: "#ffc333", color: "#0a0a0a" }}
             data-testid="button-hero-schedule-demo"
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
@@ -548,10 +547,10 @@ export default function LandingPage() {
             Schedule Demo
           </button>
           <a
-            href="/login"
-            onClick={e => { e.preventDefault(); navigate("/login"); }}
-            className="text-sm font-semibold px-7 py-3 rounded transition-all duration-150"
-            style={{ border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.7)" }}
+            href="#pricing"
+            onClick={e => { e.preventDefault(); document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" }); }}
+            className="text-sm font-semibold px-8 py-3.5 rounded transition-all duration-150 flex items-center gap-2"
+            style={{ border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.65)" }}
             data-testid="button-hero-cta"
             onMouseEnter={e => {
               (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.35)";
@@ -559,10 +558,10 @@ export default function LandingPage() {
             }}
             onMouseLeave={e => {
               (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.15)";
-              (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.7)";
+              (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.65)";
             }}
           >
-            Get Started
+            See Pricing <ArrowRight className="w-3.5 h-3.5" />
           </a>
         </div>
       </section>
@@ -725,7 +724,7 @@ export default function LandingPage() {
           </div>
 
           {/* Module grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 flex-1">
             {modules.map((mod, i) => {
               const Icon = mod.icon;
               return (
@@ -914,52 +913,120 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Footer CTA */}
-      <section className="py-24 px-6 flex flex-col items-center text-center">
-        <p
-          className="text-xs uppercase tracking-[0.22em] font-semibold mb-4"
-          style={{ color: "rgba(255,180,0,0.65)" }}
-        >
-          Ready to go deeper?
+      {/* Built Around You */}
+      <section className="py-24 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-built-around-you">
+        <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
+          Getting Started
         </p>
         <h2
-          className="text-3xl md:text-5xl font-extrabold mb-4 tracking-tight"
-          style={{ letterSpacing: "-0.03em" }}
-          data-testid="text-footer-cta-heading"
+          className="text-3xl md:text-4xl font-bold text-center mb-4 tracking-tight"
+          style={{ letterSpacing: "-0.02em" }}
+          data-testid="text-onboarding-heading"
         >
-          Build relationships that last.
+          Up and running in days — not months.
         </h2>
-        <p className="text-base mb-10 max-w-md" style={{ color: "rgba(255,255,255,0.4)" }}>
-          DNA · Down Not Across. Your competitive advantage starts with knowing your customer better than anyone else.
+        <p className="text-center text-sm mb-16 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
+          No two brokerages operate the same way. We don't expect you to change how you work — we configure the platform to match it.
         </p>
-        <div className="flex flex-col sm:flex-row items-center gap-4">
-          <a
-            href="/login"
-            onClick={e => { e.preventDefault(); navigate("/login"); }}
-            className="text-sm font-bold px-8 py-3 rounded transition-all duration-150"
-            style={{ background: "#ffc333", color: "#0a0a0a" }}
-            data-testid="button-footer-cta"
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#ffc333"; }}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {[
+            {
+              icon: Zap,
+              title: "Live in ~2 Weeks",
+              body: "We handle the full setup — data import, team configuration, and role permissions. Most brokerages go live in two weeks or less. Your team shows up on day one ready to sell.",
+            },
+            {
+              icon: Wrench,
+              title: "Tailored to Your Workflow",
+              body: "Field labels, stages, reporting views, team hierarchy — we configure all of it to match how you actually operate. You shouldn't have to adapt to a tool. The tool should adapt to you.",
+            },
+            {
+              icon: RefreshCw,
+              title: "We Build What You Need",
+              body: "Need a custom report? A new field? A workflow that doesn't exist yet? Tell us. We move fast, and we're easy to work with. The platform evolves alongside your business — not on a six-month release cycle.",
+            },
+          ].map((card, i) => {
+            const Icon = card.icon;
+            return (
+              <div
+                key={i}
+                className="flex flex-col gap-5 p-7 rounded-xl"
+                style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.14)" }}
+                data-testid={`card-onboarding-${i}`}
+              >
+                <div
+                  className="flex items-center justify-center w-10 h-10 rounded"
+                  style={{ background: "rgba(255,195,51,0.1)", border: "1px solid rgba(255,195,51,0.2)" }}
+                >
+                  <Icon className="w-5 h-5" style={{ color: "#ffc333" }} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold mb-2 tracking-tight">{card.title}</h3>
+                  <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>{card.body}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Footer CTA */}
+      <section className="py-24 px-6 flex flex-col items-center text-center" data-testid="section-footer-cta">
+        <div
+          className="relative w-full max-w-4xl mx-auto rounded-2xl px-10 py-16 md:py-20 flex flex-col items-center overflow-hidden"
+          style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.2)" }}
+        >
+          {/* Glow */}
+          <div
+            className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[300px] rounded-full"
+            style={{ background: "radial-gradient(ellipse, rgba(255,180,0,0.1) 0%, transparent 70%)" }}
+          />
+          <p
+            className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 relative"
+            style={{ color: "rgba(255,180,0,0.65)" }}
           >
-            Access the Platform
-          </a>
-          <button
-            onClick={() => setDemoOpen(true)}
-            className="text-sm font-semibold px-8 py-3 rounded transition-all duration-150"
-            style={{ border: "1px solid rgba(255,180,0,0.5)", color: "#ffb400", background: "transparent" }}
-            data-testid="button-footer-schedule-demo"
-            onMouseEnter={e => {
-              (e.currentTarget as HTMLElement).style.background = "rgba(255,180,0,0.08)";
-              (e.currentTarget as HTMLElement).style.borderColor = "#ffb400";
-            }}
-            onMouseLeave={e => {
-              (e.currentTarget as HTMLElement).style.background = "transparent";
-              (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,180,0,0.5)";
-            }}
+            Ready to go deeper?
+          </p>
+          <h2
+            className="text-3xl md:text-5xl font-extrabold mb-4 tracking-tight relative"
+            style={{ letterSpacing: "-0.03em" }}
+            data-testid="text-footer-cta-heading"
           >
-            Schedule Demo
-          </button>
+            Build relationships that last.
+          </h2>
+          <p className="text-base mb-10 max-w-md relative" style={{ color: "rgba(255,255,255,0.4)" }}>
+            Your competitive advantage starts with knowing your customers better than anyone else. Let's get you there.
+          </p>
+          <div className="flex flex-col sm:flex-row items-center gap-4 relative">
+            <button
+              onClick={() => setDemoOpen(true)}
+              className="text-sm font-bold px-8 py-3.5 rounded transition-all duration-150"
+              style={{ background: "#ffc333", color: "#0a0a0a" }}
+              data-testid="button-footer-schedule-demo"
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#ffc333"; }}
+            >
+              Schedule Demo
+            </button>
+            <a
+              href="#pricing"
+              onClick={e => { e.preventDefault(); document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" }); }}
+              className="text-sm font-semibold px-8 py-3.5 rounded transition-all duration-150"
+              style={{ border: "1px solid rgba(255,180,0,0.5)", color: "#ffb400", background: "transparent" }}
+              data-testid="button-footer-cta"
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLElement).style.background = "rgba(255,180,0,0.08)";
+                (e.currentTarget as HTMLElement).style.borderColor = "#ffb400";
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLElement).style.background = "transparent";
+                (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,180,0,0.5)";
+              }}
+            >
+              View Pricing
+            </a>
+          </div>
         </div>
       </section>
 
