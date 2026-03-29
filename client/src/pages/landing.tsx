@@ -459,7 +459,11 @@ export default function LandingPage() {
         className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 md:px-12 h-16"
         style={{ background: "rgba(10,10,10,0.92)", borderBottom: "1px solid rgba(255,180,0,0.12)", backdropFilter: "blur(8px)" }}
       >
-        <div className="flex items-center gap-3" data-testid="nav-wordmark">
+        <button
+          className="flex items-center gap-3 cursor-pointer"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          data-testid="nav-wordmark"
+        >
           <div
             className="flex items-center justify-center w-8 h-8 rounded-full"
             style={{ border: "1.5px solid #ffb400", background: "#111" }}
@@ -469,7 +473,7 @@ export default function LandingPage() {
           <span className="text-base font-bold tracking-tight" style={{ color: "#ffb400" }}>
             freight · dna
           </span>
-        </div>
+        </button>
 
         <div className="flex items-center gap-3">
           <button
