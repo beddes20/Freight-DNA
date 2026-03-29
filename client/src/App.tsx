@@ -25,6 +25,8 @@ import Customers from "@/pages/customers";
 import LoginPage from "@/pages/login";
 import ResetPasswordPage from "@/pages/reset-password";
 import LandingPage from "@/pages/landing";
+import PrivacyPage from "@/pages/privacy";
+import TermsPage from "@/pages/terms";
 import AdminUsers from "@/pages/admin-users";
 import RepCustomers from "@/pages/rep-customers";
 import Financials from "@/pages/financials";
@@ -105,6 +107,8 @@ function Router() {
       <Route path="/feedback-inbox" component={FeedbackInboxPage} />
       <Route path="/prospects" component={ProspectsPage} />
       <Route path="/pipeline-analytics" component={PipelineAnalyticsPage} />
+      <Route path="/privacy" component={PrivacyPage} />
+      <Route path="/terms" component={TermsPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -168,6 +172,8 @@ function AuthenticatedApp() {
         <Route path="/login" component={LoginPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
         <Route path="/checkout/success" component={CheckoutSuccessPage} />
+        <Route path="/privacy" component={PrivacyPage} />
+        <Route path="/terms" component={TermsPage} />
         <Route component={LandingPage} />
       </Switch>
     );

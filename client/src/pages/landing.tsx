@@ -1312,11 +1312,28 @@ export default function LandingPage() {
 
       {/* Footer bar */}
       <footer
-        className="w-full flex items-center justify-between px-6 md:px-12 py-5 text-xs"
+        className="w-full flex flex-col sm:flex-row items-center justify-between gap-3 px-6 md:px-12 py-5 text-xs"
         style={{ borderTop: "1px solid rgba(255,180,0,0.1)", color: "rgba(255,255,255,0.2)" }}
       >
         <span data-testid="text-footer-wordmark">freight · dna</span>
-        <span>Sales intelligence for freight brokers.</span>
+        <div className="flex items-center gap-5">
+          <a
+            href="/privacy"
+            data-testid="link-footer-privacy"
+            className="hover:text-white transition-colors"
+            style={{ color: "rgba(255,255,255,0.3)" }}
+          >
+            Privacy Policy
+          </a>
+          <a
+            href="/terms"
+            data-testid="link-footer-terms"
+            className="hover:text-white transition-colors"
+            style={{ color: "rgba(255,255,255,0.3)" }}
+          >
+            Terms of Service
+          </a>
+        </div>
         <a
           href="mailto:info@freight-dna.com"
           data-testid="link-footer-email"
