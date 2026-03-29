@@ -125,10 +125,10 @@ function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
       price: annual ? "$1,200" : "$1,500",
       period: annual ? "/ mo, billed annually" : "/ month",
       savingsNote: annual ? "You save $3,600/year" : "Save 20% — pay annually",
-      description: "Full platform access for teams up to 50 members. Everything you need to run a best-in-class freight sales org.",
+      description: "Full platform access for teams up to 70 members. Everything you need to run a best-in-class freight sales org.",
       features: [
         "All 20+ platform modules",
-        "Up to 50 team members",
+        "Up to 70 team members",
         "AI Sales Intel Briefs and DNA Guru",
         "Goals, 1:1s, and performance dashboards",
         "Unlimited accounts and contacts",
@@ -138,12 +138,12 @@ function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
     },
     {
       key: "enterprise",
-      badge: "50+ Seats",
+      badge: "70+ Seats",
       name: "Enterprise",
       price: annual ? "$1,600" : "$2,000",
       period: annual ? "/ mo, billed annually" : "/ month",
       savingsNote: annual ? "You save $4,800/year" : "Save 20% — pay annually",
-      description: "For larger brokerages with 50 or more team members. Everything in Standard plus enterprise-grade support.",
+      description: "For larger brokerages with 70 or more team members. Everything in Standard plus enterprise-grade support.",
       features: [
         "Everything in Standard",
         "Unlimited team members",
