@@ -7,13 +7,13 @@ import { X, CheckCircle } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 const interestOptions = [
-  "Accountability",
-  "Sustainable Growth",
-  "Macro to Micro Visibility",
-  "CRM",
-  "RFP Analysis",
-  "Reporting",
-  "Pricing",
+  "Growing wallet share",
+  "Contact & relationship tracking",
+  "RFP & bid management",
+  "Team performance & goals",
+  "Lane & freight analytics",
+  "AI-powered sales tools",
+  "Replacing an existing CRM",
   "Other",
 ];
 
