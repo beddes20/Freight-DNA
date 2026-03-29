@@ -15,7 +15,7 @@ const stats = [
   { value: "20+", label: "Platform Modules" },
   { value: "360°", label: "Account Visibility" },
   { value: "AI-Powered", label: "Sales Intelligence" },
-  { value: "~2 Weeks", label: "Avg. Onboarding Time" },
+  { value: "~1 Week", label: "Avg. Onboarding Time" },
 ];
 
 const features = [
@@ -933,8 +933,8 @@ export default function LandingPage() {
           {[
             {
               icon: Zap,
-              title: "Live in ~2 Weeks",
-              body: "We handle the full setup — data import, team configuration, and role permissions. Most brokerages go live in two weeks or less. Your team shows up on day one ready to sell.",
+              title: "Live in ~1 Week",
+              body: "We handle the full setup — data import, team configuration, and role permissions. Most brokerages are up and running within a week. Your team shows up on day one ready to sell.",
             },
             {
               icon: Wrench,
