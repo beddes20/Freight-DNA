@@ -803,6 +803,64 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* Built Around You */}
+      <section className="py-24 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-built-around-you">
+        <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
+          Getting Started
+        </p>
+        <h2
+          className="text-3xl md:text-4xl font-bold text-center mb-4 tracking-tight"
+          style={{ letterSpacing: "-0.02em" }}
+          data-testid="text-onboarding-heading"
+        >
+          Up and running in days — not months.
+        </h2>
+        <p className="text-center text-sm mb-16 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
+          No two brokerages operate the same way. We don't expect you to change how you work — we configure the platform to match it.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {[
+            {
+              icon: Zap,
+              title: "Live in ~1 Week",
+              body: "We handle the full setup — data import, team configuration, and role permissions. Most brokerages are up and running within a week. Your team shows up on day one ready to sell.",
+            },
+            {
+              icon: Wrench,
+              title: "Tailored to Your Workflow",
+              body: "Field labels, stages, reporting views, team hierarchy — we configure all of it to match how you actually operate. You shouldn't have to adapt to a tool. The tool should adapt to you.",
+            },
+            {
+              icon: RefreshCw,
+              title: "We Build What You Need",
+              body: "Need a custom report? A new field? A workflow that doesn't exist yet? Tell us. We move fast, and we're easy to work with. The platform evolves alongside your business — not on a six-month release cycle.",
+            },
+          ].map((card, i) => {
+            const Icon = card.icon;
+            return (
+              <div
+                key={i}
+                className="flex flex-col gap-5 p-7 rounded-xl"
+                style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.14)" }}
+                data-testid={`card-onboarding-${i}`}
+              >
+                <div
+                  className="flex items-center justify-center w-10 h-10 rounded"
+                  style={{ background: "rgba(255,195,51,0.1)", border: "1px solid rgba(255,195,51,0.2)" }}
+                >
+                  <Icon className="w-5 h-5" style={{ color: "#ffc333" }} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold mb-2 tracking-tight">{card.title}</h3>
+                  <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>{card.body}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
       {/* AI Feature Teaser */}
       <section className="py-20 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-ai-teaser">
         <div
@@ -910,64 +968,6 @@ export default function LandingPage() {
                   <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>
                     {feature.description}
                   </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* Built Around You */}
-      <section className="py-24 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-built-around-you">
-        <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
-          Getting Started
-        </p>
-        <h2
-          className="text-3xl md:text-4xl font-bold text-center mb-4 tracking-tight"
-          style={{ letterSpacing: "-0.02em" }}
-          data-testid="text-onboarding-heading"
-        >
-          Up and running in days — not months.
-        </h2>
-        <p className="text-center text-sm mb-16 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
-          No two brokerages operate the same way. We don't expect you to change how you work — we configure the platform to match it.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {[
-            {
-              icon: Zap,
-              title: "Live in ~1 Week",
-              body: "We handle the full setup — data import, team configuration, and role permissions. Most brokerages are up and running within a week. Your team shows up on day one ready to sell.",
-            },
-            {
-              icon: Wrench,
-              title: "Tailored to Your Workflow",
-              body: "Field labels, stages, reporting views, team hierarchy — we configure all of it to match how you actually operate. You shouldn't have to adapt to a tool. The tool should adapt to you.",
-            },
-            {
-              icon: RefreshCw,
-              title: "We Build What You Need",
-              body: "Need a custom report? A new field? A workflow that doesn't exist yet? Tell us. We move fast, and we're easy to work with. The platform evolves alongside your business — not on a six-month release cycle.",
-            },
-          ].map((card, i) => {
-            const Icon = card.icon;
-            return (
-              <div
-                key={i}
-                className="flex flex-col gap-5 p-7 rounded-xl"
-                style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.14)" }}
-                data-testid={`card-onboarding-${i}`}
-              >
-                <div
-                  className="flex items-center justify-center w-10 h-10 rounded"
-                  style={{ background: "rgba(255,195,51,0.1)", border: "1px solid rgba(255,195,51,0.2)" }}
-                >
-                  <Icon className="w-5 h-5" style={{ color: "#ffc333" }} />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold mb-2 tracking-tight">{card.title}</h3>
-                  <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>{card.body}</p>
                 </div>
               </div>
             );
