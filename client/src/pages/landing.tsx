@@ -7,6 +7,7 @@ import {
   GitBranch, Phone, Sparkles, Bot, ArrowRight,
   LayoutGrid, MessagesSquare, ListTodo, Trophy, Wrench, GraduationCap,
   UserCog, LineChart, Loader2, Kanban, RefreshCw, Send, X,
+  ChevronDown, ChevronUp, AlertCircle,
 } from "lucide-react";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
 
@@ -97,6 +98,31 @@ const personas = [
   },
 ];
 
+function FaqItem({ question, answer, index }: { question: string; answer: string; index: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ borderColor: "rgba(255,180,0,0.12)" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-4 py-5 text-left transition-colors duration-150"
+        data-testid={`button-faq-${index}`}
+        style={{ color: open ? "#ffc333" : "rgba(255,255,255,0.85)" }}
+      >
+        <span className="text-sm font-semibold leading-snug">{question}</span>
+        {open
+          ? <ChevronUp className="w-4 h-4 flex-shrink-0" style={{ color: "#ffc333" }} />
+          : <ChevronDown className="w-4 h-4 flex-shrink-0" style={{ color: "rgba(255,255,255,0.35)" }} />
+        }
+      </button>
+      {open && (
+        <p className="pb-5 text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.5)" }}>
+          {answer}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
   const [annual, setAnnual] = useState(false);
 
@@ -108,7 +134,7 @@ function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
       price: "$1,000",
       period: "/ first month",
       savingsNote: null as string | null,
-      description: "One month of full platform access with complete hands-on setup included. No commitment beyond the trial.",
+      description: "One month of full platform access with complete hands-on setup included. If you continue, the $1,000 applies toward your first year.",
       features: [
         "Full platform access — all 20+ modules",
         "Complete setup and data import",
@@ -168,7 +194,7 @@ function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
         Transparent pricing. No surprises.
       </h2>
       <p className="text-center text-sm mb-10 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
-        No per-seat fees within your tier. Every path starts with a demo — we want to make sure it's the right fit before you sign.
+        No per-seat fees within your tier. Every path starts with a demo — we want to make sure it's the right fit before you sign. Annual plans save 20% off monthly pricing.
       </p>
 
       {/* Monthly / Annual toggle */}
@@ -907,6 +933,65 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
+      {/* Why Teams Make the Switch */}
+      <section className="py-24 px-6 md:px-12 max-w-6xl mx-auto w-full" data-testid="section-why-switch">
+        <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
+          Why Teams Switch
+        </p>
+        <h2
+          className="text-3xl md:text-4xl font-bold text-center mb-4 tracking-tight"
+          style={{ letterSpacing: "-0.02em" }}
+        >
+          Built for the problems freight brokers actually have.
+        </h2>
+        <p className="text-center text-sm mb-16 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
+          Generic CRMs were never designed for transportation brokerage. Here's what changes when your team has a tool that understands the business.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {[
+            {
+              before: "Our CRM wasn't built for freight",
+              after: "Freight DNA understands modes, lanes, RFPs, org charts, and wallet share out of the box. No custom fields to configure. No workarounds. It works the way you already think about your accounts.",
+            },
+            {
+              before: "We had no visibility into wallet share",
+              after: "Reps walk into every call knowing exactly how much of an account's freight budget they're winning — and where the gaps are. The whole team goes deeper, not just broader.",
+            },
+            {
+              before: "Accounts were going cold without anyone knowing",
+              after: "Cold contact alerts, health scores, and momentum tracking mean no relationship slips through the cracks. Reps get nudged before accounts become problems — not after.",
+            },
+          ].map((item, i) => (
+            <div
+              key={i}
+              className="flex flex-col gap-5 p-7 rounded-xl"
+              style={{ background: "#0f0f0f", border: "1px solid rgba(255,180,0,0.14)" }}
+              data-testid={`card-why-switch-${i}`}
+            >
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "rgba(255,100,60,0.7)" }} />
+                <p className="text-sm font-semibold leading-snug" style={{ color: "rgba(255,255,255,0.5)" }}>"{item.before}"</p>
+              </div>
+              <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+              <div className="flex items-start gap-3">
+                <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#ffc333" }} />
+                <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.6)" }}>{item.after}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
       {/* Built Around You */}
       <section className="py-24 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-built-around-you">
         <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
@@ -964,6 +1049,33 @@ export default function LandingPage() {
           })}
         </div>
       </section>
+
+      {/* Mid-page CTA */}
+      <section className="py-10 px-6 flex justify-center" data-testid="section-mid-cta">
+        <div
+          className="flex flex-col sm:flex-row items-center gap-5 px-10 py-6 rounded-2xl"
+          style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.18)" }}
+        >
+          <p className="text-sm font-medium text-center sm:text-left" style={{ color: "rgba(255,255,255,0.5)" }}>
+            Seen enough to be curious? Let's walk through it together.
+          </p>
+          <button
+            onClick={() => setDemoOpen(true)}
+            className="flex-shrink-0 text-sm font-bold px-6 py-2.5 rounded transition-all duration-150 whitespace-nowrap"
+            style={{ background: "#ffc333", color: "#0a0a0a" }}
+            data-testid="button-mid-cta-demo"
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#ffc333"; }}
+          >
+            Schedule a Demo
+          </button>
+        </div>
+      </section>
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
 
       {/* AI Feature Teaser */}
       <section className="py-20 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-ai-teaser">
@@ -1085,6 +1197,54 @@ export default function LandingPage() {
       </div>
 
       <PricingSection onScheduleDemo={() => setDemoOpen(true)} />
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
+      {/* FAQ */}
+      <section className="py-24 px-6 md:px-12 max-w-3xl mx-auto w-full" data-testid="section-faq">
+        <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
+          FAQ
+        </p>
+        <h2
+          className="text-3xl md:text-4xl font-bold text-center mb-16 tracking-tight"
+          style={{ letterSpacing: "-0.02em" }}
+        >
+          Common questions.
+        </h2>
+        <div className="flex flex-col divide-y" style={{ borderTop: "1px solid rgba(255,180,0,0.12)", borderBottom: "1px solid rgba(255,180,0,0.12)" }}>
+          {[
+            {
+              q: "How is Freight DNA different from Salesforce or HubSpot?",
+              a: "Salesforce and HubSpot are built for generic sales teams — they don't understand freight modes, lane research, RFPs, wallet share, or brokerage org structures. Freight DNA was designed from the ground up for transportation brokerage. Every field, module, and workflow reflects how freight brokers actually sell.",
+            },
+            {
+              q: "What does onboarding actually look like?",
+              a: "We handle everything. Most brokerages are fully live within a week — data import, team configuration, role permissions, and training included. You don't need IT, a Salesforce consultant, or a six-month implementation project. Your team shows up on day one ready to work.",
+            },
+            {
+              q: "Do I need IT or consultants to get set up?",
+              a: "No. We configure the platform for you. If you have existing data in spreadsheets, a CRM, or another system, we'll import it. If you want custom fields, reports, or workflows, tell us — we build those too.",
+            },
+            {
+              q: "Is there a long-term contract?",
+              a: "Monthly plans are month-to-month — cancel any time. Annual plans are billed upfront and save you 20%. The trial is a single month with no commitment beyond it. If you continue after the trial, the $1,000 applies toward your first year.",
+            },
+            {
+              q: "What if I need a feature that doesn't exist yet?",
+              a: "Tell us. We build custom features regularly — simple additions start around $500, and larger integrations are scoped per project. We move fast and we're easy to work with. The platform evolves alongside your business, not on a six-month release cycle.",
+            },
+            {
+              q: "How small or large does my team need to be?",
+              a: "Freight DNA works for teams of any size. The Standard plan supports up to 50 team members. Enterprise covers 50+ seats. If you're a solo NAM or a two-person brokerage, the Trial is a low-risk way to evaluate whether it fits.",
+            },
+          ].map((item, i) => (
+            <FaqItem key={i} question={item.q} answer={item.a} index={i} />
+          ))}
+        </div>
+      </section>
 
       {/* Divider */}
       <div className="w-full px-6 md:px-12">
