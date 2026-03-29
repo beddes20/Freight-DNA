@@ -293,7 +293,7 @@ function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
           <p className="text-sm mb-4" style={{ color: "rgba(255,255,255,0.35)" }}>Price varies by scope and complexity</p>
           <p className="text-sm leading-relaxed max-w-xl" style={{ color: "rgba(255,255,255,0.45)" }}>
             Need something the platform doesn't do yet? We scope, build, and deploy custom features tailored to your brokerage's exact workflow.
-            Simple additions start in the low thousands — larger integrations or standalone modules are scoped per project.
+            Simple additions are quick, easy, and start around $500 — larger integrations or standalone modules are scoped per project.
           </p>
         </div>
         <div className="flex flex-col gap-3 md:w-64 w-full flex-shrink-0">
