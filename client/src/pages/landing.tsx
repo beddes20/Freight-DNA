@@ -8,7 +8,6 @@ import {
   LayoutGrid, MessagesSquare, ListTodo, Trophy, Wrench, GraduationCap,
   UserCog, LineChart, Loader2, Kanban, RefreshCw, Send, X,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
 
 const stats = [
@@ -98,133 +97,66 @@ const personas = [
   },
 ];
 
-function formatPrice(unitAmount: number | null, currency: string) {
-  if (!unitAmount) return "Contact us";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: currency || "usd",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(unitAmount / 100);
-}
+function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
+  const [annual, setAnnual] = useState(false);
 
-interface StripePrice {
-  id: string;
-  unitAmount: number | null;
-  currency: string;
-  recurring: { interval: string; interval_count: number } | null;
-}
-
-interface StripeProduct {
-  id: string;
-  name: string;
-  description: string | null;
-  metadata: Record<string, string>;
-  prices: StripePrice[];
-}
-
-function PricingSection() {
-  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
-  const [checkoutError, setCheckoutError] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState<string | null>(null); // priceId waiting for info
-  const [companyName, setCompanyName] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
-
-  const { data: productsData, isLoading } = useQuery<{ products: StripeProduct[] }>({
-    queryKey: ["/api/stripe/products"],
-  });
-
-  const products = productsData?.products ?? [];
-
-  const subscriptionProduct = products.find(
-    p => p.metadata?.type === "subscription" || p.prices.some(pr => pr.recurring !== null)
-  );
-  const addonProduct = products.find(
-    p => p.metadata?.type === "one_time" || p.prices.some(pr => pr.recurring === null)
-  );
-
-  const handleGetStarted = async (priceId: string, cName: string, aEmail: string) => {
-    setCheckoutLoading(priceId);
-    setCheckoutError(null);
-    try {
-      const res = await fetch("/api/stripe/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ priceId, companyName: cName, adminEmail: aEmail }),
-      });
-      const data = await res.json() as { url?: string; error?: string };
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        setCheckoutError(data.error ?? "Unable to start checkout. Please try again.");
-      }
-    } catch {
-      setCheckoutError("Unable to start checkout. Please try again.");
-    } finally {
-      setCheckoutLoading(null);
-    }
-  };
-
-  const openForm = (priceId: string) => {
-    setShowForm(priceId);
-    setCheckoutError(null);
-  };
-
-  const submitForm = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!showForm) return;
-    if (!companyName.trim() || !adminEmail.trim()) return;
-    const priceId = showForm;
-    setShowForm(null);
-    handleGetStarted(priceId, companyName.trim(), adminEmail.trim());
-  };
-
-  const subPrice = subscriptionProduct?.prices?.[0];
-  const addonPrice = addonProduct?.prices?.[0];
-
-  const staticPlans = [
+  const plans = [
     {
-      name: "Freight DNA Monthly",
-      price: "$1,750",
-      period: "/month",
-      description: "Full platform access for your entire freight brokerage team.",
+      key: "trial",
+      badge: "Try First",
+      name: "Trial",
+      price: "$1,000",
+      period: "/ first month",
+      savingsNote: null as string | null,
+      description: "One month of full platform access with complete hands-on setup included. No commitment beyond the trial.",
       features: [
-        "All 15+ platform modules",
-        "Unlimited team members",
-        "AI-powered cold contact alerts",
-        "RFP intelligence & bid tracking",
-        "Team performance dashboards",
-        "Career progression tracking",
-        "Touchpoint & relationship mapping",
+        "Full platform access — all 20+ modules",
+        "Complete setup and data import",
+        "Team configuration and training",
+        "All AI features enabled",
+        "Hands-on onboarding support",
+      ],
+      highlight: false,
+    },
+    {
+      key: "standard",
+      badge: "Most Popular",
+      name: "Standard",
+      price: annual ? "$1,200" : "$1,500",
+      period: annual ? "/ mo, billed annually" : "/ month",
+      savingsNote: annual ? "You save $3,600/year" : "Save 20% — pay annually",
+      description: "Full platform access for teams up to 50 members. Everything you need to run a best-in-class freight sales org.",
+      features: [
+        "All 20+ platform modules",
+        "Up to 50 team members",
+        "AI Sales Intel Briefs and DNA Guru",
+        "Goals, 1:1s, and performance dashboards",
+        "Unlimited accounts and contacts",
         "Dedicated onboarding support",
       ],
-      priceId: subPrice?.id,
-      mode: "subscription" as const,
-      badge: "Most Popular",
       highlight: true,
     },
     {
-      name: "Custom Feature Buildout",
-      price: "$5,000",
-      period: " one-time",
-      description: "A custom feature built specifically for your brokerage's unique workflow.",
+      key: "enterprise",
+      badge: "50+ Seats",
+      name: "Enterprise",
+      price: annual ? "$1,600" : "$2,000",
+      period: annual ? "/ mo, billed annually" : "/ month",
+      savingsNote: annual ? "You save $4,800/year" : "Save 20% — pay annually",
+      description: "For larger brokerages with 50 or more team members. Everything in Standard plus enterprise-grade support.",
       features: [
-        "Scoped to your exact requirements",
-        "Dedicated project manager",
-        "Full development & deployment",
-        "Ongoing support for new feature",
-        "Priority roadmap access",
-        "Integration with existing modules",
+        "Everything in Standard",
+        "Unlimited team members",
+        "Multi-org and multi-team support",
+        "Dedicated account manager",
+        "Priority feature development",
       ],
-      priceId: addonPrice?.id,
-      mode: "payment" as const,
-      badge: "Add-On",
       highlight: false,
     },
   ];
 
   return (
-    <section className="py-24 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-pricing" id="pricing">
+    <section className="py-24 px-6 md:px-12 max-w-6xl mx-auto w-full" data-testid="section-pricing" id="pricing">
       <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
         Pricing
       </p>
@@ -233,114 +165,161 @@ function PricingSection() {
         style={{ letterSpacing: "-0.02em" }}
         data-testid="text-pricing-heading"
       >
-        Simple, transparent pricing.
+        Transparent pricing. No surprises.
       </h2>
-      <p className="text-center text-sm mb-16 max-w-md mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
-        No per-seat fees. No hidden costs. One flat rate gives your whole team full access to every module.
+      <p className="text-center text-sm mb-10 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
+        No per-seat fees within your tier. Every path starts with a demo — we want to make sure it's the right fit before you sign.
       </p>
 
-      {isLoading ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin" style={{ color: "#ffc333" }} />
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {staticPlans.map((plan, i) => {
-            const livePrice = i === 0 ? subPrice : addonPrice;
-            const displayPrice = livePrice
-              ? formatPrice(livePrice.unitAmount, livePrice.currency)
-              : plan.price;
+      {/* Monthly / Annual toggle */}
+      <div className="flex items-center justify-center gap-4 mb-14" data-testid="toggle-billing-period">
+        <span className="text-sm font-medium" style={{ color: annual ? "rgba(255,255,255,0.35)" : "#fff" }}>Monthly</span>
+        <button
+          onClick={() => setAnnual(a => !a)}
+          className="relative w-12 h-6 rounded-full transition-all duration-200 flex-shrink-0"
+          style={{ background: annual ? "#ffc333" : "rgba(255,255,255,0.15)" }}
+          data-testid="button-billing-toggle"
+          aria-label="Toggle annual billing"
+        >
+          <span
+            className="absolute top-0.5 w-5 h-5 rounded-full transition-all duration-200"
+            style={{ background: "#fff", left: annual ? "calc(100% - 22px)" : "2px" }}
+          />
+        </button>
+        <span className="text-sm font-medium flex items-center gap-2" style={{ color: annual ? "#fff" : "rgba(255,255,255,0.35)" }}>
+          Annual
+          <span
+            className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full"
+            style={{ background: "rgba(255,195,51,0.15)", color: "#ffc333", border: "1px solid rgba(255,195,51,0.3)" }}
+          >
+            Save 20%
+          </span>
+        </span>
+      </div>
 
-            return (
-              <div
-                key={i}
-                className="relative flex flex-col p-8 rounded-2xl"
-                style={{
-                  background: plan.highlight ? "linear-gradient(135deg, #111200 0%, #0f0f00 100%)" : "#0f0f0f",
-                  border: plan.highlight ? "1.5px solid rgba(255,195,51,0.35)" : "1px solid rgba(255,180,0,0.14)",
-                  boxShadow: plan.highlight ? "0 0 40px rgba(255,195,51,0.07)" : "none",
-                }}
-                data-testid={`card-plan-${i}`}
-              >
-                {plan.badge && (
-                  <span
-                    className="absolute top-4 right-4 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full"
-                    style={{
-                      background: plan.highlight ? "rgba(255,195,51,0.18)" : "rgba(255,255,255,0.07)",
-                      color: plan.highlight ? "#ffc333" : "rgba(255,255,255,0.45)",
-                      border: plan.highlight ? "1px solid rgba(255,195,51,0.3)" : "1px solid rgba(255,255,255,0.1)",
-                    }}
-                  >
-                    {plan.badge}
-                  </span>
-                )}
+      {/* Plan cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        {plans.map((plan, i) => (
+          <div
+            key={plan.key}
+            className="relative flex flex-col p-7 rounded-2xl"
+            style={{
+              background: plan.highlight ? "linear-gradient(135deg, #111200 0%, #0f0f00 100%)" : "#0f0f0f",
+              border: plan.highlight ? "1.5px solid rgba(255,195,51,0.35)" : "1px solid rgba(255,180,0,0.14)",
+              boxShadow: plan.highlight ? "0 0 40px rgba(255,195,51,0.07)" : "none",
+            }}
+            data-testid={`card-plan-${i}`}
+          >
+            {/* Badge */}
+            <span
+              className="absolute top-4 right-4 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full"
+              style={{
+                background: plan.highlight ? "rgba(255,195,51,0.18)" : "rgba(255,255,255,0.07)",
+                color: plan.highlight ? "#ffc333" : "rgba(255,255,255,0.45)",
+                border: plan.highlight ? "1px solid rgba(255,195,51,0.3)" : "1px solid rgba(255,255,255,0.1)",
+              }}
+            >
+              {plan.badge}
+            </span>
 
-                <div className="mb-6">
-                  <p className="text-xs uppercase tracking-[0.18em] font-semibold mb-2" style={{ color: "rgba(255,180,0,0.6)" }}>
-                    {plan.name}
-                  </p>
-                  <div className="flex items-end gap-1 mb-3">
-                    <span className="text-4xl font-extrabold tracking-tight" style={{ letterSpacing: "-0.03em" }}>
-                      {displayPrice}
-                    </span>
-                    <span className="text-sm mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>{plan.period}</span>
-                  </div>
-                  <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>
-                    {plan.description}
-                  </p>
-                </div>
-
-                <ul className="flex flex-col gap-3 mb-8 flex-1">
-                  {plan.features.map((feature, j) => (
-                    <li key={j} className="flex items-start gap-2.5" data-testid={`text-plan-${i}-feature-${j}`}>
-                      <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#ffc333" }} />
-                      <span className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.55)" }}>{feature}</span>
-                    </li>
-                  ))}
-                </ul>
-
-                {checkoutError && (
-                  <p className="text-xs text-red-400 mb-3">{checkoutError}</p>
-                )}
-
-                <button
-                  onClick={() => {
-                    if (plan.priceId) {
-                      openForm(plan.priceId);
-                    } else {
-                      window.location.href = "mailto:info@freight-dna.com?subject=Freight DNA Subscription Inquiry";
-                    }
-                  }}
-                  disabled={checkoutLoading === plan.priceId}
-                  className="w-full flex items-center justify-center gap-2 text-sm font-bold px-6 py-3 rounded transition-all duration-150"
-                  style={{
-                    background: plan.highlight ? "#ffc333" : "transparent",
-                    color: plan.highlight ? "#0a0a0a" : "#ffc333",
-                    border: plan.highlight ? "none" : "1px solid rgba(255,195,51,0.4)",
-                  }}
-                  data-testid={`button-plan-${i}-cta`}
-                  onMouseEnter={e => {
-                    const el = e.currentTarget as HTMLElement;
-                    if (plan.highlight) el.style.background = "#ffb400";
-                    else { el.style.background = "rgba(255,195,51,0.08)"; el.style.borderColor = "#ffc333"; }
-                  }}
-                  onMouseLeave={e => {
-                    const el = e.currentTarget as HTMLElement;
-                    if (plan.highlight) el.style.background = "#ffc333";
-                    else { el.style.background = "transparent"; el.style.borderColor = "rgba(255,195,51,0.4)"; }
-                  }}
-                >
-                  {checkoutLoading === plan.priceId ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : null}
-                  {plan.priceId ? "Get Started" : "Contact Us"}
-                  {!checkoutLoading && plan.priceId && <ArrowRight className="w-4 h-4" />}
-                </button>
+            <div className="mb-5">
+              <p className="text-xs uppercase tracking-[0.18em] font-semibold mb-3" style={{ color: "rgba(255,180,0,0.6)" }}>
+                {plan.name}
+              </p>
+              <div className="flex items-end gap-1 mb-1">
+                <span className="text-4xl font-extrabold tracking-tight" style={{ letterSpacing: "-0.03em" }}>
+                  {plan.price}
+                </span>
+                <span className="text-sm mb-1.5" style={{ color: "rgba(255,255,255,0.4)" }}>{plan.period}</span>
               </div>
-            );
-          })}
+              {plan.savingsNote && (
+                <p className="text-xs mb-3" style={{ color: annual ? "#ffc333" : "rgba(255,255,255,0.3)" }}>
+                  {plan.savingsNote}
+                </p>
+              )}
+              {!plan.savingsNote && <div className="mb-3" />}
+              <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>
+                {plan.description}
+              </p>
+            </div>
+
+            <ul className="flex flex-col gap-2.5 mb-7 flex-1">
+              {plan.features.map((feature, j) => (
+                <li key={j} className="flex items-start gap-2.5" data-testid={`text-plan-${i}-feature-${j}`}>
+                  <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#ffc333" }} />
+                  <span className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.55)" }}>{feature}</span>
+                </li>
+              ))}
+            </ul>
+
+            <button
+              onClick={onScheduleDemo}
+              className="w-full flex items-center justify-center gap-2 text-sm font-bold px-6 py-3 rounded transition-all duration-150"
+              style={{
+                background: plan.highlight ? "#ffc333" : "transparent",
+                color: plan.highlight ? "#0a0a0a" : "#ffc333",
+                border: plan.highlight ? "none" : "1px solid rgba(255,195,51,0.4)",
+              }}
+              data-testid={`button-plan-${i}-cta`}
+              onMouseEnter={e => {
+                const el = e.currentTarget as HTMLElement;
+                if (plan.highlight) el.style.background = "#ffb400";
+                else { el.style.background = "rgba(255,195,51,0.08)"; el.style.borderColor = "#ffc333"; }
+              }}
+              onMouseLeave={e => {
+                const el = e.currentTarget as HTMLElement;
+                if (plan.highlight) el.style.background = "#ffc333";
+                else { el.style.background = "transparent"; el.style.borderColor = "rgba(255,195,51,0.4)"; }
+              }}
+            >
+              Schedule Demo
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Custom buildout */}
+      <div
+        className="flex flex-col md:flex-row items-start gap-8 p-8 rounded-2xl"
+        style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.12)" }}
+        data-testid="card-plan-buildout"
+      >
+        <div className="flex-1">
+          <p className="text-xs uppercase tracking-[0.18em] font-semibold mb-2" style={{ color: "rgba(255,180,0,0.6)" }}>
+            Custom Feature Buildout
+          </p>
+          <p className="text-2xl font-extrabold mb-1 tracking-tight" style={{ letterSpacing: "-0.02em" }}>Quoted per project</p>
+          <p className="text-sm mb-4" style={{ color: "rgba(255,255,255,0.35)" }}>Price varies by scope and complexity</p>
+          <p className="text-sm leading-relaxed max-w-xl" style={{ color: "rgba(255,255,255,0.45)" }}>
+            Need something the platform doesn't do yet? We scope, build, and deploy custom features tailored to your brokerage's exact workflow.
+            Simple additions start in the low thousands — larger integrations or standalone modules are scoped per project.
+          </p>
         </div>
-      )}
+        <div className="flex flex-col gap-3 md:w-64 w-full flex-shrink-0">
+          {[
+            "Scoped to your exact requirements",
+            "Full development and deployment",
+            "Priority roadmap access",
+            "Ongoing support for the feature",
+          ].map((f, i) => (
+            <div key={i} className="flex items-start gap-2.5">
+              <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#ffc333" }} />
+              <span className="text-sm" style={{ color: "rgba(255,255,255,0.55)" }}>{f}</span>
+            </div>
+          ))}
+          <a
+            href="mailto:info@freight-dna.com?subject=Custom Feature Buildout Inquiry"
+            className="mt-2 w-full flex items-center justify-center gap-2 text-sm font-bold px-6 py-3 rounded transition-all duration-150"
+            style={{ border: "1px solid rgba(255,195,51,0.4)", color: "#ffc333", background: "transparent" }}
+            data-testid="button-plan-buildout-cta"
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,195,51,0.08)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            Contact Us <ArrowRight className="w-4 h-4" />
+          </a>
+        </div>
+      </div>
 
       <p className="text-center text-xs mt-8" style={{ color: "rgba(255,255,255,0.25)" }}>
         Questions? Reach us at{" "}
@@ -348,76 +327,6 @@ function PricingSection() {
           info@freight-dna.com
         </a>
       </p>
-
-      {showForm && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center px-4"
-          style={{ background: "rgba(0,0,0,0.7)" }}
-          onClick={() => setShowForm(null)}
-          data-testid="modal-checkout-info"
-        >
-          <form
-            onClick={e => e.stopPropagation()}
-            onSubmit={submitForm}
-            className="w-full max-w-sm p-8 rounded-2xl flex flex-col gap-5"
-            style={{ background: "#111", border: "1.5px solid rgba(255,195,51,0.3)" }}
-          >
-            <h3 className="text-xl font-bold" style={{ letterSpacing: "-0.02em" }}>Before we go to checkout</h3>
-            <p className="text-sm" style={{ color: "rgba(255,255,255,0.45)" }}>
-              Tell us a bit about your brokerage so we can set up your account after payment.
-            </p>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold" style={{ color: "rgba(255,180,0,0.7)" }}>Company Name</label>
-              <input
-                type="text"
-                required
-                autoFocus
-                value={companyName}
-                onChange={e => setCompanyName(e.target.value)}
-                placeholder="ValueTruck Logistics"
-                className="w-full px-3 py-2.5 rounded text-sm outline-none"
-                style={{ background: "#1a1a1a", border: "1px solid rgba(255,255,255,0.1)", color: "#fff" }}
-                data-testid="input-checkout-company"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold" style={{ color: "rgba(255,180,0,0.7)" }}>Your Work Email</label>
-              <input
-                type="email"
-                required
-                value={adminEmail}
-                onChange={e => setAdminEmail(e.target.value)}
-                placeholder="you@yourcompany.com"
-                className="w-full px-3 py-2.5 rounded text-sm outline-none"
-                style={{ background: "#1a1a1a", border: "1px solid rgba(255,255,255,0.1)", color: "#fff" }}
-                data-testid="input-checkout-email"
-              />
-            </div>
-            {checkoutError && (
-              <p className="text-xs text-red-400">{checkoutError}</p>
-            )}
-            <button
-              type="submit"
-              disabled={!!checkoutLoading}
-              className="w-full flex items-center justify-center gap-2 text-sm font-bold px-6 py-3 rounded transition-all duration-150"
-              style={{ background: "#ffc333", color: "#0a0a0a" }}
-              data-testid="button-checkout-submit"
-            >
-              {checkoutLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-              Continue to Checkout
-              {!checkoutLoading && <ArrowRight className="w-4 h-4" />}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowForm(null)}
-              className="text-xs text-center"
-              style={{ color: "rgba(255,255,255,0.3)" }}
-            >
-              Cancel
-            </button>
-          </form>
-        </div>
-      )}
     </section>
   );
 }
@@ -1169,6 +1078,18 @@ export default function LandingPage() {
           })}
         </div>
       </section>
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
+      <PricingSection onScheduleDemo={() => setDemoOpen(true)} />
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
 
       {/* Footer CTA */}
       <section className="py-24 px-6 flex flex-col items-center text-center" data-testid="section-footer-cta">

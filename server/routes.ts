@@ -741,8 +741,11 @@ ABOUT FREIGHT DNA:
 Freight DNA is a purpose-built sales intelligence and CRM platform designed exclusively for transportation brokerage companies. Core philosophy: "Down, not across" — the highest-ROI growth path for most brokerages is unlocking wallet share in accounts they already own, not just chasing new logos.
 
 PRICING:
-- Freight DNA Monthly: $1,750/month — full platform, unlimited team members, all 20+ modules, AI features, dedicated onboarding support. No per-seat fees.
-- Custom Feature Buildout: $5,000 one-time — a custom feature built to exact brokerage specifications.
+All plans start with a demo — we do a call first to make sure it's the right fit before anyone signs.
+- Trial: $1,000 for the first month. Includes full platform access, hands-on setup, data import, team configuration, and training. No commitment beyond the trial month.
+- Standard: $1,500/month (or $1,200/month billed annually — 20% savings). Full platform, up to 50 team members, all 20+ modules, all AI features, dedicated onboarding support. No per-seat fees.
+- Enterprise: $2,000/month (or $1,600/month billed annually — 20% savings). For brokerages with 50+ team members. Everything in Standard plus unlimited seats, dedicated account manager, multi-org/multi-team support, and priority feature development. No per-seat fees.
+- Custom Feature Buildout: Quoted per project based on scope and complexity. Simple additions start in the low thousands; larger integrations or standalone modules are scoped individually. Contact info@freight-dna.com to discuss.
 
 ONBOARDING:
 - Most brokerages are fully live within one week.
