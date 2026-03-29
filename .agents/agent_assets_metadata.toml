@@ -1,0 +1,14 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "v75Z7MwLEwj4CNWXFnwtq"
+uri = "file://assets/linkedin/freight-dna-profile-picture.png"
+type = "image"
+title = "Freight DNA — LinkedIn Profile Picture (1024x1024)"
+
+[[outputs]]
+id = "ydx5Op6ubgJRxzMxwgDUw"
+uri = "file://assets/linkedin/freight-dna-banner.png"
+type = "image"
+title = "Freight DNA — LinkedIn Banner (1584x396)"
