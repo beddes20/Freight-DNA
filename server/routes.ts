@@ -3890,11 +3890,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         return res.status(403).json({ error: "Forbidden" });
       }
 
-      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      if (uploads.length === 0) return res.json([]);
-
-      // Use only the latest upload — it already contains merged historical + current month rows
-      const latestHistUpload = uploads[uploads.length - 1];
+      const latestHistUpload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      if (!latestHistUpload) return res.json([]);
       let allRows: any[] = Array.isArray(latestHistUpload.rows) ? latestHistUpload.rows as any[] : [];
       const histCols = resolveColumns(allRows);
       allRows = allRows.filter((r: any) => getStatusFromRow(r, histCols) !== "void" && !isExcludedRow(r, histCols));
@@ -3950,11 +3947,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      if (uploads.length === 0) return res.json([]);
-
-      // Use only the latest upload — it already contains merged historical + current month rows
-      const latestOppUpload = uploads[uploads.length - 1];
+      const latestOppUpload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      if (!latestOppUpload) return res.json([]);
       let allRows: any[] = Array.isArray(latestOppUpload.rows) ? latestOppUpload.rows as any[] : [];
       const oppCols = resolveColumns(allRows);
       allRows = allRows.filter((r: any) => getStatusFromRow(r, oppCols) !== "void" && !isExcludedRow(r, oppCols));
@@ -4206,8 +4200,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
-      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      const upload = uploads.find(u => u.id === (req.params.id as string));
+      const upload = await storage.getFinancialUploadById(req.params.id as string);
       if (!upload) return res.status(404).json({ error: "Upload not found" });
 
       const wb = XLSX.utils.book_new();
@@ -4443,9 +4436,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const asCacheKey = `account-summary:${req.session.organizationId}:${req.query.period || "current"}`;
       const asCached = cacheGet(asCacheKey);
       if (asCached) return res.json(asCached);
-      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      if (!uploads.length) return res.json([]);
-      const latest = uploads[uploads.length - 1];
+      const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      if (!latest) return res.json([]);
       const raw = (latest.summaryRows as any[]) || [];
 
       // Determine which month keys are valid for the requested period
@@ -4552,9 +4544,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const dsCacheKey = `dispatcher-summary:${req.session.organizationId}:${req.query.period || "current"}`;
       const dsCached = cacheGet(dsCacheKey);
       if (dsCached) return res.json(dsCached);
-      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      if (!uploads.length) return res.json([]);
-      const latest = uploads[uploads.length - 1];
+      const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      if (!latest) return res.json([]);
 
       const period = String(req.query.period || "current");
       const now = new Date();
@@ -4609,9 +4600,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Repeat Carrier metric (for Logistics Managers) ─────────────────────────
   app.get("/api/financials/repeat-carriers", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      if (!uploads.length) return res.json([]);
-      const latest = uploads[uploads.length - 1];
+      const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      if (!latest) return res.json([]);
 
       const period = String(req.query.period || "current");
       const now = new Date();
@@ -4683,9 +4673,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Salesperson summary (for Sales roles) ──────────────────────────────────
   app.get("/api/financials/salesperson-summary", requireAuth, async (req, res) => {
     try {
-      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      if (!uploads.length) return res.json([]);
-      const latest = uploads[uploads.length - 1];
+      const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      if (!latest) return res.json([]);
 
       const period = String(req.query.period || "current");
       const now = new Date();

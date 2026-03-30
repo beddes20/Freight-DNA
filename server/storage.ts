@@ -198,6 +198,7 @@ export interface IStorage {
   getFinancialUploadsForOrg(organizationId: string): Promise<FinancialUpload[]>;
   getLatestFinancialUpload(): Promise<FinancialUpload | undefined>;
   getLatestFinancialUploadForOrg(organizationId: string): Promise<FinancialUpload | undefined>;
+  getFinancialUploadById(id: string): Promise<FinancialUpload | undefined>;
   createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload>;
   deleteFinancialUpload(id: string): Promise<boolean>;
   deleteAllFinancialUploads(): Promise<void>;
@@ -660,10 +661,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getFinancialUploadsForOrg(organizationId: string): Promise<FinancialUpload[]> {
-    const orgUsers = await this.getUsers(organizationId);
-    const orgUserIds = new Set(orgUsers.map(u => u.id));
-    const all = await db.select().from(financialUploads).orderBy(asc(financialUploads.uploadedAt));
-    return all.filter(u => orgUserIds.has(u.uploadedBy));
+    const orgUserIds = (await this.getUsers(organizationId)).map(u => u.id);
+    if (orgUserIds.length === 0) return [];
+    return db.select().from(financialUploads)
+      .where(inArray(financialUploads.uploadedBy, orgUserIds))
+      .orderBy(asc(financialUploads.uploadedAt));
   }
 
   async getLatestFinancialUpload(): Promise<FinancialUpload | undefined> {
@@ -674,13 +676,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getLatestFinancialUploadForOrg(organizationId: string): Promise<FinancialUpload | undefined> {
-    // financial_uploads does not have an organizationId column; scope by checking
-    // that the uploader (uploadedBy) belongs to the given organization
-    const orgUsers = await this.getUsers(organizationId);
-    const orgUserIds = new Set(orgUsers.map(u => u.id));
-    const allUploads = await db.select().from(financialUploads)
-      .orderBy(desc(financialUploads.uploadedAt));
-    return allUploads.find(u => orgUserIds.has(u.uploadedBy));
+    const orgUserIds = (await this.getUsers(organizationId)).map(u => u.id);
+    if (orgUserIds.length === 0) return undefined;
+    const [latest] = await db.select().from(financialUploads)
+      .where(inArray(financialUploads.uploadedBy, orgUserIds))
+      .orderBy(desc(financialUploads.uploadedAt))
+      .limit(1);
+    return latest;
+  }
+
+  async getFinancialUploadById(id: string): Promise<FinancialUpload | undefined> {
+    const [upload] = await db.select().from(financialUploads)
+      .where(eq(financialUploads.id, id));
+    return upload;
   }
 
   async createFinancialUpload(upload: InsertFinancialUpload): Promise<FinancialUpload> {
