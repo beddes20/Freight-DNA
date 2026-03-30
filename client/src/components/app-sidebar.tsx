@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, Bell, KeyRound, Inbox, Crosshair, LineChart } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, LineChart } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -15,7 +15,8 @@ import {
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
-import { useNotificationCounts, useMarkNotificationsRead } from "@/hooks/use-notifications";
+import { useNotificationCounts } from "@/hooks/use-notifications";
+import { NotificationBell } from "@/components/notification-bell";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
@@ -95,10 +96,9 @@ function NavLink({ item, isActive, badge }: { item: { title: string; url: string
 }
 
 export function AppSidebar() {
-  const [location, navigate] = useLocation();
+  const [location] = useLocation();
   const { user, logout } = useAuth();
-  const { taskCount, otherCount, otherUnreadIds } = useNotificationCounts();
-  const markOtherRead = useMarkNotificationsRead();
+  const { taskCount, suggestionCount } = useNotificationCounts();
 
   const isActive = (url: string) =>
     url === "/"
@@ -258,6 +258,11 @@ export function AppSidebar() {
                       <Link href="/feedback-inbox" data-testid="link-feedback-inbox">
                         <Inbox className="h-4 w-4" />
                         <span>Feedback Inbox</span>
+                        {suggestionCount > 0 && (
+                          <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-black leading-none" data-testid="badge-feedback-count">
+                            {suggestionCount > 9 ? "9+" : suggestionCount}
+                          </span>
+                        )}
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -276,21 +281,7 @@ export function AppSidebar() {
               <p className="text-xs text-sidebar-foreground/60">{ROLE_LABELS[user.role] || user.role}</p>
             </div>
             <div className="flex items-center gap-1 shrink-0">
-              {otherCount > 0 && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="relative text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-                  title={`${otherCount} unread notification${otherCount !== 1 ? "s" : ""}`}
-                  data-testid="button-notifications-bell"
-                  onClick={() => navigate("/notifications")}
-                >
-                  <Bell className="h-4 w-4" />
-                  <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold text-white" data-testid="badge-bell-count">
-                    {otherCount > 99 ? "99+" : otherCount}
-                  </span>
-                </Button>
-              )}
+              <NotificationBell />
               <Button
                 variant="ghost"
                 size="icon"

@@ -19,12 +19,14 @@ export function useNotificationCounts() {
   const unread = safeNotifications.filter((n) => !n.read);
   const taskUnread = unread.filter((n) => TASK_NOTIFICATION_TYPES.includes(n.type));
   const otherUnread = unread.filter((n) => !TASK_NOTIFICATION_TYPES.includes(n.type));
+  const suggestionUnread = unread.filter((n) => n.type === "app_suggestion");
 
   return {
     taskCount: taskUnread.length,
     otherCount: otherUnread.length,
     otherUnreadIds: otherUnread.map((n) => n.id),
     totalCount: unread.length,
+    suggestionCount: suggestionUnread.length,
   };
 }
 

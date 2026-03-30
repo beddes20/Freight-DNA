@@ -64,7 +64,7 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
 
   const handleNotifClick = (notif: Notification) => {
     if (!notif.read) markRead.mutate(notif.id);
-    const destination = notif.link || (notif.type === "app_suggestion" ? "/tasks" : null);
+    const destination = notif.link || (notif.type === "app_suggestion" ? "/feedback-inbox" : null);
     if (destination) navigate(destination);
     setOpen(false);
   };
