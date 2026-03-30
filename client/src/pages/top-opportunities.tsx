@@ -90,10 +90,10 @@ export default function TopOpportunities() {
   const [confirmDismiss, setConfirmDismiss] = useState<{ companyId: string; companyName: string } | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskPrefill, setTaskPrefill] = useState<TaskPrefill | null>(null);
-  const [collapsedCompanies, setCollapsedCompanies] = useState<Record<string, boolean>>({});
+  const [expandedCompanies, setExpandedCompanies] = useState<Record<string, boolean>>({});
 
   const toggleCollapsed = (companyId: string) => {
-    setCollapsedCompanies(prev => ({ ...prev, [companyId]: !prev[companyId] }));
+    setExpandedCompanies(prev => ({ ...prev, [companyId]: !prev[companyId] }));
   };
 
   const dismissMutation = useMutation({
@@ -261,14 +261,14 @@ export default function TopOpportunities() {
                       </Button>
                     )}
                     <ChevronDown
-                      className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${collapsedCompanies[group.companyId] ? "-rotate-90" : ""}`}
+                      className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${expandedCompanies[group.companyId] ? "" : "-rotate-90"}`}
                       data-testid={`icon-chevron-${group.companyId}`}
                     />
                   </div>
                 </div>
               </CardHeader>
 
-              {!collapsedCompanies[group.companyId] && (
+              {expandedCompanies[group.companyId] && (
               <CardContent className="p-0">
                 <div className="divide-y">
                   {group.matches.map((match, mIdx) => (
