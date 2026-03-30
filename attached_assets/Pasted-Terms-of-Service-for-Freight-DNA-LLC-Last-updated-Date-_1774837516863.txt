@@ -1,0 +1,102 @@
+Terms of Service for Freight‑DNA, LLC
+Last updated: [Date]
+These Terms of Service (“Terms”) govern your access to and use of the Freight‑DNA, LLC website at freight-dna.com and the Freight‑DNA software-as-a-service platform (collectively, the “Service”).  By creating an account, clicking “I agree,” or using the Service, you agree to be bound by these Terms on behalf of yourself and the organization you represent (“Customer,” “you,” or “your”).[acceldata +1]
+If you do not agree to these Terms, do not use the Service.
+1. Eligibility and accounts
+1.1 Business use  
+The Service is intended for use by businesses, not consumers. By using the Service, you represent that you are acting for business purposes and have authority to bind the organization you represent.[termsfeed +1]
+1.2 Account registration  
+You must provide accurate, current, and complete information when creating an account and keep it up to date. You are responsible for all activities that occur under your accounts and for keeping your passwords and access credentials secure.[termsfeed]
+1.3 Authorized users  
+You may permit your employees, contractors, or other authorized individuals to use the Service under your account (“Authorized Users”) in accordance with these Terms. You are responsible for their use of the Service and for ensuring they comply with these Terms.[acceldata]
+2. Access to the Service
+2.1 License grant  
+Subject to these Terms and timely payment of all applicable fees, Freight‑DNA grants you a limited, non-exclusive, non-transferable, non-sublicensable right to access and use the Service for your internal business purposes during the subscription term.[acceldata +1]
+2.2 Service modifications  
+We may update, enhance, or modify the Service from time to time, including adding or removing features, provided that we do not materially reduce the core functionality of the Service you have purchased during your current subscription term.[catalisgov +1]
+2.3 Availability  
+We use reasonable efforts to keep the Service available and performing, but we do not guarantee uninterrupted or error-free operation. The Service may be temporarily unavailable for maintenance, upgrades, or unplanned outages.[acceldata]
+3. Fees and payment
+3.1 Fees  
+You agree to pay all fees specified in your order, subscription, or plan selection (“Fees”).  Fees may be based on metrics such as number of users, features, usage, or subscription tier. Unless otherwise stated, Fees are quoted and payable in U.S. dollars and are non-refundable.[shipit +1]
+3.2 Billing and taxes  
+You authorize us or our payment processor to charge your designated payment method for all Fees when due.  You are responsible for all applicable taxes, duties, and similar charges (excluding taxes based on our income), which will be added to your invoices as required by law.[shipit +1]
+3.3 Late payments  
+If any unpaid amount is overdue, we may charge interest at the lesser of 1.5% per month or the maximum allowed by law and may suspend your access to the Service after reasonable notice until all amounts are paid.[arbretech +1]
+4. Customer data
+4.1 Ownership of Customer Data  
+You retain all rights, title, and interest in and to the data, content, and information you or your Authorized Users submit to the Service (“Customer Data”).  Freight‑DNA does not claim ownership of Customer Data.[shipit +1]
+4.2 License to use Customer Data  
+You grant Freight‑DNA a non-exclusive, worldwide, royalty-free license to host, copy, process, transmit, and display Customer Data as reasonably necessary to provide the Service, maintain and improve the Service, and comply with law.[acceldata]
+4.3 Aggregated and anonymized data  
+We may derive and use aggregated or anonymized data that does not identify you or any individual, for purposes such as analytics, benchmarking, and improving the Service.[termsfeed +1]
+4.4 Data protection and security  
+We will implement reasonable technical and organizational measures to protect Customer Data, consistent with industry standards and our Privacy Policy.[freightos +1]
+5. Acceptable use
+You agree not to, and not to allow any third party to:[termsfeed +1]
+•	Use the Service in violation of any applicable law or regulation, including data privacy, export control, or anti-spam laws.
+•	Use the Service to store, transmit, or process unlawful content or content that infringes any third party’s intellectual property, privacy, or other rights.
+•	Attempt to gain unauthorized access to the Service or any related systems or networks.
+•	Interfere with or disrupt the integrity or performance of the Service.
+•	Reverse engineer, decompile, disassemble, or otherwise attempt to derive the source code of the Service (except to the extent such restriction is prohibited by law).
+•	Circumvent or remove any access controls, rate limits, or security measures.
+•	Use the Service to build a competing product or service or to benchmark the Service in a way that is not permitted by law or an applicable agreement.[acceldata]
+We may suspend or terminate access to the Service, in whole or in part, if we reasonably believe that a user has violated this Section or is using the Service in a way that poses a security or legal risk.[acceldata]
+6. Intellectual property
+6.1 Freight‑DNA IP  
+Freight‑DNA and its licensors own all rights, title, and interest in and to the Service, including all software, technology, user interfaces, designs, compilations, and associated intellectual property rights (“Freight‑DNA IP”).  Except for the limited rights expressly granted in these Terms, no rights are granted to you and all such rights are reserved by Freight‑DNA and its licensors.[termsfeed +1]
+6.2 Feedback  
+If you provide feedback, suggestions, or ideas about the Service (“Feedback”), you agree that Freight‑DNA may use the Feedback without restriction or obligation to you, and you hereby assign all rights in the Feedback to Freight‑DNA to the extent permitted by law.[termsfeed +1]
+7. Confidentiality
+7.1 Definition  
+“Confidential Information” means non-public information disclosed by one party to the other that is designated as confidential or that reasonably should be understood to be confidential given the nature of the information and the circumstances of disclosure, including Customer Data, product roadmaps, pricing, and business plans.[shipit]
+7.2 Obligations  
+Each party agrees to use the other party’s Confidential Information only as necessary to perform its obligations under these Terms and to protect such information using at least reasonable care.  Confidential Information may be shared with employees, contractors, or advisors who need to know it and are bound by confidentiality obligations.[shipit]
+7.3 Exclusions  
+Confidential Information does not include information that: (a) is or becomes publicly available without breach of these Terms; (b) was lawfully known to the receiving party before disclosure; (c) is received from a third party without restriction; or (d) is independently developed without use of the disclosing party’s Confidential Information.[shipit]
+7.4 Required disclosure  
+A party may disclose Confidential Information when required by law or legal process, provided it gives reasonable notice (if legally permitted) to the other party to seek protective measures.[shipit]
+8. Disclaimers
+The Service is provided “as is” and “as available” without warranties of any kind, whether express, implied, or statutory.  Freight‑DNA expressly disclaims all implied warranties, including warranties of merchantability, fitness for a particular purpose, title, and non-infringement.[termsfeed +1]
+Without limiting the foregoing, Freight‑DNA does not warrant that the Service will meet your requirements, be compatible with any particular system, operate without interruption or error, or produce any particular business results or revenue.  You are responsible for how you use the insights and data provided by the Service in running your freight brokerage or other business.[acceldata +1]
+The Service does not provide legal, tax, accounting, insurance, customs, or compliance advice, and you should consult qualified professionals for such matters.[termsfeed +1]
+9. Limitation of liability
+To the maximum extent permitted by law:[acceldata +1]
+•	In no event will Freight‑DNA be liable for any indirect, incidental, special, consequential, exemplary, or punitive damages (including lost profits, lost revenue, lost data, or business interruption), arising out of or in connection with the Service or these Terms, even if advised of the possibility of such damages.
+•	Freight‑DNA’s total aggregate liability for all claims arising out of or relating to the Service or these Terms will not exceed the amount you actually paid to Freight‑DNA for the Service during the twelve (12) months immediately preceding the event giving rise to the claim.[termsfeed +1]
+Some jurisdictions do not allow certain limitations of liability, so some of the above limitations may not apply to you. In such cases, Freight‑DNA’s liability will be limited to the fullest extent permitted by applicable law.[termsfeed]
+10. Indemnification
+You agree to indemnify, defend, and hold harmless Freight‑DNA, its officers, directors, employees, and agents from and against any claims, damages, losses, liabilities, costs, and expenses (including reasonable attorneys’ fees) arising out of or related to:[saaslogistics +1]
+•	Your use of the Service in violation of these Terms or applicable law.
+•	Customer Data, including any allegation that Customer Data infringes or misappropriates the rights of a third party or violates applicable law.
+•	Any dispute between you and a third party relating to your use of the Service or your freight brokerage or related services.
+11. Term, suspension, and termination
+11.1 Term  
+These Terms begin when you first access the Service and continue for as long as you have an account or continue to use the Service, unless terminated earlier in accordance with this Section.[arbretech +1]
+11.2 Termination by you  
+You may stop using the Service at any time. If your subscription includes a committed term, cancellation will be effective at the end of the then-current term, unless otherwise specified in your order.[catalisgov +1]
+11.3 Termination or suspension by Freight‑DNA  
+We may suspend or terminate your access to the Service, in whole or in part, upon notice if:[shipit +1]
+•	You materially breach these Terms and fail to cure the breach within a reasonable time after receiving notice.
+•	You fail to pay any undisputed Fees when due and do not cure within a reasonable time.
+•	We reasonably believe your use of the Service poses a security risk, violates law, or could harm other users or third parties.
+11.4 Effect of termination  
+Upon termination or expiration of your subscription:[shipit +1]
+•	Your right to access and use the Service will cease.
+•	We may delete or deactivate your account and related data in accordance with our data retention practices and applicable law.
+•	You remain responsible for all Fees incurred up to the effective date of termination.
+Upon request made within thirty (30) days after termination or expiration, we will make Customer Data available for export in a commercially reasonable format. After that period, we may delete Customer Data, subject to any legal obligations to retain it.[acceldata]
+12. Governing law and jurisdiction
+These Terms and any disputes arising out of or relating to them or the Service will be governed by and construed in accordance with the laws of the State of Utah, without regard to its conflict of law principles.[utah +1]
+You and Freight‑DNA agree that the state and federal courts located in Salt Lake County, Utah will have exclusive jurisdiction over any dispute arising out of or relating to these Terms or the Service, and you consent to the personal jurisdiction and venue of those courts.[lawinsider +1]
+13. Changes to these Terms
+We may update these Terms from time to time.  If we make material changes, we will provide notice (for example, by email, in-app notification, or posting an updated version on our website) before the changes take effect. Your continued use of the Service after the effective date of updated Terms constitutes your acceptance of the changes.[termsfeed]
+14. Miscellaneous
+•	Entire agreement: These Terms, together with any order forms or supplemental agreements you enter into with Freight‑DNA, constitute the entire agreement between you and Freight‑DNA regarding the Service and supersede any prior or contemporaneous agreements on the subject.[acceldata]
+•	Order of precedence: If there is a conflict between these Terms and an executed written agreement between you and Freight‑DNA, the executed agreement will control to the extent of the conflict.[acceldata]
+•	Assignment: You may not assign or transfer these Terms or your rights or obligations under them without our prior written consent, and any attempted assignment without consent is void. We may assign these Terms in connection with a merger, acquisition, or sale of all or substantially all of our assets.[shipit +1]
+•	Independent contractors: The parties are independent contractors, and these Terms do not create any partnership, joint venture, or agency relationship.[acceldata]
+•	Force majeure: We will not be liable for any delay or failure to perform due to events beyond our reasonable control, such as acts of God, natural disasters, war, terrorism, labor disputes, or internet failures.[acceldata]
+•	Severability: If any provision of these Terms is held invalid or unenforceable, the remaining provisions will remain in full force and effect.[acceldata]
+•	Waiver: Our failure to enforce any provision of these Terms does not constitute a waiver of that provision or any other provision.[acceldata]
+•	Notices: Official notices to Freight‑DNA must be sent to [Legal Notice Address / Email]. We may send notices to you via email, in-app notifications, or by posting on our website.[acceldata]
