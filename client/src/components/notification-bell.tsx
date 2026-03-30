@@ -58,7 +58,7 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
   });
 
   const markAllRead = useMutation({
-    mutationFn: () => apiRequest("PATCH", "/api/notifications/read-all"),
+    mutationFn: () => apiRequest("PATCH", "/api/notifications/read-all", {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/notifications"] }),
   });
 

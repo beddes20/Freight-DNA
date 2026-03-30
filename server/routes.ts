@@ -6004,7 +6004,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { types, ids } = req.body as { types?: string[]; ids?: string[] };
+      const { types, ids } = (req.body || {}) as { types?: string[]; ids?: string[] };
       if (ids && Array.isArray(ids) && ids.length > 0) {
         await storage.markNotificationsReadByIds(user.id, ids);
       } else if (types && Array.isArray(types) && types.length > 0) {
