@@ -57,8 +57,6 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Repeat2,
-  ArrowUpDown,
-  ChevronsUpDown,
   Globe,
   KeyRound,
   Eye,
@@ -236,7 +234,6 @@ export default function CompanyDetail() {
   const [contactDefaults, setContactDefaults] = useState<{ lane?: string; region?: string } | undefined>();
   const [researchDialogOpen, setResearchDialogOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<ResearchTask | null>(null);
-  const [laneSort, setLaneSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "origin", dir: "asc" });
   const [findPlannerFacility, setFindPlannerFacility] = useState<Facility | null>(null);
   const [assignExistingContactId, setAssignExistingContactId] = useState<string>("");
   const [portalEdit, setPortalEdit] = useState(false);
@@ -273,10 +270,10 @@ export default function CompanyDetail() {
   const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
   const [focusTaskComments, setFocusTaskComments] = useState(false);
   const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[] } | undefined>();
-  const [lanesCollapsed, setLanesCollapsed] = useState(false);
+  const [lanesCollapsed, setLanesCollapsed] = useState(true);
   const [scorecardPending, setScorecardPending] = useState<PendingFile[]>([]);
   const [scorecardUploading, setScorecardUploading] = useState(false);
-  const [rfpIntelCollapsed, setRfpIntelCollapsed] = useState(false);
+  const [rfpIntelCollapsed, setRfpIntelCollapsed] = useState(true);
   const [showTrends, setShowTrends] = useState(false);
   const [calloutDialogOpen, setCalloutDialogOpen] = useState(false);
   const [calloutReplyTo, setCalloutReplyTo] = useState<{ id: string; title: string } | undefined>();
@@ -2851,362 +2848,76 @@ export default function CompanyDetail() {
                 <TabsContent value="patterns" className="mt-0">
                   {!lanePatterns || (lanePatterns.topCorridors.length === 0 && lanePatterns.hubs.length === 0 && lanePatterns.stateCorridors.length === 0) ? (
                     <p className="text-sm text-muted-foreground text-center py-8">No lane pattern data available for this account.</p>
-                  ) : (
-                  <Tabs defaultValue="corridors" className="w-full">
-                    <TabsList className="w-full grid grid-cols-3 mb-3">
-                      <TabsTrigger value="corridors" data-testid="tab-top-corridors">
-                        <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />Top Corridors
-                      </TabsTrigger>
-                      <TabsTrigger value="hubs" data-testid="tab-hubs">
-                        <Warehouse className="h-3.5 w-3.5 mr-1.5" />Hubs
-                      </TabsTrigger>
-                      <TabsTrigger value="states" data-testid="tab-state-corridors">
-                        <Repeat2 className="h-3.5 w-3.5 mr-1.5" />State Map
-                      </TabsTrigger>
-                    </TabsList>
-
-                    <TabsContent value="corridors" className="mt-0">
-                      {(() => {
-                        const filteredCorridors = lanePatterns.topCorridors.filter(c =>
-                          (validLoc(c.origin) || validLoc(c.originState)) && (validLoc(c.destination) || validLoc(c.destinationState))
-                        );
-
-                        // Priority scoring: volume 40% + multi-RFP 30% + not-awarded 20% + count 10%
-                        const awardedRfpTitleSetForScore = new Set(companyRfps.filter(r => r.status === "awarded" || r.status === "partially_awarded").map(r => r.title));
-                        const maxVolume = Math.max(...filteredCorridors.map(c => c.totalVolume), 1);
-                        const maxCount = Math.max(...filteredCorridors.map(c => c.count ?? 1), 1);
-                        const withPriority = filteredCorridors.map(c => {
-                          const volumeScore = (c.totalVolume / maxVolume) * 40;
-                          const multiRfpScore = c.appearsInMultipleRfps ? 30 : 0;
-                          const notAwardedScore = !c.rfpTitles.some(t => awardedRfpTitleSetForScore.has(t)) ? 20 : 0;
-                          const countScore = ((c.count ?? 1) / maxCount) * 10;
-                          const priorityScore = Math.round(volumeScore + multiRfpScore + notAwardedScore + countScore);
-                          const priorityLabel = priorityScore >= 70 ? "High" : priorityScore >= 40 ? "Medium" : "Low";
-                          const priorityColor = priorityScore >= 70 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : priorityScore >= 40 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : "bg-gray-100 text-gray-600 dark:bg-gray-800/50 dark:text-gray-400";
-                          return { ...c, priorityScore, priorityLabel, priorityColor };
-                        }).sort((a, b) => b.priorityScore - a.priorityScore);
-
-                        const activeCorridors = withPriority.filter(c => !vendorRoutedKeys.includes(`corridor:${c.lane}`));
-                        const handledCorridors = withPriority.filter(c => vendorRoutedKeys.includes(`corridor:${c.lane}`));
-                        const multiRfpCount = filteredCorridors.filter(c => c.appearsInMultipleRfps).length;
-                        return filteredCorridors.length > 0 ? (
-                          <div className="space-y-3">
-                            {multiRfpCount > 0 && (
-                              <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/50 dark:border-blue-800/30 text-xs">
-                                <ArrowRightLeft className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
-                                <span><span className="font-medium text-blue-700 dark:text-blue-300">{multiRfpCount} corridor{multiRfpCount !== 1 ? "s" : ""}</span> appear in 2+ RFPs — highest priority for outreach.</span>
-                                <InfoTooltip text="When a lane shows up in multiple RFPs, it means they consistently need coverage there. These are your strongest conversion opportunities." side="right" />
-                              </div>
-                            )}
-                            {(() => {
-                              const awardedRfpTitleSet = new Set(companyRfps.filter(r => r.status === "awarded" || r.status === "partially_awarded").map(r => r.title));
-                              const weShipCount = withPriority.filter(c => c.rfpTitles.some(t => awardedRfpTitleSet.has(t))).length;
-                              const topUnawarded = withPriority
-                                .filter(c => !c.rfpTitles.some(t => awardedRfpTitleSet.has(t)))
-                                .slice(0, 3);
-                              return (
-                            <div className="space-y-2">
-                              {weShipCount > 0 && (
-                                <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-green-50/70 dark:bg-green-950/20 border border-green-200/60 dark:border-green-800/40 text-xs">
-                                  <span className="font-medium text-green-700 dark:text-green-400">✓ We ship {weShipCount} of {withPriority.length} corridor{withPriority.length !== 1 ? "s" : ""}</span>
-                                  <span className="text-muted-foreground">— {withPriority.length - weShipCount} still to win</span>
-                                  <InfoTooltip text="Corridors you're already covering through an awarded or partially-awarded RFP. The remaining ones are active opportunities." side="right" />
-                                </div>
-                              )}
-                              {topUnawarded.length > 0 && (
-                                <div className="rounded-md px-3 py-2 bg-amber-50/60 dark:bg-amber-950/15 border border-amber-200/50 dark:border-amber-800/30 text-xs space-y-2">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="flex items-center gap-1">
-                                      <p className="font-medium text-amber-700 dark:text-amber-400">Top unawarded lanes — high priority to win:</p>
-                                      <InfoTooltip text="These are the highest-volume lanes in their RFPs that you don't have an award on yet. The loads/yr figure comes from the RFP data they uploaded." side="top" />
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-6 px-2 text-[11px] border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-400 shrink-0"
-                                        disabled={laneGapInsightsMutation.isPending}
-                                        onClick={() => laneGapInsightsMutation.mutate(topUnawarded.map(c => ({ lane: c.lane, totalVolume: c.totalVolume, originState: c.originState, destinationState: c.destinationState })))}
-                                        data-testid="button-generate-lane-insights"
-                                      >
-                                        {laneGapInsightsMutation.isPending ? "Generating…" : "✦ AI Talking Points"}
-                                      </Button>
-                                      <InfoTooltip text="Click to generate a specific, ready-to-use sales talking point for each unawarded lane — written by AI based on the lane volume and route." side="top" />
-                                    </div>
-                                  </div>
-                                  <div className="space-y-2">
-                                    {topUnawarded.map((c, i) => (
-                                      <div key={i} className="space-y-1">
-                                        <p className="text-muted-foreground pl-1">· <span className="font-medium text-foreground">{c.lane}</span> ({c.totalVolume.toLocaleString()} loads/yr)</p>
-                                        {laneGapInsights[c.lane] && (
-                                          <div className="ml-3 flex items-start gap-2 rounded bg-white/60 dark:bg-white/5 border border-amber-200/60 dark:border-amber-800/20 px-2 py-1.5">
-                                            <span className="text-amber-600 dark:text-amber-400 mt-0.5">💬</span>
-                                            <p className="text-muted-foreground leading-relaxed flex-1">{laneGapInsights[c.lane]}</p>
-                                            <button
-                                              className="shrink-0 text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 transition-colors"
-                                              title="Copy talking point"
-                                              data-testid={`button-copy-lane-insight-${i}`}
-                                              onClick={() => navigator.clipboard.writeText(laneGapInsights[c.lane])}
-                                            >
-                                              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-                                            </button>
-                                          </div>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              {activeCorridors.map((c, i) => {
-                                const awardedRfpMatch = c.rfpTitles.find(t => awardedRfpTitleSet.has(t));
-                                return (
-                                <div key={i} className={`flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors ${awardedRfpMatch ? "border-green-300 dark:border-green-700/60 bg-green-50/30 dark:bg-green-950/10" : c.appearsInMultipleRfps ? "border-blue-200 dark:border-blue-800/50" : ""}`} data-testid={`corridor-${i}`}>
-                                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                                    <div className={`flex h-7 w-7 items-center justify-center rounded-md shrink-0 ${awardedRfpMatch ? "bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400" : "bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400"}`}>
-                                      <TruckIcon className="h-3.5 w-3.5" />
-                                    </div>
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                        <p className="font-medium text-sm truncate">{c.lane}</p>
-                                        <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0 rounded-full ${c.priorityColor}`} title={`Priority score: ${c.priorityScore}/100`} data-testid={`corridor-priority-${i}`}>
-                                          {c.priorityLabel}
-                                        </span>
-                                      </div>
-                                      <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5 flex-wrap">
-                                        <span>{c.totalVolume.toLocaleString()} loads/yr</span>
-                                        {c.originState && c.destinationState && <span className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded">{c.originState} → {c.destinationState}</span>}
-                                        {c.count > 1 && <span className="text-blue-600 dark:text-blue-400 font-medium">×{c.count}</span>}
-                                        {awardedRfpMatch && (
-                                          <span className="inline-flex items-center gap-0.5">
-                                            <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 text-[10px] px-1.5 py-0">✓ We Ship This</Badge>
-                                            <InfoTooltip text="You have an awarded or partially-awarded RFP that covers this shipping lane." side="top" />
-                                          </span>
-                                        )}
-                                        {c.appearsInMultipleRfps && !awardedRfpMatch && (
-                                          <span className="inline-flex items-center gap-0.5">
-                                            <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 text-[10px] px-1.5 py-0">Multi-RFP</Badge>
-                                            <InfoTooltip text="This lane appears in 2 or more of their RFPs — strongest indicator they need reliable capacity here. High priority to pursue." side="top" />
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                                    <span className="text-xs text-muted-foreground font-mono hidden sm:block">{c.rfpTitles.join(", ")}</span>
-                                    {canReassign && (
-                                      <Button size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-7 px-2 text-xs"
-                                        onClick={() => openForceTask(`Corridor: ${c.lane}`, `Lane Pattern — Top Corridor\nLane: ${c.lane}\nVolume: ${c.totalVolume.toLocaleString()} loads/yr\nAppearances: ${c.count}x\nRFPs: ${c.rfpTitles.join(", ")}${c.appearsInMultipleRfps ? "\nAppears in multiple RFPs" : ""}`)}
-                                        data-testid={`button-force-task-corridor-${i}`}>
-                                        <Zap className="h-3 w-3 mr-1" />Task
-                                      </Button>
-                                    )}
-                                    <Button size="sm" variant="outline" disabled={vendorRoutedToggle.isPending}
-                                      className={vendorRoutedKeys.includes(`corridor:${c.lane}`) ? "bg-green-500 text-white border-green-500 hover:bg-green-600 h-7 px-2 text-xs" : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 h-7 px-2 text-xs"}
-                                      onClick={() => vendorRoutedToggle.mutate(`corridor:${c.lane}`)}
-                                      data-testid={`button-vendor-routed-corridor-${i}`}>
-                                      <TruckIcon className="h-3 w-3 mr-1" />Handled
-                                    </Button>
-                                  </div>
-                                </div>
-                                );
-                              })}
+                  ) : (() => {
+                    const filteredCorridors = lanePatterns.topCorridors.filter(c =>
+                      (validLoc(c.origin) || validLoc(c.originState)) && (validLoc(c.destination) || validLoc(c.destinationState))
+                    );
+                    const awardedRfpTitleSet = new Set(companyRfps.filter(r => r.status === "awarded" || r.status === "partially_awarded").map(r => r.title));
+                    const maxVolume = Math.max(...filteredCorridors.map(c => c.totalVolume), 1);
+                    const maxCount = Math.max(...filteredCorridors.map(c => c.count ?? 1), 1);
+                    const withPriority = filteredCorridors.map(c => {
+                      const volumeScore = (c.totalVolume / maxVolume) * 40;
+                      const multiRfpScore = c.appearsInMultipleRfps ? 30 : 0;
+                      const notAwardedScore = !c.rfpTitles.some(t => awardedRfpTitleSet.has(t)) ? 20 : 0;
+                      const countScore = ((c.count ?? 1) / maxCount) * 10;
+                      const priorityScore = Math.round(volumeScore + multiRfpScore + notAwardedScore + countScore);
+                      const priorityLabel = priorityScore >= 70 ? "High" : priorityScore >= 40 ? "Medium" : "Low";
+                      const priorityColor = priorityScore >= 70 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : priorityScore >= 40 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : "bg-gray-100 text-gray-600 dark:bg-gray-800/50 dark:text-gray-400";
+                      return { ...c, priorityScore, priorityLabel, priorityColor };
+                    }).sort((a, b) => b.priorityScore - a.priorityScore);
+                    const topUnawarded = withPriority.filter(c => !c.rfpTitles.some(t => awardedRfpTitleSet.has(t))).slice(0, 3);
+                    const top5 = withPriority.slice(0, 5);
+                    const remaining = withPriority.length - 5;
+                    return (
+                      <div className="space-y-3">
+                        {topUnawarded.length > 0 && (
+                          <div className="rounded-md px-3 py-2.5 bg-amber-50/60 dark:bg-amber-950/15 border border-amber-200/50 dark:border-amber-800/30 text-xs space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-medium text-amber-700 dark:text-amber-400">Top unawarded corridors — priority to win:</p>
+                              <Button
+                                size="sm" variant="outline"
+                                className="h-6 px-2 text-[11px] border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-400 shrink-0"
+                                disabled={laneGapInsightsMutation.isPending}
+                                onClick={() => laneGapInsightsMutation.mutate(topUnawarded.map(c => ({ lane: c.lane, totalVolume: c.totalVolume, originState: c.originState, destinationState: c.destinationState })))}
+                                data-testid="button-generate-lane-insights"
+                              >
+                                {laneGapInsightsMutation.isPending ? "Generating…" : "✦ AI Talking Points"}
+                              </Button>
                             </div>
-                          );
-                            })()}
-                            {handledCorridors.length > 0 && (
-                              <details className="group">
-                                <summary className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer list-none hover:text-foreground">
-                                  <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
-                                  Vendor Routed ({handledCorridors.length})
-                                </summary>
-                                <div className="mt-2 space-y-1 opacity-60">
-                                  {handledCorridors.map((c, i) => (
-                                    <div key={i} className="flex items-center justify-between p-2 rounded-md border text-xs">
-                                      <span>{c.lane}</span>
-                                      <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={() => vendorRoutedToggle.mutate(`corridor:${c.lane}`)}>Undo</Button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </details>
-                            )}
-                          </div>
-                        ) : <p className="text-sm text-muted-foreground text-center py-6">No corridor data available</p>;
-                      })()}
-                    </TabsContent>
-
-                    <TabsContent value="hubs" className="mt-0">
-                      {(() => {
-                        const filteredHubs = lanePatterns.hubs.filter(h => validLoc(h.facility) || validLoc(h.state));
-                        const activeHubs = filteredHubs.filter(h => !vendorRoutedKeys.includes(`hub:${h.fullName}`));
-                        const handledHubs = filteredHubs.filter(h => vendorRoutedKeys.includes(`hub:${h.fullName}`));
-                        const hubGapCount = filteredHubs.filter(h => !hubCoverage(h.fullName)).length;
-                        return filteredHubs.length > 0 ? (
-                          <div className="space-y-3">
-                            <p className="text-xs text-muted-foreground">High-traffic facilities appearing as both origins and destinations — likely managed by dedicated planners.</p>
-                            {hubGapCount > 0 ? (
-                              <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-red-50/60 dark:bg-red-950/20 border border-red-200/50 dark:border-red-800/30 text-xs">
-                                <ShieldAlert className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0" />
-                                <span><span className="font-medium text-red-700 dark:text-red-300">{hubGapCount} of {filteredHubs.length} hub{filteredHubs.length !== 1 ? "s" : ""}</span> {hubGapCount === 1 ? "is" : "are"} missing a contact — find a planner for each gap.</span>
-                              </div>
-                            ) : filteredHubs.length > 0 ? (
-                              <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-green-50/60 dark:bg-green-950/20 border border-green-200/50 dark:border-green-800/30 text-xs">
-                                <CheckCircle className="h-3.5 w-3.5 text-green-600 dark:text-green-400 shrink-0" />
-                                <span className="text-green-700 dark:text-green-300 font-medium">All {filteredHubs.length} hubs have a contact assigned.</span>
-                              </div>
-                            ) : null}
-                            <div className="space-y-2">
-                              {activeHubs.map((h, i) => {
-                                const coverageContact = hubCoverage(h.fullName);
-                                return (
-                                  <div key={i} className="flex items-center justify-between p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors" data-testid={`hub-${i}`}>
-                                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                                      <div className="flex h-7 w-7 items-center justify-center rounded-md bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 shrink-0">
-                                        <Warehouse className="h-3.5 w-3.5" />
-                                      </div>
-                                      <div className="min-w-0">
-                                        <div className="flex items-center gap-2 flex-wrap">
-                                          <p className="font-medium text-sm">{h.fullName}</p>
-                                          {coverageContact ? (
-                                            <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 text-[10px] px-1.5 py-0">
-                                              <CheckCircle className="h-2.5 w-2.5 mr-0.5" />Covered
-                                            </Badge>
-                                          ) : (
-                                            <Badge className="bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400 text-[10px] px-1.5 py-0">
-                                              <ShieldAlert className="h-2.5 w-2.5 mr-0.5" />Gap
-                                            </Badge>
-                                          )}
-                                        </div>
-                                        <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-                                          <span>{h.totalVolume.toLocaleString()} loads/yr</span>
-                                          <span className="flex items-center gap-0.5 text-green-600 dark:text-green-400"><ArrowUpFromLine className="h-2.5 w-2.5" />{h.outboundVolume.toLocaleString()}</span>
-                                          <span className="flex items-center gap-0.5 text-blue-600 dark:text-blue-400"><ArrowDownToLine className="h-2.5 w-2.5" />{h.inboundVolume.toLocaleString()}</span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                      {canReassign && (
-                                        <Button size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-7 px-2 text-xs"
-                                          onClick={() => openForceTask(`Hub: ${h.fullName}`, `Lane Pattern — Shipping/Receiving Hub\nFacility: ${h.fullName}\nTotal Volume: ${h.totalVolume.toLocaleString()} loads/yr\nOutbound: ${h.outboundVolume.toLocaleString()} (${h.outboundCount} lanes)\nInbound: ${h.inboundVolume.toLocaleString()} (${h.inboundCount} lanes)`)}
-                                          data-testid={`button-force-task-hub-${i}`}>
-                                          <Zap className="h-3 w-3 mr-1" />Task
-                                        </Button>
-                                      )}
-                                      <Button size="sm" variant="outline" disabled={vendorRoutedToggle.isPending}
-                                        className={vendorRoutedKeys.includes(`hub:${h.fullName}`) ? "bg-green-500 text-white border-green-500 hover:bg-green-600 h-7 px-2 text-xs" : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 h-7 px-2 text-xs"}
-                                        onClick={() => vendorRoutedToggle.mutate(`hub:${h.fullName}`)}
-                                        data-testid={`button-vendor-routed-hub-${i}`}>
-                                        <TruckIcon className="h-3 w-3 mr-1" />Handled
-                                      </Button>
-                                    </div>
+                            {topUnawarded.map((c, i) => (
+                              <div key={i} className="space-y-1">
+                                <p className="text-muted-foreground pl-1">· <span className="font-medium text-foreground">{c.lane}</span> ({c.totalVolume.toLocaleString()} loads/yr)</p>
+                                {laneGapInsights[c.lane] && (
+                                  <div className="ml-3 flex items-start gap-2 rounded bg-white/60 dark:bg-white/5 border border-amber-200/60 dark:border-amber-800/20 px-2 py-1.5">
+                                    <span className="text-amber-600 dark:text-amber-400 mt-0.5">💬</span>
+                                    <p className="text-muted-foreground leading-relaxed flex-1">{laneGapInsights[c.lane]}</p>
+                                    <button className="shrink-0 text-amber-600 dark:text-amber-400 hover:text-amber-800 transition-colors" title="Copy talking point" data-testid={`button-copy-lane-insight-${i}`} onClick={() => navigator.clipboard.writeText(laneGapInsights[c.lane])}>
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                    </button>
                                   </div>
-                                );
-                              })}
-                            </div>
-                            {handledHubs.length > 0 && (
-                              <details className="group">
-                                <summary className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer list-none hover:text-foreground">
-                                  <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
-                                  Vendor Routed ({handledHubs.length})
-                                </summary>
-                                <div className="mt-2 space-y-1 opacity-60">
-                                  {handledHubs.map((h, i) => (
-                                    <div key={i} className="flex items-center justify-between p-2 rounded-md border text-xs">
-                                      <span>{h.fullName}</span>
-                                      <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={() => vendorRoutedToggle.mutate(`hub:${h.fullName}`)}>Undo</Button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </details>
-                            )}
-                          </div>
-                        ) : <p className="text-sm text-muted-foreground text-center py-6">No facilities appear as both origins and destinations</p>;
-                      })()}
-                    </TabsContent>
-
-                    <TabsContent value="states" className="mt-0">
-                      {(() => {
-                        const filteredStates = lanePatterns.stateCorridors.filter(s => validLoc(s.originState) && validLoc(s.destinationState));
-                        const activeStates = filteredStates.filter(s => !vendorRoutedKeys.includes(`state-corridor:${s.corridor}`));
-                        const handledStates = filteredStates.filter(s => vendorRoutedKeys.includes(`state-corridor:${s.corridor}`));
-                        const topState = filteredStates[0];
-                        return filteredStates.length > 0 ? (
-                          <div className="space-y-3">
-                            {topState && (
-                              <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-muted/40 border text-xs">
-                                <Repeat2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                <span className="text-muted-foreground">{filteredStates.length} state corridor{filteredStates.length !== 1 ? "s" : ""} · Highest volume: <span className="font-medium text-foreground">{topState.corridor}</span> at {topState.totalVolume.toLocaleString()} loads/yr</span>
+                                )}
                               </div>
-                            )}
-                            <div className="overflow-x-auto rounded-md border">
-                              <table className="w-full text-sm">
-                                <thead>
-                                  <tr className="bg-muted/50 border-b">
-                                    <th className="text-left font-medium px-3 py-2">Corridor</th>
-                                    <th className="text-right font-medium px-3 py-2">Lanes</th>
-                                    <th className="text-right font-medium px-3 py-2">Volume</th>
-                                    <th className="text-left px-3 py-2 w-1/3">Share</th>
-                                    {canReassign && <th className="text-right font-medium px-3 py-2"></th>}
-                                    <th className="text-right font-medium px-3 py-2"></th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {(() => {
-                                    const maxVol = Math.max(...filteredStates.map(s => s.totalVolume));
-                                    return activeStates.map((s, i) => (
-                                      <tr key={i} className="border-b last:border-0 hover:bg-muted/30 transition-colors" data-testid={`state-corridor-${i}`}>
-                                        <td className="px-3 py-2 font-medium">{s.corridor}</td>
-                                        <td className="px-3 py-2 text-right text-muted-foreground">{s.laneCount}</td>
-                                        <td className="px-3 py-2 text-right font-medium">{s.totalVolume.toLocaleString()}</td>
-                                        <td className="px-3 py-2">
-                                          <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                                            <div className="h-full bg-gradient-to-r from-blue-500 to-green-500 rounded-full transition-all" style={{ width: `${(s.totalVolume / maxVol) * 100}%` }} />
-                                          </div>
-                                        </td>
-                                        {canReassign && (
-                                          <td className="px-3 py-2 text-right">
-                                            <Button size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-7 px-2 text-xs"
-                                              onClick={() => openForceTask(`State Corridor: ${s.corridor}`, `Lane Pattern — State Corridor\nCorridor: ${s.corridor}\nLanes: ${s.laneCount}\nVolume: ${s.totalVolume.toLocaleString()} loads/yr`)}
-                                              data-testid={`button-force-task-state-corridor-${i}`}>
-                                              <Zap className="h-3 w-3 mr-1" />Task
-                                            </Button>
-                                          </td>
-                                        )}
-                                        <td className="px-3 py-2 text-right">
-                                          <Button size="sm" variant="outline" disabled={vendorRoutedToggle.isPending}
-                                            className={vendorRoutedKeys.includes(`state-corridor:${s.corridor}`) ? "bg-green-500 text-white border-green-500 hover:bg-green-600 h-7 px-2 text-xs" : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 h-7 px-2 text-xs"}
-                                            onClick={() => vendorRoutedToggle.mutate(`state-corridor:${s.corridor}`)}
-                                            data-testid={`button-vendor-routed-state-corridor-${i}`}>
-                                            <TruckIcon className="h-3 w-3 mr-1" />Handled
-                                          </Button>
-                                        </td>
-                                      </tr>
-                                    ));
-                                  })()}
-                                </tbody>
-                              </table>
-                            </div>
-                            {handledStates.length > 0 && (
-                              <details className="group">
-                                <summary className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer list-none hover:text-foreground">
-                                  <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
-                                  Vendor Routed ({handledStates.length})
-                                </summary>
-                                <div className="mt-2 space-y-1 opacity-60">
-                                  {handledStates.map((s, i) => (
-                                    <div key={i} className="flex items-center justify-between p-2 rounded-md border text-xs">
-                                      <span>{s.corridor}</span>
-                                      <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={() => vendorRoutedToggle.mutate(`state-corridor:${s.corridor}`)}>Undo</Button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </details>
-                            )}
+                            ))}
                           </div>
-                        ) : <p className="text-sm text-muted-foreground text-center py-6">No state corridor data available</p>;
-                      })()}
-                    </TabsContent>
-                  </Tabs>
-                  )}
+                        )}
+                        <div className="space-y-1.5">
+                          {top5.map((c, i) => (
+                            <div key={i} className={`flex items-center justify-between px-3 py-2 rounded-md border bg-background hover:bg-muted/40 transition-colors ${c.rfpTitles.some(t => awardedRfpTitleSet.has(t)) ? "border-green-300 dark:border-green-700/60 bg-green-50/20 dark:bg-green-950/10" : c.appearsInMultipleRfps ? "border-blue-200 dark:border-blue-800/40" : ""}`} data-testid={`corridor-${i}`}>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="text-sm font-medium truncate">{c.lane}</span>
+                                <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0 rounded-full shrink-0 ${c.priorityColor}`}>{c.priorityLabel}</span>
+                                {c.rfpTitles.some(t => awardedRfpTitleSet.has(t)) && <span className="text-[10px] text-green-600 dark:text-green-400 font-medium shrink-0">✓ We Ship</span>}
+                              </div>
+                              <span className="text-xs text-muted-foreground shrink-0 ml-2">{c.totalVolume.toLocaleString()} loads/yr</span>
+                            </div>
+                          ))}
+                        </div>
+                        <a href="/rfp-awards" className="text-xs text-primary underline underline-offset-2 hover:opacity-80">
+                          {remaining > 0 ? `View ${remaining} more corridor${remaining !== 1 ? "s" : ""} + hubs & state map in RFP & Awards →` : "View full lane analysis in RFP & Awards →"}
+                        </a>
+                      </div>
+                    );
+                  })()}
                 </TabsContent>
 
                 {/* ── Lane Matching Tab ─────────────────────────── */}
@@ -3223,271 +2934,42 @@ export default function CompanyDetail() {
                       <p className="text-sm text-muted-foreground">No RFP lane data for this company yet.</p>
                       <a href="/rfp-awards" className="text-xs text-primary underline underline-offset-2 hover:opacity-80">Go to RFP & Awards to upload →</a>
                     </div>
-                  ) : (
-                    <div className="space-y-5">
-                      {/* Section 1: Our Deliveries → Their Pickups — grouped by our zone */}
-                      {(() => {
-                        const mkDeliveryKey = (m: { ourCity: string; ourState: string; customerCity: string; customerState: string }) =>
-                          `match-delivery:${m.ourCity},${m.ourState}:${m.customerCity},${m.customerState}`;
-                        const activeDeliveries = laneMatching.ourDeliveriesToTheirPickups.filter(m => !vendorRoutedKeys.includes(mkDeliveryKey(m)));
-                        const handledDeliveries = laneMatching.ourDeliveriesToTheirPickups.filter(m => vendorRoutedKeys.includes(mkDeliveryKey(m)));
-
-                        type ZoneGroup = { ourCity: string; ourState: string; totalVolume: number; matches: typeof activeDeliveries };
-                        const zoneMap: Record<string, ZoneGroup> = {};
-                        for (const m of activeDeliveries) {
-                          const zk = `${m.ourCity}|${m.ourState}`;
-                          if (!zoneMap[zk]) zoneMap[zk] = { ourCity: m.ourCity, ourState: m.ourState, totalVolume: 0, matches: [] };
-                          zoneMap[zk].totalVolume += m.totalVolume;
-                          zoneMap[zk].matches.push(m);
-                        }
-                        const deliveryZones = Object.values(zoneMap)
-                          .sort((a, b) => b.totalVolume - a.totalVolume)
-                          .map(z => ({ ...z, matches: [...z.matches].sort((a, b) => b.totalVolume - a.totalVolume) }));
-
-                        const toggleStr = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
-                          const next = new Set(set); next.has(key) ? next.delete(key) : next.add(key); setter(next);
-                        };
-
-                        return (
-                          <div>
-                            <div className="flex items-center gap-2 mb-1.5">
-                              <ArrowDownToLine className="h-4 w-4 text-blue-500" />
-                              <p className="text-sm font-semibold text-blue-700 dark:text-blue-300">Our Trucks Near Their Pickup Zones</p>
-                              {deliveryZones.length > 0 && <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 text-[10px]">{activeDeliveries.length} pairs across {deliveryZones.length} zone{deliveryZones.length !== 1 ? "s" : ""}</Badge>}
-                            </div>
-                            <p className="text-xs text-muted-foreground mb-3">We already drop freight in these areas — we can pick up their loads on the way back. Click a customer city to see specific lanes.</p>
-                            {deliveryZones.length === 0 && handledDeliveries.length === 0 ? (
-                              <p className="text-sm text-muted-foreground text-center py-4">No matches within 50 miles.</p>
-                            ) : (
-                              <div className="space-y-2">
-                                {deliveryZones.map((zone, zi) => {
-                                  const zoneKey = `${zone.ourCity}|${zone.ourState}`;
-                                  const isZoneExpanded = expandedDeliveryGroups.has(zoneKey);
-                                  const ZONE_LIMIT = 3;
-                                  const visibleMatches = isZoneExpanded ? zone.matches : zone.matches.slice(0, ZONE_LIMIT);
-                                  const hiddenZoneCount = zone.matches.length - ZONE_LIMIT;
-                                  return (
-                                    <div key={zi} className="rounded-lg border overflow-hidden" data-testid={`match-delivery-zone-${zi}`}>
-                                      <div className="px-3 py-2.5 bg-blue-50/60 dark:bg-blue-950/30 border-b flex items-center justify-between gap-2">
-                                        <div className="flex items-center gap-2 min-w-0">
-                                          <span className="text-sm font-semibold text-blue-700 dark:text-blue-300">{zone.ourCity}, {zone.ourState}</span>
-                                          <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-300 dark:text-blue-400 shrink-0">{zone.matches.length} nearby pickup {zone.matches.length === 1 ? "zone" : "zones"}</Badge>
-                                        </div>
-                                        <span className="text-xs text-muted-foreground shrink-0">{zone.totalVolume.toLocaleString()} total vol</span>
-                                      </div>
-                                      <div className="divide-y">
-                                        {visibleMatches.map((m, mi) => {
-                                          const matchKey = `${zoneKey}|${m.customerCity}|${m.customerState}`;
-                                          const isLanesOpen = expandedDeliveryLanes.has(matchKey);
-                                          const handled = vendorRoutedKeys.includes(mkDeliveryKey(m));
-                                          const distClass = m.distance === 0 || m.distance < 10 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" : m.distance < 25 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" : "bg-muted text-muted-foreground";
-                                          return (
-                                            <div key={mi} data-testid={`match-delivery-${zi}-${mi}`}>
-                                              <div
-                                                className="flex items-center justify-between gap-2 px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors"
-                                                onClick={() => toggleStr(expandedDeliveryLanes, matchKey, setExpandedDeliveryLanes)}
-                                              >
-                                                <div className="flex items-center gap-1.5 min-w-0">
-                                                  <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${isLanesOpen ? "rotate-90" : ""}`} />
-                                                  <span className="text-sm truncate">{m.customerCity}, {m.customerState}</span>
-                                                </div>
-                                                <div className="flex items-center gap-1.5 shrink-0">
-                                                  <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${distClass}`}>{m.distance === 0 ? "Exact" : `${m.distance} mi`}</span>
-                                                  <span className="text-xs text-muted-foreground hidden sm:inline">{m.matchingLanes.length} lane{m.matchingLanes.length !== 1 ? "s" : ""} · {m.totalVolume.toLocaleString()} vol</span>
-                                                  {canReassign && (
-                                                    <Button size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
-                                                      onClick={e => { e.stopPropagation(); openForceTask(`Lane Match: ${m.ourCity}, ${m.ourState} ↔ ${m.customerCity}, ${m.customerState}`, `Lane Matching — Our Deliveries → Their Pickups\nWe Deliver To: ${m.ourCity}, ${m.ourState}\nCustomer Pickup: ${m.customerCity}, ${m.customerState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`); }}
-                                                      data-testid={`button-force-task-match-delivery-${zi}-${mi}`}>
-                                                      <Zap className="h-3 w-3 mr-1" />Task
-                                                    </Button>
-                                                  )}
-                                                  <Button size="sm" variant="outline" disabled={vendorRoutedToggle.isPending}
-                                                    className={handled ? "bg-green-500 text-white border-green-500 hover:bg-green-600 h-6 px-2 text-xs" : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 h-6 px-2 text-xs"}
-                                                    onClick={e => { e.stopPropagation(); vendorRoutedToggle.mutate(mkDeliveryKey(m)); }}
-                                                    data-testid={`button-handled-match-delivery-${zi}-${mi}`}>
-                                                    <TruckIcon className="h-3 w-3 mr-1" />Handled
-                                                  </Button>
-                                                </div>
-                                              </div>
-                                              {isLanesOpen && (
-                                                <div className="bg-muted/20 border-t divide-y">
-                                                  <div className="px-4 py-1 flex items-center justify-between text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                                                    <span>Lane</span><span>{m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol</span>
-                                                  </div>
-                                                  {m.matchingLanes.map((l, li) => (
-                                                    <div key={li} className="flex items-center justify-between px-4 py-1.5 text-xs hover:bg-muted/30">
-                                                      <span className="text-muted-foreground truncate">{l.lane}</span>
-                                                      <span className="shrink-0 ml-2">{l.volume.toLocaleString()} vol</span>
-                                                    </div>
-                                                  ))}
-                                                </div>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
-                                        {hiddenZoneCount > 0 && (
-                                          <button onClick={() => toggleStr(expandedDeliveryGroups, zoneKey, setExpandedDeliveryGroups)} className="w-full px-3 py-2 text-xs text-primary hover:bg-muted/30 text-left transition-colors">
-                                            {isZoneExpanded ? "▲ Show less" : `▼ Show ${hiddenZoneCount} more pickup zone${hiddenZoneCount !== 1 ? "s" : ""}`}
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                                {handledDeliveries.length > 0 && (
-                                  <details className="group">
-                                    <summary className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer list-none hover:text-foreground">
-                                      <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
-                                      Handled ({handledDeliveries.length})
-                                    </summary>
-                                    <div className="mt-2 space-y-1 opacity-60">
-                                      {handledDeliveries.map((m, i) => (
-                                        <div key={i} className="flex items-center justify-between p-2 rounded-md border text-xs">
-                                          <span>{m.ourCity}, {m.ourState} ↔ {m.customerCity}, {m.customerState}</span>
-                                          <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={() => vendorRoutedToggle.mutate(mkDeliveryKey(m))}>Undo</Button>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </details>
-                                )}
+                  ) : (() => {
+                    const closeDelivery = laneMatching.ourDeliveriesToTheirPickups.filter(m => m.distance < 10).length;
+                    const closePickup = laneMatching.theirDeliveriesToOurPickups.filter(m => m.distance < 10).length;
+                    const totalDelivery = laneMatching.ourDeliveriesToTheirPickups.length;
+                    const totalPickup = laneMatching.theirDeliveriesToOurPickups.length;
+                    const closeTotal = closeDelivery + closePickup;
+                    const grandTotal = totalDelivery + totalPickup;
+                    return (
+                      <div className="space-y-3">
+                        {grandTotal === 0 ? (
+                          <p className="text-sm text-muted-foreground text-center py-6">No lane matches found within 50 miles.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {closeTotal > 0 && (
+                              <div className="flex items-start gap-3 rounded-md px-3 py-2.5 bg-green-50/60 dark:bg-green-950/20 border border-green-200/60 dark:border-green-800/30">
+                                <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0 mt-0.5" />
+                                <div>
+                                  <p className="text-sm font-medium text-green-700 dark:text-green-300">{closeTotal} close match{closeTotal !== 1 ? "es" : ""} within 10 miles</p>
+                                  <p className="text-xs text-muted-foreground mt-0.5">We already operate near their lanes — strong backhaul opportunities.</p>
+                                </div>
+                              </div>
+                            )}
+                            {grandTotal - closeTotal > 0 && (
+                              <div className="flex items-start gap-3 rounded-md px-3 py-2.5 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/50 dark:border-blue-800/30">
+                                <ArrowRightLeft className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                                <p className="text-sm text-blue-700 dark:text-blue-300">{grandTotal - closeTotal} additional match{grandTotal - closeTotal !== 1 ? "es" : ""} within 50 miles</p>
                               </div>
                             )}
                           </div>
-                        );
-                      })()}
-
-                      {/* Section 2: Their Deliveries → Our Pickups — grouped by our zone */}
-                      {(() => {
-                        const mkPickupKey = (m: { customerCity: string; customerState: string; ourCity: string; ourState: string }) =>
-                          `match-pickup:${m.customerCity},${m.customerState}:${m.ourCity},${m.ourState}`;
-                        const activePickups = laneMatching.theirDeliveriesToOurPickups.filter(m => !vendorRoutedKeys.includes(mkPickupKey(m)));
-                        const handledPickups = laneMatching.theirDeliveriesToOurPickups.filter(m => vendorRoutedKeys.includes(mkPickupKey(m)));
-
-                        type PickupZone = { ourCity: string; ourState: string; totalVolume: number; matches: typeof activePickups };
-                        const zoneMap: Record<string, PickupZone> = {};
-                        for (const m of activePickups) {
-                          const zk = `${m.ourCity}|${m.ourState}`;
-                          if (!zoneMap[zk]) zoneMap[zk] = { ourCity: m.ourCity, ourState: m.ourState, totalVolume: 0, matches: [] };
-                          zoneMap[zk].totalVolume += m.totalVolume;
-                          zoneMap[zk].matches.push(m);
-                        }
-                        const pickupZones = Object.values(zoneMap)
-                          .sort((a, b) => b.totalVolume - a.totalVolume)
-                          .map(z => ({ ...z, matches: [...z.matches].sort((a, b) => b.totalVolume - a.totalVolume) }));
-
-                        const toggleStr = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
-                          const next = new Set(set); next.has(key) ? next.delete(key) : next.add(key); setter(next);
-                        };
-
-                        return (
-                          <div className="border-t pt-4">
-                            <div className="flex items-center gap-2 mb-1.5">
-                              <ArrowUpFromLine className="h-4 w-4 text-green-500" />
-                              <p className="text-sm font-semibold text-green-700 dark:text-green-300">Their Destinations Near Our Pickup Zones</p>
-                              {pickupZones.length > 0 && <Badge className="bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400 text-[10px]">{activePickups.length} pairs across {pickupZones.length} zone{pickupZones.length !== 1 ? "s" : ""}</Badge>}
-                            </div>
-                            <p className="text-xs text-muted-foreground mb-3">They need deliveries near where we already pick up freight — potential backhaul loads that fill our return trips. Click a customer city to see specific lanes.</p>
-                            {pickupZones.length === 0 && handledPickups.length === 0 ? (
-                              <p className="text-sm text-muted-foreground text-center py-4">No matches within 50 miles.</p>
-                            ) : (
-                              <div className="space-y-2">
-                                {pickupZones.map((zone, zi) => {
-                                  const zoneKey = `${zone.ourCity}|${zone.ourState}`;
-                                  const isZoneExpanded = expandedPickupGroups.has(zoneKey);
-                                  const ZONE_LIMIT = 3;
-                                  const visibleMatches = isZoneExpanded ? zone.matches : zone.matches.slice(0, ZONE_LIMIT);
-                                  const hiddenZoneCount = zone.matches.length - ZONE_LIMIT;
-                                  return (
-                                    <div key={zi} className="rounded-lg border overflow-hidden" data-testid={`match-pickup-zone-${zi}`}>
-                                      <div className="px-3 py-2.5 bg-green-50/60 dark:bg-green-950/30 border-b flex items-center justify-between gap-2">
-                                        <div className="flex items-center gap-2 min-w-0">
-                                          <span className="text-sm font-semibold text-green-700 dark:text-green-300">{zone.ourCity}, {zone.ourState}</span>
-                                          <Badge variant="outline" className="text-[10px] text-green-600 border-green-300 dark:text-green-400 shrink-0">{zone.matches.length} nearby delivery {zone.matches.length === 1 ? "zone" : "zones"}</Badge>
-                                        </div>
-                                        <span className="text-xs text-muted-foreground shrink-0">{zone.totalVolume.toLocaleString()} total vol</span>
-                                      </div>
-                                      <div className="divide-y">
-                                        {visibleMatches.map((m, mi) => {
-                                          const matchKey = `${zoneKey}|${m.customerCity}|${m.customerState}`;
-                                          const isLanesOpen = expandedPickupLanes.has(matchKey);
-                                          const handled = vendorRoutedKeys.includes(mkPickupKey(m));
-                                          const distClass = m.distance === 0 || m.distance < 10 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" : m.distance < 25 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" : "bg-muted text-muted-foreground";
-                                          return (
-                                            <div key={mi} data-testid={`match-pickup-${zi}-${mi}`}>
-                                              <div
-                                                className="flex items-center justify-between gap-2 px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors"
-                                                onClick={() => toggleStr(expandedPickupLanes, matchKey, setExpandedPickupLanes)}
-                                              >
-                                                <div className="flex items-center gap-1.5 min-w-0">
-                                                  <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${isLanesOpen ? "rotate-90" : ""}`} />
-                                                  <span className="text-sm truncate">{m.customerCity}, {m.customerState}</span>
-                                                </div>
-                                                <div className="flex items-center gap-1.5 shrink-0">
-                                                  <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${distClass}`}>{m.distance === 0 ? "Exact" : `${m.distance} mi`}</span>
-                                                  <span className="text-xs text-muted-foreground hidden sm:inline">{m.matchingLanes.length} lane{m.matchingLanes.length !== 1 ? "s" : ""} · {m.totalVolume.toLocaleString()} vol</span>
-                                                  {canReassign && (
-                                                    <Button size="sm" variant="outline" className="border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-400 h-6 px-2 text-xs"
-                                                      onClick={e => { e.stopPropagation(); openForceTask(`Lane Match: ${m.customerCity}, ${m.customerState} ↔ ${m.ourCity}, ${m.ourState}`, `Lane Matching — Their Deliveries → Our Pickups\nCustomer Delivers To: ${m.customerCity}, ${m.customerState}\nWe Pick Up At: ${m.ourCity}, ${m.ourState}\nDistance: ${m.distance} mi\nOur Frequency: ${m.ourWeeklyLoads}/wk\nCustomer Volume: ${m.totalVolume.toLocaleString()} loads/yr\nMatching Lanes:\n${m.matchingLanes.map(l => `  • ${l.lane} (${l.volume} vol) — ${l.rfpTitle}`).join("\n")}`); }}
-                                                      data-testid={`button-force-task-match-pickup-${zi}-${mi}`}>
-                                                      <Zap className="h-3 w-3 mr-1" />Task
-                                                    </Button>
-                                                  )}
-                                                  <Button size="sm" variant="outline" disabled={vendorRoutedToggle.isPending}
-                                                    className={handled ? "bg-green-500 text-white border-green-500 hover:bg-green-600 h-6 px-2 text-xs" : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 h-6 px-2 text-xs"}
-                                                    onClick={e => { e.stopPropagation(); vendorRoutedToggle.mutate(mkPickupKey(m)); }}
-                                                    data-testid={`button-handled-match-pickup-${zi}-${mi}`}>
-                                                    <TruckIcon className="h-3 w-3 mr-1" />Handled
-                                                  </Button>
-                                                </div>
-                                              </div>
-                                              {isLanesOpen && (
-                                                <div className="bg-muted/20 border-t divide-y">
-                                                  <div className="px-4 py-1 flex items-center justify-between text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                                                    <span>Lane</span><span>{m.ourWeeklyLoads}/wk · {m.totalVolume.toLocaleString()} vol</span>
-                                                  </div>
-                                                  {m.matchingLanes.map((l, li) => (
-                                                    <div key={li} className="flex items-center justify-between px-4 py-1.5 text-xs hover:bg-muted/30">
-                                                      <span className="text-muted-foreground truncate">{l.lane}</span>
-                                                      <span className="shrink-0 ml-2">{l.volume.toLocaleString()} vol</span>
-                                                    </div>
-                                                  ))}
-                                                </div>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
-                                        {hiddenZoneCount > 0 && (
-                                          <button onClick={() => toggleStr(expandedPickupGroups, zoneKey, setExpandedPickupGroups)} className="w-full px-3 py-2 text-xs text-primary hover:bg-muted/30 text-left transition-colors">
-                                            {isZoneExpanded ? "▲ Show less" : `▼ Show ${hiddenZoneCount} more delivery zone${hiddenZoneCount !== 1 ? "s" : ""}`}
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                                {handledPickups.length > 0 && (
-                                  <details className="group">
-                                    <summary className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer list-none hover:text-foreground">
-                                      <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
-                                      Handled ({handledPickups.length})
-                                    </summary>
-                                    <div className="mt-2 space-y-1 opacity-60">
-                                      {handledPickups.map((m, i) => (
-                                        <div key={i} className="flex items-center justify-between p-2 rounded-md border text-xs">
-                                          <span>{m.customerCity}, {m.customerState} ↔ {m.ourCity}, {m.ourState}</span>
-                                          <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={() => vendorRoutedToggle.mutate(mkPickupKey(m))}>Undo</Button>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </details>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
+                        )}
+                        <a href="/rfp-awards" className="text-xs text-primary underline underline-offset-2 hover:opacity-80">
+                          View full lane matching analysis in RFP & Awards →
+                        </a>
+                      </div>
+                    );
+                  })()}
                 </TabsContent>
               </Tabs>
             )}
@@ -3547,32 +3029,9 @@ export default function CompanyDetail() {
                   return `${city}, ${state}`;
                 };
 
-                const handleLaneSort = (col: string) => {
-                  setLaneSort((prev) =>
-                    prev.col === col
-                      ? { col, dir: prev.dir === "asc" ? "desc" : "asc" }
-                      : { col, dir: col === "volume" ? "desc" : "asc" }
-                  );
-                };
-
-                const SortIcon = ({ col }: { col: string }) => (
-                  laneSort.col === col
-                    ? <ArrowUpDown className={`h-3 w-3 ml-1 inline ${laneSort.dir === "asc" ? "rotate-180" : ""}`} />
-                    : <ChevronsUpDown className="h-3 w-3 ml-1 inline opacity-40" />
-                );
-
-                const sorted = [...unresolvedTasks].sort((a, b) => {
-                  const dir = laneSort.dir === "asc" ? 1 : -1;
-                  switch (laneSort.col) {
-                    case "origin": return dir * fmtLoc(a.origin, a.originState).localeCompare(fmtLoc(b.origin, b.originState));
-                    case "destination": return dir * fmtLoc(a.destination, a.destinationState).localeCompare(fmtLoc(b.destination, b.destinationState));
-                    case "volume": return dir * (a.volume - b.volume);
-                    case "equipment": return dir * (a.equipment || "").localeCompare(b.equipment || "");
-                    case "rfp": return dir * a.rfpTitle.localeCompare(b.rfpTitle);
-                    case "status": return dir * a.status.localeCompare(b.status);
-                    default: return 0;
-                  }
-                });
+                const sorted = [...unresolvedTasks].sort((a, b) => b.volume - a.volume);
+                const top5 = sorted.slice(0, 5);
+                const hiddenCount = sorted.length - 5;
 
                 if (unresolvedTasks.length === 0) {
                   return (
@@ -3582,38 +3041,24 @@ export default function CompanyDetail() {
                   );
                 }
 
-                const thClass = "text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide py-2 px-3 cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap";
+                const thClass = "text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide py-2 px-3 whitespace-nowrap";
 
                 return (
+                  <div className="space-y-2">
                   <div className="overflow-x-auto rounded-md border">
                     <table className="w-full text-sm">
                       <thead className="bg-muted/50 border-b">
                         <tr>
-                          <th className={thClass} onClick={() => handleLaneSort("origin")}>
-                            Origin <SortIcon col="origin" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("destination")}>
-                            Destination <SortIcon col="destination" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("volume")}>
-                            Volume <SortIcon col="volume" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("equipment")}>
-                            Equipment <SortIcon col="equipment" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("rfp")}>
-                            RFP <SortIcon col="rfp" />
-                          </th>
-                          <th className={thClass} onClick={() => handleLaneSort("status")}>
-                            Status <SortIcon col="status" />
-                          </th>
-                          <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide py-2 px-3 whitespace-nowrap">
-                            Action
-                          </th>
+                          <th className={thClass}>Origin</th>
+                          <th className={thClass}>Destination</th>
+                          <th className={thClass}>Volume</th>
+                          <th className={thClass}>Equipment</th>
+                          <th className={thClass}>Status</th>
+                          <th className={thClass}>Action</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {sorted.map((task, i) => {
+                        {top5.map((task, i) => {
                           const linkedContact = task.contactId && contacts
                             ? contacts.find((c) => c.id === task.contactId)
                             : null;
@@ -3634,9 +3079,6 @@ export default function CompanyDetail() {
                               </td>
                               <td className="py-2 px-3 text-muted-foreground">
                                 {task.equipment || "—"}
-                              </td>
-                              <td className="py-2 px-3 text-muted-foreground max-w-[180px] truncate" title={task.rfpTitle}>
-                                {task.rfpTitle}
                               </td>
                               <td className="py-2 px-3">
                                 {task.status === "open" ? (
@@ -3724,6 +3166,12 @@ export default function CompanyDetail() {
                         })}
                       </tbody>
                     </table>
+                  </div>
+                  {hiddenCount > 0 && (
+                    <a href="/tasks" className="text-xs text-primary underline underline-offset-2 hover:opacity-80 block">
+                      See all {sorted.length} lanes in Research Tasks →
+                    </a>
+                  )}
                   </div>
                 );
               })()}
