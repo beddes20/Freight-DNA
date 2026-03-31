@@ -26,6 +26,10 @@ import {
   Bookmark,
   BookmarkCheck,
   UserPlus,
+  Clock,
+  Mail,
+  MessageSquare,
+  MapPin,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -48,7 +52,7 @@ type AccountSummaryRow = {
   byMonth?: Record<string, MonthBucket>;
 };
 
-type TouchpointSummary = Record<string, { week: number; month: number }>;
+type TouchpointSummary = Record<string, { week: number; month: number; lastType: string | null; lastDate: string | null; daysSince: number | null }>;
 
 function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummaryRow | null {
   if (!rows.length) return null;
@@ -339,7 +343,7 @@ export default function Customers() {
       if (repFilter !== "all" && company.assignedTo !== repFilter && !sharedRepIds.includes(repFilter)) return false;
       if (industryFilter !== "all" && company.industry !== industryFilter) return false;
       if (touchFilter !== "all") {
-        const tps = tpSummary[company.id] || { week: 0, month: 0 };
+        const tps = tpSummary[company.id] || { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
         if (touchFilter === "not_this_month" && tps.month > 0) return false;
         if (touchFilter === "not_this_week" && tps.week > 0) return false;
         if (touchFilter === "needs_attention" && tps.month > 0) return false;
@@ -588,7 +592,7 @@ export default function Customers() {
             const contacts = contactsByCompany.get(company.id) || [];
             const openTasks = openTasksByCompany.get(company.id) || 0;
             const fin = getCompanyFinancials(company, accountSummary);
-            const tps = tpSummary[company.id] || { week: 0, month: 0 };
+            const tps = tpSummary[company.id] || { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
             return (
               <Link key={company.id} href={`/companies/${company.id}`}>
                 <Card className="hover-elevate cursor-pointer h-full" data-testid={`card-customer-${company.id}`}>
@@ -730,12 +734,19 @@ export default function Customers() {
                         ) : (
                           <span className="text-xs text-muted-foreground italic">No financial data</span>
                         )}
-                        {(tps.week > 0 || tps.month > 0) && (
-                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground ml-auto">
-                            <PhoneCall className="h-3 w-3" />
-                            <span>{tps.week > 0 ? `${tps.week} this wk` : `${tps.month} this mo.`}</span>
-                          </div>
-                        )}
+                        {(() => {
+                          if (tps.daysSince === null && !tps.lastType) return null;
+                          const d = tps.daysSince ?? 999;
+                          const urgency = d <= 7 ? "text-emerald-600 dark:text-emerald-400" : d <= 14 ? "text-amber-500 dark:text-amber-400" : d <= 30 ? "text-orange-500 dark:text-orange-400" : "text-red-500 dark:text-red-400";
+                          const TypeIcon = tps.lastType === "email" ? Mail : tps.lastType === "text" ? MessageSquare : tps.lastType === "site_visit" ? MapPin : PhoneCall;
+                          const label = d === 0 ? "today" : d === 1 ? "yesterday" : `${d}d ago`;
+                          return (
+                            <div className={`flex items-center gap-1 text-xs ml-auto ${urgency}`} title={`Last touch: ${tps.lastType} ${label}`}>
+                              <TypeIcon className="h-3 w-3" />
+                              <span>{label}</span>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </CardContent>

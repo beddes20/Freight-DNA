@@ -3990,6 +3990,113 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  // ── 1:1 Prep Summary ──────────────────────────────────────────────────────
+  app.get("/api/1on1/prep-summary", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const amId = req.query.amId as string;
+      if (!amId) return res.status(400).json({ error: "amId required" });
+
+      const allUsers = await storage.getUsers(user.organizationId);
+      const amUser = allUsers.find(u => u.id === amId);
+      if (!amUser) return res.status(404).json({ error: "User not found" });
+
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+      const thirtyAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+      const [allCompanies, allTouchpoints, allTasks, amGoals, allSessions] = await Promise.all([
+        storage.getCompanies(user.organizationId),
+        storage.getTouchpoints(),
+        storage.getTasks(),
+        storage.getGoals({ amId }),
+        storage.getAllSessions(),
+      ]);
+
+      const myCompanies = allCompanies.filter(c => !c.archivedAt && c.assignedTo === amId);
+      const companyMap: Record<string, string> = Object.fromEntries(allCompanies.map(c => [c.id, c.name]));
+
+      // Last touch per company
+      const lastTouchMap: Record<string, { date: string; type: string }> = {};
+      for (const tp of allTouchpoints) {
+        if (!lastTouchMap[tp.companyId] || tp.date > lastTouchMap[tp.companyId].date) {
+          lastTouchMap[tp.companyId] = { date: tp.date, type: tp.type };
+        }
+      }
+
+      // Cold accounts (30+ days / never touched)
+      const staleAccounts = myCompanies
+        .filter(c => !lastTouchMap[c.id] || lastTouchMap[c.id].date < thirtyAgo)
+        .map(c => ({ name: c.name, daysSince: lastTouchMap[c.id] ? Math.floor((new Date(todayStr).getTime() - new Date(lastTouchMap[c.id].date).getTime()) / (1000 * 60 * 60 * 24)) : null }))
+        .sort((a, b) => (b.daysSince ?? 999) - (a.daysSince ?? 999))
+        .slice(0, 8);
+
+      // Recent activity
+      const touchesThisWeek = allTouchpoints.filter(tp => tp.loggedById === amId && tp.date >= weekAgo).length;
+      const touchesThisMonth = allTouchpoints.filter(tp => tp.loggedById === amId && tp.date >= monthStart).length;
+
+      // Recent touchpoints (last 7 days with company name + note)
+      const recentTouchpoints = allTouchpoints
+        .filter(tp => tp.loggedById === amId && tp.date >= weekAgo)
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .slice(0, 10)
+        .map(tp => ({ companyName: companyMap[tp.companyId] ?? "Unknown", type: tp.type, date: tp.date, note: tp.notes ?? null }));
+
+      // Open tasks (count as "action items" for 1:1 context)
+      const openTasks = allTasks.filter(t => t.assignedTo === amId && t.status === "open");
+
+      // Open 1:1 topics
+      let openTopics = 0;
+      try {
+        const sessions1on1 = Array.isArray(allSessions) ? allSessions.filter((s: any) => s.repId === amId || s.managerId === amId) : [];
+        // We don't have a direct topics count here; use a fallback of 0
+        openTopics = 0;
+      } catch {}
+
+      // Last 1:1 session
+      let lastSessionDate: string | null = null;
+      let daysSinceSession: number | null = null;
+      try {
+        const mySessions = Array.isArray(allSessions) ? allSessions.filter((s: any) => (s.repId === amId || s.managerId === amId) && s.closedAt) : [];
+        if (mySessions.length > 0) {
+          const lastClosed = mySessions.sort((a: any, b: any) => b.closedAt.localeCompare(a.closedAt))[0];
+          lastSessionDate = lastClosed.closedAt.slice(0, 10);
+          daysSinceSession = Math.floor((new Date(todayStr).getTime() - new Date(lastSessionDate).getTime()) / (1000 * 60 * 60 * 24));
+        }
+      } catch {}
+
+      // Goals
+      const activeGoals = amGoals.filter(g => g.startDate <= todayStr && g.endDate >= todayStr);
+      const goalSummary = activeGoals.map(g => ({
+        metric: g.metric,
+        label: (g as any).customLabel || g.metric,
+        current: Number(g.currentValue ?? 0),
+        target: Number(g.target ?? 0),
+        pct: g.target && Number(g.target) > 0 ? Math.min(Math.round((Number(g.currentValue ?? 0) / Number(g.target)) * 100), 100) : 0,
+      }));
+
+      res.json({
+        amName: amUser.name || amUser.username,
+        openTopics,
+        openActionItems: openTasks.length,
+        touchesThisWeek,
+        touchesThisMonth,
+        coldAccounts: staleAccounts.length,
+        lastSessionDate,
+        daysSinceSession,
+        goalSummary,
+        recentTouchpoints,
+        staleAccounts,
+      });
+    } catch (error) {
+      console.error("Prep summary error:", error);
+      res.status(500).json({ error: "Failed to load prep summary" });
+    }
+  });
+
   // ── LM Development Milestones ──────────────────────────────────────────────
   // Stored in developmentGoals table as JSON { milestones: [...] }
 
@@ -8025,6 +8132,7 @@ Respond with valid JSON only:
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
       const weekAgo = new Date(now);
       weekAgo.setDate(weekAgo.getDate() - 7);
       const monthAgo = new Date(now);
@@ -8037,12 +8145,25 @@ Respond with valid JSON only:
         storage.getCompanies(user.organizationId),
       ]);
       const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
-      const summary: Record<string, { week: number; month: number }> = {};
+      const summary: Record<string, { week: number; month: number; lastType: string | null; lastDate: string | null; daysSince: number | null }> = {};
+      // Track latest tp per company (sorted by date desc)
+      const latestByCompany: Record<string, { type: string; date: string }> = {};
       for (const tp of all) {
         if (!orgCompanyIds.has(tp.companyId)) continue;
-        if (!summary[tp.companyId]) summary[tp.companyId] = { week: 0, month: 0 };
+        if (!summary[tp.companyId]) summary[tp.companyId] = { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
         if (tp.date >= monthStr) summary[tp.companyId].month++;
         if (tp.date >= weekStr) summary[tp.companyId].week++;
+        if (!latestByCompany[tp.companyId] || tp.date > latestByCompany[tp.companyId].date) {
+          latestByCompany[tp.companyId] = { type: tp.type, date: tp.date };
+        }
+      }
+      for (const [companyId, latest] of Object.entries(latestByCompany)) {
+        if (summary[companyId]) {
+          summary[companyId].lastType = latest.type;
+          summary[companyId].lastDate = latest.date;
+          const msAgo = new Date(todayStr).getTime() - new Date(latest.date).getTime();
+          summary[companyId].daysSince = Math.floor(msAgo / (1000 * 60 * 60 * 24));
+        }
       }
       res.json(summary);
     } catch (error) {
@@ -9149,6 +9270,151 @@ Respond with valid JSON only:
     } catch (err) {
       console.error("Error computing stale accounts:", err);
       res.status(500).json({ error: "Failed to compute stale accounts" });
+    }
+  });
+
+  // ── Today's 5 — top 5 priority accounts for an AM ────────────────────────
+  app.get("/api/dashboard/todays-five", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      const thirtyStr = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+      const [allCompanies, allTouchpoints, allTasks, allRfps] = await Promise.all([
+        storage.getCompanies(user.organizationId),
+        storage.getTouchpoints(),
+        storage.getTasks(),
+        storage.getRfps(user.organizationId),
+      ]);
+
+      // Scope to companies this user owns (or all visible for NAM/Director)
+      const isAM = user.role === "account_manager";
+      const myCompanies = isAM
+        ? allCompanies.filter(c => !c.archivedAt && c.assignedTo === user.id)
+        : allCompanies.filter(c => !c.archivedAt);
+
+      // Build last-touch map
+      const lastTouch: Record<string, string> = {};
+      for (const tp of allTouchpoints) {
+        if (!lastTouch[tp.companyId] || tp.date > lastTouch[tp.companyId]) {
+          lastTouch[tp.companyId] = tp.date;
+        }
+      }
+
+      // Build open-task count per company
+      const openTasks: Record<string, number> = {};
+      for (const t of allTasks) {
+        if (t.companyId && t.status === "open") {
+          openTasks[t.companyId] = (openTasks[t.companyId] || 0) + 1;
+        }
+      }
+
+      // Build open-RFP deadline urgency per company
+      const rfpUrgent: Record<string, boolean> = {};
+      for (const rfp of allRfps) {
+        if (rfp.companyId && rfp.status === "open" && rfp.deadline) {
+          const daysLeft = Math.ceil((new Date(rfp.deadline).getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          if (daysLeft <= 14) rfpUrgent[rfp.companyId] = true;
+        }
+      }
+
+      type PriorityAccount = { id: string; name: string; daysSince: number | null; openTasks: number; hasUrgentRfp: boolean; score: number; reasons: string[] };
+      const scored: PriorityAccount[] = myCompanies.map(c => {
+        const last = lastTouch[c.id];
+        const daysSince = last ? Math.floor((new Date(todayStr).getTime() - new Date(last).getTime()) / (1000 * 60 * 60 * 24)) : null;
+        const tasks = openTasks[c.id] || 0;
+        const urgentRfp = rfpUrgent[c.id] || false;
+
+        let score = 0;
+        const reasons: string[] = [];
+
+        if (daysSince === null) { score += 10; reasons.push("Never touched"); }
+        else if (daysSince >= 30) { score += 8; reasons.push(`${daysSince}d since last touch`); }
+        else if (daysSince >= 14) { score += 4; reasons.push(`${daysSince}d since last touch`); }
+        if (tasks > 0) { score += 3; reasons.push(`${tasks} open task${tasks > 1 ? "s" : ""}`); }
+        if (urgentRfp) { score += 5; reasons.push("RFP due soon"); }
+
+        return { id: c.id, name: c.name, daysSince, openTasks: tasks, hasUrgentRfp: urgentRfp, score, reasons };
+      });
+
+      const top5 = scored.sort((a, b) => b.score - a.score).slice(0, 5);
+      res.json(top5);
+    } catch (err) {
+      console.error("Error computing today's five:", err);
+      res.status(500).json({ error: "Failed to compute today's five" });
+    }
+  });
+
+  // ── AM Comparison — side-by-side metrics for NAM/Director ────────────────
+  app.get("/api/dashboard/am-comparison", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const allowed = ["national_account_manager", "director", "admin", "sales", "sales_director"];
+      if (!allowed.includes(user.role)) return res.status(403).json({ error: "Access denied" });
+
+      const now = new Date();
+      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
+      const allUsers = await storage.getUsers(user.organizationId);
+      let amIds: string[];
+      if (user.role === "admin" || user.role === "director") {
+        amIds = allUsers.filter(u => u.role === "account_manager").map(u => u.id);
+      } else {
+        amIds = allUsers.filter(u => u.managerId === user.id && u.role === "account_manager").map(u => u.id);
+      }
+      if (!amIds.length) return res.json([]);
+
+      const [allTouchpoints, allGoals, allCompanies, allTasks] = await Promise.all([
+        storage.getTouchpoints(),
+        storage.getGoals({ namId: user.role === "admin" || user.role === "director" ? undefined : user.id }),
+        storage.getCompanies(user.organizationId),
+        storage.getTasks(),
+      ]);
+
+      // Last touch per company
+      const lastTouchMap: Record<string, string> = {};
+      for (const tp of allTouchpoints) {
+        if (!lastTouchMap[tp.companyId] || tp.date > lastTouchMap[tp.companyId]) {
+          lastTouchMap[tp.companyId] = tp.date;
+        }
+      }
+
+      const result = amIds.map(amId => {
+        const amUser = allUsers.find(u => u.id === amId);
+        const touchesWeek = allTouchpoints.filter(tp => tp.loggedById === amId && tp.date >= weekAgo).length;
+        const touchesMonth = allTouchpoints.filter(tp => tp.loggedById === amId && tp.date >= monthStart).length;
+        const myCompanies = allCompanies.filter(c => !c.archivedAt && c.assignedTo === amId);
+        const thirtyAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const coldAccounts = myCompanies.filter(c => !lastTouchMap[c.id] || lastTouchMap[c.id] < thirtyAgo).length;
+        const openTasks = allTasks.filter(t => t.assignedTo === amId && t.status === "open").length;
+        const currentGoals = allGoals.filter(g => g.amId === amId && g.metric === "touchpoints" && g.startDate <= new Date().toISOString().slice(0, 10) && g.endDate >= new Date().toISOString().slice(0, 10));
+        const tpGoal = currentGoals[0];
+        const goalTarget = tpGoal?.target ? Number(tpGoal.target) : null;
+        const goalPct = goalTarget && goalTarget > 0 ? Math.min(Math.round((touchesMonth / goalTarget) * 100), 100) : null;
+
+        return {
+          id: amId,
+          name: amUser?.name || amUser?.username || "Unknown",
+          touchesWeek,
+          touchesMonth,
+          coldAccounts,
+          openTasks,
+          companyCount: myCompanies.length,
+          goalPct,
+          goalTarget,
+        };
+      });
+
+      result.sort((a, b) => b.touchesMonth - a.touchesMonth);
+      res.json(result);
+    } catch (err) {
+      console.error("Error computing AM comparison:", err);
+      res.status(500).json({ error: "Failed to compute AM comparison" });
     }
   });
 

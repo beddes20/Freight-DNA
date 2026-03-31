@@ -378,6 +378,20 @@ export default function Dashboard() {
   });
   const staleAccounts = staleAccountsData?.stale ?? [];
 
+  type TodaysFiveItem = { id: string; name: string; daysSince: number | null; openTasks: number; hasUrgentRfp: boolean; score: number; reasons: string[] };
+  const { data: todaysFive = [], isLoading: todaysFiveLoading } = useQuery<TodaysFiveItem[]>({
+    queryKey: ["/api/dashboard/todays-five"],
+    enabled: isAm,
+    staleTime: 120000,
+  });
+
+  type AmRow = { id: string; name: string; touchesWeek: number; touchesMonth: number; coldAccounts: number; openTasks: number; companyCount: number; goalPct: number | null; goalTarget: number | null };
+  const { data: amComparison = [], isLoading: amComparisonLoading } = useQuery<AmRow[]>({
+    queryKey: ["/api/dashboard/am-comparison"],
+    enabled: isNam || isDirector,
+    staleTime: 120000,
+  });
+
   type TeamActivity = { touches: number; meaningful: number; newContacts: number };
   const { data: teamActivity, isLoading: teamActivityLoading } = useQuery<TeamActivity>({
     queryKey: ["/api/dashboard/team-activity", selectedDirectorId],
@@ -1698,6 +1712,55 @@ export default function Dashboard() {
             </Card>
           )}
 
+          {/* AM Comparison Table */}
+          <Card data-testid="card-am-comparison">
+            <CardHeader className="pb-2 pt-4 px-4">
+              <div className="flex items-center gap-2">
+                <Trophy className="h-4 w-4 text-amber-500 shrink-0" />
+                <CardTitle className="text-sm font-semibold">AM Activity Snapshot</CardTitle>
+                <span className="text-xs text-muted-foreground ml-2">This week vs. month · cold accounts · open tasks</span>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 px-4 pb-4 overflow-x-auto">
+              {amComparisonLoading ? (
+                <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+              ) : amComparison.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic text-center py-4">No AM data available.</p>
+              ) : (
+                <table className="w-full text-xs min-w-[520px]">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left pb-2 font-medium text-muted-foreground pr-3">Rep</th>
+                      <th className="text-right pb-2 font-medium text-muted-foreground px-2">Accts</th>
+                      <th className="text-right pb-2 font-medium text-muted-foreground px-2">Wk Touches</th>
+                      <th className="text-right pb-2 font-medium text-muted-foreground px-2">Mo Touches</th>
+                      <th className="text-right pb-2 font-medium text-muted-foreground px-2">Cold</th>
+                      <th className="text-right pb-2 font-medium text-muted-foreground px-2">Tasks</th>
+                      <th className="text-right pb-2 font-medium text-muted-foreground pl-2">Goal %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {amComparison.map((row, idx) => {
+                      const goalPct = row.goalPct ?? null;
+                      const goalColor = goalPct == null ? "" : goalPct >= 90 ? "text-emerald-600 dark:text-emerald-400 font-bold" : goalPct >= 60 ? "text-amber-500 dark:text-amber-400" : "text-red-500 dark:text-red-400";
+                      return (
+                        <tr key={row.id} className={`border-b border-border/40 hover:bg-muted/40 transition-colors ${idx % 2 === 0 ? "" : "bg-muted/20"}`} data-testid={`am-comparison-row-${row.id}`}>
+                          <td className="py-2 pr-3 font-medium text-foreground truncate max-w-[140px]">{row.name}</td>
+                          <td className="py-2 px-2 text-right text-muted-foreground">{row.companyCount}</td>
+                          <td className="py-2 px-2 text-right">{row.touchesWeek}</td>
+                          <td className="py-2 px-2 text-right">{row.touchesMonth}</td>
+                          <td className={`py-2 px-2 text-right ${row.coldAccounts > 0 ? "text-amber-600 dark:text-amber-400 font-semibold" : "text-muted-foreground"}`}>{row.coldAccounts}</td>
+                          <td className={`py-2 px-2 text-right ${row.openTasks > 0 ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground"}`}>{row.openTasks}</td>
+                          <td className={`py-2 pl-2 text-right ${goalColor}`}>{goalPct != null ? `${goalPct}%` : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Stale Accounts Alert — accounts with no touchpoint in 21+ days */}
           {staleAccounts.length > 0 && (
             <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-stale-accounts-nam">
@@ -1842,6 +1905,45 @@ export default function Dashboard() {
       {/* ── AM Dashboard Portlets ────────────────────────────────────────────── */}
       {isAm && (
         <>
+          {/* Today's 5 — top priority accounts for this AM */}
+          <Card data-testid="card-todays-five">
+            <CardHeader className="pb-2 pt-4 px-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Target className="h-4 w-4 text-blue-500 shrink-0" />
+                  <CardTitle className="text-sm font-semibold">Today's 5</CardTitle>
+                </div>
+                <span className="text-xs text-muted-foreground">Your highest-priority accounts right now</span>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 px-4 pb-4">
+              {todaysFiveLoading ? (
+                <div className="space-y-2">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-9 w-full" />)}</div>
+              ) : todaysFive.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic text-center py-4">All caught up — no priority accounts flagged.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {todaysFive.map((acct, idx) => (
+                    <Link key={acct.id} href={`/companies/${acct.id}`}>
+                      <div className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-muted/60 transition-colors cursor-pointer" data-testid={`todays-five-${acct.id}`}>
+                        <span className="text-xs font-bold text-muted-foreground w-4 shrink-0">{idx + 1}</span>
+                        <span className="flex-1 text-sm font-medium truncate">{acct.name}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {acct.reasons.slice(0, 2).map((r, i) => (
+                            <span key={i} className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${r.includes("RFP") ? "bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300" : r.includes("task") ? "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300" : "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300"}`}>
+                              {r}
+                            </span>
+                          ))}
+                        </div>
+                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Stale Accounts Alert — accounts with no touchpoint in 21+ days */}
           {staleAccounts.length > 0 && (
             <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-stale-accounts-am">

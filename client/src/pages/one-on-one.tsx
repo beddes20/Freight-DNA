@@ -1840,6 +1840,7 @@ function PairingList({ pairings, selectedKey, onSelect, showNamLabel, userRole }
 export default function OneOnOnePage() {
   const { user } = useAuth();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [prepOpen, setPrepOpen] = useState(false);
 
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
@@ -1879,6 +1880,30 @@ export default function OneOnOnePage() {
 
   const managerId = activePairing?.namId ?? null;
   const repId = activePairing?.amId ?? null;
+
+  type PrepSummaryData = {
+    amName: string;
+    openTopics: number;
+    openActionItems: number;
+    touchesThisWeek: number;
+    touchesThisMonth: number;
+    coldAccounts: number;
+    lastSessionDate: string | null;
+    daysSinceSession: number | null;
+    goalSummary: { metric: string; label: string; current: number; target: number; pct: number }[];
+    recentTouchpoints: { companyName: string; type: string; date: string; note: string | null }[];
+    staleAccounts: { name: string; daysSince: number }[];
+  };
+  const { data: prepData, isLoading: prepLoading } = useQuery<PrepSummaryData>({
+    queryKey: ["/api/1on1/prep-summary", repId],
+    queryFn: async () => {
+      const res = await fetch(`/api/1on1/prep-summary?amId=${repId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: prepOpen && !!repId,
+    staleTime: 60000,
+  });
 
   const pairingDisplayName = activePairing
     ? (isAM || activePairing.section === "upward" ? activePairing.namName : activePairing.amName)
@@ -1934,10 +1959,22 @@ export default function OneOnOnePage() {
                       {initials(pairingDisplayName)}
                     </div>
                   )}
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <h2 className="font-semibold" data-testid="text-pairing-title">{pairingTitle}</h2>
                     <p className="text-xs text-muted-foreground">Add topics anytime — discuss them in your next meeting</p>
                   </div>
+                  {!isAM && repId && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 text-xs gap-1.5"
+                      onClick={() => setPrepOpen(true)}
+                      data-testid="btn-prep-summary"
+                    >
+                      <ClipboardList className="h-3.5 w-3.5" />
+                      Prep Summary
+                    </Button>
+                  )}
                 </div>
               </div>
               <SessionPanel
@@ -1966,6 +2003,111 @@ export default function OneOnOnePage() {
           )}
         </div>
       </div>
+
+      {/* Prep Summary Modal */}
+      <Dialog open={prepOpen} onOpenChange={setPrepOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-indigo-500" />
+              Prep Summary — {prepData?.amName ?? pairingDisplayName ?? "Rep"}
+            </DialogTitle>
+          </DialogHeader>
+
+          {prepLoading ? (
+            <div className="space-y-3 py-2">
+              {[1,2,3,4].map(i => <Skeleton key={i} className="h-12 w-full" />)}
+            </div>
+          ) : !prepData ? (
+            <p className="text-sm text-muted-foreground text-center py-6">No prep data available.</p>
+          ) : (
+            <div className="space-y-5 py-1">
+              {/* Quick stats row */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: "Open Topics", value: prepData.openTopics, color: "text-indigo-600 dark:text-indigo-400" },
+                  { label: "Action Items", value: prepData.openActionItems, color: "text-amber-600 dark:text-amber-400" },
+                  { label: "Touches (wk)", value: prepData.touchesThisWeek, color: "text-emerald-600 dark:text-emerald-400" },
+                  { label: "Cold Accounts", value: prepData.coldAccounts, color: prepData.coldAccounts > 0 ? "text-red-500 dark:text-red-400" : "text-muted-foreground" },
+                ].map(stat => (
+                  <div key={stat.label} className="rounded-lg bg-muted/50 px-3 py-2 text-center">
+                    <div className={`text-2xl font-bold ${stat.color}`}>{stat.value}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{stat.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Last session */}
+              {prepData.lastSessionDate && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <CalendarDays className="h-4 w-4 shrink-0" />
+                  <span>Last session: <span className="font-medium text-foreground">{new Date(prepData.lastSessionDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span></span>
+                  {prepData.daysSinceSession != null && <span>({prepData.daysSinceSession} days ago)</span>}
+                </div>
+              )}
+
+              {/* Goal progress */}
+              {prepData.goalSummary.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Goal Progress</p>
+                  <div className="space-y-2">
+                    {prepData.goalSummary.map((g, i) => (
+                      <div key={i}>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="font-medium text-foreground">{g.label}</span>
+                          <span className={`font-semibold ${g.pct >= 90 ? "text-emerald-600 dark:text-emerald-400" : g.pct >= 60 ? "text-amber-500" : "text-red-500"}`}>{g.current}/{g.target} ({g.pct}%)</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div className={`h-full rounded-full transition-all ${g.pct >= 90 ? "bg-emerald-500" : g.pct >= 60 ? "bg-amber-400" : "bg-red-400"}`} style={{ width: `${Math.min(g.pct, 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Recent touchpoints */}
+              {prepData.recentTouchpoints.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Recent Activity (last 7 days)</p>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                    {prepData.recentTouchpoints.map((tp, i) => (
+                      <div key={i} className="flex items-start gap-2 text-xs">
+                        <span className="shrink-0 mt-0.5">
+                          {tp.type === "call" ? <Phone className="h-3 w-3 text-emerald-500" /> : tp.type === "email" ? <Mail className="h-3 w-3 text-blue-500" /> : tp.type === "text" ? <MessageCircle className="h-3 w-3 text-purple-500" /> : <MapPin className="h-3 w-3 text-orange-500" />}
+                        </span>
+                        <span className="font-medium text-foreground flex-1 truncate">{tp.companyName}</span>
+                        {tp.note && <span className="text-muted-foreground italic truncate max-w-[160px]">{tp.note}</span>}
+                        <span className="text-muted-foreground shrink-0">{new Date(tp.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Stale accounts */}
+              {prepData.staleAccounts.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3 text-amber-500" /> Cold Accounts
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {prepData.staleAccounts.map((a, i) => (
+                      <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 font-medium">
+                        {a.name} · {a.daysSince}d
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setPrepOpen(false)} data-testid="btn-prep-close">Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
