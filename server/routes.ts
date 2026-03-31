@@ -4108,12 +4108,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const lm = await storage.getUser(lmId);
       if (!lm) return res.status(404).json({ error: "User not found" });
       const managerId = lm.managerId;
-      const canAccess =
-        viewer.id === lmId ||
-        viewer.id === managerId ||
-        viewer.role === "admin" ||
-        viewer.role === "director";
-      if (!canAccess) return res.status(403).json({ error: "Access denied" });
+      const isSelfOrManager = viewer.id === lmId || viewer.id === managerId;
+      const isAdminOrDirector = viewer.role === "admin" || viewer.role === "director" || viewer.role === "sales_director";
+      let isInChain = false;
+      if (!isSelfOrManager && !isAdminOrDirector) {
+        const teamIds = await storage.getTeamMemberIds(viewer.id, viewer.organizationId);
+        isInChain = teamIds.includes(lmId);
+      }
+      if (!isSelfOrManager && !isAdminOrDirector && !isInChain) return res.status(403).json({ error: "Access denied" });
       if (!managerId) return res.json({ milestones: [] });
       const row = await storage.getDevelopmentGoals(managerId, lmId);
       if (!row) return res.json({ milestones: [] });
@@ -10406,11 +10408,16 @@ Respond with valid JSON only:
       }
 
       // LM can see their own checks; managers (anyone in chain above) can also see
-      const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-      const isManagerOf = teamIds.includes(lmUserId);
+      // Admins and directors (who oversee all org LMs) also get read access
       const isSelf = user.id === lmUserId;
       const isAdmin = user.role === "admin";
-      if (!isSelf && !isManagerOf && !isAdmin) {
+      const isDirectorRole = user.role === "director" || user.role === "sales_director";
+      let isManagerOf = false;
+      if (!isSelf && !isAdmin && !isDirectorRole) {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        isManagerOf = teamIds.includes(lmUserId);
+      }
+      if (!isSelf && !isManagerOf && !isAdmin && !isDirectorRole) {
         return res.status(403).json({ error: "Forbidden" });
       }
 
