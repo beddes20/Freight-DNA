@@ -160,6 +160,7 @@ export interface IStorage {
   /** Route-level company lookup — scoped to org, returns undefined if not in org. */
   getCompanyInOrg(id: string, organizationId: string): Promise<Company | undefined>;
   createCompany(company: InsertCompany): Promise<Company>;
+  bulkCreateCompanies(companiesList: InsertCompany[]): Promise<Company[]>;
   /** Route-level update — scoped to org to prevent cross-tenant writes. */
   updateCompany(id: string, organizationId: string, company: Partial<InsertCompany>): Promise<Company | undefined>;
   deleteCompany(id: string, organizationId: string): Promise<boolean>;
@@ -504,6 +505,11 @@ export class DatabaseStorage implements IStorage {
   async createCompany(company: InsertCompany): Promise<Company> {
     const [created] = await db.insert(companies).values(company).returning();
     return created;
+  }
+
+  async bulkCreateCompanies(companiesList: InsertCompany[]): Promise<Company[]> {
+    if (companiesList.length === 0) return [];
+    return db.insert(companies).values(companiesList).returning();
   }
 
   async updateCompany(id: string, organizationId: string, company: Partial<InsertCompany>): Promise<Company | undefined> {

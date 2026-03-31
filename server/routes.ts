@@ -992,6 +992,172 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
+  // ── Import templates download ────────────────────────────────────────────
+  app.get("/api/import-templates/:type", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+
+      const type = req.params.type as string;
+      const XLSX = await import("xlsx");
+      let wb: any;
+
+      if (type === "users") {
+        const ws = XLSX.utils.aoa_to_sheet([
+          ["display_name", "Email", "title"],
+          ["Jane Smith", "jane@example.com", "Account Manager"],
+          ["John Doe", "john@example.com", "National Account Manager"],
+        ]);
+        wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Users");
+      } else if (type === "companies") {
+        const ws = XLSX.utils.aoa_to_sheet([
+          ["company_name", "industry", "website", "shipping_modes", "estimated_freight_spend", "assigned_rep_email", "account_summary", "financial_alias"],
+          ["Acme Corp", "Manufacturing", "https://acme.com", "FTL,LTL", "500000", "rep@example.com", "Key account in Midwest", "ACME"],
+          ["Beta Logistics", "Logistics", "https://beta.com", "Drayage,IMDL", "250000", "", "", "BETA"],
+        ]);
+        wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Companies");
+      } else if (type === "contacts") {
+        const ws = XLSX.utils.aoa_to_sheet([
+          ["contact_name", "company_name", "title", "email", "phone", "relationship_base"],
+          ["Alice Johnson", "Acme Corp", "VP of Logistics", "alice@acme.com", "555-1234", "2nd Base"],
+          ["Bob Williams", "Beta Logistics", "Director of Ops", "bob@beta.com", "555-5678", "1st Base"],
+        ]);
+        wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Contacts");
+      } else {
+        return res.status(400).json({ error: "Invalid template type" });
+      }
+
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${type}-import-template.xlsx"`);
+      res.send(buf);
+    } catch (error) {
+      console.error("Template download error:", error);
+      res.status(500).json({ error: "Failed to generate template" });
+    }
+  });
+
+  // ── Companies bulk import ────────────────────────────────────────────────
+  app.post("/api/companies/bulk-import", upload.single("file"), async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const XLSX = await import("xlsx");
+      const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
+
+      // Build a username→userId map for rep assignment
+      const orgUsers = await storage.getUsers(req.session.organizationId!);
+      const repMap = new Map<string, string>(orgUsers.map(u => [u.username.toLowerCase(), u.id]));
+
+      const created: string[] = [];
+      const skipped: string[] = [];
+      const errors: string[] = [];
+      const toInsert: any[] = [];
+
+      // Pre-load existing company names to detect duplicates
+      const existingCompanies = await storage.getCompanies(req.session.organizationId!);
+      const existingNames = new Set(existingCompanies.map(c => c.name.toLowerCase().trim()));
+
+      for (const row of rows) {
+        const name = String(row["company_name"] || "").trim();
+        if (!name) { errors.push("Skipped row — missing company_name"); continue; }
+        if (existingNames.has(name.toLowerCase())) { skipped.push(name); continue; }
+
+        const rawModes = String(row["shipping_modes"] || "").trim();
+        const shippingModes = rawModes ? rawModes.split(",").map((m: string) => m.trim()).filter(Boolean) : null;
+
+        const assignedRepEmail = String(row["assigned_rep_email"] || "").trim().toLowerCase();
+        const assignedTo = assignedRepEmail ? (repMap.get(assignedRepEmail) ?? null) : null;
+
+        const rawSpend = String(row["estimated_freight_spend"] || "").replace(/[^0-9.]/g, "");
+        const estimatedFreightSpend = rawSpend ? rawSpend : null;
+
+        toInsert.push({
+          organizationId: req.session.organizationId!,
+          name,
+          industry: String(row["industry"] || "").trim() || null,
+          website: String(row["website"] || "").trim() || null,
+          accountSummary: String(row["account_summary"] || "").trim() || null,
+          financialAlias: String(row["financial_alias"] || "").trim() || null,
+          assignedTo,
+          shippingModes,
+          estimatedFreightSpend,
+        });
+        existingNames.add(name.toLowerCase());
+        created.push(name);
+      }
+
+      if (toInsert.length > 0) await storage.bulkCreateCompanies(toInsert);
+
+      res.json({ created, skipped, errors, total: rows.length });
+    } catch (error) {
+      console.error("Company bulk import error:", error);
+      res.status(500).json({ error: "Failed to import companies" });
+    }
+  });
+
+  // ── Contacts global bulk import ──────────────────────────────────────────
+  app.post("/api/contacts/bulk-import", upload.single("file"), async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const XLSX = await import("xlsx");
+      const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
+
+      // Build company name → id map (org-scoped)
+      const orgCompanies = await storage.getCompanies(req.session.organizationId!);
+      const companyMap = new Map<string, string>(orgCompanies.map(c => [c.name.toLowerCase().trim(), c.id]));
+
+      const created: string[] = [];
+      const errors: string[] = [];
+      const toInsert: any[] = [];
+      const now = new Date().toISOString();
+
+      for (const row of rows) {
+        const contactName = String(row["contact_name"] || "").trim();
+        const companyName = String(row["company_name"] || "").trim();
+        if (!contactName) { errors.push(`Skipped row — missing contact_name`); continue; }
+        if (!companyName) { errors.push(`${contactName} — missing company_name`); continue; }
+
+        const companyId = companyMap.get(companyName.toLowerCase());
+        if (!companyId) { errors.push(`${contactName} — company "${companyName}" not found`); continue; }
+
+        toInsert.push({
+          companyId,
+          name: contactName,
+          title: String(row["title"] || "").trim() || null,
+          email: String(row["email"] || "").trim() || null,
+          phone: String(row["phone"] || "").trim() || null,
+          relationshipBase: String(row["relationship_base"] || "").trim() || null,
+          createdAt: now,
+          createdBy: currentUser.id,
+        });
+        created.push(`${contactName} (${companyName})`);
+      }
+
+      if (toInsert.length > 0) await storage.bulkCreateContacts(toInsert);
+
+      res.json({ created, errors, total: rows.length });
+    } catch (error) {
+      console.error("Contact bulk import error:", error);
+      res.status(500).json({ error: "Failed to import contacts" });
+    }
+  });
+
   app.patch("/api/users/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);

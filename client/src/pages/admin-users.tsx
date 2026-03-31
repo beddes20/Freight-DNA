@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink, Building2, Contact } from "lucide-react";
 import type { User } from "@shared/schema";
 
 interface PromotionCriteria {
@@ -586,9 +586,19 @@ function BulkImportDialog() {
           </div>
         ) : (
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Upload an Excel file with columns: <strong>display_name</strong>, <strong>Email</strong>, <strong>title</strong>. Roles are mapped automatically from the title column.
-            </p>
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-sm text-muted-foreground">
+                Upload an Excel file with columns: <strong>display_name</strong>, <strong>Email</strong>, <strong>title</strong>. Roles are mapped automatically from the title column.
+              </p>
+              <a
+                href="/api/import-templates/users"
+                download
+                className="shrink-0 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                data-testid="link-download-users-template"
+              >
+                <Download className="h-3.5 w-3.5" /> Template
+              </a>
+            </div>
             <div className="space-y-2">
               <Label>Excel File (.xlsx)</Label>
               <input
@@ -627,6 +637,266 @@ function BulkImportDialog() {
             >
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {loading ? "Importing..." : `Import Users`}
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Bulk Import Companies ─────────────────────────────────────────────────────
+
+function BulkImportCompaniesDialog() {
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<{ created: string[]; skipped: string[]; errors: string[]; total: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  const handleImport = async () => {
+    if (!file) return;
+    setLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/companies/bulk-import", { method: "POST", body: fd, credentials: "include" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Import failed");
+      setResult(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+    } catch (err: any) {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClose = () => {
+    setOpen(false);
+    setFile(null);
+    setResult(null);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); else setOpen(true); }}>
+      <DialogTrigger asChild>
+        <Button variant="outline" data-testid="button-bulk-import-companies">
+          <Building2 className="w-4 h-4 mr-2" /> Import Companies
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Bulk Import Companies</DialogTitle>
+        </DialogHeader>
+        {result ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="rounded-lg bg-green-50 dark:bg-green-950 p-3">
+                <p className="text-2xl font-bold text-green-600">{result.created.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">Created</p>
+              </div>
+              <div className="rounded-lg bg-amber-50 dark:bg-amber-950 p-3">
+                <p className="text-2xl font-bold text-amber-600">{result.skipped.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">Already Exist</p>
+              </div>
+              <div className="rounded-lg bg-red-50 dark:bg-red-950 p-3">
+                <p className="text-2xl font-bold text-red-600">{result.errors.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">Errors</p>
+              </div>
+            </div>
+            {result.created.length > 0 && (
+              <div>
+                <p className="text-sm font-medium mb-2 flex items-center gap-1"><CheckCircle2 className="w-4 h-4 text-green-500" /> Created</p>
+                <div className="max-h-40 overflow-y-auto text-sm space-y-1">
+                  {result.created.map(n => <p key={n} className="text-muted-foreground">{n}</p>)}
+                </div>
+              </div>
+            )}
+            {result.skipped.length > 0 && (
+              <div>
+                <p className="text-sm font-medium mb-2 flex items-center gap-1"><SkipForward className="w-4 h-4 text-amber-500" /> Skipped (already exist)</p>
+                <div className="max-h-32 overflow-y-auto text-sm space-y-1">
+                  {result.skipped.map(n => <p key={n} className="text-muted-foreground">{n}</p>)}
+                </div>
+              </div>
+            )}
+            {result.errors.length > 0 && (
+              <div>
+                <p className="text-sm font-medium mb-2 flex items-center gap-1"><XCircle className="w-4 h-4 text-red-500" /> Errors</p>
+                <div className="max-h-32 overflow-y-auto text-sm space-y-1">
+                  {result.errors.map((e, i) => <p key={i} className="text-muted-foreground">{e}</p>)}
+                </div>
+              </div>
+            )}
+            <Button className="w-full" onClick={handleClose}>Done</Button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-sm text-muted-foreground">
+                Upload an Excel file to create customer accounts in bulk. Duplicate company names are skipped automatically.
+              </p>
+              <a
+                href="/api/import-templates/companies"
+                download
+                className="shrink-0 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                data-testid="link-download-companies-template"
+              >
+                <Download className="h-3.5 w-3.5" /> Template
+              </a>
+            </div>
+            <div className="bg-muted/40 rounded-lg p-3 text-xs text-muted-foreground space-y-1">
+              <p className="font-medium text-foreground mb-1">Required &amp; optional columns:</p>
+              <p><strong>company_name</strong> (required), industry, website</p>
+              <p>shipping_modes (comma-separated: FTL,LTL,Drayage,IMDL)</p>
+              <p>estimated_freight_spend, assigned_rep_email, account_summary, financial_alias</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Excel File (.xlsx)</Label>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                data-testid="input-bulk-import-companies-file"
+                className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-950 dark:file:text-blue-300"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+              />
+            </div>
+            <Button
+              className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
+              disabled={!file || loading}
+              onClick={handleImport}
+              data-testid="button-confirm-bulk-import-companies"
+            >
+              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {loading ? "Importing..." : "Import Companies"}
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Bulk Import Contacts ──────────────────────────────────────────────────────
+
+function BulkImportContactsDialog() {
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<{ created: string[]; errors: string[]; total: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  const handleImport = async () => {
+    if (!file) return;
+    setLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/contacts/bulk-import", { method: "POST", body: fd, credentials: "include" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Import failed");
+      setResult(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
+    } catch (err: any) {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClose = () => {
+    setOpen(false);
+    setFile(null);
+    setResult(null);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); else setOpen(true); }}>
+      <DialogTrigger asChild>
+        <Button variant="outline" data-testid="button-bulk-import-contacts">
+          <Contact className="w-4 h-4 mr-2" /> Import Contacts
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Bulk Import Contacts</DialogTitle>
+        </DialogHeader>
+        {result ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-lg bg-green-50 dark:bg-green-950 p-3">
+                <p className="text-2xl font-bold text-green-600">{result.created.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">Created</p>
+              </div>
+              <div className="rounded-lg bg-red-50 dark:bg-red-950 p-3">
+                <p className="text-2xl font-bold text-red-600">{result.errors.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">Errors</p>
+              </div>
+            </div>
+            {result.created.length > 0 && (
+              <div>
+                <p className="text-sm font-medium mb-2 flex items-center gap-1"><CheckCircle2 className="w-4 h-4 text-green-500" /> Created</p>
+                <div className="max-h-48 overflow-y-auto text-sm space-y-1">
+                  {result.created.map((n, i) => <p key={i} className="text-muted-foreground">{n}</p>)}
+                </div>
+              </div>
+            )}
+            {result.errors.length > 0 && (
+              <div>
+                <p className="text-sm font-medium mb-2 flex items-center gap-1"><XCircle className="w-4 h-4 text-red-500" /> Errors</p>
+                <div className="max-h-32 overflow-y-auto text-sm space-y-1">
+                  {result.errors.map((e, i) => <p key={i} className="text-muted-foreground">{e}</p>)}
+                </div>
+              </div>
+            )}
+            <Button className="w-full" onClick={handleClose}>Done</Button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-sm text-muted-foreground">
+                Upload an Excel file to create contacts across all companies. Contacts are matched to companies by name — import companies first.
+              </p>
+              <a
+                href="/api/import-templates/contacts"
+                download
+                className="shrink-0 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                data-testid="link-download-contacts-template"
+              >
+                <Download className="h-3.5 w-3.5" /> Template
+              </a>
+            </div>
+            <div className="bg-muted/40 rounded-lg p-3 text-xs text-muted-foreground space-y-1">
+              <p className="font-medium text-foreground mb-1">Required &amp; optional columns:</p>
+              <p><strong>contact_name</strong>, <strong>company_name</strong> (required — must match exactly)</p>
+              <p>title, email, phone, relationship_base</p>
+              <p className="text-amber-600 dark:text-amber-400">Tip: relationship_base values — 1st Base, 2nd Base, 3rd Base, Home Run</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Excel File (.xlsx)</Label>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                data-testid="input-bulk-import-contacts-file"
+                className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-950 dark:file:text-blue-300"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+              />
+            </div>
+            <Button
+              className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
+              disabled={!file || loading}
+              onClick={handleImport}
+              data-testid="button-confirm-bulk-import-contacts"
+            >
+              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {loading ? "Importing..." : "Import Contacts"}
             </Button>
           </div>
         )}
@@ -935,7 +1205,13 @@ export default function AdminUsers() {
             </Button>
           </div>
 
-          {currentUser?.role === "admin" && <BulkImportDialog />}
+          {currentUser?.role === "admin" && (
+            <>
+              <BulkImportDialog />
+              <BulkImportCompaniesDialog />
+              <BulkImportContactsDialog />
+            </>
+          )}
           <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
             <DialogTrigger asChild>
               <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" data-testid="button-add-user">
