@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Truck, Route, ChevronDown, ChevronUp, Download, Circle, Phone, MapPin, TrendingUp, Calendar } from "lucide-react";
+import { Search, Truck, Route, ChevronDown, ChevronUp, Download, Circle, Phone, MapPin, TrendingUp, Calendar, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -95,8 +95,53 @@ function DistancePill({ miles }: { miles: number | null }) {
   );
 }
 
+type SortCol = "loads" | "pct" | "avgCarrierPay" | "avgMarginPerLoad" | "lastUsed" | "name";
+type SortDir = "asc" | "desc";
+
+function SortIcon({ col, sortCol, sortDir }: { col: SortCol; sortCol: SortCol; sortDir: SortDir }) {
+  if (col !== sortCol) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40 inline-block" />;
+  return sortDir === "asc"
+    ? <ArrowUp className="w-3 h-3 ml-1 text-foreground inline-block" />
+    : <ArrowDown className="w-3 h-3 ml-1 text-foreground inline-block" />;
+}
+
+function sortCarriers(carriers: CarrierEntry[], col: SortCol, dir: SortDir): CarrierEntry[] {
+  return [...carriers].sort((a, b) => {
+    let av: any, bv: any;
+    if (col === "lastUsed") {
+      av = a.lastUsed ?? "";
+      bv = b.lastUsed ?? "";
+    } else if (col === "name") {
+      av = a.name.toLowerCase();
+      bv = b.name.toLowerCase();
+    } else {
+      av = a[col] ?? -Infinity;
+      bv = b[col] ?? -Infinity;
+    }
+    if (av < bv) return dir === "asc" ? -1 : 1;
+    if (av > bv) return dir === "asc" ? 1 : -1;
+    return 0;
+  });
+}
+
 function CorridorCard({ corridor }: { corridor: CorridorResult }) {
   const [expanded, setExpanded] = useState(true);
+  const [sortCol, setSortCol] = useState<SortCol>("loads");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  function handleSort(col: SortCol) {
+    if (col === sortCol) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortCol(col);
+      setSortDir(col === "name" || col === "lastUsed" ? "asc" : "desc");
+    }
+  }
+
+  const sorted = sortCarriers(corridor.carriers, sortCol, sortDir);
+
+  const thClass = (col: SortCol, align: "left" | "right" = "right") =>
+    `${align === "right" ? "text-right" : "text-left"} px-4 py-2 font-medium cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap ${sortCol === col ? "text-foreground" : ""}`;
 
   return (
     <Card className="overflow-hidden" data-testid={`card-corridor-${corridor.corridorKey.replace(/\|/g, "-")}`}>
@@ -152,23 +197,59 @@ function CorridorCard({ corridor }: { corridor: CorridorResult }) {
         <div className="border-t border-border">
           <div className="px-5 py-2.5 bg-muted/30 flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
             <Phone className="w-3.5 h-3.5" />
-            Carrier Call List — sorted by load count
+            Carrier Call List — click any column to sort
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-muted/20 text-muted-foreground text-xs uppercase tracking-wide border-t border-border">
                   <th className="text-left px-5 py-2 font-medium">#</th>
-                  <th className="text-left px-4 py-2 font-medium">Carrier</th>
-                  <th className="text-right px-4 py-2 font-medium">Loads</th>
-                  <th className="text-right px-4 py-2 font-medium">Share</th>
-                  <th className="text-right px-4 py-2 font-medium">Avg Carrier Pay</th>
-                  <th className="text-right px-4 py-2 font-medium">Avg Margin</th>
-                  <th className="text-right px-5 py-2 font-medium">Last Used</th>
+                  <th
+                    className={thClass("name", "left")}
+                    onClick={e => { e.stopPropagation(); handleSort("name"); }}
+                    data-testid="th-carrier-name"
+                  >
+                    Carrier<SortIcon col="name" sortCol={sortCol} sortDir={sortDir} />
+                  </th>
+                  <th
+                    className={thClass("loads")}
+                    onClick={e => { e.stopPropagation(); handleSort("loads"); }}
+                    data-testid="th-carrier-loads"
+                  >
+                    Loads<SortIcon col="loads" sortCol={sortCol} sortDir={sortDir} />
+                  </th>
+                  <th
+                    className={thClass("pct")}
+                    onClick={e => { e.stopPropagation(); handleSort("pct"); }}
+                    data-testid="th-carrier-share"
+                  >
+                    Share<SortIcon col="pct" sortCol={sortCol} sortDir={sortDir} />
+                  </th>
+                  <th
+                    className={thClass("avgCarrierPay")}
+                    onClick={e => { e.stopPropagation(); handleSort("avgCarrierPay"); }}
+                    data-testid="th-carrier-pay"
+                  >
+                    Avg Carrier Pay<SortIcon col="avgCarrierPay" sortCol={sortCol} sortDir={sortDir} />
+                  </th>
+                  <th
+                    className={thClass("avgMarginPerLoad")}
+                    onClick={e => { e.stopPropagation(); handleSort("avgMarginPerLoad"); }}
+                    data-testid="th-carrier-margin"
+                  >
+                    Avg Margin<SortIcon col="avgMarginPerLoad" sortCol={sortCol} sortDir={sortDir} />
+                  </th>
+                  <th
+                    className={`${thClass("lastUsed")} pr-5`}
+                    onClick={e => { e.stopPropagation(); handleSort("lastUsed"); }}
+                    data-testid="th-carrier-last-used"
+                  >
+                    Last Used<SortIcon col="lastUsed" sortCol={sortCol} sortDir={sortDir} />
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {corridor.carriers.map((carrier, idx) => (
+                {sorted.map((carrier, idx) => (
                   <tr
                     key={carrier.name}
                     className="border-t border-border/50 hover:bg-muted/20 transition-colors"
