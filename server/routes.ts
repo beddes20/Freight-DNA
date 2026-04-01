@@ -5238,7 +5238,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           corridor.monthLoads.set(mk, (corridor.monthLoads.get(mk) || 0) + 1);
 
           // track per-carrier stats
-          const carrierPayVal = parseFloat(String(row[cols.carrierPay] || row[cols.freightCharge] || 0)) || 0;
+          const rawCarrierPay = String(row[cols.carrierPay] || row[cols.freightCharge] || "").replace(/[^0-9.]/g, "");
+          const carrierPayVal = rawCarrierPay ? parseFloat(rawCarrierPay) || 0 : 0;
           if (!corridor.carriers.has(carrier)) corridor.carriers.set(carrier, { loads: 0, totalMargin: 0, totalCarrierPay: 0, lastDate: null });
           const cs = corridor.carriers.get(carrier)!;
           cs.loads++;
