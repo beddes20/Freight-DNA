@@ -1836,6 +1836,85 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
+  // Cross-RFP lane search: search origin/destination across all uploaded RFP lane data
+  app.get("/api/rfps/lane-search", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+
+      const originQuery = String(req.query.origin || "").trim().toLowerCase();
+      const destQuery = String(req.query.destination || "").trim().toLowerCase();
+
+      if (!originQuery && !destQuery) {
+        return res.status(400).json({ error: "Provide at least an origin or destination to search" });
+      }
+
+      // Get all visible RFPs for this org
+      let rfpList = await storage.getRfps();
+      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+      rfpList = rfpList.filter(r => orgCompanyIds.has(r.companyId));
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      if (visibleIds !== null) {
+        rfpList = rfpList.filter(r => visibleIds.includes(r.companyId));
+      }
+
+      // Build a company name lookup
+      const companyMap = new Map(orgCompanies.map(c => [c.id, c.name]));
+
+      // Search through each RFP's stored lane data
+      const results: {
+        companyId: string;
+        companyName: string;
+        rfpId: string;
+        rfpTitle: string;
+        rfpStatus: string;
+        rfpDueDate: string | null;
+        matchingLanes: any[];
+        totalMatchVolume: number;
+      }[] = [];
+
+      for (const rfp of rfpList) {
+        const fd = rfp.fileData as { rows?: any[]; highVolumeLanes?: any[] } | null;
+        if (!fd) continue;
+
+        const lanes: any[] = fd.highVolumeLanes || [];
+        if (!lanes.length) continue;
+
+        const matchingLanes = lanes.filter(lane => {
+          const originText = [lane.origin || "", lane.originState || "", lane.lane || ""].join(" ").toLowerCase();
+          const destText = [lane.destination || "", lane.destinationState || "", lane.lane || ""].join(" ").toLowerCase();
+
+          const originMatch = !originQuery || originText.includes(originQuery);
+          const destMatch = !destQuery || destText.includes(destQuery);
+          return originMatch && destMatch;
+        });
+
+        if (matchingLanes.length === 0) continue;
+
+        const totalMatchVolume = matchingLanes.reduce((sum, l) => sum + (l.volume || 0), 0);
+        results.push({
+          companyId: rfp.companyId,
+          companyName: companyMap.get(rfp.companyId) || "Unknown",
+          rfpId: rfp.id,
+          rfpTitle: rfp.title,
+          rfpStatus: rfp.status,
+          rfpDueDate: rfp.dueDate || null,
+          matchingLanes,
+          totalMatchVolume,
+        });
+      }
+
+      // Sort by total matching volume descending
+      results.sort((a, b) => b.totalMatchVolume - a.totalMatchVolume);
+
+      res.json({ results, originQuery, destQuery });
+    } catch (error) {
+      console.error("Lane search error:", error);
+      res.status(500).json({ error: "Lane search failed" });
+    }
+  });
+
   app.get("/api/rfps", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
