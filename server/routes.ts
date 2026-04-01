@@ -5191,12 +5191,26 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!uploads.length) return res.json({ corridors: [], originQuery, destQuery, radiusMiles, minLoadsPerMonth, originGeocoded: !!originCenter, destGeocoded: !!destCenter });
 
       // ─── Aggregate: corridor → month → carrier → load count ────────────────
+      function normalizeModeServer(raw: string): string {
+        const t = (raw || "").trim().toLowerCase();
+        if (!t) return "";
+        if (/^(v|van|dry.?van|dv|dryvan)$/.test(t)) return "Van";
+        if (/^(r|reefer|refrigerated|temp|temperature|temp.?ctrl)$/.test(t)) return "Reefer";
+        if (/^(f|flatbed|fb|flat|step.?deck|rgn|lowboy)$/.test(t)) return "Flatbed";
+        if (/^ltl$/.test(t)) return "LTL";
+        if (/^(drayage|dray)$/.test(t)) return "Drayage";
+        if (/^(imdl|intermodal|im|rail)$/.test(t)) return "IMDL";
+        const s = raw.trim();
+        return s.charAt(0).toUpperCase() + s.slice(1);
+      }
+
       type CarrierStats = { loads: number; totalMargin: number; totalCarrierPay: number; lastDate: string | null; lastShipDate: string | null };
       type CorridorData = {
         originCity: string; originState: string;
         destCity: string;   destState: string;
-        monthLoads: Map<string, number>;           // monthKey → load count
-        carriers: Map<string, CarrierStats>;       // carrier name → stats
+        mode: string;
+        monthLoads: Map<string, number>;
+        carriers: Map<string, CarrierStats>;
       };
       const corridorMap = new Map<string, CorridorData>();
 
@@ -5215,18 +5229,21 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           const dstCity   = String(row[cols.consigneeCity]  || row[cols.destination]       || "").trim();
           const dstState  = String(row[cols.consigneeState] || row[cols.destinationState]  || "").trim().toUpperCase();
           const carrier   = String(row[cols.carrier]        || "").trim();
+          const mode      = normalizeModeServer(String(row[cols.orderType] || "").trim());
 
           if (!origCity && !origState) continue;
           if (!dstCity  && !dstState)  continue;
           if (!carrier) continue;
+          if (!mode) continue;  // skip rows with no mode
 
           const { monthKey, margin } = parseHistoricalRow(row, cols);
 
-          const key = `${origCity.toLowerCase()}|${origState}|${dstCity.toLowerCase()}|${dstState}`;
+          const key = `${origCity.toLowerCase()}|${origState}|${dstCity.toLowerCase()}|${dstState}|${mode}`;
           if (!corridorMap.has(key)) {
             corridorMap.set(key, {
               originCity: origCity, originState: origState,
               destCity: dstCity,   destState: dstState,
+              mode,
               monthLoads: new Map(),
               carriers: new Map(),
             });
@@ -5301,9 +5318,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           .sort((a, b) => b.loads - a.loads);
 
         results.push({
-          corridorKey: `${corridor.originCity}|${corridor.originState}|${corridor.destCity}|${corridor.destState}`,
+          corridorKey: `${corridor.originCity}|${corridor.originState}|${corridor.destCity}|${corridor.destState}|${corridor.mode}`,
           originCity: corridor.originCity, originState: corridor.originState,
           destCity: corridor.destCity,     destState: corridor.destState,
+          mode: corridor.mode,
           originLabel, destLabel,
           corridorLabel: `${originLabel} → ${destLabel}`,
           avgLoadsPerMonth: Math.round(avgLoadsPerMonth * 10) / 10,
