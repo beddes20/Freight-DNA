@@ -1374,6 +1374,40 @@ RULES FOR YOUR RESPONSES:
     return 0;
   }
 
+  // ─── Easter Egg System ──────────────────────────────────────────────────────
+  const EGG_CONFIGS: Record<string, { title: string; message: string }> = {
+    first_meaningful_2: {
+      title: "🥚 Easter Egg Unlocked — First Meaningful!",
+      message: "LFG! You're the first rep this month to rack up 2 meaningful conversations. The bar has officially been set. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+    },
+    first_nominator: {
+      title: "🥚 Easter Egg Unlocked — First Nominator!",
+      message: "LFG! You're the first person this month to nominate a teammate. Leadership is lifting others up. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+    },
+    first_1on1_close: {
+      title: "🥚 Easter Egg Unlocked — First 1:1 Finisher!",
+      message: "LFG! You're the first person this month to close out a full 1:1 session. You just set the standard. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+    },
+    first_relationship_mover: {
+      title: "🥚 Easter Egg Unlocked — First Relationship Mover!",
+      message: "LFG! You're the first rep this month to move two contacts up the relationship ladder. Down, not across. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+    },
+    first_opportunity_4: {
+      title: "🥚 Easter Egg Unlocked — First Opportunity Logger!",
+      message: "LFG! You're the first rep this month to log 4 opportunities. Hunters find the bag. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+    },
+  };
+
+  async function tryClaimEasterEgg(type: string, userId: string): Promise<{ type: string; title: string; message: string } | null> {
+    const config = EGG_CONFIGS[type];
+    if (!config) return null;
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const claimed = await storage.checkAndClaimEasterEgg(type, month, userId);
+    if (!claimed) return null;
+    return { type, ...config };
+  }
+
   async function fanOutCelebration(type: "new_account" | "new_contact" | "base_advanced", title: string, body: string, link: string, relatedId: string, actorId: string, organizationId: string) {
     try {
       const allUsers = await storage.getUsers(organizationId);
@@ -1707,10 +1741,10 @@ RULES FOR YOUR RESPONSES:
         return res.status(400).json({ error: parsed.error.message });
       }
       const baseChanged = parsed.data.relationshipBase && parsed.data.relationshipBase !== existing.relationshipBase;
+      const oldRank = getBaseRank(existing.relationshipBase);
+      const newRank = baseChanged ? getBaseRank(parsed.data.relationshipBase) : 0;
       if (baseChanged) {
         parsed.data.baseAdvancedAt = new Date().toISOString().split("T")[0];
-        const oldRank = getBaseRank(existing.relationshipBase);
-        const newRank = getBaseRank(parsed.data.relationshipBase);
         if (newRank > oldRank && newRank > 0) {
           const _orgIdForFanOut2 = req.session.organizationId!;
           storage.getCompanyInOrg(existing.companyId, _orgIdForFanOut2).then(co => {
@@ -1734,7 +1768,14 @@ RULES FOR YOUR RESPONSES:
         ).catch(() => {});
       }
       const contact = await storage.updateContact((req.params.id as string), parsed.data);
-      res.json(contact);
+      let easterEgg = null;
+      if (newRank > oldRank && newRank > 0) {
+        const now2 = new Date();
+        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
+        const moved = await storage.countRelationshipsMovedThisMonth(currentUser.id, monthStart);
+        if (moved >= 2) easterEgg = await tryClaimEasterEgg("first_relationship_mover", currentUser.id);
+      }
+      res.json({ ...contact, easterEgg });
     } catch (error) {
       console.error("Error updating contact:", error);
       res.status(500).json({ error: "Failed to update contact" });
@@ -3319,7 +3360,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         });
       }
 
-      res.status(201).json(log);
+      let easterEgg = null;
+      {
+        const now2 = new Date();
+        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
+        const count = await storage.countOpportunityLogsThisMonth(user.id, monthStart);
+        if (count >= 4) easterEgg = await tryClaimEasterEgg("first_opportunity_4", user.id);
+      }
+      res.status(201).json({ ...log, easterEgg });
     } catch (error) {
       res.status(500).json({ error: "Failed to create opportunity log" });
     }
@@ -3726,7 +3774,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           console.error("[1on1] summary email error:", emailErr);
         }
       }
-      res.json(newSession);
+      const easterEgg = await tryClaimEasterEgg("first_1on1_close", user.id);
+      res.json({ ...newSession, easterEgg });
     } catch (error) {
       res.status(500).json({ error: "Failed to close session" });
     }
@@ -7687,7 +7736,14 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
       cacheInvalidatePrefix(`cold-contacts:${user.id}`);
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
-      res.json({ ...tp, aiInsights, autoTask });
+      let easterEgg = null;
+      if (tp.isMeaningful) {
+        const now2 = new Date();
+        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
+        const count = await storage.countMeaningfulThisMonth(user.id, monthStart);
+        if (count >= 2) easterEgg = await tryClaimEasterEgg("first_meaningful_2", user.id);
+      }
+      res.json({ ...tp, aiInsights, autoTask, easterEgg });
     } catch (error) {
       console.error("Failed to create touchpoint:", error);
       res.status(500).json({ error: "Failed to create touchpoint" });
@@ -10160,7 +10216,8 @@ Respond with valid JSON only:
         }
       })();
 
-      res.json(nomination);
+      const easterEgg = await tryClaimEasterEgg("first_nominator", user.id);
+      res.json({ ...nomination, easterEgg });
     } catch (err) {
       res.status(500).json({ error: "Failed to create nomination" });
     }
@@ -10286,7 +10343,14 @@ Respond with valid JSON only:
           console.error("Failed to create auto follow-up task for company touchpoint:", taskError);
         }
       }
-      res.json({ ...tp, aiInsights, autoTask });
+      let easterEgg = null;
+      if (tp.isMeaningful) {
+        const now2 = new Date();
+        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
+        const count = await storage.countMeaningfulThisMonth(user.id, monthStart);
+        if (count >= 2) easterEgg = await tryClaimEasterEgg("first_meaningful_2", user.id);
+      }
+      res.json({ ...tp, aiInsights, autoTask, easterEgg });
     } catch (error) {
       console.error("Failed to log touchpoint (company route):", error);
       res.status(500).json({ error: "Failed to log touchpoint" });
@@ -10330,7 +10394,14 @@ Respond with valid JSON only:
           console.error("Failed to create auto follow-up task for touch-log:", taskError);
         }
       }
-      res.json({ ...tp, aiInsights, autoTask });
+      let easterEgg = null;
+      if (tp.isMeaningful) {
+        const now2 = new Date();
+        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
+        const count = await storage.countMeaningfulThisMonth(user.id, monthStart);
+        if (count >= 2) easterEgg = await tryClaimEasterEgg("first_meaningful_2", user.id);
+      }
+      res.json({ ...tp, aiInsights, autoTask, easterEgg });
     } catch (error) {
       console.error("Failed to log touch:", error);
       res.status(500).json({ error: "Failed to log touch" });

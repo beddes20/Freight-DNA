@@ -691,4 +691,25 @@ export async function runMigrations() {
   } finally {
     clientStripe.release();
   }
+
+  // Easter egg winners table
+  const clientEgg = await pool.connect();
+  try {
+    await clientEgg.query(`
+      CREATE TABLE IF NOT EXISTS easter_egg_winners (
+        id serial PRIMARY KEY,
+        type varchar(64) NOT NULL,
+        month varchar(7) NOT NULL,
+        winner_id varchar(255) NOT NULL,
+        won_at timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT easter_egg_winners_unique UNIQUE (type, month)
+      )
+    `);
+    await clientEgg.query(`CREATE INDEX IF NOT EXISTS idx_easter_egg_winners_month ON easter_egg_winners(month)`);
+    console.log("[migrations] easter_egg_winners table ensured");
+  } catch (err) {
+    console.error("[migrations] easter_egg_winners error:", err);
+  } finally {
+    clientEgg.release();
+  }
 }

@@ -394,6 +394,12 @@ export interface IStorage {
     currentPeriodEnd?: Date | null;
   }): Promise<Organization | undefined>;
   getOrganizationByStripeCustomerId(stripeCustomerId: string): Promise<Organization | undefined>;
+
+  // Easter eggs
+  checkAndClaimEasterEgg(type: string, month: string, winnerId: string): Promise<boolean>;
+  countMeaningfulThisMonth(userId: string, monthStart: string): Promise<number>;
+  countOpportunityLogsThisMonth(userId: string, monthStart: string): Promise<number>;
+  countRelationshipsMovedThisMonth(userId: string, monthStart: string): Promise<number>;
 }
 
 const pool = new Pool({
@@ -2323,6 +2329,60 @@ export class DatabaseStorage implements IStorage {
   async getOrganizationByStripeCustomerId(stripeCustomerId: string): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.stripeCustomerId, stripeCustomerId));
     return org;
+  }
+
+  async checkAndClaimEasterEgg(type: string, month: string, winnerId: string): Promise<boolean> {
+    try {
+      const result = await pool.query(
+        `INSERT INTO easter_egg_winners (type, month, winner_id, won_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT ON CONSTRAINT easter_egg_winners_unique DO NOTHING
+         RETURNING id`,
+        [type, month, winnerId]
+      );
+      return (result.rowCount ?? 0) > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  async countMeaningfulThisMonth(userId: string, monthStart: string): Promise<number> {
+    try {
+      const result = await pool.query(
+        `SELECT COUNT(*) as cnt FROM touchpoints
+         WHERE logged_by_id = $1 AND date >= $2 AND is_meaningful = true`,
+        [userId, monthStart]
+      );
+      return parseInt(result.rows[0]?.cnt ?? "0", 10);
+    } catch {
+      return 0;
+    }
+  }
+
+  async countOpportunityLogsThisMonth(userId: string, monthStart: string): Promise<number> {
+    try {
+      const result = await pool.query(
+        `SELECT COUNT(*) as cnt FROM opportunity_logs
+         WHERE rep_id = $1 AND logged_at >= $2`,
+        [userId, monthStart]
+      );
+      return parseInt(result.rows[0]?.cnt ?? "0", 10);
+    } catch {
+      return 0;
+    }
+  }
+
+  async countRelationshipsMovedThisMonth(userId: string, monthStart: string): Promise<number> {
+    try {
+      const result = await pool.query(
+        `SELECT COUNT(DISTINCT contact_id) as cnt FROM contact_base_history
+         WHERE changed_by_id = $1 AND changed_at >= $2`,
+        [userId, monthStart]
+      );
+      return parseInt(result.rows[0]?.cnt ?? "0", 10);
+    } catch {
+      return 0;
+    }
   }
 }
 
