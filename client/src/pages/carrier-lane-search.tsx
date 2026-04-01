@@ -14,6 +14,7 @@ interface CarrierEntry {
   avgMarginPerLoad: number | null;
   avgCarrierPay: number | null;
   lastUsed: string | null;
+  lastShipDate: string | null;
 }
 
 interface CorridorResult {
@@ -53,7 +54,7 @@ function formatMonthKey(mk: string | null): string {
 function exportToCsv(corridors: CorridorResult[], originQ: string, destQ: string, radius: number) {
   const rows: string[][] = [
     ["Corridor", "Origin City", "Origin State", "Origin Dist (mi)", "Dest City", "Dest State", "Dest Dist (mi)",
-     "Avg Loads/Mo", "Total Loads", "Months Observed", "Carrier", "Carrier Loads", "Carrier %", "Avg Carrier Pay", "Avg Margin/Load", "Last Used"],
+     "Avg Loads/Mo", "Total Loads", "Months Observed", "Carrier", "Carrier Loads", "Carrier %", "Avg Carrier Pay", "Avg Margin/Load", "Last Used", "Last Ship Date"],
   ];
   for (const c of corridors) {
     for (const carrier of c.carriers) {
@@ -72,6 +73,7 @@ function exportToCsv(corridors: CorridorResult[], originQ: string, destQ: string
         carrier.avgCarrierPay != null ? `$${carrier.avgCarrierPay}` : "",
         carrier.avgMarginPerLoad != null ? `$${carrier.avgMarginPerLoad}` : "",
         formatMonthKey(carrier.lastUsed),
+        carrier.lastShipDate ?? "",
       ]);
     }
   }
@@ -284,8 +286,13 @@ function CorridorCard({ corridor }: { corridor: CorridorResult }) {
                     <td className="px-4 py-3 text-right tabular-nums text-emerald-600 dark:text-emerald-400 font-medium">
                       {carrier.avgMarginPerLoad != null ? `$${carrier.avgMarginPerLoad.toLocaleString()}` : "—"}
                     </td>
-                    <td className="px-5 py-3 text-right text-muted-foreground text-xs">
-                      {formatMonthKey(carrier.lastUsed)}
+                    <td className="px-5 py-3 text-right text-xs">
+                      <div className="text-muted-foreground">{formatMonthKey(carrier.lastUsed)}</div>
+                      {carrier.lastShipDate && (
+                        <div className="text-muted-foreground/60 text-[10px] mt-0.5">
+                          {new Date(carrier.lastShipDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
