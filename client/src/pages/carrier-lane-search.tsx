@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface CarrierEntry {
   name: string;
@@ -299,6 +300,7 @@ export default function CarrierLaneSearchPage() {
   const [destInput, setDestInput] = useState("");
   const [radiusInput, setRadiusInput] = useState("75");
   const [minLoadsInput, setMinLoadsInput] = useState("5");
+  const [modeFilter, setModeFilter] = useState("all");
   const [searchParams, setSearchParams] = useState<{ origin: string; dest: string; radius: number; minLoads: number } | null>(null);
 
   const { data, isLoading, isError } = useQuery<SearchResponse>({
@@ -325,11 +327,12 @@ export default function CarrierLaneSearchPage() {
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === "Enter") handleSearch(); };
 
-  // Group corridors by mode
+  // Group corridors by mode (apply mode filter if set)
   const modeGroups: { mode: string; corridors: CorridorResult[] }[] = [];
   if (data?.corridors.length) {
     const groupMap = new Map<string, CorridorResult[]>();
     for (const c of data.corridors) {
+      if (modeFilter !== "all" && c.mode !== modeFilter) continue;
       if (!groupMap.has(c.mode)) groupMap.set(c.mode, []);
       groupMap.get(c.mode)!.push(c);
     }
@@ -372,6 +375,22 @@ export default function CarrierLaneSearchPage() {
                 <TrendingUp className="w-3 h-3" /> Min Loads/Mo
               </Label>
               <Input type="number" min="1" value={minLoadsInput} onChange={e => setMinLoadsInput(e.target.value)} onKeyDown={handleKeyDown} data-testid="input-carrier-min-loads" />
+            </div>
+            <div className="w-32 flex-shrink-0 space-y-1.5">
+              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                <Truck className="w-3 h-3" /> Mode
+              </Label>
+              <Select value={modeFilter} onValueChange={setModeFilter} data-testid="select-carrier-mode">
+                <SelectTrigger data-testid="trigger-carrier-mode">
+                  <SelectValue placeholder="All modes" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Modes</SelectItem>
+                  {MODE_ORDER.map(m => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <Button onClick={handleSearch} disabled={isLoading || (!originInput.trim() && !destInput.trim())} className="gap-2 sm:w-auto w-full flex-shrink-0" data-testid="button-carrier-search">
               <Search className="w-4 h-4" />
