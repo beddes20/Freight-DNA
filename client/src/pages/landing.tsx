@@ -7,7 +7,7 @@ import {
   GitBranch, Phone, Sparkles, Bot, ArrowRight,
   LayoutGrid, MessagesSquare, ListTodo, Trophy, Wrench, GraduationCap,
   UserCog, LineChart, Loader2, Kanban, RefreshCw, Send, X,
-  ChevronDown, ChevronUp, AlertCircle,
+  ChevronDown, ChevronUp, AlertCircle, Truck, Route,
 } from "lucide-react";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
 
@@ -30,9 +30,9 @@ const features = [
     description: "Manage every prospect through a visual Kanban pipeline. One click generates an AI-powered brief: network overlap, conversation starters, industry pain points, and competitive tips — before you ever pick up the phone.",
   },
   {
-    icon: FileSearch,
-    title: "RFP Intelligence Engine",
-    description: "Upload RFP lane data, analyze corridors, track bid history, and compare awards. Walk into every bid knowing exactly how to win.",
+    icon: Truck,
+    title: "Carrier Lane Intelligence",
+    description: "Search your financial history by corridor to instantly build a carrier call list — loads hauled, market share, avg carrier pay, and last ship date, grouped by mode (Van, Reefer, Flatbed, LTL, Drayage, IMDL). Ask DNA Guru in plain English: \"What carriers run TX-CA?\" and get a live answer.",
   },
   {
     icon: MousePointerClick,
@@ -40,9 +40,9 @@ const features = [
     description: "Log a touchpoint in seconds from anywhere in the platform. Calls, emails, texts, and site visits in one click — automated alerts surface contacts going cold before it costs you freight.",
   },
   {
-    icon: BarChart3,
-    title: "Team Performance Dashboards",
-    description: "Real-time dashboards show activity metrics, pipeline health, and rep rankings so leaders can coach with precision.",
+    icon: FileSearch,
+    title: "RFP & Lane Intelligence",
+    description: "Upload RFP lane data, analyze corridors by mode, track bid history, and find which customers have freight on specific lanes across all their RFPs. Walk into every bid knowing exactly how to win.",
   },
   {
     icon: Target,
@@ -59,7 +59,9 @@ const modules = [
   { icon: Phone, name: "Touchpoint Log", desc: "Every call, email, text, and site visit in a unified timeline. AI flags cold contacts before they cost you freight." },
   { icon: CalendarCheck, name: "1:1's", desc: "Structured NAM-AM session topics, follow-ups, and threaded discussion threads." },
   { icon: BarChart3, name: "Report Cards", desc: "Per-rep scorecards showing load count, margin, touchpoints, and goal progress." },
-  { icon: FileSearch, name: "RFP & Awards", desc: "Full pipeline management for bids, awards, and lane-level analysis." },
+  { icon: FileSearch, name: "RFP & Awards", desc: "Full bid lifecycle management with lane-level analysis, award tracking, AI column mapping, and deadline alerts." },
+  { icon: Truck, name: "Carrier Lane Search", desc: "Find every carrier that's run a corridor from your financial history — loads, market share, avg carrier pay, and last ship date, grouped by mode. Build a call list in seconds." },
+  { icon: Route, name: "RFP Lane Search", desc: "Search across all uploaded RFPs by corridor to find which customers have freight on specific lanes, grouped by mode. Know who to call before an RFP drops." },
   { icon: Target, name: "Goals & Accountability", desc: "Set and auto-track targets for loads, margin, touchpoints, and new contacts against live platform data." },
   { icon: BarChart3, name: "Team Performance", desc: "Period-over-period activity and revenue tracking with rep rankings — turn coaching from opinions into evidence." },
 ];
@@ -73,6 +75,7 @@ const personas = [
       "Full account org charts with contact ownership and decision-maker mapping",
       "One-click touchpoint logging from anywhere — calls, emails, texts, site visits",
       "AI-flagged cold contacts so no relationship slips through the cracks",
+      "Ask DNA Guru \"what carriers run TX-CA for dry vans?\" and get a live carrier call list from your own freight data",
       "AI Sales Intel Briefs with wallet share scoring, RFP history, network overlap, and conversation starters — before every pitch",
     ],
   },
@@ -83,7 +86,7 @@ const personas = [
       "Real-time team performance dashboards with period-over-period comparisons",
       "Rep scorecards covering loads, margin, touchpoints, and goal progress",
       "1:1 tooling with threaded follow-ups and structured agendas",
-      "Career progression tracking to develop talent from day one",
+      "Carrier Lane Search and RFP Lane Search give ops and sales leaders corridor-level intel before any bid or sourcing call",
     ],
   },
   {
@@ -93,7 +96,7 @@ const personas = [
       "Multi-team and multi-org support with role-based access control",
       "Centralized portal credentials management via Coordinator's Corner",
       "PTO passoff workflows so accounts never slip during coverage gaps",
-      "Playbook and bucket configuration to standardize how your team sells",
+      "Financial data powers Carrier Lane Search, RFP Lane Search, and wallet share — all from a single upload",
     ],
   },
 ];
@@ -819,7 +822,8 @@ export default function LandingPage() {
               {[
                 { icon: Kanban, label: "Sales Pipeline", active: true },
                 { icon: Trophy, label: "RFP & Awards" },
-                { icon: ClipboardList, label: "Lane Research" },
+                { icon: Truck, label: "Carrier Lane Search" },
+                { icon: Route, label: "RFP Lane Search" },
               ].map((item, i) => (
                 <div
                   key={i}
