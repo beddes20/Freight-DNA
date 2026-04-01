@@ -5229,7 +5229,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           const dstCity   = String(row[cols.consigneeCity]  || row[cols.destination]       || "").trim();
           const dstState  = String(row[cols.consigneeState] || row[cols.destinationState]  || "").trim().toUpperCase();
           const carrier   = String(row[cols.carrier]        || "").trim();
-          const mode      = normalizeModeServer(String(row[cols.orderType] || "").trim());
+          const mode      = normalizeModeServer(String(row[cols.equipmentType] || "").trim());
 
           if (!origCity && !origState) continue;
           if (!dstCity  && !dstState)  continue;
