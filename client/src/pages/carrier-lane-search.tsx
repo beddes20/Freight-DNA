@@ -12,6 +12,7 @@ interface CarrierEntry {
   loads: number;
   pct: number;
   avgMarginPerLoad: number | null;
+  avgCarrierPay: number | null;
   lastUsed: string | null;
 }
 
@@ -52,7 +53,7 @@ function formatMonthKey(mk: string | null): string {
 function exportToCsv(corridors: CorridorResult[], originQ: string, destQ: string, radius: number) {
   const rows: string[][] = [
     ["Corridor", "Origin City", "Origin State", "Origin Dist (mi)", "Dest City", "Dest State", "Dest Dist (mi)",
-     "Avg Loads/Mo", "Total Loads", "Months Observed", "Carrier", "Carrier Loads", "Carrier %", "Avg Margin/Load", "Last Used"],
+     "Avg Loads/Mo", "Total Loads", "Months Observed", "Carrier", "Carrier Loads", "Carrier %", "Avg Carrier Pay", "Avg Margin/Load", "Last Used"],
   ];
   for (const c of corridors) {
     for (const carrier of c.carriers) {
@@ -68,6 +69,7 @@ function exportToCsv(corridors: CorridorResult[], originQ: string, destQ: string
         carrier.name,
         String(carrier.loads),
         `${carrier.pct}%`,
+        carrier.avgCarrierPay != null ? `$${carrier.avgCarrierPay}` : "",
         carrier.avgMarginPerLoad != null ? `$${carrier.avgMarginPerLoad}` : "",
         formatMonthKey(carrier.lastUsed),
       ]);
@@ -160,6 +162,7 @@ function CorridorCard({ corridor }: { corridor: CorridorResult }) {
                   <th className="text-left px-4 py-2 font-medium">Carrier</th>
                   <th className="text-right px-4 py-2 font-medium">Loads</th>
                   <th className="text-right px-4 py-2 font-medium">Share</th>
+                  <th className="text-right px-4 py-2 font-medium">Avg Carrier Pay</th>
                   <th className="text-right px-4 py-2 font-medium">Avg Margin</th>
                   <th className="text-right px-5 py-2 font-medium">Last Used</th>
                 </tr>
@@ -193,6 +196,9 @@ function CorridorCard({ corridor }: { corridor: CorridorResult }) {
                         </div>
                         <span className="text-muted-foreground text-xs w-8 text-right">{carrier.pct}%</span>
                       </div>
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-blue-600 dark:text-blue-400 font-medium">
+                      {carrier.avgCarrierPay != null ? `$${carrier.avgCarrierPay.toLocaleString()}` : "—"}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-emerald-600 dark:text-emerald-400 font-medium">
                       {carrier.avgMarginPerLoad != null ? `$${carrier.avgMarginPerLoad.toLocaleString()}` : "—"}

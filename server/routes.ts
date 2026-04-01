@@ -5191,7 +5191,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!uploads.length) return res.json({ corridors: [], originQuery, destQuery, radiusMiles, minLoadsPerMonth, originGeocoded: !!originCenter, destGeocoded: !!destCenter });
 
       // ─── Aggregate: corridor → month → carrier → load count ────────────────
-      type CarrierStats = { loads: number; totalMargin: number; lastDate: string | null };
+      type CarrierStats = { loads: number; totalMargin: number; totalCarrierPay: number; lastDate: string | null };
       type CorridorData = {
         originCity: string; originState: string;
         destCity: string;   destState: string;
@@ -5238,10 +5238,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           corridor.monthLoads.set(mk, (corridor.monthLoads.get(mk) || 0) + 1);
 
           // track per-carrier stats
-          if (!corridor.carriers.has(carrier)) corridor.carriers.set(carrier, { loads: 0, totalMargin: 0, lastDate: null });
+          const carrierPayVal = parseFloat(String(row[cols.carrierPay] || row[cols.freightCharge] || 0)) || 0;
+          if (!corridor.carriers.has(carrier)) corridor.carriers.set(carrier, { loads: 0, totalMargin: 0, totalCarrierPay: 0, lastDate: null });
           const cs = corridor.carriers.get(carrier)!;
           cs.loads++;
           cs.totalMargin += margin || 0;
+          cs.totalCarrierPay += carrierPayVal;
           if (monthKey && (!cs.lastDate || monthKey > cs.lastDate)) cs.lastDate = monthKey;
         }
       }
@@ -5272,6 +5274,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
             loads: cs.loads,
             pct: Math.round((cs.loads / totalLoads) * 100),
             avgMarginPerLoad: cs.loads > 0 ? Math.round(cs.totalMargin / cs.loads) : null,
+            avgCarrierPay: cs.loads > 0 && cs.totalCarrierPay > 0 ? Math.round(cs.totalCarrierPay / cs.loads) : null,
             lastUsed: cs.lastDate,
           }))
           .sort((a, b) => b.loads - a.loads);
