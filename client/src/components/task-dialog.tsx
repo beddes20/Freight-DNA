@@ -30,6 +30,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import type { Company, Task, User, TaskComment } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
+import { CarrierProcurementWorkspace, type ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
 
 type SafeUser = Omit<User, "password">;
 
@@ -588,6 +589,26 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
               )}
             </div>
           )}
+
+          {editingTask && Array.isArray(editingTask.attachedLaneData) && (() => {
+            const procLanes = (editingTask.attachedLaneData as Array<Record<string, unknown>>).filter(
+              (l): l is ProcurementLaneInfo =>
+                l != null &&
+                typeof l === "object" &&
+                l.type === "carrier_procurement" &&
+                typeof l.lane === "string" &&
+                typeof l.awardId === "string"
+            ) as ProcurementLaneInfo[];
+            if (procLanes.length === 0) return null;
+            return (
+              <div className="border rounded-lg p-3" data-testid="section-procurement-workspace">
+                <CarrierProcurementWorkspace
+                  lanes={procLanes}
+                  fallbackTaskId={editingTask.id}
+                />
+              </div>
+            );
+          })()}
 
           <FileAttachmentUpload
             pendingFiles={pendingFiles}

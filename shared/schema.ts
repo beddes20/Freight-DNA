@@ -856,6 +856,30 @@ export type ProspectContact = typeof prospectContacts.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Carrier Procurement Rolodex
+export const laneCarriers = pgTable("lane_carriers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  taskId: varchar("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+  awardId: varchar("award_id").notNull().references(() => awards.id, { onDelete: "cascade" }),
+  lane: text("lane").notNull(),
+  carrierName: text("carrier_name").notNull(),
+  mcNumber: text("mc_number"),
+  contactName: text("contact_name"),
+  phone: text("phone"),
+  email: text("email"),
+  rate: text("rate"),
+  capacityPerWeek: integer("capacity_per_week"),
+  notes: text("notes"),
+  status: text("status").notNull().default("contacted"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertLaneCarrierSchema = createInsertSchema(laneCarriers).omit({ id: true });
+export type InsertLaneCarrier = z.infer<typeof insertLaneCarrierSchema>;
+export type LaneCarrier = typeof laneCarriers.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Contact relationship base change history
 export const contactBaseHistory = pgTable("contact_base_history", {
   id: serial("id").primaryKey(),

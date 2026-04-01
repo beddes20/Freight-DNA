@@ -50,6 +50,8 @@ import {
   ChevronDown,
   Sparkles,
   XCircle,
+  Truck,
+  ClipboardList,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -74,8 +76,10 @@ import { ConvertToAwardDialog } from "@/components/convert-to-award-dialog";
 import { ResearchLaneDialog } from "@/components/research-lane-dialog";
 import { DataAnalystPortlet } from "@/components/data-analyst-portlet";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Rfp, Award, Company, Contact } from "@shared/schema";
+import type { Rfp, Award, Company, Contact, LaneCarrier } from "@shared/schema";
+import { ProcurementTaskLauncherDialog, AwardRolodexDialog, type ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
 
 const rfpStatusConfig = {
   pending:           { label: "Pending",            icon: Clock,      color: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400" },
@@ -221,6 +225,30 @@ function RfpCard({ rfp, company, onEdit, onDelete, onViewData, onConvert }: RfpC
   );
 }
 
+function parseLaneString(laneStr: string, awardId: string): ProcurementLaneInfo | null {
+  // Handles: "→", "->", " to " separators; volume formats "(N loads)", "(N shipments)", "(N shpts/yr)", etc.
+  const match = laneStr.match(/^(.+?)\s*(?:→|->|\bto\b)\s*(.+?)(?:\s*\((\d[\d,]*)\s*(?:loads?|shipments?|shpts?)[^)]*\))?$/i);
+  if (!match) return null;
+  const origin = match[1].trim();
+  const destination = match[2].trim();
+  const volume = match[3] ? parseInt(match[3].replace(/,/g, "")) : 0;
+  return {
+    type: "carrier_procurement",
+    lane: laneStr,
+    origin,
+    destination,
+    volume,
+    awardId,
+  };
+}
+
+function getHighVolumeLanes(award: Award): ProcurementLaneInfo[] {
+  if (!award.lanes || award.lanes.length === 0) return [];
+  return award.lanes
+    .map(l => parseLaneString(l, award.id))
+    .filter((l): l is ProcurementLaneInfo => l !== null && l.volume >= 50);
+}
+
 interface AwardCardProps {
   award: Award;
   company?: Company;
@@ -229,83 +257,208 @@ interface AwardCardProps {
 }
 
 function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const [procurementDialogOpen, setProcurementDialogOpen] = useState(false);
+  const [activeProcLanes, setActiveProcLanes] = useState<ProcurementLaneInfo[]>([]);
+  const [generatingTasks, setGeneratingTasks] = useState(false);
+  const [rolodexOpen, setRolodexOpen] = useState(false);
+
+  const highVolumeLanes = getHighVolumeLanes(award);
+
+  const { data: awardCarriers = [] } = useQuery<LaneCarrier[]>({
+    queryKey: ["/api/awards", award.id, "lane-carriers"],
+  });
+
+  const coveredLanes = highVolumeLanes.filter(
+    l => awardCarriers.filter(c => c.lane === l.lane && c.status !== "declined").length >= 5
+  ).length;
+  const totalLanes = highVolumeLanes.length;
+
+  const getCoverageBadgeStyle = () => {
+    if (totalLanes === 0) return null;
+    if (coveredLanes === 0) return "bg-red-500/10 text-red-700 dark:text-red-400";
+    if (coveredLanes < totalLanes) return "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
+    return "bg-green-500/10 text-green-700 dark:text-green-400";
+  };
+
+  async function handleGenerateProcurementTasks() {
+    if (highVolumeLanes.length === 0) {
+      toast({
+        title: "No qualifying lanes",
+        description: "No lanes with 50+ loads/year found. Add lanes with volume data to generate procurement tasks.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!user) return;
+    setGeneratingTasks(true);
+    try {
+      const res = await apiRequest("POST", `/api/awards/${award.id}/procurement-tasks`, {});
+      const { results } = await res.json() as { results: Array<{ lane: string; taskId: string; created: boolean }> };
+      const taskByLane = Object.fromEntries(results.map(r => [r.lane, r.taskId]));
+      const createdLanes: ProcurementLaneInfo[] = highVolumeLanes.map(lane => ({ ...lane, taskId: taskByLane[lane.lane] }));
+      const createdCount = results.filter(r => r.created).length;
+      const reusedCount = results.filter(r => !r.created).length;
+      if (createdCount > 0) queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      setActiveProcLanes(createdLanes);
+      setProcurementDialogOpen(true);
+      toast({
+        title: createdCount > 0
+          ? `${createdCount} procurement task${createdCount !== 1 ? "s" : ""} created`
+          : "Opening existing procurement workspace",
+        description: reusedCount > 0 && createdCount > 0
+          ? `${reusedCount} existing task${reusedCount !== 1 ? "s" : ""} reused, ${createdCount} new.`
+          : reusedCount > 0
+          ? `Using ${reusedCount} existing task${reusedCount !== 1 ? "s" : ""} for this award.`
+          : `One task per qualifying lane. Target 5–10 carrier contacts each.`,
+      });
+    } catch {
+      toast({ title: "Failed to generate procurement tasks", variant: "destructive" });
+    } finally {
+      setGeneratingTasks(false);
+    }
+  }
+
+  const coverageStyle = getCoverageBadgeStyle();
+
   return (
-    <Card className="hover-elevate" data-testid={`card-award-${award.id}`}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-2 mb-3">
-          <div className="min-w-0 flex-1">
-            <h3 className="font-medium truncate">{award.title}</h3>
-            {company && (
-              <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
-                <Building2 className="h-3 w-3" />
-                <span className="truncate">{company.name}</span>
+    <>
+      <Card className="hover-elevate" data-testid={`card-award-${award.id}`}>
+        <CardContent className="p-4">
+          <div className="flex items-start justify-between gap-2 mb-3">
+            <div className="min-w-0 flex-1">
+              <h3 className="font-medium truncate">{award.title}</h3>
+              {company && (
+                <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
+                  <Building2 className="h-3 w-3" />
+                  <span className="truncate">{company.name}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {coverageStyle && (
+                <Badge className={`text-xs ${coverageStyle}`} data-testid={`badge-procurement-coverage-${award.id}`}>
+                  <Truck className="h-3 w-3 mr-1" />
+                  {coveredLanes}/{totalLanes} covered
+                </Badge>
+              )}
+              <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
+                <Trophy className="h-3 w-3 mr-1" />
+                Won
+              </Badge>
+            </div>
+          </div>
+
+          <div className="space-y-2 text-sm">
+            {award.value && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <DollarSign className="h-3.5 w-3.5" />
+                <span>${Number(award.value).toLocaleString()}</span>
+              </div>
+            )}
+            {award.awardDate && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Calendar className="h-3.5 w-3.5" />
+                <span>Awarded: {new Date(award.awardDate).toLocaleDateString()}</span>
+              </div>
+            )}
+            {award.lanes && award.lanes.length > 0 && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <TruckIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">{award.lanes.join(", ")}</span>
+              </div>
+            )}
+            {award.notes && (
+              <p className="text-muted-foreground line-clamp-2">{award.notes}</p>
+            )}
+            {award.fileName && award.fileData && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                <a
+                  href={award.fileData}
+                  download={award.fileName}
+                  className="text-blue-600 dark:text-blue-400 hover:underline truncate text-sm"
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid={`link-award-file-${award.id}`}
+                >
+                  {award.fileName}
+                </a>
               </div>
             )}
           </div>
-          <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
-            <Trophy className="h-3 w-3 mr-1" />
-            Won
-          </Badge>
-        </div>
 
-        <div className="space-y-2 text-sm">
-          {award.value && (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <DollarSign className="h-3.5 w-3.5" />
-              <span>${Number(award.value).toLocaleString()}</span>
-            </div>
-          )}
-          {award.awardDate && (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Calendar className="h-3.5 w-3.5" />
-              <span>Awarded: {new Date(award.awardDate).toLocaleDateString()}</span>
-            </div>
-          )}
-          {award.lanes && award.lanes.length > 0 && (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <TruckIcon className="h-3.5 w-3.5 flex-shrink-0" />
-              <span className="truncate">{award.lanes.join(", ")}</span>
-            </div>
-          )}
-          {award.notes && (
-            <p className="text-muted-foreground line-clamp-2">{award.notes}</p>
-          )}
-          {award.fileName && award.fileData && (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Paperclip className="h-3.5 w-3.5 shrink-0" />
-              <a
-                href={award.fileData}
-                download={award.fileName}
-                className="text-blue-600 dark:text-blue-400 hover:underline truncate text-sm"
-                onClick={(e) => e.stopPropagation()}
-                data-testid={`link-award-file-${award.id}`}
+          <div className="flex items-center justify-between mt-3 pt-3 border-t gap-2">
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleGenerateProcurementTasks}
+                disabled={generatingTasks || highVolumeLanes.length === 0}
+                title={highVolumeLanes.length === 0 ? "No qualifying lanes (50+ loads/yr) on this award" : undefined}
+                className="text-xs h-8"
+                data-testid={`button-generate-procurement-${award.id}`}
               >
-                {award.fileName}
-              </a>
+                {generatingTasks ? (
+                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                ) : (
+                  <ClipboardList className="h-3 w-3 mr-1.5" />
+                )}
+                Generate Procurement Tasks
+              </Button>
+              {highVolumeLanes.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setRolodexOpen(true)}
+                  className="text-xs h-8"
+                  data-testid={`button-view-rolodex-${award.id}`}
+                >
+                  <Users className="h-3 w-3 mr-1.5" />
+                  {awardCarriers.length > 0 ? `Rolodex (${awardCarriers.length})` : "Rolodex"}
+                </Button>
+              )}
             </div>
-          )}
-        </div>
+            <div className="flex items-center gap-1">
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => onEdit(award)}
+                data-testid={`button-edit-award-${award.id}`}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => onDelete(award)}
+                data-testid={`button-delete-award-${award.id}`}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
-        <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t">
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => onEdit(award)}
-            data-testid={`button-edit-award-${award.id}`}
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => onDelete(award)}
-            data-testid={`button-delete-award-${award.id}`}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+      {activeProcLanes.length > 0 && (
+        <ProcurementTaskLauncherDialog
+          open={procurementDialogOpen}
+          onOpenChange={setProcurementDialogOpen}
+          title={`Carrier Procurement — ${award.title}`}
+          lanes={activeProcLanes}
+        />
+      )}
+      {highVolumeLanes.length > 0 && (
+        <AwardRolodexDialog
+          open={rolodexOpen}
+          onOpenChange={setRolodexOpen}
+          awardTitle={award.title}
+          awardId={award.id}
+          lanes={highVolumeLanes}
+        />
+      )}
+    </>
   );
 }
 

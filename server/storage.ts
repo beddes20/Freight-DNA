@@ -24,6 +24,7 @@ import {
   touchpoints,
   internalPosts,
   passwordResetTokens,
+  laneCarriers,
   type Organization,
   type User,
   type InsertUser,
@@ -104,6 +105,8 @@ import {
   type ContactLaneAttribution,
   type InsertContactLaneAttribution,
   contactBaseHistory,
+  type LaneCarrier,
+  type InsertLaneCarrier,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -212,6 +215,7 @@ export interface IStorage {
   getTasks(): Promise<Task[]>;
   getTasksByCompany(companyId: string): Promise<Task[]>;
   getTask(id: string): Promise<Task | undefined>;
+  findProcurementTask(awardId: string, lane: string): Promise<Task | undefined>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
@@ -400,6 +404,14 @@ export interface IStorage {
   countMeaningfulThisMonth(userId: string, monthStart: string): Promise<number>;
   countOpportunityLogsThisMonth(userId: string, monthStart: string): Promise<number>;
   countRelationshipsMovedThisMonth(userId: string, monthStart: string): Promise<number>;
+
+  // Lane carriers (procurement rolodex)
+  getLaneCarrier(id: string): Promise<import('../shared/schema').LaneCarrier | undefined>;
+  getLaneCarriersByTask(taskId: string): Promise<import('../shared/schema').LaneCarrier[]>;
+  getLaneCarriersByAward(awardId: string): Promise<import('../shared/schema').LaneCarrier[]>;
+  createLaneCarrier(data: import('../shared/schema').InsertLaneCarrier): Promise<import('../shared/schema').LaneCarrier>;
+  updateLaneCarrier(id: string, data: Partial<import('../shared/schema').InsertLaneCarrier>): Promise<import('../shared/schema').LaneCarrier | undefined>;
+  deleteLaneCarrier(id: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -811,6 +823,16 @@ export class DatabaseStorage implements IStorage {
   async getTask(id: string): Promise<Task | undefined> {
     const [task] = await db.select().from(tasks).where(eq(tasks.id, id));
     return task;
+  }
+
+  async findProcurementTask(awardId: string, lane: string): Promise<Task | undefined> {
+    const results = await db.select().from(tasks).where(
+      sql`attached_lane_data @> ${JSON.stringify([{ type: "carrier_procurement", awardId, lane }])}::jsonb`
+    ).orderBy(
+      sql`CASE WHEN status = 'open' THEN 0 ELSE 1 END`,
+      desc(tasks.createdAt)
+    );
+    return results[0];
   }
 
   async createTask(task: InsertTask): Promise<Task> {
@@ -2383,6 +2405,34 @@ export class DatabaseStorage implements IStorage {
     } catch {
       return 0;
     }
+  }
+
+  async getLaneCarrier(id: string): Promise<LaneCarrier | undefined> {
+    const [carrier] = await db.select().from(laneCarriers).where(eq(laneCarriers.id, id));
+    return carrier;
+  }
+
+  async getLaneCarriersByTask(taskId: string): Promise<LaneCarrier[]> {
+    return db.select().from(laneCarriers).where(eq(laneCarriers.taskId, taskId)).orderBy(asc(laneCarriers.createdAt));
+  }
+
+  async getLaneCarriersByAward(awardId: string): Promise<LaneCarrier[]> {
+    return db.select().from(laneCarriers).where(eq(laneCarriers.awardId, awardId)).orderBy(asc(laneCarriers.createdAt));
+  }
+
+  async createLaneCarrier(data: InsertLaneCarrier): Promise<LaneCarrier> {
+    const [carrier] = await db.insert(laneCarriers).values(data).returning();
+    return carrier;
+  }
+
+  async updateLaneCarrier(id: string, data: Partial<InsertLaneCarrier>): Promise<LaneCarrier | undefined> {
+    const [updated] = await db.update(laneCarriers).set(data).where(eq(laneCarriers.id, id)).returning();
+    return updated;
+  }
+
+  async deleteLaneCarrier(id: string): Promise<boolean> {
+    const result = await db.delete(laneCarriers).where(eq(laneCarriers.id, id)).returning();
+    return result.length > 0;
   }
 }
 

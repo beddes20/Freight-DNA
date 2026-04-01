@@ -712,4 +712,52 @@ export async function runMigrations() {
   } finally {
     clientEgg.release();
   }
+
+  // Carrier Procurement Rolodex (Task #113)
+  const clientLaneCarriers = await pool.connect();
+  try {
+    await clientLaneCarriers.query(`
+      CREATE TABLE IF NOT EXISTS lane_carriers (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        task_id varchar NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        award_id varchar NOT NULL REFERENCES awards(id) ON DELETE CASCADE,
+        lane text NOT NULL,
+        carrier_name text NOT NULL,
+        mc_number text,
+        contact_name text,
+        phone text,
+        email text,
+        rate text,
+        capacity_per_week integer,
+        notes text,
+        status text NOT NULL DEFAULT 'contacted',
+        created_at text NOT NULL
+      )
+    `);
+    await clientLaneCarriers.query(`CREATE INDEX IF NOT EXISTS idx_lane_carriers_task_id ON lane_carriers(task_id)`);
+    await clientLaneCarriers.query(`CREATE INDEX IF NOT EXISTS idx_lane_carriers_award_id ON lane_carriers(award_id)`);
+    // Unique index to prevent duplicate carrier names per task+lane (case-insensitive)
+    await clientLaneCarriers.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_lane_carriers_unique_carrier_per_lane
+      ON lane_carriers(task_id, lane, lower(carrier_name))
+    `);
+    // Enforce status enum at DB level
+    await clientLaneCarriers.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.constraint_column_usage
+          WHERE table_name = 'lane_carriers' AND constraint_name = 'lane_carriers_status_check'
+        ) THEN
+          ALTER TABLE lane_carriers
+          ADD CONSTRAINT lane_carriers_status_check
+          CHECK (status IN ('contacted', 'committed', 'declined'));
+        END IF;
+      END $$
+    `);
+    console.log("[migrations] lane_carriers table ensured");
+  } catch (err) {
+    console.error("[migrations] lane_carriers error:", err);
+  } finally {
+    clientLaneCarriers.release();
+  }
 }

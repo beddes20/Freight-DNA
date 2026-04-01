@@ -9,7 +9,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
@@ -3063,7 +3063,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { title, notes, status, dueDate, assignedTo, companyId, contactId } = req.body;
+      const { title, notes, status, dueDate, assignedTo, companyId, contactId, attachedLaneData } = req.body;
       if (!title || typeof title !== "string" || !title.trim()) {
         return res.status(400).json({ error: "Title is required" });
       }
@@ -3111,6 +3111,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         assignedBy: user.id,
         companyId: companyId || null,
         contactId: contactId || null,
+        attachedLaneData: attachedLaneData ?? null,
         createdAt: new Date().toISOString(),
       });
       if (assignedTo !== user.id) {
@@ -5309,9 +5310,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         const destLabel   = [corridor.destCity,   corridor.destState].filter(Boolean).join(", ");
 
         // Build sorted carrier list
+        // Note: mcNumber is not present in historical shipment row data;
+        // it is set to null here and may be back-filled on the client from
+        // previously-catalogued lane_carriers records (same carrier name lookup).
         const carrierList = [...corridor.carriers.entries()]
           .map(([name, cs]) => ({
             name,
+            mcNumber: null as string | null,
             loads: cs.loads,
             pct: Math.round((cs.loads / totalLoads) * 100),
             avgMarginPerLoad: cs.loads > 0 ? Math.round(cs.totalMargin / cs.loads) : null,
@@ -12450,6 +12455,238 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
       const message = err instanceof Error ? err.message : String(err);
       console.error("GET /api/admin/billing/invoices error:", message);
       res.status(500).json({ error: "Failed to fetch invoices" });
+    }
+  });
+
+  // ── Lane Carrier Routes (Procurement Rolodex) ─────────────────────────────
+
+  // Helper: verify award is accessible to the current user (same org + visibility)
+  async function verifyAwardAccess(user: User, awardId: string): Promise<boolean> {
+    const award = await storage.getAward(awardId);
+    if (!award) return false;
+    const orgCompanies = await storage.getCompanies(user.organizationId);
+    const orgCompanyIds = new Set(orgCompanies.map((c) => c.id));
+    if (!orgCompanyIds.has(award.companyId)) return false;
+    const visibleIds = await getVisibleCompanyIds(user);
+    if (visibleIds !== null && !visibleIds.includes(award.companyId)) return false;
+    return true;
+  }
+
+  // Helper: verify a task is accessible to the current user, respecting company visibility constraints
+  async function verifyTaskAccess(user: User, taskId: string): Promise<boolean> {
+    const task = await storage.getTask(taskId);
+    if (!task) return false;
+    // When the task is linked to a company, enforce company-visibility rules (same as canAccessCompany)
+    if (task.companyId) {
+      return canAccessCompany(user, task.companyId);
+    }
+    // No company link: fall back to checking the assigned/creating user's org membership
+    const assignedUser = await storage.getUser(task.assignedTo);
+    return !!(assignedUser && assignedUser.organizationId === user.organizationId);
+  }
+
+  // Per-key serialization map: prevents concurrent requests from creating duplicate procurement tasks
+  // for the same (awardId, lane) pair (Node.js single-thread, but async interleaving is still possible)
+  const procTaskCreationLocks = new Map<string, Promise<{ lane: string; taskId: string; created: boolean }>>();
+
+  // Idempotent procurement task generation — server validates qualifying lanes (>=50 loads) and finds-or-creates
+  app.post("/api/awards/:awardId/procurement-tasks", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { awardId } = req.params;
+      if (!(await verifyAwardAccess(user, awardId))) return res.status(403).json({ error: "Access denied" });
+      // lanes is optional — if omitted, all award qualifying lanes are processed server-side
+      const { lanes } = (req.body ?? {}) as { lanes?: Array<{ lane: string }> };
+      const award = await storage.getAward(awardId);
+      if (!award) return res.status(404).json({ error: "Award not found" });
+      // Parse award lane strings server-side; origin/dest/volume are derived here, not trusted from client
+      const lanePattern = /^(.+?)\s*(?:→|->|\bto\b)\s*(.+?)(?:\s*\((\d[\d,]*)\s*(?:loads?|shipments?|shpts?)[^)]*\))?$/i;
+      type LaneMeta = { origin: string; destination: string; volume: number };
+      const qualifyingLaneMap = new Map<string, LaneMeta>(
+        (award.lanes ?? [])
+          .map((l: string) => {
+            const m = l.match(lanePattern);
+            if (!m) return null;
+            const volume = m[3] ? parseInt(m[3].replace(/,/g, "")) : 0;
+            if (volume < 50) return null;
+            return [l, { origin: m[1].trim(), destination: m[2].trim(), volume }] as [string, LaneMeta];
+          })
+          .filter((entry): entry is [string, LaneMeta] => entry !== null)
+      );
+      // Process all server-computed qualifying lanes (client list already validated non-empty above)
+      const validLaneEntries = [...qualifyingLaneMap.entries()];
+      if (validLaneEntries.length === 0) return res.status(400).json({ error: "No qualifying lanes (≥50 loads/yr) found for this award" });
+      // Per-key serialization prevents concurrent requests from creating duplicate tasks for the same lane
+      const results = await Promise.all(validLaneEntries.map(([laneName, meta]) => {
+        const lockKey = `${awardId}:${laneName}`;
+        if (!procTaskCreationLocks.has(lockKey)) {
+          const op = (async () => {
+            const existing = await storage.findProcurementTask(awardId, laneName);
+            if (existing) return { lane: laneName, taskId: existing.id, created: false };
+            const task = await storage.createTask({
+              title: `Carrier Procurement — ${laneName}`,
+              notes: `Procurement workspace for lane: ${laneName} (${meta.volume.toLocaleString()} loads/yr). Award ID: ${awardId}. Target 5–10 carrier contacts.`,
+              status: "open",
+              dueDate: null,
+              assignedTo: user.id,
+              assignedBy: user.id,
+              companyId: award.companyId ?? null,
+              contactId: null,
+              attachedLaneData: [{ type: "carrier_procurement", lane: laneName, origin: meta.origin, destination: meta.destination, volume: meta.volume, awardId }],
+              createdAt: new Date().toISOString(),
+            });
+            return { lane: laneName, taskId: task.id, created: true };
+          })();
+          procTaskCreationLocks.set(lockKey, op.finally(() => procTaskCreationLocks.delete(lockKey)));
+        }
+        return procTaskCreationLocks.get(lockKey)!;
+      }));
+      return res.status(200).json({ results });
+    } catch (err) {
+      console.error("procurement-tasks error", err);
+      return res.status(500).json({ error: "Failed to generate procurement tasks" });
+    }
+  });
+
+  // GET carriers by task
+  app.get("/api/tasks/:taskId/lane-carriers", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await verifyTaskAccess(user, req.params.taskId))) return res.status(403).json({ error: "Access denied" });
+      const carriers = await storage.getLaneCarriersByTask(req.params.taskId);
+      res.json(carriers);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch lane carriers" });
+    }
+  });
+
+  // GET carriers by award
+  app.get("/api/awards/:awardId/lane-carriers", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await verifyAwardAccess(user, req.params.awardId))) return res.status(403).json({ error: "Access denied" });
+      const carriers = await storage.getLaneCarriersByAward(req.params.awardId);
+      res.json(carriers);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch lane carriers" });
+    }
+  });
+
+  // POST create lane carrier
+  const LANE_CARRIER_STATUS_ENUM = ["contacted", "committed", "declined"] as const;
+  type LaneCarrierStatus = typeof LANE_CARRIER_STATUS_ENUM[number];
+
+  app.post("/api/lane-carriers", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      // Validate status enum
+      if (req.body.status && !LANE_CARRIER_STATUS_ENUM.includes(req.body.status as LaneCarrierStatus)) {
+        return res.status(400).json({ error: `status must be one of: ${LANE_CARRIER_STATUS_ENUM.join(", ")}` });
+      }
+      // Verify task belongs to user's org and is accessible
+      if (!(await verifyTaskAccess(user, req.body.taskId))) return res.status(403).json({ error: "Access denied" });
+      // Verify award is accessible
+      if (!(await verifyAwardAccess(user, req.body.awardId))) return res.status(403).json({ error: "Access denied" });
+      // Task must explicitly be a carrier_procurement task with matching award+lane metadata
+      const task = await storage.getTask(req.body.taskId);
+      if (task) {
+        const laneData = Array.isArray(task.attachedLaneData) ? task.attachedLaneData as Array<{ awardId?: string; lane?: string; type?: string }> : [];
+        const procEntries = laneData.filter(e => e.type === "carrier_procurement");
+        if (procEntries.length === 0) {
+          return res.status(400).json({ error: "Task is not a carrier procurement task" });
+        }
+        const taskAwardIds = procEntries.map(e => e.awardId).filter(Boolean);
+        if (taskAwardIds.length > 0 && !taskAwardIds.includes(req.body.awardId)) {
+          return res.status(400).json({ error: "Task does not belong to the specified award" });
+        }
+        const taskLanes = procEntries.map(e => e.lane).filter(Boolean);
+        if (taskLanes.length > 0 && req.body.lane && !taskLanes.includes(req.body.lane)) {
+          return res.status(400).json({ error: "Lane does not match task's procurement lanes" });
+        }
+      }
+      // Prevent duplicate carrier name on the same task+lane
+      if (req.body.taskId && req.body.lane && req.body.carrierName) {
+        const existing = await storage.getLaneCarriersByTask(req.body.taskId);
+        const isDuplicate = existing.some(c =>
+          c.lane === req.body.lane &&
+          c.carrierName.toLowerCase() === String(req.body.carrierName).trim().toLowerCase()
+        );
+        if (isDuplicate) {
+          return res.status(409).json({ error: "Carrier already logged for this lane" });
+        }
+      }
+      const parsed = insertLaneCarrierSchema.safeParse({
+        ...req.body,
+        createdAt: new Date().toISOString(),
+      });
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
+      const carrier = await storage.createLaneCarrier(parsed.data);
+      res.json(carrier);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to create lane carrier" });
+    }
+  });
+
+  // PATCH update lane carrier
+  app.patch("/api/lane-carriers/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      // Validate status enum if provided
+      if (req.body.status && !LANE_CARRIER_STATUS_ENUM.includes(req.body.status as LaneCarrierStatus)) {
+        return res.status(400).json({ error: `status must be one of: ${LANE_CARRIER_STATUS_ENUM.join(", ")}` });
+      }
+      const existing = await storage.getLaneCarrier(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Lane carrier not found" });
+      if (!(await verifyAwardAccess(user, existing.awardId))) return res.status(403).json({ error: "Access denied" });
+      // Only allow updating mutable fields — never allow changing taskId/awardId/lane/createdAt
+      const patchSchema = insertLaneCarrierSchema.pick({
+        carrierName: true,
+        mcNumber: true,
+        contactName: true,
+        phone: true,
+        email: true,
+        rate: true,
+        capacityPerWeek: true,
+        notes: true,
+        status: true,
+      }).partial();
+      const parsed = patchSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
+      let carrier;
+      try {
+        carrier = await storage.updateLaneCarrier(req.params.id, parsed.data);
+      } catch (updateErr: unknown) {
+        const msg = updateErr instanceof Error ? updateErr.message : String(updateErr);
+        if (msg.includes("unique") || msg.includes("duplicate")) {
+          return res.status(409).json({ error: "Carrier already logged for this lane" });
+        }
+        throw updateErr;
+      }
+      if (!carrier) return res.status(404).json({ error: "Lane carrier not found" });
+      res.json(carrier);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to update lane carrier" });
+    }
+  });
+
+  // DELETE lane carrier
+  app.delete("/api/lane-carriers/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getLaneCarrier(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Lane carrier not found" });
+      if (!(await verifyAwardAccess(user, existing.awardId))) return res.status(403).json({ error: "Access denied" });
+      const ok = await storage.deleteLaneCarrier(req.params.id);
+      if (!ok) return res.status(404).json({ error: "Lane carrier not found" });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to delete lane carrier" });
     }
   });
 
