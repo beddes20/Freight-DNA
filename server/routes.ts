@@ -1842,11 +1842,50 @@ RULES FOR YOUR RESPONSES:
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
 
-      const originQuery = String(req.query.origin || "").trim().toLowerCase();
-      const destQuery = String(req.query.destination || "").trim().toLowerCase();
+      const originQuery = String(req.query.origin || "").trim();
+      const destQuery = String(req.query.destination || "").trim();
+      const radiusMiles = Math.max(1, Math.min(500, parseFloat(String(req.query.radius || "75")) || 75));
 
       if (!originQuery && !destQuery) {
         return res.status(400).json({ error: "Provide at least an origin or destination to search" });
+      }
+
+      // Parse "City, ST" or "City ST" or "ST" into {city, state} for geocoding
+      function parseCityState(q: string): { city: string; state: string } {
+        if (!q) return { city: "", state: "" };
+        const commaMatch = q.match(/^(.+),\s*([A-Za-z]{2})$/);
+        if (commaMatch) return { city: commaMatch[1].trim(), state: commaMatch[2].trim().toUpperCase() };
+        const spaceMatch = q.match(/^(.+)\s+([A-Za-z]{2})$/);
+        if (spaceMatch) return { city: spaceMatch[1].trim(), state: spaceMatch[2].trim().toUpperCase() };
+        if (/^[A-Za-z]{2}$/.test(q)) return { city: "", state: q.trim().toUpperCase() };
+        return { city: q.trim(), state: "" };
+      }
+
+      // Geocode the query locations (used as the center of the radius buffer)
+      const originParsed = parseCityState(originQuery);
+      const destParsed = parseCityState(destQuery);
+      const originCenter = originQuery ? geocodeCity(originParsed.city, originParsed.state) : null;
+      const destCenter = destQuery ? geocodeCity(destParsed.city, destParsed.state) : null;
+
+      // Check if a lane endpoint is within radiusMiles of the query center.
+      // Falls back to text matching when geocoding isn't possible.
+      function locationMatches(
+        laneCity: string, laneState: string, laneText: string,
+        queryRaw: string, queryCenter: [number, number] | null,
+      ): { match: boolean; distanceMiles: number | null } {
+        if (!queryRaw) return { match: true, distanceMiles: null };
+
+        if (queryCenter) {
+          const laneCoords = geocodeCity(laneCity, laneState);
+          if (laneCoords) {
+            const dist = haversineDistance(queryCenter[0], queryCenter[1], laneCoords[0], laneCoords[1]);
+            return { match: dist <= radiusMiles, distanceMiles: Math.round(dist) };
+          }
+        }
+        // Geocode not available — fall back to text contains
+        const haystack = laneText.toLowerCase();
+        const needle = queryRaw.toLowerCase();
+        return { match: haystack.includes(needle), distanceMiles: null };
       }
 
       // Get all visible RFPs for this org
@@ -1859,10 +1898,8 @@ RULES FOR YOUR RESPONSES:
         rfpList = rfpList.filter(r => visibleIds.includes(r.companyId));
       }
 
-      // Build a company name lookup
       const companyMap = new Map(orgCompanies.map(c => [c.id, c.name]));
 
-      // Search through each RFP's stored lane data
       const results: {
         companyId: string;
         companyName: string;
@@ -1881,14 +1918,22 @@ RULES FOR YOUR RESPONSES:
         const lanes: any[] = fd.highVolumeLanes || [];
         if (!lanes.length) continue;
 
-        const matchingLanes = lanes.filter(lane => {
-          const originText = [lane.origin || "", lane.originState || "", lane.lane || ""].join(" ").toLowerCase();
-          const destText = [lane.destination || "", lane.destinationState || "", lane.lane || ""].join(" ").toLowerCase();
+        const matchingLanes: any[] = [];
+        for (const lane of lanes) {
+          const originText = [lane.origin || "", lane.originState || "", lane.lane || ""].join(" ");
+          const destText = [lane.destination || "", lane.destinationState || "", lane.lane || ""].join(" ");
 
-          const originMatch = !originQuery || originText.includes(originQuery);
-          const destMatch = !destQuery || destText.includes(destQuery);
-          return originMatch && destMatch;
-        });
+          const originCheck = locationMatches(lane.origin || "", lane.originState || "", originText, originQuery, originCenter);
+          const destCheck = locationMatches(lane.destination || "", lane.destinationState || "", destText, destQuery, destCenter);
+
+          if (originCheck.match && destCheck.match) {
+            matchingLanes.push({
+              ...lane,
+              originDistanceMiles: originCheck.distanceMiles,
+              destDistanceMiles: destCheck.distanceMiles,
+            });
+          }
+        }
 
         if (matchingLanes.length === 0) continue;
 
@@ -1905,10 +1950,16 @@ RULES FOR YOUR RESPONSES:
         });
       }
 
-      // Sort by total matching volume descending
       results.sort((a, b) => b.totalMatchVolume - a.totalMatchVolume);
 
-      res.json({ results, originQuery, destQuery });
+      res.json({
+        results,
+        originQuery,
+        destQuery,
+        radiusMiles,
+        originGeocoded: !!originCenter,
+        destGeocoded: !!destCenter,
+      });
     } catch (error) {
       console.error("Lane search error:", error);
       res.status(500).json({ error: "Lane search failed" });
