@@ -1378,23 +1378,23 @@ RULES FOR YOUR RESPONSES:
   const EGG_CONFIGS: Record<string, { title: string; message: string }> = {
     first_meaningful_2: {
       title: "🥚 Easter Egg Unlocked — First Meaningful!",
-      message: "LFG! You're the first rep this month to rack up 2 meaningful conversations. The bar has officially been set. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first rep this month to rack up 2 meaningful conversations. The bar has officially been set. 📸 Take a screenshot, send it to the $ales group chat in Teams, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
     first_nominator: {
       title: "🥚 Easter Egg Unlocked — First Nominator!",
-      message: "LFG! You're the first person this month to nominate a teammate. Leadership is lifting others up. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first person this month to nominate a teammate. Leadership is lifting others up. 📸 Take a screenshot, send it to the $ales group chat in Teams, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
     first_1on1_close: {
       title: "🥚 Easter Egg Unlocked — First 1:1 Finisher!",
-      message: "LFG! You're the first person this month to close out a full 1:1 session. You just set the standard. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first person this month to close out a full 1:1 session. You just set the standard. 📸 Take a screenshot, send it to the $ales group chat in Teams, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
     first_relationship_mover: {
       title: "🥚 Easter Egg Unlocked — First Relationship Mover!",
-      message: "LFG! You're the first rep this month to move two contacts up the relationship ladder. Down, not across. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first rep this month to move two contacts up the relationship ladder. Down, not across. 📸 Take a screenshot, send it to the $ales group chat in Teams, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
     first_opportunity_4: {
       title: "🥚 Easter Egg Unlocked — First Opportunity Logger!",
-      message: "LFG! You're the first rep this month to log 4 opportunities. Hunters find the bag. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first rep this month to log 4 opportunities. Hunters find the bag. 📸 Take a screenshot, send it to the $ales group chat in Teams, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
   };
 
