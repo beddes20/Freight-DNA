@@ -37,6 +37,22 @@ const zipCodeMap: Record<string, string> = JSON.parse(
   readFileSync(join(process.cwd(), "server", "zipcodes.json"), "utf-8")
 );
 
+// Build 3-digit zip prefix → best representative city map at startup
+const zipPrefixMap: Record<string, string> = (() => {
+  const prefixCities: Record<string, Record<string, number>> = {};
+  for (const [zip, city] of Object.entries(zipCodeMap)) {
+    const prefix = zip.substring(0, 3);
+    if (!prefixCities[prefix]) prefixCities[prefix] = {};
+    prefixCities[prefix][city] = (prefixCities[prefix][city] || 0) + 1;
+  }
+  const result: Record<string, string> = {};
+  for (const [prefix, cities] of Object.entries(prefixCities)) {
+    const best = Object.entries(cities).sort((a, b) => b[1] - a[1])[0];
+    if (best) result[prefix] = best[0]; // e.g. "217" -> "Hagerstown, MD"
+  }
+  return result;
+})();
+
 function findSheetByName(workbook: XLSX.WorkBook, preferredName: string): string {
   const match = workbook.SheetNames.find(s => s.trim().toLowerCase() === preferredName.toLowerCase());
   return match || workbook.SheetNames[0];
@@ -197,6 +213,10 @@ const ZIP_REGEX = /^\d{5}(-\d{4})?$/;
 
 function zipToCity(value: string): string {
   const trimmed = value.trim();
+  // Handle 3-digit zip prefix (e.g. "217" from Staples-style RFPs)
+  if (/^\d{3}$/.test(trimmed)) {
+    return zipPrefixMap[trimmed] || trimmed;
+  }
   if (!ZIP_REGEX.test(trimmed)) return trimmed;
   const zip5 = trimmed.substring(0, 5);
   return zipCodeMap[zip5] || trimmed;
@@ -2009,16 +2029,20 @@ Rules:
 Your task is to map spreadsheet column headers to standard freight lane fields.
 The standard fields are:
 - origin_city: City name for origin/pickup location
-- origin_state: State abbreviation for origin
-- origin_zip: ZIP code for origin
+- origin_state: State abbreviation for origin (e.g. "Origin*", "Origin Country*" with state samples, "Orig State")
+- origin_zip: ZIP code or partial postal code for origin (e.g. "Origin Partial Postal Code*", "Origin ZIP", "Orig Zip", "From Zip")
 - dest_city: City name for destination/delivery location  
-- dest_state: State abbreviation for destination
-- dest_zip: ZIP code for destination
-- volume: Number of loads/shipments (annual or weekly)
-- equipment: Equipment or trailer type (e.g. Van, Flatbed, Reefer)
-- lane_id: Lane identifier or name
-- miles: Distance in miles for the lane (also called distance, mileage, mi, loaded miles, deadhead miles)
+- dest_state: State abbreviation for destination (e.g. "Destination*", "Dest State", "To State")
+- dest_zip: ZIP code or partial postal code for destination (e.g. "Destination Partial Postal Code*", "Dest ZIP", "To Zip")
+- volume: Number of loads/shipments (e.g. "Estimated Volume*", "Volume*", "Annual Loads", "Weekly Loads")
+- equipment: Equipment or trailer type (e.g. "Equipment Type*", "Trailer Type", "Van", "Flatbed", "Reefer")
+- lane_id: Lane identifier or name (e.g. "Lane Name*", "Lane ID", "Lane #")
+- miles: Distance in miles for the lane (e.g. "Length Of Haul*", "Miles", "Distance", "Mileage")
 - ignore: Column is not relevant
+
+IMPORTANT: "Origin Partial Postal Code*" and "Destination Partial Postal Code*" contain 3-digit zip prefix codes — map these to origin_zip and dest_zip respectively.
+"Origin*" when samples show 2-letter state codes (MD, FL, TX, etc.) should be mapped to origin_state.
+"Destination*" when samples show 2-letter state codes should be mapped to dest_state.
 
 Respond ONLY with a JSON object where keys are the original column names and values are one of the standard field types above.
 Be conservative - if unsure, use "ignore". Every column must be assigned.`,
