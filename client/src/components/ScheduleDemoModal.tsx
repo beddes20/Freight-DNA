@@ -59,8 +59,8 @@ function getAvailableTimesForDate(dateStr: string): string[] {
   }
   hash = Math.abs(hash);
 
-  // LCG to pick 1–3 unique indices to block
-  const blockCount = (hash % 3) + 1; // 1, 2, or 3
+  // LCG to pick 4–7 unique indices to block
+  const blockCount = (hash % 4) + 4; // 4, 5, 6, or 7
   const blocked = new Set<number>();
   let seed = hash;
   while (blocked.size < blockCount) {
