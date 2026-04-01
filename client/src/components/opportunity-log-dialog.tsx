@@ -181,7 +181,7 @@ export function OpportunityLogDialog({ open, onOpenChange, companyId, companyNam
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="opp-value">Est. Value $ <span className="text-xs text-muted-foreground">(optional)</span></Label>
+              <Label htmlFor="opp-value">Est. Value $ <span className="text-xs text-muted-foreground">(Margin, optional)</span></Label>
               <Input
                 id="opp-value"
                 type="number"
