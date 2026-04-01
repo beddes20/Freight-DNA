@@ -9,6 +9,9 @@ import {
   companies, contacts, touchpoints, rfps, goals, tasks, users,
   chatConversations, chatMessages, appSuggestions, notifications,
 } from "@shared/schema";
+import { storage } from "./storage";
+import { resolveColumns } from "./colResolver";
+import { geocodeCity, haversineDistance } from "./geocoding";
 
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -23,6 +26,197 @@ const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
+
+function normalizeModeCS(raw: string): string {
+  const t = (raw || "").trim().toLowerCase();
+  if (!t) return "";
+  if (/^(v|van|dry.?van|dv|dryvan)$/.test(t)) return "Van";
+  if (/^(r|reefer|refrigerated|temp|temperature|temp.?ctrl)$/.test(t)) return "Reefer";
+  if (/^(f|flatbed|fb|flat|step.?deck|rgn|lowboy)$/.test(t)) return "Flatbed";
+  if (/^ltl$/.test(t)) return "LTL";
+  if (/^(drayage|dray)$/.test(t)) return "Drayage";
+  if (/^(imdl|intermodal|im|rail)$/.test(t)) return "IMDL";
+  const s = raw.trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+async function runCarrierLaneSearch(
+  orgId: string,
+  originQuery: string,
+  destQuery: string,
+  radiusMiles: number,
+  modeFilter: string,
+  minLoadsPerMonth: number,
+): Promise<string> {
+  try {
+    function parseCityState(q: string): { city: string; state: string } {
+      if (!q) return { city: "", state: "" };
+      const cm = q.match(/^(.+),\s*([A-Za-z]{2})$/);
+      if (cm) return { city: cm[1].trim(), state: cm[2].trim().toUpperCase() };
+      const sm = q.match(/^(.+)\s+([A-Za-z]{2})$/);
+      if (sm) return { city: sm[1].trim(), state: sm[2].trim().toUpperCase() };
+      if (/^[A-Za-z]{2}$/.test(q)) return { city: "", state: q.trim().toUpperCase() };
+      return { city: q.trim(), state: "" };
+    }
+
+    const originParsed = parseCityState(originQuery);
+    const destParsed   = parseCityState(destQuery);
+    const originCenter = originQuery ? geocodeCity(originParsed.city, originParsed.state) : null;
+    const destCenter   = destQuery   ? geocodeCity(destParsed.city,   destParsed.state)   : null;
+
+    function locMatches(city: string, state: string, rawText: string, queryRaw: string, center: [number, number] | null): { match: boolean; dist: number | null } {
+      if (!queryRaw) return { match: true, dist: null };
+      if (center) {
+        const lc = geocodeCity(city, state);
+        if (lc) {
+          const d = haversineDistance(center[0], center[1], lc[0], lc[1]);
+          return { match: d <= radiusMiles, dist: Math.round(d) };
+        }
+      }
+      return { match: rawText.toLowerCase().includes(queryRaw.toLowerCase()), dist: null };
+    }
+
+    const uploads = await storage.getFinancialUploadsForOrg(orgId);
+    if (!uploads.length) return "No financial data found for this organization.";
+
+    type CarrierStats = { loads: number; totalMargin: number; totalCarrierPay: number; lastDate: string | null };
+    type CorridorData = {
+      originCity: string; originState: string;
+      destCity: string;   destState: string;
+      mode: string;
+      monthLoads: Map<string, number>;
+      carriers: Map<string, CarrierStats>;
+    };
+    const corridorMap = new Map<string, CorridorData>();
+
+    for (const upload of uploads) {
+      const rows: any[] = (upload.rows as any[]) || [];
+      if (!rows.length) continue;
+      const cols = resolveColumns(rows);
+
+      for (const row of rows) {
+        // exclude valubuaz
+        const rep = String(row[cols.opsUser] || "").trim().toLowerCase();
+        if (rep === "valubuaz") continue;
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || 0);
+        if (revenue === 0) continue;
+
+        const origCity  = String(row[cols.shipperCity]    || row[cols.origin]          || "").trim();
+        const origState = String(row[cols.shipperState]   || row[cols.originState]      || "").trim().toUpperCase();
+        const dstCity   = String(row[cols.consigneeCity]  || row[cols.destination]      || "").trim();
+        const dstState  = String(row[cols.consigneeState] || row[cols.destinationState] || "").trim().toUpperCase();
+        const carrier   = String(row[cols.carrier]        || "").trim();
+        const mode      = normalizeModeCS(String(row[cols.equipmentType] || "").trim());
+
+        if (!origCity && !origState) continue;
+        if (!dstCity  && !dstState)  continue;
+        if (!carrier) continue;
+        if (!mode) continue;
+        if (modeFilter && modeFilter.toLowerCase() !== "any" && mode.toLowerCase() !== modeFilter.toLowerCase()) continue;
+
+        // parse month key + margin
+        let monthKey = "";
+        let margin = 0;
+        const rawDate = row[cols.deliveryDate] || row[cols.dateOrdered];
+        if (rawDate != null && rawDate !== "") {
+          const serial = Number(rawDate);
+          if (!isNaN(serial) && serial > 40000) {
+            const d = new Date(new Date(1899, 11, 30).getTime() + serial * 86400000);
+            monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          } else {
+            const dStr = String(rawDate).trim();
+            if (dStr && isNaN(Number(dStr))) {
+              const d = new Date(dStr);
+              if (!isNaN(d.getTime())) monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+            }
+          }
+        }
+        const rawMargin = String(row[cols.marginDollar] || "").replace(/[^0-9.\-]/g, "");
+        if (rawMargin) margin = parseFloat(rawMargin) || 0;
+        else {
+          const rev = Number(row[cols.revenue] || row[cols.totalCharges] || 0);
+          const rawCP = String(row[cols.carrierPay] || row[cols.freightCharge] || "").replace(/[^0-9.]/g, "");
+          const cp = rawCP ? parseFloat(rawCP) || 0 : 0;
+          margin = rev - cp;
+        }
+
+        const rawCarrierPay = String(row[cols.carrierPay] || row[cols.freightCharge] || "").replace(/[^0-9.]/g, "");
+        const carrierPayVal = rawCarrierPay ? parseFloat(rawCarrierPay) || 0 : 0;
+
+        const key = `${origCity.toLowerCase()}|${origState}|${dstCity.toLowerCase()}|${dstState}|${mode}`;
+        if (!corridorMap.has(key)) {
+          corridorMap.set(key, {
+            originCity: origCity, originState: origState,
+            destCity: dstCity,   destState: dstState,
+            mode,
+            monthLoads: new Map(),
+            carriers: new Map(),
+          });
+        }
+        const corridor = corridorMap.get(key)!;
+        const mk = monthKey || "unknown";
+        corridor.monthLoads.set(mk, (corridor.monthLoads.get(mk) || 0) + 1);
+        if (!corridor.carriers.has(carrier)) corridor.carriers.set(carrier, { loads: 0, totalMargin: 0, totalCarrierPay: 0, lastDate: null });
+        const cs = corridor.carriers.get(carrier)!;
+        cs.loads++;
+        cs.totalMargin += margin || 0;
+        cs.totalCarrierPay += carrierPayVal;
+        if (monthKey && (!cs.lastDate || monthKey > cs.lastDate)) cs.lastDate = monthKey;
+      }
+    }
+
+    const results: any[] = [];
+    for (const corridor of corridorMap.values()) {
+      const realMonths = [...corridor.monthLoads.keys()].filter(k => k !== "unknown");
+      const totalLoads = [...corridor.monthLoads.values()].reduce((s, v) => s + v, 0);
+      const monthCount = Math.max(1, realMonths.length);
+      const avgLoadsPerMonth = totalLoads / monthCount;
+      if (avgLoadsPerMonth < minLoadsPerMonth) continue;
+
+      const origCheck = locMatches(corridor.originCity, corridor.originState, `${corridor.originCity} ${corridor.originState}`, originQuery, originCenter);
+      const dstCheck  = locMatches(corridor.destCity,   corridor.destState,   `${corridor.destCity} ${corridor.destState}`,   destQuery,   destCenter);
+      if (!origCheck.match || !dstCheck.match) continue;
+
+      const originLabel = [corridor.originCity, corridor.originState].filter(Boolean).join(", ");
+      const destLabel   = [corridor.destCity,   corridor.destState].filter(Boolean).join(", ");
+      const carrierList = [...corridor.carriers.entries()]
+        .map(([name, cs]) => ({
+          name,
+          loads: cs.loads,
+          pct: Math.round((cs.loads / totalLoads) * 100),
+          avgMarginPerLoad: cs.loads > 0 ? Math.round(cs.totalMargin / cs.loads) : null,
+          avgCarrierPay: cs.loads > 0 && cs.totalCarrierPay > 0 ? Math.round(cs.totalCarrierPay / cs.loads) : null,
+          lastUsed: cs.lastDate,
+        }))
+        .sort((a, b) => b.loads - a.loads);
+
+      results.push({ originLabel, destLabel, mode: corridor.mode, avgLoadsPerMonth: Math.round(avgLoadsPerMonth * 10) / 10, totalLoads, carriers: carrierList });
+    }
+
+    results.sort((a, b) => b.avgLoadsPerMonth - a.avgLoadsPerMonth);
+
+    if (!results.length) return `No corridors found matching your criteria (origin: "${originQuery || "any"}", dest: "${destQuery || "any"}", radius: ${radiusMiles}mi, mode: ${modeFilter || "any"}).`;
+
+    const TOP_CORRIDORS = 6;
+    const TOP_CARRIERS  = 5;
+    let out = `Carrier lane search results — ${originQuery || "any origin"} → ${destQuery || "any dest"} (${radiusMiles}mi radius${modeFilter ? `, ${modeFilter} only` : ""}):\n\n`;
+    for (const r of results.slice(0, TOP_CORRIDORS)) {
+      out += `**${r.originLabel} → ${r.destLabel}** [${r.mode}] — ${r.avgLoadsPerMonth} loads/mo avg (${r.totalLoads} total)\n`;
+      for (const c of r.carriers.slice(0, TOP_CARRIERS)) {
+        const pay  = c.avgCarrierPay     != null ? ` | avg carrier pay $${c.avgCarrierPay.toLocaleString()}`    : "";
+        const marg = c.avgMarginPerLoad  != null ? ` | avg margin $${c.avgMarginPerLoad.toLocaleString()}`  : "";
+        out += `  • ${c.name} — ${c.loads} loads (${c.pct}%)${pay}${marg}\n`;
+      }
+      if (r.carriers.length > TOP_CARRIERS) out += `  ...and ${r.carriers.length - TOP_CARRIERS} more carriers\n`;
+      out += "\n";
+    }
+    if (results.length > TOP_CORRIDORS) out += `(${results.length - TOP_CORRIDORS} more corridors — open Carrier Lane Search for full results)\n`;
+    return out;
+  } catch (err) {
+    console.error("Chatbot carrier lane search error:", err);
+    return "Carrier lane search failed. Please try the Carrier Lane Search page directly.";
+  }
+}
 
 async function buildEveryoneContext(requestingUserId: string): Promise<string> {
   try {
@@ -322,7 +516,8 @@ Keep it short and casual — reps are busy. No fluff, no filler.
 - If data isn't there, just say so
 - Talk like a sharp colleague, not a corporate assistant
 - When the user says they want to LOG A CALL, LOG AN EMAIL, LOG A TEXT, LOG A VISIT, or LOG A TOUCHPOINT — use the log_touchpoint tool
-- When the user says they want to CREATE A TASK, SET A REMINDER, or ADD A TO-DO — use the create_task tool`;
+- When the user says they want to CREATE A TASK, SET A REMINDER, or ADD A TO-DO — use the create_task tool
+- When the user asks about CARRIERS on a lane, who runs a corridor, carrier pay rates, what we're paying for a mode on a lane (e.g. "what carriers run TX-CA?", "how much are we paying for dry vans CA-TX?") — use the carrier_lane_search tool`;
 
       const tools: any[] = [
         {
@@ -357,6 +552,24 @@ Keep it short and casual — reps are busy. No fluff, no filler.
             },
           },
         },
+        {
+          type: "function",
+          function: {
+            name: "carrier_lane_search",
+            description: "Search financial upload data to find which carriers run on a specific lane/corridor and what we're paying them. Use when the user asks about carriers on a lane, carrier pay rates, who runs TX-CA, what we're paying for dry vans on a corridor, etc.",
+            parameters: {
+              type: "object",
+              properties: {
+                origin: { type: "string", description: "Origin location: city+state ('Chicago, IL'), state abbreviation ('TX'), or city name. Leave empty to search any origin." },
+                destination: { type: "string", description: "Destination location: city+state, state abbreviation, or city name. Leave empty to search any destination." },
+                radius_miles: { type: "number", description: "Radius in miles around the origin/destination to include nearby lanes (default 75)." },
+                mode: { type: "string", description: "Equipment/mode filter: Van, Reefer, Flatbed, LTL, Drayage, or IMDL. Leave empty for all modes." },
+                min_loads_per_month: { type: "number", description: "Minimum average loads per month for a corridor to be included (default 3)." },
+              },
+              required: [],
+            },
+          },
+        },
       ];
 
       res.setHeader("Content-Type", "text/event-stream");
@@ -378,6 +591,7 @@ Keep it short and casual — reps are busy. No fluff, no filler.
       });
 
       let fullResponse = "";
+      let toolCallId   = "";
       let toolCallName = "";
       let toolCallArgs = "";
 
@@ -394,19 +608,72 @@ Keep it short and casual — reps are busy. No fluff, no filler.
         // Accumulate tool call data
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls) {
+            if (tc.id)              toolCallId   += tc.id;
             if (tc.function?.name) toolCallName += tc.function.name;
             if (tc.function?.arguments) toolCallArgs += tc.function.arguments;
           }
         }
 
-        // Tool call complete — emit action event
+        // Tool call complete
         if (choice?.finish_reason === "tool_calls" && toolCallName) {
           try {
             const args = JSON.parse(toolCallArgs);
-            const actionResponse = `I can do that for you. Here's what I'll log:`;
-            fullResponse += actionResponse;
-            res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
-            res.write(`data: ${JSON.stringify({ action: { tool: toolCallName, args } })}\n\n`);
+
+            if (toolCallName === "carrier_lane_search") {
+              // ── Data-retrieval tool: execute server-side, feed result back to GPT ──
+              const searchResult = await runCarrierLaneSearch(
+                req.session.organizationId!,
+                String(args.origin || ""),
+                String(args.destination || ""),
+                Number(args.radius_miles || 75),
+                String(args.mode || ""),
+                Number(args.min_loads_per_month || 3),
+              );
+
+              // Build second-pass messages with tool result
+              const toolResultMessages: any[] = [
+                { role: "system", content: systemPrompt },
+                ...chatHistory,
+                {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [{
+                    id: toolCallId || "call_carrier",
+                    type: "function",
+                    function: { name: "carrier_lane_search", arguments: toolCallArgs },
+                  }],
+                },
+                {
+                  role: "tool",
+                  tool_call_id: toolCallId || "call_carrier",
+                  content: searchResult,
+                },
+              ];
+
+              // Stream the final GPT response incorporating search results
+              const stream2 = await openai.chat.completions.create({
+                model: "gpt-4o",
+                messages: toolResultMessages,
+                stream: true,
+                max_tokens: 1200,
+              });
+
+              for await (const chunk2 of stream2) {
+                const c2 = chunk2.choices[0]?.delta?.content;
+                if (c2) {
+                  fullResponse += c2;
+                  res.write(`data: ${JSON.stringify({ content: c2 })}\n\n`);
+                }
+              }
+            } else {
+              // ── Action tools: emit confirmation card for user to approve ──
+              const actionResponse = `I can do that for you. Here's what I'll log:`;
+              fullResponse += actionResponse;
+              res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
+              res.write(`data: ${JSON.stringify({ action: { tool: toolCallName, args } })}\n\n`);
+            }
+
+            toolCallId = "";
             toolCallName = "";
             toolCallArgs = "";
           } catch (parseErr) {
