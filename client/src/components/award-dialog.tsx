@@ -47,9 +47,10 @@ interface AwardDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   award?: Award;
+  onCreated?: (award: Award) => void;
 }
 
-export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
+export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialogProps) {
   const { toast } = useToast();
   const isEditing = !!award;
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -115,14 +116,15 @@ export function AwardDialog({ open, onOpenChange, award }: AwardDialogProps) {
   const createMutation = useMutation({
     mutationFn: async (data: InsertAward) => {
       const response = await apiRequest("POST", "/api/awards", data);
-      return response.json();
+      return response.json() as Promise<Award>;
     },
-    onSuccess: () => {
+    onSuccess: (createdAward: Award) => {
       queryClient.invalidateQueries({ queryKey: ["/api/awards"] });
       toast({ title: "Award created successfully" });
       onOpenChange(false);
       form.reset();
       setSelectedFile(null);
+      onCreated?.(createdAward);
     },
     onError: (error: Error) => {
       toast({ title: "Error creating award", description: error.message, variant: "destructive" });

@@ -1415,6 +1415,11 @@ export default function RfpAwards() {
   const [awardDialogOpen, setAwardDialogOpen] = useState(false);
   const [editingRfp, setEditingRfp] = useState<Rfp | undefined>();
   const [editingAward, setEditingAward] = useState<Award | undefined>();
+  const [procurementPromptAward, setProcurementPromptAward] = useState<Award | null>(null);
+  const [procurementPromptLanes, setProcurementPromptLanes] = useState<ProcurementLaneInfo[]>([]);
+  const [promptProcDialogOpen, setPromptProcDialogOpen] = useState(false);
+  const [promptProcLanes, setPromptProcLanes] = useState<ProcurementLaneInfo[]>([]);
+  const [promptGeneratingTasks, setPromptGeneratingTasks] = useState(false);
   const [deleteRfpTarget, setDeleteRfpTarget] = useState<Rfp | null>(null);
   const [deleteAwardTarget, setDeleteAwardTarget] = useState<Award | null>(null);
   const [viewingRfp, setViewingRfp] = useState<Rfp | null>(null);
@@ -1655,6 +1660,40 @@ export default function RfpAwards() {
   const handleAddAward = () => {
     setEditingAward(undefined);
     setAwardDialogOpen(true);
+  };
+
+  const handleNewAwardCreated = (award: Award) => {
+    const lanes = getHighVolumeLanes(award);
+    if (lanes.length > 0) {
+      setProcurementPromptAward(award);
+      setProcurementPromptLanes(lanes);
+    }
+  };
+
+  const handlePromptCreateTasks = async () => {
+    if (!procurementPromptAward) return;
+    setPromptGeneratingTasks(true);
+    try {
+      const res = await apiRequest("POST", `/api/awards/${procurementPromptAward.id}/procurement-tasks`, {});
+      const { results } = await res.json() as { results: Array<{ lane: string; taskId: string; created: boolean }> };
+      const taskByLane = Object.fromEntries(results.map((r: any) => [r.lane, r.taskId]));
+      const createdLanes: ProcurementLaneInfo[] = procurementPromptLanes.map(lane => ({ ...lane, taskId: taskByLane[lane.lane] }));
+      const createdCount = results.filter((r: any) => r.created).length;
+      if (createdCount > 0) queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      setPromptProcLanes(createdLanes);
+      setProcurementPromptAward(null);
+      setPromptProcDialogOpen(true);
+      toast({
+        title: createdCount > 0
+          ? `${createdCount} procurement task${createdCount !== 1 ? "s" : ""} created`
+          : "Opening procurement workspace",
+        description: "Target 5–10 carrier contacts per lane.",
+      });
+    } catch {
+      toast({ title: "Failed to generate procurement tasks", variant: "destructive" });
+    } finally {
+      setPromptGeneratingTasks(false);
+    }
   };
 
   const isLoading = rfpsLoading || awardsLoading;
@@ -2214,6 +2253,7 @@ export default function RfpAwards() {
         rfp={convertingRfp}
         company={convertingRfp ? companiesMap.get(convertingRfp.companyId) : undefined}
         onClose={() => setConvertingRfp(null)}
+        onCreated={handleNewAwardCreated}
       />
 
       {isLoading ? (
@@ -2402,6 +2442,59 @@ export default function RfpAwards() {
           if (!open) setEditingAward(undefined);
         }}
         award={editingAward}
+        onCreated={handleNewAwardCreated}
+      />
+
+      {/* Procurement prompt — shown after a new award is created with high-volume lanes */}
+      <Dialog open={!!procurementPromptAward} onOpenChange={(open) => { if (!open) setProcurementPromptAward(null); }}>
+        <DialogContent className="sm:max-w-sm" data-testid="dialog-procurement-prompt">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Trophy className="h-5 w-5 text-amber-500" />
+              Set up carrier procurement?
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-1">
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              <span className="font-medium text-foreground">{procurementPromptAward?.title}</span> has{" "}
+              <span className="font-medium text-foreground">{procurementPromptLanes.length} high-volume lane{procurementPromptLanes.length !== 1 ? "s" : ""}</span> (50+ loads/year).
+              Want to create procurement tasks so your team can start sourcing carrier coverage?
+            </p>
+            <p className="text-xs text-muted-foreground">
+              You can always do this later from the award card.
+            </p>
+            <div className="flex flex-col gap-2 pt-1">
+              <Button
+                onClick={handlePromptCreateTasks}
+                disabled={promptGeneratingTasks}
+                className="w-full"
+                data-testid="button-prompt-create-tasks"
+              >
+                {promptGeneratingTasks ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Creating tasks…</>
+                ) : (
+                  <><ClipboardList className="h-4 w-4 mr-2" />Yes, create procurement tasks</>
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => setProcurementPromptAward(null)}
+                className="w-full text-muted-foreground"
+                data-testid="button-prompt-skip-procurement"
+              >
+                Skip for now
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Workspace dialog opened from the procurement prompt */}
+      <ProcurementTaskLauncherDialog
+        open={promptProcDialogOpen}
+        onOpenChange={setPromptProcDialogOpen}
+        lanes={promptProcLanes}
+        awardId={promptProcLanes[0]?.awardId ?? ""}
       />
 
       <AlertDialog open={!!deleteRfpTarget} onOpenChange={(open) => !open && setDeleteRfpTarget(null)}>
