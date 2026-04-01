@@ -22,6 +22,7 @@ import Dashboard from "@/pages/dashboard";
 import CompanyDetail from "@/pages/company-detail";
 import RfpAwards from "@/pages/rfp-awards";
 import RfpLaneSearch from "@/pages/rfp-lane-search";
+import CarrierLaneSearch from "@/pages/carrier-lane-search";
 import ResearchTasks from "@/pages/research-tasks";
 import Customers from "@/pages/customers";
 import LoginPage from "@/pages/login";
@@ -88,6 +89,7 @@ function Router() {
       <Route path="/companies/:id" component={CompanyDetail} />
       <Route path="/rfp-awards" component={RfpAwards} />
       <Route path="/rfp-lane-search" component={RfpLaneSearch} />
+      <Route path="/carrier-lane-search" component={CarrierLaneSearch} />
       <Route path="/research-tasks" component={ResearchTasks} />
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/reps/:userId" component={RepCustomers} />

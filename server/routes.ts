@@ -5149,6 +5149,157 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  // ── Carrier Lane Search — build a call list of carriers by corridor ─────────
+  app.get("/api/carriers/lane-search", requireAuth, async (req, res) => {
+    try {
+      const orgId = req.session.organizationId!;
+      const originQuery = String(req.query.origin || "").trim();
+      const destQuery   = String(req.query.destination || "").trim();
+      const radiusMiles = Math.max(1, Math.min(500, parseFloat(String(req.query.radius || "75")) || 75));
+      const minLoadsPerMonth = Math.max(1, parseFloat(String(req.query.minLoadsPerMonth || "5")) || 5);
+
+      // Parse "City, ST" / "City ST" / "ST" into components for geocoding
+      function parseCityState(q: string): { city: string; state: string } {
+        if (!q) return { city: "", state: "" };
+        const cm = q.match(/^(.+),\s*([A-Za-z]{2})$/);
+        if (cm) return { city: cm[1].trim(), state: cm[2].trim().toUpperCase() };
+        const sm = q.match(/^(.+)\s+([A-Za-z]{2})$/);
+        if (sm) return { city: sm[1].trim(), state: sm[2].trim().toUpperCase() };
+        if (/^[A-Za-z]{2}$/.test(q)) return { city: "", state: q.trim().toUpperCase() };
+        return { city: q.trim(), state: "" };
+      }
+
+      const originParsed = parseCityState(originQuery);
+      const destParsed   = parseCityState(destQuery);
+      const originCenter = originQuery ? geocodeCity(originParsed.city, originParsed.state) : null;
+      const destCenter   = destQuery   ? geocodeCity(destParsed.city,   destParsed.state)   : null;
+
+      function locMatches(city: string, state: string, rawText: string, queryRaw: string, center: [number, number] | null): { match: boolean; dist: number | null } {
+        if (!queryRaw) return { match: true, dist: null };
+        if (center) {
+          const lc = geocodeCity(city, state);
+          if (lc) {
+            const d = haversineDistance(center[0], center[1], lc[0], lc[1]);
+            return { match: d <= radiusMiles, dist: Math.round(d) };
+          }
+        }
+        return { match: rawText.toLowerCase().includes(queryRaw.toLowerCase()), dist: null };
+      }
+
+      // Load all financial data for the org (all uploads merged)
+      const uploads = await storage.getFinancialUploadsForOrg(orgId);
+      if (!uploads.length) return res.json({ corridors: [], originQuery, destQuery, radiusMiles, minLoadsPerMonth, originGeocoded: !!originCenter, destGeocoded: !!destCenter });
+
+      // ─── Aggregate: corridor → month → carrier → load count ────────────────
+      type CarrierStats = { loads: number; totalMargin: number; lastDate: string | null };
+      type CorridorData = {
+        originCity: string; originState: string;
+        destCity: string;   destState: string;
+        monthLoads: Map<string, number>;           // monthKey → load count
+        carriers: Map<string, CarrierStats>;       // carrier name → stats
+      };
+      const corridorMap = new Map<string, CorridorData>();
+
+      for (const upload of uploads) {
+        const rows: any[] = (upload.rows as any[]) || [];
+        if (!rows.length) continue;
+        const cols = resolveColumns(rows);
+
+        for (const row of rows) {
+          if (isExcludedRow(row, cols)) continue;
+          const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || 0);
+          if (revenue === 0) continue;
+
+          const origCity  = String(row[cols.shipperCity]    || row[cols.origin]           || "").trim();
+          const origState = String(row[cols.shipperState]   || row[cols.originState]       || "").trim().toUpperCase();
+          const dstCity   = String(row[cols.consigneeCity]  || row[cols.destination]       || "").trim();
+          const dstState  = String(row[cols.consigneeState] || row[cols.destinationState]  || "").trim().toUpperCase();
+          const carrier   = String(row[cols.carrier]        || "").trim();
+
+          if (!origCity && !origState) continue;
+          if (!dstCity  && !dstState)  continue;
+          if (!carrier) continue;
+
+          const { monthKey, margin } = parseHistoricalRow(row, cols);
+
+          const key = `${origCity.toLowerCase()}|${origState}|${dstCity.toLowerCase()}|${dstState}`;
+          if (!corridorMap.has(key)) {
+            corridorMap.set(key, {
+              originCity: origCity, originState: origState,
+              destCity: dstCity,   destState: dstState,
+              monthLoads: new Map(),
+              carriers: new Map(),
+            });
+          }
+          const corridor = corridorMap.get(key)!;
+
+          // track monthly load count
+          const mk = monthKey || "unknown";
+          corridor.monthLoads.set(mk, (corridor.monthLoads.get(mk) || 0) + 1);
+
+          // track per-carrier stats
+          if (!corridor.carriers.has(carrier)) corridor.carriers.set(carrier, { loads: 0, totalMargin: 0, lastDate: null });
+          const cs = corridor.carriers.get(carrier)!;
+          cs.loads++;
+          cs.totalMargin += margin || 0;
+          if (monthKey && (!cs.lastDate || monthKey > cs.lastDate)) cs.lastDate = monthKey;
+        }
+      }
+
+      // ─── Filter: avg loads/month ≥ minLoadsPerMonth ─────────────────────────
+      const results: any[] = [];
+
+      for (const corridor of corridorMap.values()) {
+        const realMonths = [...corridor.monthLoads.keys()].filter(k => k !== "unknown");
+        const totalLoads = [...corridor.monthLoads.values()].reduce((s, v) => s + v, 0);
+        const monthCount = Math.max(1, realMonths.length);
+        const avgLoadsPerMonth = totalLoads / monthCount;
+
+        if (avgLoadsPerMonth < minLoadsPerMonth) continue;
+
+        // ─── Radius filter ───────────────────────────────────────────────────
+        const origCheck = locMatches(corridor.originCity, corridor.originState, `${corridor.originCity} ${corridor.originState}`, originQuery, originCenter);
+        const dstCheck  = locMatches(corridor.destCity,   corridor.destState,   `${corridor.destCity} ${corridor.destState}`,   destQuery,   destCenter);
+        if (!origCheck.match || !dstCheck.match) continue;
+
+        const originLabel = [corridor.originCity, corridor.originState].filter(Boolean).join(", ");
+        const destLabel   = [corridor.destCity,   corridor.destState].filter(Boolean).join(", ");
+
+        // Build sorted carrier list
+        const carrierList = [...corridor.carriers.entries()]
+          .map(([name, cs]) => ({
+            name,
+            loads: cs.loads,
+            pct: Math.round((cs.loads / totalLoads) * 100),
+            avgMarginPerLoad: cs.loads > 0 ? Math.round(cs.totalMargin / cs.loads) : null,
+            lastUsed: cs.lastDate,
+          }))
+          .sort((a, b) => b.loads - a.loads);
+
+        results.push({
+          corridorKey: `${corridor.originCity}|${corridor.originState}|${corridor.destCity}|${corridor.destState}`,
+          originCity: corridor.originCity, originState: corridor.originState,
+          destCity: corridor.destCity,     destState: corridor.destState,
+          originLabel, destLabel,
+          corridorLabel: `${originLabel} → ${destLabel}`,
+          avgLoadsPerMonth: Math.round(avgLoadsPerMonth * 10) / 10,
+          totalLoads,
+          monthsObserved: monthCount,
+          originDistanceMiles: origCheck.dist,
+          destDistanceMiles:   dstCheck.dist,
+          carriers: carrierList,
+        });
+      }
+
+      results.sort((a, b) => b.avgLoadsPerMonth - a.avgLoadsPerMonth);
+
+      res.json({ corridors: results, originQuery, destQuery, radiusMiles, minLoadsPerMonth, originGeocoded: !!originCenter, destGeocoded: !!destCenter });
+    } catch (err) {
+      console.error("Carrier lane search error:", err);
+      res.status(500).json({ error: "Carrier lane search failed" });
+    }
+  });
+
   // ── Salesperson summary (for Sales roles) ──────────────────────────────────
   app.get("/api/financials/salesperson-summary", requireAuth, async (req, res) => {
     try {
