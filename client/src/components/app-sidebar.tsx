@@ -21,9 +21,11 @@ import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
 
+const PROSPECTS_ROLES = ["sales", "sales_director", "account_manager", "national_account_manager"];
+
 const navItems = [
   { title: "Dashboard",         url: "/",                 icon: LayoutGrid    },
-  { title: "Sales Pipeline",    url: "/prospects",        icon: Crosshair,     roles: ["admin", "sales", "sales_director"] },
+  { title: "Sales Pipeline",    url: "/prospects",        icon: Crosshair,     roles: PROSPECTS_ROLES },
   { title: "Customers",         url: "/customers",        icon: Network,       roles: SALES_ROLES },
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
   { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare },
@@ -35,7 +37,6 @@ const navItems = [
     roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
   },
   { title: "Goals",           url: "/goals",      icon: Target         },
-  { title: "Report Cards",    url: "/reports",    icon: FileBarChart2, roles: ["admin", "director", "national_account_manager", "sales_director"] },
   { title: "My Report Card",  url: "/report/me",  icon: FileBarChart2, roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
   { title: "PTO Passoff",     url: "/pto-passoff",icon: Plane          },
   {
@@ -47,11 +48,14 @@ const navItems = [
 ];
 
 const pipelineItems = [
-  { title: "RFP & Awards",        url: "/rfp-awards",          icon: Trophy,       roles: undefined },
+  { title: "RFP & Awards",       url: "/rfp-awards",         icon: Trophy,    roles: undefined },
+  { title: "Pipeline Analytics", url: "/pipeline-analytics", icon: LineChart, roles: ["admin", "sales_director"] },
+];
+
+const laneToolItems = [
   { title: "Lane Research",       url: "/research-tasks",      icon: ClipboardList, roles: undefined },
-  { title: "RFP Lane Search",     url: "/rfp-lane-search",     icon: MapPin,       roles: undefined },
-  { title: "Carrier Lane Search", url: "/carrier-lane-search", icon: Truck,        roles: undefined },
-  { title: "Pipeline Analytics",  url: "/pipeline-analytics",  icon: LineChart,    roles: ["admin", "sales_director"] },
+  { title: "RFP Lane Search",     url: "/rfp-lane-search",     icon: MapPin,        roles: undefined },
+  { title: "Carrier Lane Search", url: "/carrier-lane-search", icon: Truck,         roles: undefined },
 ];
 
 const toolItems = [
@@ -207,8 +211,22 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 {pipelineItems
-                .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
-                .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
+                  .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
+                  .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
+        {/* ── Lane Tools (hidden for LM/LC roles) ── */}
+        {SALES_ROLES.includes(user?.role ?? "") && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Lane Tools</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {laneToolItems
+                  .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
+                  .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

@@ -513,7 +513,8 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      {/* Lane header row */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge className={`text-xs ${coverage.color}`}>
             {coverage.label}
@@ -522,7 +523,38 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
             {laneInfo.volume.toLocaleString()} loads/yr · {laneInfo.origin} → {laneInfo.destination}
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Assign LM — always visible in header */}
+          {assignedLmName && !assignOpen ? (
+            <div className="flex items-center gap-1">
+              <Badge variant="secondary" className="text-xs gap-1 h-7 px-2">
+                <Check className="h-3 w-3 text-green-600" />
+                {assignedLmName}
+              </Badge>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs text-muted-foreground"
+                onClick={() => setAssignOpen(true)}
+                data-testid="button-reassign-lm"
+              >
+                Reassign
+              </Button>
+            </div>
+          ) : !assignOpen ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => setAssignOpen(true)}
+              data-testid="button-open-assign-lm"
+            >
+              <UserPlus className="h-3 w-3 mr-1" />
+              Assign LM
+            </Button>
+          ) : null}
           <Button
             type="button"
             size="sm"
@@ -547,135 +579,106 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
         </div>
       </div>
 
+      {/* Assign LM picker — shown inline when open */}
+      {assignOpen && (
+        <div className="border rounded-lg p-3 bg-muted/40 space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <UserPlus className="h-4 w-4 text-primary" />
+            {assignedLmName ? `Reassign lane — currently ${assignedLmName}` : "Assign lane to a Logistics Manager"}
+          </div>
+          <div className="flex items-center gap-2">
+            <Select value={selectedLmId} onValueChange={setSelectedLmId}>
+              <SelectTrigger className="h-8 text-xs flex-1" data-testid="select-assign-lm">
+                <SelectValue placeholder="Select a Logistics Manager…" />
+              </SelectTrigger>
+              <SelectContent>
+                {lmUsers.length === 0 ? (
+                  <SelectItem value="_none" disabled>No LMs found in your org</SelectItem>
+                ) : (
+                  lmUsers.map(u => (
+                    <SelectItem key={u.id} value={u.id} data-testid={`option-lm-${u.id}`}>
+                      {u.name}
+                      {u.role === "logistics_coordinator" && (
+                        <span className="ml-1 text-muted-foreground">(LC)</span>
+                      )}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 text-xs shrink-0"
+              disabled={!selectedLmId || assignLmMutation.isPending}
+              onClick={() => assignLmMutation.mutate({ lane: laneInfo.lane, assignToUserId: selectedLmId })}
+              data-testid="button-confirm-assign-lm"
+            >
+              {assignLmMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Assign"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 text-xs shrink-0"
+              onClick={() => { setAssignOpen(false); setSelectedLmId(""); }}
+              data-testid="button-cancel-assign-lm"
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Suggest panel — carrier suggestions only */}
       {suggestOpen && (
-        <div className="border rounded-lg p-3 bg-blue-50/50 dark:bg-blue-950/20 space-y-3">
-          {/* Carriers from history */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-sm font-medium text-blue-800 dark:text-blue-300">
-              <TrendingUp className="h-4 w-4" />
-              Carriers from your data on this lane
-              <span className="text-xs font-normal text-blue-600 dark:text-blue-400">(within 50 mi)</span>
+        <div className="border rounded-lg p-3 bg-blue-50/50 dark:bg-blue-950/20 space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium text-blue-800 dark:text-blue-300">
+            <TrendingUp className="h-4 w-4" />
+            Carriers from your data on this lane
+            <span className="text-xs font-normal text-blue-600 dark:text-blue-400">(within 50 mi)</span>
+          </div>
+          {suggestLoading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading...
             </div>
-            {suggestLoading ? (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" /> Loading...
-              </div>
-            ) : uniqueSuggested.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No carrier data found for this lane in your freight history.</p>
-            ) : (
-              <div className="space-y-1">
-                {uniqueSuggested.map((c, i) => {
-                  const alreadyAdded = laneScopedCarriers.some(
-                    lc => lc.carrierName.toLowerCase() === c.name.toLowerCase()
-                  );
-                  return (
-                    <div key={i} className="flex items-center justify-between text-xs py-1" data-testid={`row-suggested-carrier-${i}`}>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{c.name}</span>
-                        <span className="text-muted-foreground">{c.loads} loads</span>
-                        {c.avgCarrierPay != null && (
-                          <span className="text-muted-foreground">${c.avgCarrierPay.toFixed(0)} avg</span>
-                        )}
-                      </div>
-                      {alreadyAdded ? (
-                        <Badge variant="secondary" className="text-xs">Added</Badge>
-                      ) : (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="h-5 text-xs px-2"
-                          onClick={() => handleAddSuggested(c)}
-                          disabled={directAddMutation.isPending}
-                          data-testid={`button-use-suggested-${i}`}
-                        >
-                          {directAddMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Add"}
-                        </Button>
+          ) : uniqueSuggested.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No carrier data found for this lane in your freight history.</p>
+          ) : (
+            <div className="space-y-1">
+              {uniqueSuggested.map((c, i) => {
+                const alreadyAdded = laneScopedCarriers.some(
+                  lc => lc.carrierName.toLowerCase() === c.name.toLowerCase()
+                );
+                return (
+                  <div key={i} className="flex items-center justify-between text-xs py-1" data-testid={`row-suggested-carrier-${i}`}>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{c.name}</span>
+                      <span className="text-muted-foreground">{c.loads} loads</span>
+                      {c.avgCarrierPay != null && (
+                        <span className="text-muted-foreground">${c.avgCarrierPay.toFixed(0)} avg</span>
                       )}
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Assign to LM divider */}
-          <div className="border-t border-blue-200 dark:border-blue-800 pt-2 space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-medium text-blue-800 dark:text-blue-300">
-                <UserPlus className="h-4 w-4" />
-                Assign lane to LM
-              </div>
-              {assignedLmName && !assignOpen && (
-                <Badge variant="secondary" className="text-xs gap-1">
-                  <Check className="h-3 w-3 text-green-600" />
-                  {assignedLmName}
-                </Badge>
-              )}
-            </div>
-
-            {!assignOpen ? (
-              <div className="flex items-center gap-2">
-                <p className="text-xs text-muted-foreground flex-1">
-                  {assignedLmName
-                    ? `Currently assigned to ${assignedLmName}. Reassign below.`
-                    : "Send this lane to a Logistics Manager to source carrier contacts."}
-                </p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs shrink-0"
-                  onClick={() => setAssignOpen(true)}
-                  data-testid="button-open-assign-lm"
-                >
-                  {assignedLmName ? "Reassign" : "Assign"}
-                </Button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Select value={selectedLmId} onValueChange={setSelectedLmId}>
-                  <SelectTrigger className="h-8 text-xs flex-1" data-testid="select-assign-lm">
-                    <SelectValue placeholder="Select a Logistics Manager…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {lmUsers.length === 0 ? (
-                      <SelectItem value="_none" disabled>No LMs found in your org</SelectItem>
+                    {alreadyAdded ? (
+                      <Badge variant="secondary" className="text-xs">Added</Badge>
                     ) : (
-                      lmUsers.map(u => (
-                        <SelectItem key={u.id} value={u.id} data-testid={`option-lm-${u.id}`}>
-                          {u.name}
-                          {u.role === "logistics_coordinator" && (
-                            <span className="ml-1 text-muted-foreground">(LC)</span>
-                          )}
-                        </SelectItem>
-                      ))
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-5 text-xs px-2"
+                        onClick={() => handleAddSuggested(c)}
+                        disabled={directAddMutation.isPending}
+                        data-testid={`button-use-suggested-${i}`}
+                      >
+                        {directAddMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Add"}
+                      </Button>
                     )}
-                  </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  size="sm"
-                  className="h-8 text-xs shrink-0"
-                  disabled={!selectedLmId || assignLmMutation.isPending}
-                  onClick={() => assignLmMutation.mutate({ lane: laneInfo.lane, assignToUserId: selectedLmId })}
-                  data-testid="button-confirm-assign-lm"
-                >
-                  {assignLmMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Assign"}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 text-xs shrink-0"
-                  onClick={() => { setAssignOpen(false); setSelectedLmId(""); }}
-                  data-testid="button-cancel-assign-lm"
-                >
-                  Cancel
-                </Button>
-              </div>
-            )}
-          </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

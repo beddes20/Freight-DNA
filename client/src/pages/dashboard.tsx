@@ -33,7 +33,6 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { TaskDialog } from "@/components/task-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import InternalCommsPortlet from "@/components/internal-comms-portlet";
-import MarketSharePortlet from "@/components/market-share-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
@@ -3429,11 +3428,6 @@ export default function Dashboard() {
       </div>
       </div>{/* end team-directory */}
 
-      <div style={{ order: getOrder("market-share") }} className={!isVisible("market-share") ? "hidden" : ""}>
-      <PortletErrorBoundary label="Market Share">
-      {canSeeTeam && <MarketSharePortlet />}
-      </PortletErrorBoundary>
-      </div>{/* end market-share */}
 
       <div style={{ order: getOrder("relationship") }} className={!isVisible("relationship") ? "hidden" : ""}>
       <PortletErrorBoundary label="Relationship Intel">

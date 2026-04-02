@@ -1272,9 +1272,10 @@ export default function CompanyDetail() {
       )}
 
       <Tabs value={detailTab} onValueChange={(t) => { setDetailTab(t); localStorage.setItem("cd_tab", t); }}>
-        <TabsList className="w-full grid grid-cols-4 mb-1">
+        <TabsList className="w-full grid grid-cols-5 mb-1">
           <TabsTrigger value="overview" data-testid="tab-detail-overview">Overview</TabsTrigger>
-          <TabsTrigger value="intelligence" data-testid="tab-detail-intelligence">Intelligence</TabsTrigger>
+          <TabsTrigger value="activity" data-testid="tab-detail-activity">Activity</TabsTrigger>
+          <TabsTrigger value="intelligence" data-testid="tab-detail-intelligence">Intel</TabsTrigger>
           <TabsTrigger value="people" data-testid="tab-detail-people">People</TabsTrigger>
           <TabsTrigger value="rfp" data-testid="tab-detail-rfp">RFP & Lanes</TabsTrigger>
         </TabsList>
@@ -1406,6 +1407,11 @@ export default function CompanyDetail() {
 
       {/* Relationship Freight Attribution */}
       <RelationshipFreightCompanyPortlet companyId={companyId} companyName={company.name} />
+
+        </TabsContent>
+
+        {/* ── Activity tab: Tasks, Callouts, Touch Log ── */}
+        <TabsContent value="activity" className="space-y-4 mt-2">
 
       {/* Account Tasks */}
       <Card data-testid="card-company-tasks">

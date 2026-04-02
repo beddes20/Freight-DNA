@@ -79,7 +79,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Rfp, Award, Company, Contact, LaneCarrier } from "@shared/schema";
-import { ProcurementTaskLauncherDialog, AwardRolodexDialog, type ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
+import { ProcurementTaskLauncherDialog, type ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
 
 const rfpStatusConfig = {
   pending:           { label: "Pending",            icon: Clock,      color: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400" },
@@ -262,8 +262,6 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
   const [procurementDialogOpen, setProcurementDialogOpen] = useState(false);
   const [activeProcLanes, setActiveProcLanes] = useState<ProcurementLaneInfo[]>([]);
   const [generatingTasks, setGeneratingTasks] = useState(false);
-  const [rolodexOpen, setRolodexOpen] = useState(false);
-
   const highVolumeLanes = getHighVolumeLanes(award);
 
   const { data: awardCarriers = [] } = useQuery<LaneCarrier[]>({
@@ -406,18 +404,6 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
                 )}
                 Generate Procurement Tasks
               </Button>
-              {highVolumeLanes.length > 0 && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setRolodexOpen(true)}
-                  className="text-xs h-8"
-                  data-testid={`button-view-rolodex-${award.id}`}
-                >
-                  <Users className="h-3 w-3 mr-1.5" />
-                  {awardCarriers.length > 0 ? `Rolodex (${awardCarriers.length})` : "Rolodex"}
-                </Button>
-              )}
             </div>
             <div className="flex items-center gap-1">
               <Button
@@ -447,15 +433,6 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
           onOpenChange={setProcurementDialogOpen}
           title={`Carrier Procurement — ${award.title}`}
           lanes={activeProcLanes}
-        />
-      )}
-      {highVolumeLanes.length > 0 && (
-        <AwardRolodexDialog
-          open={rolodexOpen}
-          onOpenChange={setRolodexOpen}
-          awardTitle={award.title}
-          awardId={award.id}
-          lanes={highVolumeLanes}
         />
       )}
     </>

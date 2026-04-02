@@ -1465,6 +1465,8 @@ function ProspectCard({ prospect, onClick }: { prospect: EnrichedProspect; onCli
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
+const PROSPECTS_ALLOWED_ROLES = ["sales", "sales_director", "account_manager", "national_account_manager"];
+
 export default function ProspectsPage() {
   const { user } = useAuth();
   const [addOpen, setAddOpen] = useState(false);
@@ -1496,12 +1498,12 @@ export default function ProspectsPage() {
     return true;
   }), [prospects, filterOwner, filterPriority, filterLeadSource]);
 
-  if (!user || !["admin", "sales", "sales_director"].includes(user.role ?? "")) {
+  if (!user || !PROSPECTS_ALLOWED_ROLES.includes(user.role ?? "")) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 text-center p-8">
         <AlertCircle className="h-10 w-10 text-muted-foreground" />
         <p className="font-semibold">Access Restricted</p>
-        <p className="text-sm text-muted-foreground">The sales pipeline is only accessible to the sales team.</p>
+        <p className="text-sm text-muted-foreground">The sales pipeline is only accessible to sales team members.</p>
       </div>
     );
   }
