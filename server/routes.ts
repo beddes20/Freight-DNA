@@ -2317,14 +2317,63 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       } else {
         result = analyzeRfpSpreadsheet(workbook);
       }
+      // Build the column→field reverse lookup from the confirmed mapping
+      const fieldToOriginalCol = (field: string): string | null => {
+        for (const [col, f] of Object.entries(confirmedMappingRaw ? (typeof confirmedMappingRaw === "string" ? JSON.parse(confirmedMappingRaw) : confirmedMappingRaw) : {})) {
+          if (f === field) return col;
+        }
+        return null;
+      };
+      const oCityCol   = fieldToOriginalCol("origin_city");
+      const oStateCol  = fieldToOriginalCol("origin_state");
+      const oZipCol    = fieldToOriginalCol("origin_zip");
+      const dCityCol   = fieldToOriginalCol("dest_city");
+      const dStateCol  = fieldToOriginalCol("dest_state");
+      const dZipCol    = fieldToOriginalCol("dest_zip");
+      const volCol     = fieldToOriginalCol("volume");
+
+      // Detect cadence for volume scaling (same logic as analyzeRfpSpreadsheetWithMapping)
+      let isWeekly = false, isMonthly = false;
+      if (volCol) {
+        const colLower = volCol.toLowerCase();
+        if (colLower.includes("week") || colLower.includes("wkly")) isWeekly = true;
+        else if (colLower.includes("month") || colLower.includes("mthly")) isMonthly = true;
+        else {
+          const nums = result.rows.map((r: Record<string, any>) => parseFloat(String(r[volCol] || "").replace(/[^0-9.]/g, ""))).filter((v: number) => !isNaN(v) && v > 0);
+          if (nums.length > 0 && Math.max(...nums) <= 52) isWeekly = true;
+        }
+      }
+
+      const allLaneLabels: string[] = result.rows
+        .map((row: Record<string, any>) => {
+          const rawOCity  = oCityCol  ? String(row[oCityCol]  || "").trim() : "";
+          const oState    = oStateCol ? String(row[oStateCol] || "").trim() : "";
+          const rawOZip   = oZipCol   ? String(row[oZipCol]   || "").trim() : "";
+          const rawDCity  = dCityCol  ? String(row[dCityCol]  || "").trim() : "";
+          const dState    = dStateCol ? String(row[dStateCol] || "").trim() : "";
+          const rawDZip   = dZipCol   ? String(row[dZipCol]   || "").trim() : "";
+
+          const oCity = rawOCity || zipToCity(rawOZip);
+          const dCity = rawDCity || zipToCity(rawDZip);
+
+          const originPart = oCity ? `${oCity}${oState ? `, ${oState}` : ""}` : oState || rawOZip;
+          const destPart   = dCity ? `${dCity}${dState ? `, ${dState}` : ""}` : dState || rawDZip;
+
+          if (!originPart || !destPart) return null;
+
+          let vol = 0;
+          if (volCol && row[volCol] !== "" && row[volCol] != null) {
+            const v = parseFloat(String(row[volCol]).replace(/[^0-9.]/g, ""));
+            if (!isNaN(v) && v > 0) vol = isWeekly ? v * 52 : isMonthly ? v * 12 : v;
+          }
+          const volSuffix = vol > 0 ? ` (${Math.round(vol).toLocaleString()} loads)` : "";
+          return `${originPart} → ${destPart}${volSuffix}`;
+        })
+        .filter((l: string | null): l is string => l !== null);
+
       return res.json({
         lanes: result.highVolumeLanes,
-        allLaneLabels: result.rows.map((row: Record<string, any>) => {
-          const origin = [row.origin_city, row.origin_state].filter(Boolean).join(", ") || row.origin_zip || "Unknown Origin";
-          const dest = [row.dest_city, row.dest_state].filter(Boolean).join(", ") || row.dest_zip || "Unknown Dest";
-          const vol = row.volume ? ` (${Number(row.volume).toLocaleString()} loads)` : "";
-          return `${origin} → ${dest}${vol}`;
-        }),
+        allLaneLabels,
         analysis: result.analysis,
         headers: result.headers,
         sheetName: result.sheetName,
