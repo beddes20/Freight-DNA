@@ -1465,7 +1465,7 @@ function ProspectCard({ prospect, onClick }: { prospect: EnrichedProspect; onCli
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-const PROSPECTS_ALLOWED_ROLES = ["admin", "sales", "sales_director", "account_manager", "national_account_manager"];
+const PROSPECTS_ALLOWED_ROLES = ["admin", "sales", "sales_director"];
 
 export default function ProspectsPage() {
   const { user } = useAuth();
