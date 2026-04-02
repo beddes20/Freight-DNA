@@ -1427,7 +1427,6 @@ RULES FOR YOUR RESPONSES:
     if (!config) return null;
     const now = new Date();
     const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    if (month !== "2026-04") return null;
     const claimed = await storage.checkAndClaimEasterEgg(type, month, userId);
     if (!claimed) return null;
     return { type, ...config };

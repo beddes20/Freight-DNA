@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink, Building2, Contact } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink, Building2, Contact, RefreshCw, Database } from "lucide-react";
 import type { User } from "@shared/schema";
 
 interface PromotionCriteria {
@@ -905,6 +905,58 @@ function BulkImportContactsDialog() {
   );
 }
 
+// ─── Demo Org Tools ───────────────────────────────────────────────────────────
+
+function DemoOrgTools() {
+  const { toast } = useToast();
+  const [log, setLog] = useState<string | null>(null);
+
+  const seedMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/seed-demo");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setLog(data.message || "Seed complete");
+      toast({ title: "Demo org refreshed", description: "All demo data has been reseeded successfully." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Seed failed", description: err?.message || "An error occurred", variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-5 space-y-4" data-testid="section-demo-org-tools">
+      <div>
+        <p className="font-semibold text-sm flex items-center gap-1.5 text-amber-800 dark:text-amber-300 mb-1">
+          <Database className="w-4 h-4" /> Demo Org Tools
+        </p>
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          Use this to reseed the demo org with fresh dummy data. Login: <strong>admin@freightdna-demo.com</strong> / <strong>Demo1234!</strong>
+        </p>
+      </div>
+      <div className="flex items-center gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          className="border-amber-400 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 gap-1.5"
+          onClick={() => { setLog(null); seedMutation.mutate(); }}
+          disabled={seedMutation.isPending}
+          data-testid="button-reseed-demo-org"
+        >
+          {seedMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          {seedMutation.isPending ? "Seeding… (30–60s)" : "Reseed Demo Org"}
+        </Button>
+      </div>
+      {log && (
+        <p className="text-xs text-green-700 dark:text-green-400 flex items-center gap-1.5">
+          <CheckCircle2 className="h-3.5 w-3.5" /> {log}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── Billing Panel ────────────────────────────────────────────────────────────
 
 const BILLING_STATUS_COLORS: Record<string, string> = {
@@ -1386,6 +1438,10 @@ export default function AdminUsers() {
           </div>
           <BillingPanel />
         </div>
+      )}
+
+      {currentUser?.role === "admin" && (
+        <DemoOrgTools />
       )}
 
       <AlertDialog open={!!userToDelete} onOpenChange={(open) => { if (!open) setUserToDelete(null); }}>
