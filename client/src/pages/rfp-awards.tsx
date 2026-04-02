@@ -1419,6 +1419,7 @@ export default function RfpAwards() {
   const [procurementPromptLanes, setProcurementPromptLanes] = useState<ProcurementLaneInfo[]>([]);
   const [promptProcDialogOpen, setPromptProcDialogOpen] = useState(false);
   const [promptProcLanes, setPromptProcLanes] = useState<ProcurementLaneInfo[]>([]);
+  const [promptProcTitle, setPromptProcTitle] = useState("");
   const [promptGeneratingTasks, setPromptGeneratingTasks] = useState(false);
   const [deleteRfpTarget, setDeleteRfpTarget] = useState<Rfp | null>(null);
   const [deleteAwardTarget, setDeleteAwardTarget] = useState<Award | null>(null);
@@ -1680,8 +1681,10 @@ export default function RfpAwards() {
       const createdLanes: ProcurementLaneInfo[] = procurementPromptLanes.map(lane => ({ ...lane, taskId: taskByLane[lane.lane] }));
       const createdCount = results.filter((r: any) => r.created).length;
       if (createdCount > 0) queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      setPromptProcTitle(`Carrier Procurement — ${procurementPromptAward.title}`);
       setPromptProcLanes(createdLanes);
       setProcurementPromptAward(null);
+      setProcurementPromptLanes([]);
       setPromptProcDialogOpen(true);
       toast({
         title: createdCount > 0
@@ -2446,7 +2449,7 @@ export default function RfpAwards() {
       />
 
       {/* Procurement prompt — shown after a new award is created with high-volume lanes */}
-      <Dialog open={!!procurementPromptAward} onOpenChange={(open) => { if (!open) setProcurementPromptAward(null); }}>
+      <Dialog open={!!procurementPromptAward} onOpenChange={(open) => { if (!open) { setProcurementPromptAward(null); setProcurementPromptLanes([]); } }}>
         <DialogContent className="sm:max-w-sm" data-testid="dialog-procurement-prompt">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -2478,7 +2481,7 @@ export default function RfpAwards() {
               </Button>
               <Button
                 variant="ghost"
-                onClick={() => setProcurementPromptAward(null)}
+                onClick={() => { setProcurementPromptAward(null); setProcurementPromptLanes([]); }}
                 className="w-full text-muted-foreground"
                 data-testid="button-prompt-skip-procurement"
               >
@@ -2490,12 +2493,17 @@ export default function RfpAwards() {
       </Dialog>
 
       {/* Workspace dialog opened from the procurement prompt */}
-      <ProcurementTaskLauncherDialog
-        open={promptProcDialogOpen}
-        onOpenChange={setPromptProcDialogOpen}
-        lanes={promptProcLanes}
-        awardId={promptProcLanes[0]?.awardId ?? ""}
-      />
+      {promptProcLanes.length > 0 && (
+        <ProcurementTaskLauncherDialog
+          open={promptProcDialogOpen}
+          onOpenChange={(open) => {
+            setPromptProcDialogOpen(open);
+            if (!open) { setPromptProcLanes([]); setPromptProcTitle(""); }
+          }}
+          title={promptProcTitle}
+          lanes={promptProcLanes}
+        />
+      )}
 
       <AlertDialog open={!!deleteRfpTarget} onOpenChange={(open) => !open && setDeleteRfpTarget(null)}>
         <AlertDialogContent>
