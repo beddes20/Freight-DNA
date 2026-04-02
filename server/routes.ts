@@ -12649,6 +12649,80 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
     }
   });
 
+  // Assign a specific procurement lane to an LM — creates task if needed, then reassigns
+  app.post("/api/awards/:awardId/lanes/assign-lm", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { awardId } = req.params as { awardId: string };
+      if (!(await verifyAwardAccess(user, awardId))) return res.status(403).json({ error: "Access denied" });
+
+      const { lane, assignToUserId } = req.body as { lane?: string; assignToUserId?: string };
+      if (!lane || !assignToUserId) return res.status(400).json({ error: "lane and assignToUserId are required" });
+
+      // Verify the assignee is in the same org
+      const assignee = await storage.getUser(assignToUserId);
+      if (!assignee || assignee.organizationId !== user.organizationId) {
+        return res.status(400).json({ error: "Invalid assignee" });
+      }
+
+      const award = await storage.getAward(awardId);
+      if (!award) return res.status(404).json({ error: "Award not found" });
+
+      // Parse lane string to extract origin/destination/volume
+      const lanePattern = /^(.+?)\s*(?:→|->|\bto\b)\s*(.+?)(?:\s*\((\d[\d,]*)\s*(?:loads?|shipments?)[^)]*\))?$/i;
+      const m = lane.match(lanePattern);
+      if (!m) return res.status(400).json({ error: "Could not parse lane. Use format: Origin → Destination" });
+      const origin = m[1].trim();
+      const destination = m[2].trim();
+      const volume = m[3] ? parseInt(m[3].replace(/,/g, "")) : 0;
+
+      let taskId: string;
+      let created = false;
+
+      const existing = await storage.findProcurementTask(awardId, lane);
+      if (existing) {
+        // Reassign existing task to the LM
+        await storage.updateTask(existing.id, { assignedTo: assignToUserId, assignedBy: user.id });
+        taskId = existing.id;
+      } else {
+        // Create a new procurement task assigned to the LM
+        const task = await storage.createTask({
+          title: `Carrier Procurement — ${lane}`,
+          notes: `Procurement workspace for lane: ${lane}${volume > 0 ? ` (${volume.toLocaleString()} loads/yr)` : ""}. Award ID: ${awardId}. Target 5–10 carrier contacts.`,
+          status: "open",
+          dueDate: null,
+          assignedTo: assignToUserId,
+          assignedBy: user.id,
+          companyId: award.companyId ?? null,
+          contactId: null,
+          attachedLaneData: [{ type: "carrier_procurement", lane, origin, destination, volume, awardId }],
+          createdAt: new Date().toISOString(),
+        });
+        taskId = task.id;
+        created = true;
+      }
+
+      // Notify the LM
+      if (assignToUserId !== user.id) {
+        storage.createNotification({
+          userId: assignToUserId,
+          type: "task_assigned",
+          title: `${user.name} assigned you a carrier procurement task`,
+          body: `Source 5–10 carriers for lane: ${lane}`,
+          link: "/tasks",
+          relatedId: taskId,
+          read: false,
+        }).catch((e) => console.error("Assign-LM notification error:", e));
+      }
+
+      return res.json({ taskId, created, assigneeName: assignee.name });
+    } catch (err) {
+      console.error("assign-lm error", err);
+      return res.status(500).json({ error: "Failed to assign lane to LM" });
+    }
+  });
+
   // GET carriers by task
   app.get("/api/tasks/:taskId/lane-carriers", requireAuth, async (req, res) => {
     try {
