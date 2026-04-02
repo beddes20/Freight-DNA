@@ -21,7 +21,7 @@ import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
 
-const PROSPECTS_ROLES = ["sales", "sales_director", "account_manager", "national_account_manager"];
+const PROSPECTS_ROLES = ["admin", "sales", "sales_director", "account_manager", "national_account_manager"];
 
 const navItems = [
   { title: "Dashboard",         url: "/",                 icon: LayoutGrid    },
