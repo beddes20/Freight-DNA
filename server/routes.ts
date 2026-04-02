@@ -6728,7 +6728,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         }
       }
       const topics = await storage.getTopicsBySession(newSession.id);
-      res.json({ session: newSession, topics });
+      const easterEgg = await tryClaimEasterEgg("first_1on1_close", currentUser.id);
+      res.json({ session: newSession, topics, easterEgg });
     } catch (error) {
       res.status(500).json({ error: "Failed to close session" });
     }
