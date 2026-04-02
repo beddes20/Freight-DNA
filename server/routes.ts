@@ -2289,6 +2289,52 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  // Award lane parsing endpoint — reuses same analyzeRfpSpreadsheet logic as RFP upload
+  app.post("/api/awards/parse-lanes", requireAuth, upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+      const allowedExts = [".xlsx", ".xls", ".csv"];
+      const fileExt = req.file.originalname.toLowerCase().replace(/.*(\.[^.]+)$/, "$1");
+      if (!allowedExts.includes(fileExt)) {
+        return res.status(400).json({ error: "Invalid file type. Please upload an Excel (.xlsx, .xls) or CSV file." });
+      }
+      let workbook: XLSX.WorkBook;
+      try {
+        workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      } catch {
+        return res.status(400).json({ error: "Could not parse file. Please ensure it is a valid Excel or CSV file." });
+      }
+      const confirmedMappingRaw = req.body.confirmedMapping;
+      let result: ReturnType<typeof analyzeRfpSpreadsheet>;
+      if (confirmedMappingRaw) {
+        try {
+          const confirmedMapping: ConfirmedColumnMapping = typeof confirmedMappingRaw === "string"
+            ? JSON.parse(confirmedMappingRaw) : confirmedMappingRaw;
+          result = analyzeRfpSpreadsheetWithMapping(workbook, confirmedMapping) as any;
+        } catch {
+          result = analyzeRfpSpreadsheet(workbook);
+        }
+      } else {
+        result = analyzeRfpSpreadsheet(workbook);
+      }
+      return res.json({
+        lanes: result.highVolumeLanes,
+        allLaneLabels: result.rows.map((row: Record<string, any>) => {
+          const origin = [row.origin_city, row.origin_state].filter(Boolean).join(", ") || row.origin_zip || "Unknown Origin";
+          const dest = [row.dest_city, row.dest_state].filter(Boolean).join(", ") || row.dest_zip || "Unknown Dest";
+          const vol = row.volume ? ` (${Number(row.volume).toLocaleString()} loads)` : "";
+          return `${origin} → ${dest}${vol}`;
+        }),
+        analysis: result.analysis,
+        headers: result.headers,
+        sheetName: result.sheetName,
+      });
+    } catch (err) {
+      console.error("award parse-lanes error", err);
+      return res.status(500).json({ error: "Failed to process file" });
+    }
+  });
+
   app.post("/api/rfps/upload-pdf", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
