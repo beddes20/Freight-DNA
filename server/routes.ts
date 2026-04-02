@@ -75,6 +75,38 @@ function isBadSummaryData(rows: any[]): boolean {
   );
 }
 
+/**
+ * Count loads, total margin, and total charges for a rep goal.
+ * LMs are attributed via the Dispatcher column; AMs/NAMs/sales via Operations User.
+ */
+function computeLoadsForRepGoal(
+  txRows: any[],
+  cols: FinancialCols,
+  repKey: string,
+  isLMGoal: boolean,
+  goalMonthKey: string | null
+): { loads: number; totalMargin: number; totalCharges: number } {
+  const repKeyLower = repKey.toLowerCase();
+  let loads = 0;
+  let totalMargin = 0;
+  let totalCharges = 0;
+  for (const row of txRows) {
+    if (isExcludedRow(row, cols)) continue;
+    const repInRow = isLMGoal
+      ? getDispatcherFromRow(row, cols).toLowerCase()
+      : getRepFromRow(row, cols).toLowerCase();
+    if (repInRow !== repKeyLower) continue;
+    if (goalMonthKey) {
+      const { monthKey } = parseHistoricalRow(row, cols);
+      if (monthKey !== goalMonthKey) continue;
+    }
+    loads++;
+    totalMargin += Number(row[cols.marginDollar] || row["Margin $"] || 0);
+    totalCharges += Number(row[cols.totalCharges] || row["Total charges"] || 0);
+  }
+  return { loads, totalMargin, totalCharges };
+}
+
 function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
   const readSheet = (name: string): any[] => {
     const match = workbook.SheetNames.find(s => s.trim().toLowerCase() === name.toLowerCase());
@@ -7492,6 +7524,19 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
             if (total > 0) computedValue = Math.round(total);
           }
         }
+        if ((goal.metric === "loads_booked" || goal.metric === "margin_pct") && latestUpload) {
+          const amUser = allUsers.find(u => u.id === goal.amId);
+          const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
+          if (repKey) {
+            const isLM = amUser?.role === "logistics_manager" || amUser?.role === "logistics_coordinator";
+            const txRows: any[] = (latestUpload.rows as any[]) || [];
+            const lbCols = resolveColumns(txRows);
+            const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+            const { loads, totalMargin, totalCharges } = computeLoadsForRepGoal(txRows, lbCols, repKey, isLM, goalMonthKey);
+            if (goal.metric === "loads_booked") computedValue = loads;
+            else computedValue = totalCharges > 0 ? Math.round((totalMargin / totalCharges) * 1000) / 10 : 0;
+          }
+        }
         return { ...goal, computedValue };
       }));
 
@@ -7583,6 +7628,18 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
               }
             }
             if (total > 0) effectiveValue = Math.round(total);
+          }
+        }
+        if ((goal.metric === "loads_booked" || goal.metric === "margin_pct") && latestUpload) {
+          const repKey = (amUser as any).financialRepId as string | null;
+          if (repKey) {
+            const isLM = (amUser as any).role === "logistics_manager" || (amUser as any).role === "logistics_coordinator";
+            const txRows: any[] = (latestUpload.rows as any[]) || [];
+            const lbCols = resolveColumns(txRows);
+            const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+            const { loads, totalMargin, totalCharges } = computeLoadsForRepGoal(txRows, lbCols, repKey, isLM, goalMonthKey);
+            if (goal.metric === "loads_booked") effectiveValue = loads;
+            else effectiveValue = totalCharges > 0 ? Math.round((totalMargin / totalCharges) * 1000) / 10 : 0;
           }
         }
 
@@ -7911,7 +7968,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           autoValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
         }
       } else if (goal.metric === "loads_booked" || goal.metric === "margin_pct" || (goal.metric === "margin" && isLMGoal)) {
-        // LM metrics — computed from the Dispatcher column in transaction rows
+        // loads_booked / margin_pct / LM margin — LMs use Dispatcher col; AMs use Ops User col
         const repKey = targetUser ? (targetUser as any).financialRepId as string | null : null;
         if (repKey) {
           const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
@@ -7920,23 +7977,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
             const txRows: any[] = (latest.rows as any[]) || [];
             const cols = resolveColumns(txRows);
             const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
-            const repKeyLower = repKey.toLowerCase();
-            let count = 0;
-            let totalMargin = 0;
-            let totalCharges = 0;
-            for (const row of txRows) {
-              if (isExcludedRow(row, cols)) continue;
-              const disp = getDispatcherFromRow(row, cols).toLowerCase();
-              if (disp !== repKeyLower) continue;
-              if (goalMonthKey) {
-                const { monthKey } = parseHistoricalRow(row, cols);
-                if (monthKey !== goalMonthKey) continue;
-              }
-              count++;
-              totalMargin += Number(row[cols.marginDollar] || row["Margin $"] || 0);
-              totalCharges += Number(row[cols.totalCharges] || row["Total charges"] || 0);
-            }
-            if (goal.metric === "loads_booked") autoValue = count;
+            const { loads, totalMargin, totalCharges } = computeLoadsForRepGoal(txRows, cols, repKey, isLMGoal, goalMonthKey);
+            if (goal.metric === "loads_booked") autoValue = loads;
             else if (goal.metric === "margin_pct") autoValue = totalCharges > 0 ? Math.round((totalMargin / totalCharges) * 1000) / 10 : 0;
             else autoValue = Math.round(totalMargin); // margin for LM
           }
