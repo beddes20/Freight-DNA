@@ -2356,8 +2356,15 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           const oCity = rawOCity || zipToCity(rawOZip);
           const dCity = rawDCity || zipToCity(rawDZip);
 
-          const originPart = oCity ? `${oCity}${oState ? `, ${oState}` : ""}` : oState || rawOZip;
-          const destPart   = dCity ? `${dCity}${dState ? `, ${dState}` : ""}` : dState || rawDZip;
+          // zipToCity returns "City, ST" format — don't double-append state if already embedded
+          const fmtLocation = (city: string, state: string, zip: string): string => {
+            if (city && city.includes(",")) return city; // already "City, ST"
+            if (city && state) return `${city}, ${state}`;
+            if (city) return city;
+            return state || zip;
+          };
+          const originPart = fmtLocation(oCity, oState, rawOZip);
+          const destPart   = fmtLocation(dCity, dState, rawDZip);
 
           if (!originPart || !destPart) return null;
 
