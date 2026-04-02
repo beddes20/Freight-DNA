@@ -246,7 +246,7 @@ function getHighVolumeLanes(award: Award): ProcurementLaneInfo[] {
   if (!award.lanes || award.lanes.length === 0) return [];
   return award.lanes
     .map(l => parseLaneString(l, award.id))
-    .filter((l): l is ProcurementLaneInfo => l !== null && l.volume >= 50);
+    .filter((l): l is ProcurementLaneInfo => l !== null);
 }
 
 interface AwardCardProps {
@@ -395,7 +395,7 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
                 variant="outline"
                 onClick={handleGenerateProcurementTasks}
                 disabled={generatingTasks || highVolumeLanes.length === 0}
-                title={highVolumeLanes.length === 0 ? "No qualifying lanes (50+ loads/yr) on this award" : undefined}
+                title={highVolumeLanes.length === 0 ? "No lanes on this award — add lanes in the format: Origin → Destination" : undefined}
                 className="text-xs h-8"
                 data-testid={`button-generate-procurement-${award.id}`}
               >

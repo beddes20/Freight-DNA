@@ -12508,14 +12508,13 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
             const m = l.match(lanePattern);
             if (!m) return null;
             const volume = m[3] ? parseInt(m[3].replace(/,/g, "")) : 0;
-            if (volume < 50) return null;
             return [l, { origin: m[1].trim(), destination: m[2].trim(), volume }] as [string, LaneMeta];
           })
           .filter((entry): entry is [string, LaneMeta] => entry !== null)
       );
-      // Process all server-computed qualifying lanes (client list already validated non-empty above)
+      // Process all server-computed qualifying lanes (any parseable origin → destination)
       const validLaneEntries = [...qualifyingLaneMap.entries()];
-      if (validLaneEntries.length === 0) return res.status(400).json({ error: "No qualifying lanes (≥50 loads/yr) found for this award" });
+      if (validLaneEntries.length === 0) return res.status(400).json({ error: "No parseable lanes found for this award. Use format: Origin → Destination" });
       // Per-key serialization prevents concurrent requests from creating duplicate tasks for the same lane
       const results = await Promise.all(validLaneEntries.map(([laneName, meta]) => {
         const lockKey = `${awardId}:${laneName}`;
@@ -12525,7 +12524,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
             if (existing) return { lane: laneName, taskId: existing.id, created: false };
             const task = await storage.createTask({
               title: `Carrier Procurement — ${laneName}`,
-              notes: `Procurement workspace for lane: ${laneName} (${meta.volume.toLocaleString()} loads/yr). Award ID: ${awardId}. Target 5–10 carrier contacts.`,
+              notes: `Procurement workspace for lane: ${laneName}${meta.volume > 0 ? ` (${meta.volume.toLocaleString()} loads/yr)` : ""}. Award ID: ${awardId}. Target 5–10 carrier contacts.`,
               status: "open",
               dueDate: null,
               assignedTo: user.id,
