@@ -28,6 +28,7 @@ import {
   toolLinks,
   promotionCriteria,
   appSettings,
+  contactLaneAttributions,
   type User,
   type Company,
   type Contact,
@@ -47,6 +48,8 @@ const FEB_START = "2026-02-01";
 const FEB_END = "2026-02-28";
 const MAR_START = "2026-03-01";
 const MAR_END = "2026-03-31";
+const APR_START = "2026-04-01";
+const APR_END = "2026-04-30";
 
 function ts(d: Date): string {
   return d.toISOString();
@@ -699,6 +702,119 @@ async function main() {
       contactsByCompanyId.set(co.id, created);
     }
 
+    // ─── STEP 3b: HOME RUN CONTACTS (April 2026 additions) ───────────────────
+    console.log("\nStep 3b: Adding Home Run contacts…");
+
+    const summitCoRef = companyByName.get("Summit Frozen Foods")!;
+    const greatPlainsCoRef = companyByName.get("Great Plains Distribution")!;
+
+    const [kenHolst] = await db.insert(contacts).values({
+      companyId: summitCoRef.id,
+      name: "Ken Holst",
+      title: "CEO",
+      relationshipBase: "hr",
+      email: "k.holst@summitfrozen.com",
+      phone: "312-555-0510",
+      reportsToId: null,
+      lanes: ["Chicago, IL", "Memphis, TN", "Atlanta, GA", "Minneapolis, MN"],
+      regions: ["National"],
+      freightSpend: "34000000",
+      spotBiddingProcess: "Direct approval on all spot over $5K — calls Tyler personally",
+      interests: "Enterprise-level partnerships, multi-year commitments, margin transparency",
+      notes: "C-suite champion — secured formal preferred broker status in Q1 2026. Long-term strategic relationship.",
+      createdAt: "2026-04-01T08:00:00.000Z",
+      createdBy: amMap["am1"].id,
+      baseAdvancedAt: "2026-04-01",
+    }).returning();
+    contactsByCompanyId.get(summitCoRef.id)!.push(kenHolst);
+    console.log(`  Created HR contact: Ken Holst (CEO) @ Summit Frozen Foods`);
+
+    const [dianeWeston] = await db.insert(contacts).values({
+      companyId: greatPlainsCoRef.id,
+      name: "Diane Weston",
+      title: "Chief Supply Chain Officer",
+      relationshipBase: "hr",
+      email: "d.weston@greatplainsdist.com",
+      phone: "402-555-0610",
+      reportsToId: null,
+      lanes: ["Omaha, NE", "Kansas City, MO", "Des Moines, IA", "Chicago, IL", "Memphis, TN"],
+      regions: ["National"],
+      freightSpend: "42000000",
+      spotBiddingProcess: "Strategic only — Jason has direct line for board-level capacity commitments",
+      interests: "Supply chain resilience, multi-modal strategy, preferred partner programs",
+      notes: "Board-level champion. Approved us as sole preferred broker for all Midwest core lanes in Q1 2026.",
+      createdAt: "2026-04-02T08:00:00.000Z",
+      createdBy: amMap["am3"].id,
+      baseAdvancedAt: "2026-04-02",
+    }).returning();
+    contactsByCompanyId.get(greatPlainsCoRef.id)!.push(dianeWeston);
+    console.log(`  Created HR contact: Diane Weston (CSCO) @ Great Plains Distribution`);
+
+    // ─── STEP 3c: CONTACT LANE ATTRIBUTIONS ──────────────────────────────────
+    console.log("\nStep 3c: Creating contact lane attributions…");
+
+    type LaneAttrDef = {
+      companyName: string;
+      contactName: string;
+      amKey: keyof AmMap;
+      lanes: Array<{ originCity: string; originState: string; destinationCity: string; destinationState: string }>;
+    };
+
+    const laneAttrDefs: LaneAttrDef[] = [
+      // 3rd base contacts — attribute 1 key lane each (matches their company's financial data)
+      { companyName: "Summit Frozen Foods", contactName: "Owen Hughes", amKey: "am1",
+        lanes: [{ originCity: "Chicago", originState: "IL", destinationCity: "Memphis", destinationState: "TN" }] },
+      { companyName: "Riverview Chemical", contactName: "Dr. Janet Liu", amKey: "am2",
+        lanes: [{ originCity: "Chicago", originState: "IL", destinationCity: "Houston", destinationState: "TX" }] },
+      { companyName: "Riverview Chemical", contactName: "Nadia Goldstein", amKey: "am2",
+        lanes: [{ originCity: "Houston", originState: "TX", destinationCity: "Beaumont", destinationState: "TX" }] },
+      { companyName: "Great Plains Distribution", contactName: "Howard Blaine", amKey: "am3",
+        lanes: [{ originCity: "Kansas City", originState: "MO", destinationCity: "Memphis", destinationState: "TN" }] },
+      { companyName: "MidAmerica Steel Works", contactName: "Patricia Shields", amKey: "am3",
+        lanes: [{ originCity: "St. Louis", originState: "MO", destinationCity: "Pittsburgh", destinationState: "PA" }] },
+      { companyName: "Keystone Pharma Logistics", contactName: "Dr. Patricia Walsh", amKey: "am5",
+        lanes: [{ originCity: "Philadelphia", originState: "PA", destinationCity: "Chicago", destinationState: "IL" }] },
+      { companyName: "Laredo Cross-Border Trading", contactName: "Carla Medina", amKey: "am6",
+        lanes: [{ originCity: "Houston", originState: "TX", destinationCity: "Dallas", destinationState: "TX" }] },
+      // HR contacts — all lanes (high-volume, high-margin attribution)
+      { companyName: "Summit Frozen Foods", contactName: "Ken Holst", amKey: "am1",
+        lanes: [
+          { originCity: "Chicago", originState: "IL", destinationCity: "Memphis", destinationState: "TN" },
+          { originCity: "Chicago", originState: "IL", destinationCity: "Atlanta", destinationState: "GA" },
+          { originCity: "Minneapolis", originState: "MN", destinationCity: "Chicago", destinationState: "IL" },
+        ] },
+      { companyName: "Great Plains Distribution", contactName: "Diane Weston", amKey: "am3",
+        lanes: [
+          { originCity: "Omaha", originState: "NE", destinationCity: "Chicago", destinationState: "IL" },
+          { originCity: "Kansas City", originState: "MO", destinationCity: "Memphis", destinationState: "TN" },
+          { originCity: "Des Moines", originState: "IA", destinationCity: "Chicago", destinationState: "IL" },
+        ] },
+    ];
+
+    let laneAttrCount = 0;
+    for (const def of laneAttrDefs) {
+      const co = companyByName.get(def.companyName);
+      if (!co) continue;
+      const compContacts = contactsByCompanyId.get(co.id) ?? [];
+      const contact = compContacts.find(c => c.name === def.contactName);
+      if (!contact) { console.warn(`  [lane attr] Contact not found: ${def.contactName} @ ${def.companyName}`); continue; }
+      for (const lane of def.lanes) {
+        await db.insert(contactLaneAttributions).values({
+          contactId: contact.id,
+          companyId: co.id,
+          originCity: lane.originCity,
+          originState: lane.originState,
+          destinationCity: lane.destinationCity,
+          destinationState: lane.destinationState,
+          source: "manual",
+          notes: null,
+          createdBy: amMap[def.amKey].id,
+        });
+        laneAttrCount++;
+      }
+    }
+    console.log(`  Created ${laneAttrCount} contact lane attributions`);
+
     // ─── STEP 4: TOUCHPOINTS ─────────────────────────────────────────────────
     console.log("\nStep 4: Creating touchpoints…");
 
@@ -883,6 +999,23 @@ async function main() {
       { companyName: "Keystone Pharma Logistics", amKey: "am5", contactIdx: 1, type: "call", date: "2026-03-25", notes: "Nathan called with great news — Keystone is renewing our contract and expanding scope by 40%. They're adding 4 more lanes including two high-value West Coast routes.", meaningful: true },
       { companyName: "Laredo Cross-Border Trading", amKey: "am6", contactIdx: 0, type: "call", date: "2026-03-24", notes: "Sofia confirmed preferred cross-border partner agreement — formalizing in writing next week. This locks in $2.2M in annual freight volume with us as primary.", meaningful: true },
       { companyName: "Laredo Cross-Border Trading", amKey: "am6", contactIdx: 2, type: "email", date: "2026-03-23", notes: "Ana confirmed 6 Houston→Dallas loads for this week — all covered same day.", meaningful: false },
+      // April 1, 2026 — week-opening cadence touches
+      { companyName: "Summit Frozen Foods", amKey: "am1", contactIdx: 1, type: "call", date: "2026-04-01", notes: "Called Rick to kick off April — confirmed 45 reefer loads locked for the month. He mentioned they may add a Nashville lane by mid-April.", meaningful: false },
+      { companyName: "Pacific Coast Produce", amKey: "am2", contactIdx: 1, type: "email", date: "2026-04-01", notes: "Emailed Lisa the April capacity confirmation — 80 reefer loads committed. She replied 'perfect timing, produce season starts this week.'", meaningful: false },
+      { companyName: "Great Plains Distribution", amKey: "am3", contactIdx: 1, type: "call", date: "2026-04-01", notes: "Rachel called first thing to confirm our preferred carrier rollout is live — all dispatch teams notified. First April loads already tendered.", meaningful: false },
+      { companyName: "Northstar Lumber Co.", amKey: "am5", contactIdx: 1, type: "email", date: "2026-04-01", notes: "Emailed Wendy confirming April 1 lane start — all 5 dedicated lanes active. She confirmed first loads dispatched successfully.", meaningful: false },
+      { companyName: "Keystone Pharma Logistics", amKey: "am5", contactIdx: 1, type: "call", date: "2026-04-01", notes: "Nathan called to say the contract expansion paperwork is signed — new West Coast lanes starting this week.", meaningful: false },
+      // April 2, 2026 — today's activity (meaningful conversations + check-ins)
+      { companyName: "Summit Frozen Foods", amKey: "am1", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Called Rick to discuss adding a Nashville lane — he's looping in the DC manager next week. Potential 12 loads/month incremental. Real next step defined.", meaningful: true },
+      { companyName: "Heartland Building Products", amKey: "am1", contactIdx: 1, type: "text", date: "2026-04-02", notes: "Texted Carmen confirming trailer staging is set for April 7 start. She replied 'all good, team is ready.' Smooth launch ahead.", meaningful: false },
+      { companyName: "Riverview Chemical", amKey: "am2", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Steve called to confirm Port Arthur expansion is green-lit — 6 loads/week starting April 14. He wants our HAZMAT carrier list by Friday. $90K/month opportunity unlocked.", meaningful: true },
+      { companyName: "Pacific Coast Produce", amKey: "am2", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Lisa called — first week of produce season is off to a strong start. 22 loads covered yesterday with zero issues. She's recommending us internally for the Portland expansion.", meaningful: true },
+      { companyName: "Great Plains Distribution", amKey: "am3", contactIdx: 1, type: "email", date: "2026-04-02", notes: "Emailed Rachel a Q1 performance summary ahead of today's QBR — 98.7% on-time, zero carrier compliance issues. Strong talking points ready.", meaningful: false },
+      { companyName: "MidAmerica Steel Works", amKey: "am3", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Dana called to officially add 2 new dedicated lanes — Cleveland and Indianapolis routes confirmed. She said Frank signed off this morning. Both lanes start April 14.", meaningful: true },
+      { companyName: "Bayshore Consumer Brands", amKey: "am4", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Tom called to accelerate the New York DC launch — wants us to have capacity committed by April 10. 20 dry van loads/week, real urgency. Big opportunity.", meaningful: true },
+      { companyName: "Northstar Lumber Co.", amKey: "am5", contactIdx: 0, type: "call", date: "2026-04-02", notes: "Glen called — CFO wants to discuss adding 2 more lanes to the dedicated agreement. Scheduled a follow-up call for Friday. Significant expansion potential.", meaningful: true },
+      { companyName: "Laredo Cross-Border Trading", amKey: "am6", contactIdx: 0, type: "call", date: "2026-04-02", notes: "Sofia called to say the formal preferred partner agreement is ready to sign — she wants to meet Thursday to execute. $2.2M locked in writing.", meaningful: true },
+      { companyName: "Keystone Pharma Logistics", amKey: "am5", contactIdx: 1, type: "email", date: "2026-04-02", notes: "Emailed Nathan confirming first West Coast loads are covered — all GDP compliant. He forwarded to their compliance team as a success story.", meaningful: false },
     ];
 
     const touchpointTypes = ["call", "email", "visit", "call", "email", "call"];
@@ -1070,22 +1203,54 @@ async function main() {
       },
     ];
 
+    // Accounts that are trending down — lost some volume to competitors
+    const decliningTemplates: CompanyLoadTemplate[] = [
+      {
+        customer: "Consolidated Retail Group", opsUser: "Lexi Navarro",
+        lanes: [
+          { origCity: "Columbus", origState: "OH", destCity: "Pittsburgh", destState: "PA" },
+          { origCity: "Columbus", origState: "OH", destCity: "Baltimore", destState: "MD" },
+        ],
+        spotFraction: 0.40, baseMarginPerLoad: 318, baseRevenuePerLoad: 2180, baseLoadsPerMonth: 14,
+      },
+      {
+        customer: "Inland Freight Solutions", opsUser: "Marcus Dunn",
+        lanes: [
+          { origCity: "Indianapolis", origState: "IN", destCity: "Louisville", destState: "KY" },
+          { origCity: "Cincinnati", origState: "OH", destCity: "Nashville", destState: "TN" },
+        ],
+        spotFraction: 0.35, baseMarginPerLoad: 282, baseRevenuePerLoad: 1940, baseLoadsPerMonth: 11,
+      },
+      {
+        customer: "Tri-State Building Supply", opsUser: "Jason Kowalski",
+        lanes: [
+          { origCity: "Kansas City", origState: "MO", destCity: "Wichita", destState: "KS" },
+          { origCity: "St. Louis", origState: "MO", destCity: "Springfield", destState: "MO" },
+        ],
+        spotFraction: 0.20, baseMarginPerLoad: 192, baseRevenuePerLoad: 1440, baseLoadsPerMonth: 9,
+      },
+    ];
+
     // Deterministic pseudo-noise so Feb always > Jan per company (no Math.random)
     function deterministicNoise(seed: number, range: number): number {
       return ((seed * 2654435761) >>> 0) % (range * 2 + 1) - range;
     }
 
-    function makeTransactionRows(month: "November" | "December" | "January" | "February" | "March"): TxRow[] {
-      const monthNum = month === "November" ? 11 : month === "December" ? 12 : month === "January" ? 1 : month === "February" ? 2 : 3;
-      const daysInMonth = month === "November" ? 30 : month === "December" ? 31 : month === "January" ? 31 : month === "February" ? 28 : 24;
+    function makeTransactionRows(
+      month: "November" | "December" | "January" | "February" | "March" | "April",
+      templates: CompanyLoadTemplate[] = companyTemplates,
+      seqBase?: number,
+    ): TxRow[] {
+      const monthNum = month === "November" ? 11 : month === "December" ? 12 : month === "January" ? 1 : month === "February" ? 2 : month === "March" ? 3 : 4;
+      const daysInMonth = month === "November" ? 30 : month === "December" ? 31 : month === "January" ? 31 : month === "February" ? 28 : month === "March" ? 24 : 2;
       const year = month === "November" || month === "December" ? 2025 : 2026;
       const rows: TxRow[] = [];
-      let orderSeq = month === "November" ? 96000 : month === "December" ? 98000 : month === "January" ? 100000 : month === "February" ? 102000 : 104000;
-      // Growth multipliers: Nov = 0.82, Dec = 0.88 (holiday slowdown), Jan = base, Feb = +18%, March = +28%
-      const baseMult = month === "November" ? 0.82 : month === "December" ? 0.88 : month === "January" ? 1.0 : month === "February" ? 1.18 : 1.28;
+      let orderSeq = seqBase ?? (month === "November" ? 96000 : month === "December" ? 98000 : month === "January" ? 100000 : month === "February" ? 102000 : month === "March" ? 104000 : 106000);
+      // Growth multipliers: Nov = 0.82, Dec = 0.88 (holiday slowdown), Jan = base, Feb = +18%, March = +28%, April = ~9% (2-day partial month)
+      const baseMult = month === "November" ? 0.82 : month === "December" ? 0.88 : month === "January" ? 1.0 : month === "February" ? 1.18 : month === "March" ? 1.28 : 0.09;
 
-      for (let ci = 0; ci < companyTemplates.length; ci++) {
-        const tmpl = companyTemplates[ci];
+      for (let ci = 0; ci < templates.length; ci++) {
+        const tmpl = templates[ci];
         const loadsThisMonth = Math.ceil(tmpl.baseLoadsPerMonth * baseMult);
         for (let i = 0; i < loadsThisMonth; i++) {
           const lane = tmpl.lanes[i % tmpl.lanes.length];
@@ -1116,19 +1281,54 @@ async function main() {
       return rows;
     }
 
+    // For declining accounts in April: generate only 1 load each (well below 2/30 pace → shows as "down")
+    function makeDecliningAprilRows(): TxRow[] {
+      const rows: TxRow[] = [];
+      let seq = 107500;
+      for (const tmpl of decliningTemplates) {
+        const lane = tmpl.lanes[0];
+        seq++;
+        rows.push({
+          "Customer": tmpl.customer,
+          "Operations user": tmpl.opsUser,
+          "Order type": "Contract",
+          "Status": "delivered",
+          "Shipper city": lane.origCity,
+          "Shipper state": lane.origState,
+          "Consignee city": lane.destCity,
+          "Consignee state": lane.destState,
+          "Date ordered": "2026-04-01",
+          "Order number": `DEMO-${seq}`,
+          "Total revenue": tmpl.baseRevenuePerLoad,
+          "Margin $": Math.round(tmpl.baseMarginPerLoad * 0.6),
+        });
+      }
+      return rows;
+    }
+
     const novRows = makeTransactionRows("November");
     const decRows = makeTransactionRows("December");
     const janRows = makeTransactionRows("January");
     const febRows = makeTransactionRows("February");
     const marchRows = makeTransactionRows("March");
+    const aprRows = makeTransactionRows("April");
 
-    // November 2025 upload (historical baseline)
+    // Declining companies: add to Nov–March historical data (not April — they dropped off)
+    const declNovRows = makeTransactionRows("November", decliningTemplates, 96900);
+    const declDecRows = makeTransactionRows("December", decliningTemplates, 98900);
+    const declJanRows = makeTransactionRows("January", decliningTemplates, 100900);
+    const declFebRows = makeTransactionRows("February", decliningTemplates, 102900);
+    const declMarchRows = makeTransactionRows("March", decliningTemplates, 104900);
+    const declAprRows = makeDecliningAprilRows(); // only 1 load each → below-pace April = trending down
+
+    // November 2025 upload (historical baseline — includes declining accounts)
+    const novAllRows = [...novRows, ...declNovRows];
     await db.insert(financialUploads).values({
       fileName: `${DEMO_FILE_PREFIX}November_2025.xlsx`,
       uploadedAt: "2025-12-03T09:00:00.000Z",
       uploadedBy: admin.id,
-      rowCount: novRows.length,
-      rows: novRows,
+      rowCount: novAllRows.length,
+      rows: novAllRows,
       summaryRows: [],
       bestDealDaysSpot: [],
       bestDealDaysAll: [],
@@ -1136,15 +1336,16 @@ async function main() {
       averagesData: [],
       dailyAcquisition: [],
     });
-    console.log(`  Created November 2025 financial upload: ${novRows.length} transaction rows`);
+    console.log(`  Created November 2025 financial upload: ${novAllRows.length} transaction rows`);
 
     // December 2025 upload (historical — holiday period, lower volume)
+    const decAllRows = [...decRows, ...declDecRows];
     await db.insert(financialUploads).values({
       fileName: `${DEMO_FILE_PREFIX}December_2025.xlsx`,
       uploadedAt: "2026-01-05T09:00:00.000Z",
       uploadedBy: admin.id,
-      rowCount: decRows.length,
-      rows: decRows,
+      rowCount: decAllRows.length,
+      rows: decAllRows,
       summaryRows: [],
       bestDealDaysSpot: [],
       bestDealDaysAll: [],
@@ -1152,15 +1353,16 @@ async function main() {
       averagesData: [],
       dailyAcquisition: [],
     });
-    console.log(`  Created December 2025 financial upload: ${decRows.length} transaction rows`);
+    console.log(`  Created December 2025 financial upload: ${decAllRows.length} transaction rows`);
 
     // Jan-only upload (historical)
+    const janAllRows = [...janRows, ...declJanRows];
     await db.insert(financialUploads).values({
       fileName: `${DEMO_FILE_PREFIX}January_2026.xlsx`,
       uploadedAt: "2026-02-03T09:00:00.000Z",
       uploadedBy: admin.id,
-      rowCount: janRows.length,
-      rows: janRows,
+      rowCount: janAllRows.length,
+      rows: janAllRows,
       summaryRows: [],
       bestDealDaysSpot: [],
       bestDealDaysAll: [],
@@ -1168,14 +1370,15 @@ async function main() {
       averagesData: [],
       dailyAcquisition: [],
     });
-    console.log(`  Created January financial upload: ${janRows.length} transaction rows`);
+    console.log(`  Created January financial upload: ${janAllRows.length} transaction rows`);
 
+    const febAllRows = [...febRows, ...declFebRows];
     await db.insert(financialUploads).values({
       fileName: `${DEMO_FILE_PREFIX}February_2026.xlsx`,
       uploadedAt: "2026-03-03T09:00:00.000Z",
       uploadedBy: admin.id,
-      rowCount: febRows.length,
-      rows: febRows,
+      rowCount: febAllRows.length,
+      rows: febAllRows,
       summaryRows: [],
       bestDealDaysSpot: [],
       bestDealDaysAll: [],
@@ -1183,14 +1386,32 @@ async function main() {
       averagesData: [],
       dailyAcquisition: [],
     });
-    console.log(`  Created February financial upload: ${febRows.length} transaction rows`);
+    console.log(`  Created February financial upload: ${febAllRows.length} transaction rows`);
 
-    // March upload = ALL 5 months combined — this is the "latest" upload the trending endpoint reads.
-    // By including Nov/Dec 2025 + Jan + Feb + March rows, trending shows full Q1 growth arc.
-    const allRows = [...novRows, ...decRows, ...janRows, ...febRows, ...marchRows];
+    // March upload = 5 months combined (historical)
+    const marchAllRows = [...novRows, ...decRows, ...janRows, ...febRows, ...marchRows, ...declNovRows, ...declDecRows, ...declJanRows, ...declFebRows, ...declMarchRows];
     await db.insert(financialUploads).values({
       fileName: `${DEMO_FILE_PREFIX}March_2026.xlsx`,
       uploadedAt: "2026-03-24T09:00:00.000Z",
+      uploadedBy: admin.id,
+      rowCount: marchAllRows.length,
+      rows: marchAllRows,
+      summaryRows: [],
+      bestDealDaysSpot: [],
+      bestDealDaysAll: [],
+      trendAnalysis: [],
+      averagesData: [],
+      dailyAcquisition: [],
+    });
+    console.log(`  Created March financial upload: ${marchAllRows.length} total rows (Nov 2025–March 2026)`);
+
+    // April upload = ALL 6 months combined — this is the LATEST upload.
+    // Includes declining accounts (with below-pace April data) so they show in "trending down".
+    const allRows = [...novRows, ...decRows, ...janRows, ...febRows, ...marchRows, ...aprRows,
+                     ...declNovRows, ...declDecRows, ...declJanRows, ...declFebRows, ...declMarchRows, ...declAprRows];
+    await db.insert(financialUploads).values({
+      fileName: `${DEMO_FILE_PREFIX}April_2026.xlsx`,
+      uploadedAt: "2026-04-02T09:00:00.000Z",
       uploadedBy: admin.id,
       rowCount: allRows.length,
       rows: allRows,
@@ -1201,7 +1422,7 @@ async function main() {
       averagesData: [],
       dailyAcquisition: [],
     });
-    console.log(`  Created March financial upload: ${allRows.length} total rows (Nov 2025–March 2026 — used for trending)`);
+    console.log(`  Created April financial upload: ${allRows.length} total rows (Nov 2025–Apr 2026, current month — used for trending/team performance)`);
 
     // ─── STEP 6: RFPs ────────────────────────────────────────────────────────
     console.log("\nStep 6: Creating RFPs…");
@@ -1835,8 +2056,8 @@ async function main() {
     console.log(`  Users:             10 (1 Admin, 1 Director, 2 NAMs, 6 AMs)`);
     console.log(`  Companies:         ${companyDefs.length} fictional freight shippers`);
     console.log(`  Contacts:          ${totalContacts} contacts with full org chart hierarchy`);
-    console.log(`  Touchpoints:       ${totalTouchpoints} historical + 16 current-week (Dec 2025–Mar 2026)`);
-    console.log(`  Financial uploads: 5 (Nov 2025, Dec 2025, Jan 2026, Feb 2026, Mar 2026 cumulative)`);
+    console.log(`  Touchpoints:       ${totalTouchpoints} historical + 32 current-week (Mar–Apr 2026, incl. today's)`);
+    console.log(`  Financial uploads: 6 (Nov 2025–Apr 2026; Apr is latest with 2-day partial month data)`);
     console.log(`  RFPs:              3 (Summit Frozen Foods, Pacific Coast Produce, Great Plains)`);
     console.log(`  Awards:            3 (Summit, Pacific Coast, Great Plains — with lane data)`);
     console.log(`  Tasks:             ${taskDefs.length} (mix of open and completed, with comments)`);
