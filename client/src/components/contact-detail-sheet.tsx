@@ -82,6 +82,7 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
   const { toast } = useToast();
   const [logType, setLogType] = useState("call");
   const [logNotes, setLogNotes] = useState("");
+  const [logMeaningful, setLogMeaningful] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [tpPendingFiles, setTpPendingFiles] = useState<PendingFile[]>([]);
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -111,6 +112,7 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
         type: logType,
         date: today,
         notes: logNotes.trim() || null,
+        isMeaningful: logMeaningful,
       });
       const tp = await res.json();
       if (tpPendingFiles.length > 0) {
@@ -128,6 +130,7 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/cold-contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
       setLogNotes("");
+      setLogMeaningful(false);
       setTpPendingFiles([]);
       toast({ title: "Touchpoint logged" });
     },
@@ -355,6 +358,16 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
                   Log
                 </Button>
               </div>
+              <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
+                <input
+                  type="checkbox"
+                  checked={logMeaningful}
+                  onChange={e => setLogMeaningful(e.target.checked)}
+                  className="rounded"
+                  data-testid="checkbox-meaningful"
+                />
+                <span className="text-muted-foreground">Meaningful conversation?</span>
+              </label>
               <Textarea
                 placeholder="Optional note..."
                 value={logNotes}

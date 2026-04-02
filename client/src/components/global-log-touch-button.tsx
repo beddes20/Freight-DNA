@@ -80,7 +80,7 @@ export function GlobalLogTouchButton() {
         isMeaningful: meaningful,
         sentiment: vibe || null,
         notes: notes.trim() || null,
-      });
+      }).then(r => r.json());
     },
     onSuccess: () => {
       if (selectedContact) {
