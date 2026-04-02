@@ -10,7 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   Users, Plus, CheckCircle2, Circle, Trash2, ChevronDown, ChevronUp,
-  Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle,
+  Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle, History,
   StickyNote, ClipboardList, CornerDownRight, CalendarClock, Pencil, X,
   BarChart2, Phone, Mail, MessageCircle, MapPin, Target, CheckCheck, Clock,
   Video, ExternalLink, Link, Lightbulb, Smile, Frown, Meh, Timer,
@@ -707,8 +707,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const { toast } = useToast();
   const [newText, setNewText] = useState("");
   const [newTag, setNewTag] = useState("fyi");
-  const [showArchived, setShowArchived] = useState(false);
-  const [activeTab, setActiveTab] = useState<"topics" | "action-items" | "dev-goals">("topics");
+  const [activeTab, setActiveTab] = useState<"topics" | "action-items" | "dev-goals" | "history">("topics");
   const [topicPendingFiles, setTopicPendingFiles] = useState<PendingFile[]>([]);
   const [editingDate, setEditingDate] = useState(false);
   const [dateInput, setDateInput] = useState("");
@@ -771,7 +770,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const archivedKey = ["/api/1on1/archived", managerId, repId];
   const { data: archivedSessions = [], isLoading: archivedLoading } = useQuery<(OneOnOneSession & { topics: OneOnOneTopic[] })[]>({
     queryKey: archivedKey,
-    enabled: showArchived,
+    enabled: activeTab === "history",
     queryFn: async () => {
       const res = await fetch(`/api/1on1/archived?managerId=${managerId}&repId=${repId}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
@@ -1208,6 +1207,19 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
             Development Goals
           </span>
         </button>
+        <button
+          onClick={() => setActiveTab("history")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "history" ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          data-testid="tab-session-history"
+        >
+          <span className="flex items-center gap-1.5">
+            <History className="h-4 w-4" />
+            Session History
+            {archivedSessions.length > 0 && (
+              <Badge variant="secondary" className="ml-1 text-xs h-5 min-w-[20px] flex items-center justify-center">{archivedSessions.length}</Badge>
+            )}
+          </span>
+        </button>
       </div>
 
       {activeTab === "dev-goals" ? (
@@ -1318,38 +1330,23 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
             )}
           </div>
 
-          {/* Past sessions */}
-          <div className="border-t">
-            <button
-              className="flex items-center gap-2 w-full px-6 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-              onClick={() => setShowArchived(v => !v)}
-              data-testid="btn-toggle-archived"
-            >
-              <RotateCcw className="h-4 w-4" />
-              <span>Past Sessions</span>
-              {archivedSessions.length > 0 && (
-                <Badge variant="secondary" className="ml-1 text-xs">{archivedSessions.length}</Badge>
-              )}
-              <span className="ml-auto">
-                {showArchived ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-              </span>
-            </button>
-
-            {showArchived && (
-              <div className="px-6 pb-6 space-y-3">
-                {archivedLoading ? (
-                  [1, 2].map(i => <Skeleton key={i} className="h-12 w-full" />)
-                ) : archivedSessions.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-4">No past sessions yet</p>
-                ) : (
-                  archivedSessions.map(s => (
-                    <ArchivedSessionCard key={s.id} session={s} allUsers={allUsers} />
-                  ))
-                )}
-              </div>
-            )}
-          </div>
         </>
+      ) : activeTab === "history" ? (
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3" data-testid="panel-session-history">
+          {archivedLoading ? (
+            [1, 2, 3].map(i => <Skeleton key={i} className="h-16 w-full" />)
+          ) : archivedSessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
+              <History className="h-10 w-10 mb-3 opacity-30" />
+              <p className="text-base font-medium">No past sessions yet</p>
+              <p className="text-sm mt-1">Closed sessions will appear here with their notes and topics</p>
+            </div>
+          ) : (
+            archivedSessions.map(s => (
+              <ArchivedSessionCard key={s.id} session={s} allUsers={allUsers} />
+            ))
+          )}
+        </div>
       ) : (
         <ActionItemsPanel managerId={managerId} repId={repId} allUsers={allUsers} />
       )}
