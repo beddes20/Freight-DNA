@@ -4557,10 +4557,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
-        const teamNames = teamUsers.map(u => u.name.toLowerCase());
+        const lmNames = teamUsers.filter(u => u.role === "logistics_manager" || u.role === "logistics_coordinator").map(u => u.name.toLowerCase());
+        const salesNames = teamUsers.filter(u => u.role !== "logistics_manager" && u.role !== "logistics_coordinator").map(u => u.name.toLowerCase());
         allRows = allRows.filter((r: any) => {
           const op = getRepFromRow(r, histCols);
-          return teamNames.some(n => op.includes(n) || n.includes(op));
+          const disp = getDispatcherFromRow(r, histCols).toLowerCase();
+          return salesNames.some(n => op.includes(n) || n.includes(op))
+            || lmNames.some(n => disp.includes(n) || n.includes(disp));
         });
       }
 
@@ -4614,16 +4617,25 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
-        const teamNames = teamUsers.map(u => u.name.toLowerCase());
+        const lmNames = teamUsers.filter(u => u.role === "logistics_manager" || u.role === "logistics_coordinator").map(u => u.name.toLowerCase());
+        const salesNames = teamUsers.filter(u => u.role !== "logistics_manager" && u.role !== "logistics_coordinator").map(u => u.name.toLowerCase());
         allRows = allRows.filter((r: any) => {
           const op = getRepFromRow(r, oppCols);
-          return teamNames.some(n => op.includes(n) || n.includes(op));
+          const disp = getDispatcherFromRow(r, oppCols).toLowerCase();
+          return salesNames.some(n => op.includes(n) || n.includes(op))
+            || lmNames.some(n => disp.includes(n) || n.includes(disp));
         });
-      } else if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
+      } else if (user.role === "account_manager") {
         const userName = user.name.toLowerCase();
         allRows = allRows.filter((r: any) => {
           const op = getRepFromRow(r, oppCols);
           return op.includes(userName) || userName.includes(op);
+        });
+      } else if (user.role === "logistics_manager" || user.role === "logistics_coordinator") {
+        const userName = user.name.toLowerCase();
+        allRows = allRows.filter((r: any) => {
+          const disp = getDispatcherFromRow(r, oppCols).toLowerCase();
+          return disp.includes(userName) || userName.includes(disp);
         });
       }
 
@@ -4827,10 +4839,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
-        const teamNames = teamUsers.map(u => u.name.toLowerCase());
+        const lmNames = teamUsers.filter(u => u.role === "logistics_manager" || u.role === "logistics_coordinator").map(u => u.name.toLowerCase());
+        const salesNames = teamUsers.filter(u => u.role !== "logistics_manager" && u.role !== "logistics_coordinator").map(u => u.name.toLowerCase());
         rows = rows.filter((r: any) => {
           const op = getRepFromRow(r, finCols);
-          return teamNames.some(n => op.includes(n) || n.includes(op));
+          const disp = getDispatcherFromRow(r, finCols).toLowerCase();
+          return salesNames.some(n => op.includes(n) || n.includes(op))
+            || lmNames.some(n => disp.includes(n) || n.includes(disp));
         });
       }
 
@@ -7490,7 +7505,16 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         } else if (goal.metric === "margin" && latestUpload) {
           const amUser = allUsers.find(u => u.id === goal.amId);
           const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
-          if (repKey) {
+          const isLMUser = amUser?.role === "logistics_manager" || amUser?.role === "logistics_coordinator";
+          if (repKey && isLMUser) {
+            // LMs: margin is in the Dispatcher column — use shared helper
+            const txRows: any[] = (latestUpload.rows as any[]) || [];
+            const lmTxCols = resolveColumns(txRows);
+            const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+            const { totalMargin } = computeLoadsForRepGoal(txRows, lmTxCols, repKey, true, goalMonthKey);
+            if (totalMargin > 0) computedValue = Math.round(totalMargin);
+          } else if (repKey) {
+            // AMs/NAMs: margin is in the Ops User column — use summary or tx rows
             const repKeyLower = repKey.toLowerCase();
             const raw = (latestUpload.summaryRows as any[]) || [];
             let total = 0;
@@ -7596,7 +7620,16 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           effectiveValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
         } else if (goal.metric === "margin" && latestUpload) {
           const repKey = (amUser as any).financialRepId as string | null;
-          if (repKey) {
+          const isLMUser = (amUser as any).role === "logistics_manager" || (amUser as any).role === "logistics_coordinator";
+          if (repKey && isLMUser) {
+            // LMs: margin is in Dispatcher column
+            const txRows: any[] = (latestUpload.rows as any[]) || [];
+            const lmTxCols = resolveColumns(txRows);
+            const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+            const { totalMargin } = computeLoadsForRepGoal(txRows, lmTxCols, repKey, true, goalMonthKey);
+            if (totalMargin > 0) effectiveValue = Math.round(totalMargin);
+          } else if (repKey) {
+            // AMs/NAMs: margin is in Ops User column
             const raw = (latestUpload.summaryRows as any[]) || [];
             const repKeyLower = repKey.toLowerCase();
             let total = 0;
@@ -8056,12 +8089,16 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const txRows: any[] = (latest.rows as any[]) || [];
       const trendCols = resolveColumns(txRows);
       const repKeyLower = repKey.toLowerCase();
+      const isLMUser = amUser?.role === "logistics_manager" || amUser?.role === "logistics_coordinator";
       const byMonth: Record<string, number> = {};
       for (const row of txRows) {
         if (isExcludedRow(row, trendCols)) continue;
         const { monthKey, margin } = parseHistoricalRow(row, trendCols);
         if (!monthKey) continue;
-        const rep = getRepFromRow(row, trendCols);
+        // LMs are in Dispatcher column; AMs/NAMs are in Operations User column
+        const rep = isLMUser
+          ? getDispatcherFromRow(row, trendCols).toLowerCase()
+          : getRepFromRow(row, trendCols);
         if (rep !== repKeyLower) continue;
         byMonth[monthKey] = (byMonth[monthKey] || 0) + margin;
       }
