@@ -404,6 +404,9 @@ export interface IStorage {
   countMeaningfulThisMonth(userId: string, monthStart: string): Promise<number>;
   countOpportunityLogsThisMonth(userId: string, monthStart: string): Promise<number>;
   countRelationshipsMovedThisMonth(userId: string, monthStart: string): Promise<number>;
+  getUncelebratedEggs(winnerId: string): Promise<{ id: number; type: string; month: string; won_at: string }[]>;
+  markEggCelebrated(id: number): Promise<void>;
+  adminAwardEasterEgg(type: string, month: string, winnerId: string): Promise<number | null>;
 
   // Lane carriers (procurement rolodex)
   getLaneCarrier(id: string): Promise<import('../shared/schema').LaneCarrier | undefined>;
@@ -2365,6 +2368,42 @@ export class DatabaseStorage implements IStorage {
       return (result.rowCount ?? 0) > 0;
     } catch {
       return false;
+    }
+  }
+
+  async getUncelebratedEggs(winnerId: string): Promise<{ id: number; type: string; month: string; won_at: string }[]> {
+    try {
+      const result = await pool.query(
+        `SELECT id, type, month, won_at FROM easter_egg_winners
+         WHERE winner_id = $1 AND celebrated_at IS NULL
+         ORDER BY won_at ASC`,
+        [winnerId]
+      );
+      return result.rows;
+    } catch {
+      return [];
+    }
+  }
+
+  async markEggCelebrated(id: number): Promise<void> {
+    try {
+      await pool.query(`UPDATE easter_egg_winners SET celebrated_at = now() WHERE id = $1`, [id]);
+    } catch {}
+  }
+
+  async adminAwardEasterEgg(type: string, month: string, winnerId: string): Promise<number | null> {
+    try {
+      const result = await pool.query(
+        `INSERT INTO easter_egg_winners (type, month, winner_id, won_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT ON CONSTRAINT easter_egg_winners_unique DO UPDATE
+           SET winner_id = $3, won_at = now(), celebrated_at = NULL
+         RETURNING id`,
+        [type, month, winnerId]
+      );
+      return result.rows[0]?.id ?? null;
+    } catch {
+      return null;
     }
   }
 

@@ -760,4 +760,16 @@ export async function runMigrations() {
   } finally {
     clientLaneCarriers.release();
   }
+
+  const clientEggCelebrated = await pool.connect();
+  try {
+    await clientEggCelebrated.query(`
+      ALTER TABLE easter_egg_winners ADD COLUMN IF NOT EXISTS celebrated_at timestamptz
+    `);
+    console.log("[migrations] easter_egg_winners celebrated_at ensured");
+  } catch (err) {
+    console.error("[migrations] easter_egg_winners celebrated_at error:", err);
+  } finally {
+    clientEggCelebrated.release();
+  }
 }

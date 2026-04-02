@@ -1432,6 +1432,47 @@ RULES FOR YOUR RESPONSES:
     return { type, ...config };
   }
 
+  // ─── Pending eggs (for missed celebrations) ──────────────────────────────────
+  app.get("/api/me/pending-eggs", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const eggs = await storage.getUncelebratedEggs(user.id);
+      const enriched = eggs.map(e => {
+        const config = EGG_CONFIGS[e.type] ?? { title: "🥚 Easter Egg!", message: "You found an easter egg!" };
+        return { ...e, ...config };
+      });
+      res.json(enriched);
+    } catch {
+      res.json([]);
+    }
+  });
+
+  app.post("/api/me/pending-eggs/:id/celebrate", requireAuth, async (req, res) => {
+    try {
+      await storage.markEggCelebrated(parseInt(req.params.id, 10));
+      res.json({ ok: true });
+    } catch {
+      res.json({ ok: false });
+    }
+  });
+
+  app.post("/api/admin/award-easter-egg", requireAuth, async (req, res) => {
+    try {
+      const admin = await getCurrentUser(req);
+      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admins only" });
+      const { type, winnerId } = req.body;
+      if (!type || !winnerId) return res.status(400).json({ error: "type and winnerId required" });
+      const now = new Date();
+      const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const id = await storage.adminAwardEasterEgg(type, month, winnerId);
+      if (!id) return res.status(500).json({ error: "Failed to award egg" });
+      res.json({ ok: true, id });
+    } catch {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
   async function fanOutCelebration(type: "new_account" | "new_contact" | "base_advanced", title: string, body: string, link: string, relatedId: string, actorId: string, organizationId: string) {
     try {
       const allUsers = await storage.getUsers(organizationId);

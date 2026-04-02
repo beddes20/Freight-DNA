@@ -16,7 +16,7 @@ import { Loader2, UserX, Clock } from "lucide-react";
 import React, { useEffect, useCallback } from "react";
 import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
 import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
-import { EasterEggModal } from "@/components/easter-egg-modal";
+import { EasterEggModal, dispatchEasterEgg } from "@/components/easter-egg-modal";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import CompanyDetail from "@/pages/company-detail";
@@ -150,6 +150,26 @@ function AuthenticatedApp() {
     prefetch("/api/tasks");
     prefetch("/api/notifications");
     prefetch("/api/feed-posts");
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    // Check for any easter eggs this user won but never saw the popup for
+    const checkPendingEggs = async () => {
+      try {
+        const res = await fetch("/api/me/pending-eggs", { credentials: "include" });
+        if (!res.ok) return;
+        const eggs: { id: number; type: string; title: string; message: string }[] = await res.json();
+        if (!eggs.length) return;
+        // Show the first one after a short delay so the page has settled
+        setTimeout(async () => {
+          const egg = eggs[0];
+          dispatchEasterEgg({ type: egg.type, title: egg.title, message: egg.message });
+          await fetch(`/api/me/pending-eggs/${egg.id}/celebrate`, { method: "POST", credentials: "include" });
+        }, 1500);
+      } catch {}
+    };
+    checkPendingEggs();
   }, [user?.id]);
 
   const stopImpersonatingMutation = useMutation({
