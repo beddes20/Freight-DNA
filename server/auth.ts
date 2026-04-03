@@ -178,6 +178,18 @@ export function setupAuth(app: any) {
     if (!user) {
       return res.status(401).json({ error: "User not found" });
     }
+
+    // Refresh lastLoginAt at most once per hour so it reflects real activity,
+    // not just the last time the user explicitly typed their password.
+    const now = new Date();
+    const lastLogin = (user as any).lastLoginAt ? new Date((user as any).lastLoginAt) : null;
+    const hoursSince = lastLogin ? (now.getTime() - lastLogin.getTime()) / 3_600_000 : Infinity;
+    let freshLoginAt = (user as any).lastLoginAt as string | undefined;
+    if (!req.session.impersonatingAdminId && hoursSince >= 1) {
+      freshLoginAt = now.toISOString();
+      await storage.updateUser(user.id, user.organizationId, { lastLoginAt: freshLoginAt });
+    }
+
     const { password: _, ...safeUser } = user;
     const isImpersonating = !!req.session.impersonatingAdminId;
     let impersonatingAdminName: string | null = null;
@@ -185,7 +197,7 @@ export function setupAuth(app: any) {
       const admin = await storage.getUser(req.session.impersonatingAdminId!);
       if (admin) impersonatingAdminName = admin.name;
     }
-    res.json({ ...safeUser, isImpersonating, impersonatingAdminName, organizationSlug: req.session.organizationSlug ?? "" });
+    res.json({ ...safeUser, lastLoginAt: freshLoginAt, isImpersonating, impersonatingAdminName, organizationSlug: req.session.organizationSlug ?? "" });
   });
 
   app.post("/api/admin/impersonate/:userId", async (req: Request, res: Response) => {
