@@ -6410,15 +6410,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (amLikeRoles.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       } else if (user.role === "admin") {
-        const ams = allUsers.filter(u => amLikeRoles.includes(u.role) && u.managerId);
-        // NAM↔AM pairings (deduplicated — only one loop)
-        for (const am of ams) {
-          pairs.push({ namId: am.managerId!, amId: am.id });
-        }
-        // Admin↔NAM direct pairings
-        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
-        for (const nam of nams) {
-          pairs.push({ namId: user.id, amId: nam.id });
+        // All manager-report pairs in the entire org (admin→direct + all below)
+        const allReports = allUsers.filter(u => u.managerId && u.role !== "admin");
+        for (const report of allReports) {
+          pairs.push({ namId: report.managerId!, amId: report.id });
         }
       } else {
         // NAM/Director: downward (ALL direct reports) + upward (their manager)
@@ -6452,10 +6447,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (amLikeRoles.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       } else if (user.role === "admin") {
-        const ams = allUsers.filter(u => amLikeRoles.includes(u.role) && u.managerId);
-        for (const am of ams) pairs.push({ namId: am.managerId!, amId: am.id });
-        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
-        for (const nam of nams) pairs.push({ namId: user.id, amId: nam.id });
+        // All manager-report pairs in the entire org (admin→direct + all below)
+        const allReports = allUsers.filter(u => u.managerId && u.role !== "admin");
+        for (const report of allReports) {
+          pairs.push({ namId: report.managerId!, amId: report.id });
+        }
       } else {
         const reports = allUsers.filter(u => u.managerId === user.id);
         for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
@@ -6512,10 +6508,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (amLikeRoles2.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       } else if (user.role === "admin") {
-        const ams = allUsers.filter(u => amLikeRoles2.includes(u.role) && u.managerId);
-        for (const am of ams) pairs.push({ namId: am.managerId!, amId: am.id });
-        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
-        for (const nam of nams) pairs.push({ namId: user.id, amId: nam.id });
+        // All manager-report pairs in the entire org (admin→direct + all below)
+        const allReports = allUsers.filter(u => u.managerId && u.role !== "admin");
+        for (const report of allReports) {
+          pairs.push({ namId: report.managerId!, amId: report.id });
+        }
       } else {
         // NAM/Director: downward (ALL direct reports) + upward (their manager)
         const reports = allUsers.filter(u => u.managerId === user.id);
@@ -6587,18 +6584,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
       if (currentUser.role === "admin") {
         const result: { namId: string; amId: string; namName: string; amName: string; section: string; groupLabel?: string }[] = [];
-        const nams = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
-        // Admin→NAM direct pairings first
-        for (const nam of nams) {
-          result.push({ namId: currentUser.id, amId: nam.id, namName: currentUser.name, amName: nam.name, section: "my_nams", groupLabel: nam.name });
+        const directReports = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
+        // Admin→Director/NAM direct pairings first
+        for (const dr of directReports) {
+          result.push({ namId: currentUser.id, amId: dr.id, namName: currentUser.name, amName: dr.name, section: "my_nams", groupLabel: dr.name });
         }
-        // NAM→AM pairings grouped by NAM
-        const amRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
-        const ams = safeUsers.filter(u => amRoles.includes(u.role) && u.managerId);
-        for (const am of ams) {
-          const nam = safeUsers.find(u => u.id === am.managerId);
-          if (nam) {
-            result.push({ namId: nam.id, amId: am.id, namName: nam.name, amName: am.name, section: "team", groupLabel: nam.name });
+        // ALL manager-report pairs below admin level (Director→NAM, NAM→AM, Director→AM, etc.)
+        const allSubReports = safeUsers.filter(u => u.managerId && u.managerId !== currentUser.id && u.role !== "admin");
+        for (const report of allSubReports) {
+          const manager = safeUsers.find(u => u.id === report.managerId);
+          if (manager) {
+            result.push({ namId: manager.id, amId: report.id, namName: manager.name, amName: report.name, section: "team", groupLabel: manager.name });
           }
         }
         return res.json(result);
