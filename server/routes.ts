@@ -8272,6 +8272,73 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
+  app.get("/api/touchpoints/history", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const [allTps, allCompanies, allUsers] = await Promise.all([
+        storage.getTouchpointsByOrg(user.organizationId),
+        storage.getCompanies(user.organizationId),
+        storage.getUsers(),
+      ]);
+      const companyIds = allCompanies.map(c => c.id);
+      const allContacts = companyIds.length > 0 ? await storage.getContactsByCompanyIds(companyIds) : [];
+
+      const companyMap = new Map(allCompanies.map(c => [c.id, c]));
+      const contactMap = new Map(allContacts.map(c => [c.id, c]));
+      const userMap = new Map(allUsers.map(u => [u.id, u]));
+
+      // Determine which user IDs are visible to this user based on role
+      let allowedUserIds: Set<string> | null = null;
+      const role = user.role;
+      if (role === "admin" || role === "sales" || role === "sales_director") {
+        allowedUserIds = null; // see all
+      } else if (role === "director") {
+        // see everyone in org (or scope by team — show all for now)
+        allowedUserIds = null;
+      } else if (role === "national_account_manager") {
+        // see their team (AMs under them) + themselves
+        const teamUsers = allUsers.filter(u => u.managerId === user.id || u.id === user.id);
+        allowedUserIds = new Set(teamUsers.map(u => u.id));
+      } else {
+        // AM, LM, LC — own only
+        allowedUserIds = new Set([user.id]);
+      }
+
+      let filtered = allTps;
+      if (allowedUserIds !== null) {
+        filtered = filtered.filter(tp => allowedUserIds!.has(tp.loggedById));
+      }
+
+      const enriched = filtered.map(tp => {
+        const company = companyMap.get(tp.companyId);
+        const contact = tp.contactId ? contactMap.get(tp.contactId) : undefined;
+        const loggedBy = userMap.get(tp.loggedById);
+        return {
+          id: tp.id,
+          date: tp.date,
+          type: tp.type,
+          notes: tp.notes,
+          sentiment: tp.sentiment,
+          isMeaningful: tp.isMeaningful,
+          createdAt: tp.createdAt,
+          contactId: tp.contactId,
+          contactName: contact?.name ?? null,
+          companyId: tp.companyId,
+          companyName: company?.name ?? "Unknown",
+          loggedById: tp.loggedById,
+          loggedByName: loggedBy?.name ?? "Unknown",
+        };
+      });
+
+      res.json(enriched);
+    } catch (error) {
+      console.error("Failed to fetch touchpoint history:", error);
+      res.status(500).json({ error: "Failed to fetch touchpoint history" });
+    }
+  });
+
   app.get("/api/contacts/:id/touchpoints", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

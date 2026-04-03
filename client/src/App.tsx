@@ -51,6 +51,7 @@ import FeedbackInboxPage from "@/pages/feedback-inbox";
 import ProspectsPage from "@/pages/prospects";
 import PipelineAnalyticsPage from "@/pages/pipeline-analytics";
 import CheckoutSuccessPage from "@/pages/checkout-success";
+import TouchpointHistoryPage from "@/pages/touchpoint-history";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -112,6 +113,7 @@ function Router() {
       <Route path="/feedback-inbox" component={FeedbackInboxPage} />
       <Route path="/prospects" component={ProspectsPage} />
       <Route path="/pipeline-analytics" component={PipelineAnalyticsPage} />
+      <Route path="/touchpoint-history" component={TouchpointHistoryPage} />
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/terms" component={TermsPage} />
       <Route component={NotFound} />

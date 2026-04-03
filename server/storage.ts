@@ -289,6 +289,7 @@ export interface IStorage {
   getTouchpointsByContact(contactId: string): Promise<Touchpoint[]>;
   getTouchpointsByCompany(companyId: string): Promise<Touchpoint[]>;
   getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]>;
+  getTouchpointsByOrg(organizationId: string): Promise<Touchpoint[]>;
   createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint>;
   deleteTouchpoint(id: string): Promise<boolean>;
   getColdContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>>;
@@ -1445,6 +1446,16 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(touchpoints).where(
       and(eq(touchpoints.loggedById, userId), gte(touchpoints.date, since))
     );
+  }
+
+  async getTouchpointsByOrg(organizationId: string): Promise<Touchpoint[]> {
+    const result = await db
+      .select({ tp: touchpoints })
+      .from(touchpoints)
+      .innerJoin(companies, eq(touchpoints.companyId, companies.id))
+      .where(eq(companies.organizationId, organizationId))
+      .orderBy(desc(touchpoints.date));
+    return result.map(r => r.tp);
   }
 
   async createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint> {

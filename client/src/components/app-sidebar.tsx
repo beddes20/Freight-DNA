@@ -30,6 +30,7 @@ const navItems = [
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
   { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare },
   { title: "Tasks",             url: "/tasks",            icon: ListTodo      },
+  { title: "Touch History",     url: "/touchpoint-history", icon: History      },
   {
     title: "Team Performance",
     url: "/team-performance",
