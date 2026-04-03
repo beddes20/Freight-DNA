@@ -386,7 +386,8 @@ export default function Dashboard() {
 
   type AmRow = { id: string; name: string; touchesWeek: number; touchesMonth: number; coldAccounts: number; openTasks: number; companyCount: number; goalPct: number | null; goalTarget: number | null };
   const { data: amComparison = [], isLoading: amComparisonLoading } = useQuery<AmRow[]>({
-    queryKey: ["/api/dashboard/am-comparison"],
+    queryKey: ["/api/dashboard/am-comparison", selectedDirectorId],
+    queryFn: () => fetch(`/api/dashboard/am-comparison${directorFilterParam}`).then(r => r.json()),
     enabled: isNam || isDirector,
     staleTime: 120000,
   });

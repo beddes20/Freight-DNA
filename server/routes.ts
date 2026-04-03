@@ -10067,7 +10067,14 @@ Respond with valid JSON only:
       const allUsers = await storage.getUsers(user.organizationId);
       let amIds: string[];
       if (user.role === "admin" || user.role === "director") {
-        amIds = allUsers.filter(u => u.role === "account_manager").map(u => u.id);
+        const directorIdParam = typeof req.query.directorId === "string" ? req.query.directorId : null;
+        if (directorIdParam) {
+          // Scope to AMs whose manager (NAM) reports to the selected director
+          const directReportIds = new Set(allUsers.filter(u => u.managerId === directorIdParam).map(u => u.id));
+          amIds = allUsers.filter(u => u.role === "account_manager" && directReportIds.has(u.managerId!)).map(u => u.id);
+        } else {
+          amIds = allUsers.filter(u => u.role === "account_manager").map(u => u.id);
+        }
       } else {
         amIds = allUsers.filter(u => u.managerId === user.id && u.role === "account_manager").map(u => u.id);
       }
@@ -10336,7 +10343,8 @@ Respond with valid JSON only:
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const mmCacheKey = `margin-metrics:${req.session.organizationId}:${user.id}`;
+      const mmDirId = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : "all";
+      const mmCacheKey = `margin-metrics:${req.session.organizationId}:${user.id}:${mmDirId}`;
       const mmCached = cacheGet(mmCacheKey);
       if (mmCached) return res.json(mmCached);
 
