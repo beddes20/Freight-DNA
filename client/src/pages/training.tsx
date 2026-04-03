@@ -1,9 +1,11 @@
 import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/hooks/use-auth";
+import { useTour } from "@/hooks/use-tour";
 import {
   LayoutGrid, Network, Users, BarChart3, History, Zap, BookOpen,
   MessagesSquare, ListTodo, TrendingUp, Target, Plane, Trophy,
@@ -12,7 +14,7 @@ import {
   FileSpreadsheet, Award, Route, Flame, Lightbulb, Megaphone,
   UserCog, ArrowRightLeft, GraduationCap, ChevronDown, ChevronUp,
   ExternalLink, Star, Info, Bot, Calculator, HeartPulse, Truck,
-  FileBarChart2, BadgeCheck, Gauge, BellRing, Shield,
+  FileBarChart2, BadgeCheck, Gauge, BellRing, Shield, PlayCircle,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -968,6 +970,7 @@ function saveCompleted(set: Set<string>) {
 
 export default function TrainingPage() {
   const { user } = useAuth();
+  const { startTour } = useTour();
   const [activeCategory, setActiveCategory] = useState("Getting Started");
   const [expandedId, setExpandedId] = useState<string | null>("overview");
   const [search, setSearch] = useState("");
@@ -1064,12 +1067,41 @@ export default function TrainingPage() {
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-green-500 text-white">
               <GraduationCap className="h-5 w-5" />
             </div>
-            <div>
+            <div className="flex-1">
               <h1 className="text-xl font-bold">Training Center</h1>
               <p className="text-sm text-muted-foreground">
                 A guided walkthrough of every feature in Freight DNA. Mark sections as read to track your progress.
               </p>
             </div>
+            <Button
+              onClick={() => startTour()}
+              className="shrink-0 gap-2 bg-amber-500 hover:bg-amber-600 text-white shadow-sm"
+              data-testid="button-start-tour"
+            >
+              <PlayCircle className="h-4 w-4" />
+              Start Live Tour
+            </Button>
+          </div>
+
+          {/* Tour CTA card */}
+          <div className="rounded-xl border border-amber-200 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-950/20 p-4 flex items-start gap-3">
+            <span className="text-2xl shrink-0">🎯</span>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-sm">New to Freight DNA? Start with the Live Tour.</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                A 5-minute interactive walkthrough that highlights the actual features in the platform as you go — no reading required. Perfect for visual learners.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => startTour()}
+              className="shrink-0 gap-1.5 border-amber-400 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+              data-testid="button-start-tour-cta"
+            >
+              <PlayCircle className="h-3.5 w-3.5" />
+              Launch
+            </Button>
           </div>
 
           {/* Search */}

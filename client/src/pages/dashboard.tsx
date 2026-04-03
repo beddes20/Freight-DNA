@@ -1170,7 +1170,7 @@ export default function Dashboard() {
 
           {/* Row 1: Small activity count portlets */}
           <div style={{ order: getOrder("dir-activity") }} className={!isVisible("dir-activity") ? "hidden" : ""}>
-          <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="director-activity-row">
+          <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="director-activity-row" data-tour="tour-kpi-tiles">
 
             {/* Relationships Moved Up */}
             <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="portlet-relationships-moved" onClick={() => setActivePortlet({ type: "relationships", personal: false, title: "Relationships Moved Up This Month" })}>
@@ -1483,7 +1483,7 @@ export default function Dashboard() {
       {isNam && (
         <>
           {/* Row 1: Team activity metrics */}
-          <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-activity-row">
+          <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-activity-row" data-tour="tour-kpi-tiles">
             <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-relationships-moved" onClick={() => setActivePortlet({ type: "relationships", personal: false, title: "Team Relationships Moved Up This Month" })}>
               <CardContent className="p-4">
                 {namRelationshipsMovedLoading ? <Skeleton className="h-16 w-full" /> : (
@@ -2063,7 +2063,7 @@ export default function Dashboard() {
           {/* Row 2: Personal metrics */}
           <div className="space-y-1">
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide px-0.5">My Activity</h3>
-            <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="am-personal-metrics-row">
+            <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="am-personal-metrics-row" data-tour="tour-kpi-tiles">
               <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="am-personal-relationships" onClick={() => setActivePortlet({ type: "relationships", personal: true, title: "My Relationships Moved Up This Month" })}>
                 <CardContent className="p-4">
                   {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
@@ -2334,7 +2334,7 @@ export default function Dashboard() {
       })}
 
       <div style={{ order: getOrder("tasks") }} className={!isVisible("tasks") ? "hidden" : ""}>
-      <Card data-testid="card-my-tasks">
+      <Card data-testid="card-my-tasks" data-tour="tour-tasks-portlet">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <button
@@ -2551,7 +2551,7 @@ export default function Dashboard() {
       </Card>
       </div>{/* end tasks */}
 
-      <div style={{ order: getOrder("cold-contacts") }} className={!isVisible("cold-contacts") ? "hidden" : ""}>
+      <div style={{ order: getOrder("cold-contacts") }} className={!isVisible("cold-contacts") ? "hidden" : ""} data-tour="tour-contacts-attention">
       {coldContacts.length > 0 && (
         <Card data-testid="card-cold-contacts">
           <CardHeader className={coldContactsCollapsed ? "pb-2" : "pb-3"}>

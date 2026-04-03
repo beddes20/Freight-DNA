@@ -17,6 +17,7 @@ import React, { useEffect, useCallback } from "react";
 import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
 import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
 import { EasterEggModal, dispatchEasterEgg } from "@/components/easter-egg-modal";
+import { TourProvider } from "@/components/app-tour";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import CompanyDetail from "@/pages/company-detail";
@@ -280,8 +281,8 @@ function AuthenticatedApp() {
                   ))}
                 </p>
               </div>
-              <GlobalLogTouchButton />
-              <GlobalSearch navBar />
+              <span data-tour="tour-log-touch"><GlobalLogTouchButton /></span>
+              <span data-tour="tour-global-search"><GlobalSearch navBar /></span>
               <NotificationBell navBar />
             </header>
             <main className="flex-1 overflow-auto">
@@ -302,7 +303,9 @@ function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <AuthenticatedApp />
+          <TourProvider>
+            <AuthenticatedApp />
+          </TourProvider>
           <Toaster />
         </TooltipProvider>
       </QueryClientProvider>

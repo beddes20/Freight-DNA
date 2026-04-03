@@ -442,6 +442,7 @@ export function CrmChatbot() {
           open && "scale-90 opacity-80"
         )}
         data-testid="chatbot-toggle"
+        data-tour="tour-dna-guru"
       >
         {open ? <X className="h-5 w-5" /> : <Bot className="h-6 w-6" />}
       </button>
