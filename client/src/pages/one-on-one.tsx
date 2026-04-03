@@ -765,6 +765,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
       if (!res.ok) throw new Error("Failed");
       return res.json();
     },
+    refetchInterval: 30000,
   });
 
   const archivedKey = ["/api/1on1/archived", managerId, repId];
