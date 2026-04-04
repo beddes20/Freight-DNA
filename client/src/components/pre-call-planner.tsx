@@ -26,12 +26,14 @@ import {
   Sparkles,
   Loader2,
   Brain,
+  Send,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useQuery } from "@tanstack/react-query";
 import { fmtMoney } from "@/lib/rep-utils";
 import type { Company, Contact, Touchpoint, Rfp, Award } from "@shared/schema";
 import { ContactIntelModal } from "@/components/contact-intel-modal";
+import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 
 type TaskLike = { id: string | number; title: string; status: string; dueDate?: string | null };
 type FinancialSummary = { totalLoads: number; totalMargin: number; totalRevenue?: number } | null;
@@ -84,6 +86,7 @@ export function PreCallPlanner({
   const [loadingPoints, setLoadingPoints] = useState(false);
   const [selectedContactForIntel, setSelectedContactForIntel] = useState<Contact | null>(null);
   const [narrativeEnabled, setNarrativeEnabled] = useState(false);
+  const [composeTarget, setComposeTarget] = useState<Contact | null>(null);
 
   // Enable health narrative fetch once modal is open
   useEffect(() => {
@@ -383,11 +386,11 @@ export function PreCallPlanner({
                   const bKey = baseNorm((c as any).relationshipBase);
 
                   return (
-                    <button
+                    <div
                       key={c.id}
-                      onClick={() => setSelectedContactForIntel(c)}
-                      className="w-full text-left flex items-start justify-between gap-2 text-sm border rounded-md px-3 py-2 hover:bg-muted/50 hover:border-primary/40 transition-colors group"
+                      className="w-full text-left flex items-start justify-between gap-2 text-sm border rounded-md px-3 py-2 hover:bg-muted/50 hover:border-primary/40 transition-colors group cursor-pointer"
                       data-testid={`precall-contact-${c.id}`}
+                      onClick={() => setSelectedContactForIntel(c)}
                     >
                       <div className="min-w-0">
                         <div className="font-medium flex items-center gap-1.5 flex-wrap">
@@ -410,11 +413,23 @@ export function PreCallPlanner({
                           </div>
                         )}
                       </div>
-                      <div className="text-xs text-muted-foreground shrink-0 text-right">
-                        {lastTp && <div>Last: {lastTp.date}</div>}
-                        <div className="text-primary opacity-0 group-hover:opacity-100 transition-opacity text-xs">View intel →</div>
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <div className="text-xs text-muted-foreground text-right">
+                          {lastTp && <div>Last: {lastTp.date}</div>}
+                          <div className="text-primary opacity-0 group-hover:opacity-100 transition-opacity text-xs">View intel →</div>
+                        </div>
+                        {c.email && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setComposeTarget(c); }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600"
+                            title="Send email via Outlook"
+                            data-testid={`precall-email-${c.id}`}
+                          >
+                            <Send className="h-3 w-3" /> Email
+                          </button>
+                        )}
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -564,6 +579,14 @@ export function PreCallPlanner({
       contact={selectedContactForIntel}
       open={!!selectedContactForIntel}
       onClose={() => setSelectedContactForIntel(null)}
+    />
+
+    <OutlookComposeDialog
+      open={!!composeTarget}
+      onClose={() => setComposeTarget(null)}
+      toEmail={composeTarget?.email || ""}
+      toName={composeTarget?.name || ""}
+      companyName={company?.name || ""}
     />
     </>
   );

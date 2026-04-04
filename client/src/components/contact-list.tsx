@@ -27,10 +27,12 @@ import {
   Phone,
   PhoneCall,
   ArrowRight,
+  Send,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Contact, Touchpoint } from "@shared/schema";
+import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 
 function countThisWeek(tps: Touchpoint[]) {
   const start = new Date();
@@ -73,6 +75,7 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
+  const [composeTarget, setComposeTarget] = useState<Contact | null>(null);
 
   const deleteMutation = useMutation({
     mutationFn: async (contactId: string) => {
@@ -181,6 +184,17 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
+                        {contact.email && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={(e) => { e.stopPropagation(); setComposeTarget(contact); }}
+                            title="Send email via Outlook"
+                            data-testid={`button-email-contact-list-${contact.id}`}
+                          >
+                            <Send className="h-4 w-4 text-blue-500" />
+                          </Button>
+                        )}
                         <Button
                           size="icon"
                           variant="ghost"
@@ -313,6 +327,14 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <OutlookComposeDialog
+        open={!!composeTarget}
+        onClose={() => setComposeTarget(null)}
+        toEmail={composeTarget?.email || ""}
+        toName={composeTarget?.name || ""}
+        companyName=""
+      />
     </div>
   );
 }

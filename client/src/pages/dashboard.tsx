@@ -44,6 +44,7 @@ import { RelationshipDashboardSection } from "@/components/relationship-freight-
 import { useDashboardLayout } from "@/hooks/use-dashboard-layout";
 import { DashboardLayoutPanel } from "@/components/dashboard-layout-panel";
 import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
+import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -149,6 +150,7 @@ export default function Dashboard() {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>();
   const [viewContact, setViewContact] = useState<Contact | null>(null);
+  const [composeContact, setComposeContact] = useState<{ email: string; name: string; companyName: string } | null>(null);
   const [feedContent, setFeedContent] = useState("");
   const [feedCategory, setFeedCategory] = useState<"trend" | "growth" | "idea" | "celebrate">("idea");
   const [mentionState, setMentionState] = useState<{ mentionStart: number; query: string } | null>(null);
@@ -2592,6 +2594,21 @@ export default function Dashboard() {
                           : <p className="text-xs font-medium">Never</p>
                         }
                       </div>
+                      {contact.email && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500"
+                          title="Send email via Outlook"
+                          data-testid={`button-email-cold-${contact.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setComposeContact({ email: contact.email!, name: contact.name, companyName: company.name });
+                          }}
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                       <Button
                         size="icon"
                         variant="ghost"
@@ -3576,6 +3593,14 @@ export default function Dashboard() {
         portlet={activePortlet}
         onClose={() => setActivePortlet(null)}
         directorId={selectedDirectorId ?? undefined}
+      />
+
+      <OutlookComposeDialog
+        open={!!composeContact}
+        onClose={() => setComposeContact(null)}
+        toEmail={composeContact?.email || ""}
+        toName={composeContact?.name || ""}
+        companyName={composeContact?.companyName || ""}
       />
 
     </div>
