@@ -41,6 +41,11 @@ The application utilizes React, TypeScript, and Tailwind CSS with `shadcn/ui` to
     - **Greenfield Visibility**: Coverage portlet shows "Unworked Accounts" count — companies with no contacts assigned to any relationship base level.
     - **Pre-call Planner Relationship Intel**: Contact cards in the pre-call planner now display relationship base badge (1st/2nd/3rd/HR), lane count, loads, and margin sourced from the company's freight summary.
     - **Feedback Inbox Admin Responses**: Admins can type a response to any feedback submission. Response is saved, displayed in the inbox, and the submitter is notified by email (using their username as the email address).
+    - **Contact Data Completeness Nudge**: Contact cards in the People tab show amber warning badges for missing email, missing phone, or never-contacted status, prompting reps to fill in data gaps.
+    - **Company Activity Timeline**: Unified chronological feed at the top of each company's Activity tab, interleaving touchpoints and tasks sorted newest-first with icon-coded event types.
+    - **RFP & Task Calendar**: Monthly calendar page (`/rfp-calendar`) showing RFP deadlines (red) and task due dates (blue) with an "Upcoming Deadlines" sidebar panel for 60-day lookahead. Accessible to all users from the Pipeline section in the sidebar.
+    - **Rep Scorecard / Director Leaderboard**: Director/admin-only page (`/rep-scorecard`) showing all reps ranked by weekly touchpoints with goal progress bars, breakdown cards per rep, and sortable columns. Backed by `/api/rep-scorecard` endpoint. Accessible from the Pipeline section.
+    - **AI Email Drafting**: "Draft for me" button in the email compose dialog calls `POST /api/ai/draft-email`. Generates a personalized draft using GPT-4o-mini with contact context (title, interests, next steps, relationship level) and recent touchpoint notes.
 
 ## External Dependencies
 - **PostgreSQL**: Used for database management and session storage.

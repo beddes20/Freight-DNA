@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Mail, Send, X, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Loader2, Mail, Send, X, AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -99,7 +99,32 @@ export function OutlookComposeDialog({
     },
   });
 
+  const draftMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/ai/draft-email", {
+        contactId: contactId || undefined,
+        companyId: companyId || undefined,
+        subject: subject.trim() || undefined,
+        toName: toName || undefined,
+        companyName: companyName || undefined,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.draft) {
+        setBody(data.draft);
+        toast({ title: "Draft ready!", description: "AI draft inserted — review and edit before sending." });
+      } else {
+        toast({ title: "No draft returned", description: "Try again or write manually.", variant: "destructive" });
+      }
+    },
+    onError: () => {
+      toast({ title: "Draft failed", description: "Could not generate a draft. Write manually.", variant: "destructive" });
+    },
+  });
+
   const canSend = to.includes("@") && subject.trim() && body.trim() && outlookEnabled && !sendMutation.isPending && !sent;
+  const canDraft = !draftMutation.isPending && !sent;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -171,16 +196,39 @@ export function OutlookComposeDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="outlook-body" className="text-xs font-medium">Message</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="outlook-body" className="text-xs font-medium">Message</Label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-xs gap-1.5 text-purple-600 border-purple-200 hover:bg-purple-50 hover:border-purple-400 dark:text-purple-400 dark:border-purple-800 dark:hover:bg-purple-950/40"
+                  onClick={() => draftMutation.mutate()}
+                  disabled={!canDraft}
+                  data-testid="button-ai-draft"
+                >
+                  {draftMutation.isPending ? (
+                    <><Loader2 className="h-3 w-3 animate-spin" />Drafting…</>
+                  ) : (
+                    <><Sparkles className="h-3 w-3" />Draft for me</>
+                  )}
+                </Button>
+              </div>
               <Textarea
                 id="outlook-body"
                 value={body}
                 onChange={e => setBody(e.target.value)}
-                placeholder="Write your message here..."
+                placeholder="Write your message here, or click 'Draft for me' to generate a personalized draft…"
                 rows={8}
                 data-testid="textarea-outlook-body"
                 className="text-sm resize-none"
               />
+              {draftMutation.isSuccess && (
+                <p className="text-xs text-purple-600 dark:text-purple-400 flex items-center gap-1">
+                  <Sparkles className="h-3 w-3" />
+                  AI draft generated — review before sending.
+                </p>
+              )}
             </div>
 
             {companyName && (

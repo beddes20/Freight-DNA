@@ -28,6 +28,7 @@ import {
   PhoneCall,
   ArrowRight,
   Send,
+  AlertTriangle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -309,6 +310,25 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                         </div>
                       )}
                     </div>
+
+                    {/* Completeness nudge */}
+                    {(() => {
+                      const issues: string[] = [];
+                      if (!contact.email) issues.push("Missing email");
+                      if (!contact.phone) issues.push("Missing phone");
+                      if (days === null) issues.push("Never contacted");
+                      if (issues.length === 0) return null;
+                      return (
+                        <div className="mt-2 flex items-center gap-1.5 flex-wrap pt-2 border-t border-border/60" onClick={e => e.stopPropagation()}>
+                          <AlertTriangle className="h-3 w-3 text-amber-500 shrink-0" />
+                          {issues.map(issue => (
+                            <span key={issue} className="inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                              {issue}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </CardContent>

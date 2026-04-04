@@ -13156,5 +13156,157 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
     }
   });
 
+  // AI email draft
+  app.post("/api/ai/draft-email", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { contactId, companyId, subject, toName, companyName } = req.body as {
+        contactId?: string; companyId?: string; subject?: string; toName?: string; companyName?: string;
+      };
+
+      let contactCtx = "";
+      let recentNotes = "";
+
+      if (contactId) {
+        const contact = await storage.getContact(contactId);
+        if (contact) {
+          const parts: string[] = [];
+          if (contact.title) parts.push(`Title: ${contact.title}`);
+          if (contact.interests) parts.push(`Personal interests: ${contact.interests}`);
+          if (contact.nextSteps) parts.push(`Next steps noted: ${contact.nextSteps}`);
+          if (contact.relationshipBase) parts.push(`Relationship level: ${contact.relationshipBase}`);
+          contactCtx = parts.join("\n");
+
+          const tps = await storage.getTouchpointsByContact(contactId);
+          const withNotes = tps.filter(t => t.notes && t.notes.trim()).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
+          recentNotes = withNotes.map(t => `[${t.date} ${t.type}] ${t.notes}`).join("\n");
+        }
+      }
+
+      let companyCtx = "";
+      if (companyId) {
+        const company = await storage.getCompany(companyId);
+        if (company) {
+          const parts: string[] = [];
+          if (company.industry) parts.push(`Industry: ${company.industry}`);
+          if (company.accountSummary) parts.push(`Account summary: ${company.accountSummary}`);
+          companyCtx = parts.join("\n");
+        }
+      }
+
+      const systemPrompt = `You are a sales rep at a freight brokerage called Freight-DNA / Value Truck. 
+Write a professional, warm, concise business email to a shipper contact. 
+Keep it under 150 words. Be specific and personal where context allows. 
+Do NOT use generic filler phrases like "I hope this email finds you well." 
+Sign off with just the sender's name placeholder: [Your Name]. 
+Return only the email body text — no subject line, no extra commentary.`;
+
+      const userPrompt = `Write an email to ${toName || "the contact"} at ${companyName || "their company"}.
+Subject hint: ${subject || "General outreach"}
+${contactCtx ? `\nContact context:\n${contactCtx}` : ""}
+${companyCtx ? `\nAccount context:\n${companyCtx}` : ""}
+${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recentNotes}` : ""}`;
+
+      const OpenAI = (await import("openai")).default;
+      const openai = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 300,
+        temperature: 0.7,
+      });
+
+      const draft = completion.choices[0]?.message?.content?.trim() ?? "";
+      res.json({ draft });
+    } catch (err: any) {
+      console.error("[ai-draft-email] error:", err?.message ?? err);
+      res.status(500).json({ error: "Failed to generate draft" });
+    }
+  });
+
+  // Rep scorecard — aggregated metrics for all reps (admin/director only)
+  app.get("/api/rep-scorecard", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role ?? "")) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const orgId = user.organizationId;
+      const allUsers = await storage.getUsers(orgId);
+      const repRoles = ["account_manager", "national_account_manager", "logistics_manager", "logistics_coordinator", "sales"];
+      const reps = allUsers.filter(u => repRoles.includes(u.role ?? ""));
+
+      const now = new Date();
+      // Monday of current week
+      const weekStart = new Date(now);
+      const day = weekStart.getDay();
+      weekStart.setDate(weekStart.getDate() - (day === 0 ? 6 : day - 1));
+      weekStart.setHours(0, 0, 0, 0);
+      const weekStartStr = weekStart.toISOString().split("T")[0];
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthStartStr = monthStart.toISOString().split("T")[0];
+      const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+      // All weekly touchpoints (bulk fetch, then split per rep)
+      const allTps = await storage.getTouchpointsSince(weekStartStr);
+
+      // All contacts (for contacts-added count)
+      const allContacts = await storage.getContacts();
+      const orgUserIds = new Set(allUsers.map(u => u.id));
+      const contactsThisMonth = allContacts.filter(c => c.createdAt && c.createdAt >= monthStartStr && c.createdBy && orgUserIds.has(c.createdBy));
+
+      // All goals (no filter = all org goals via am-scoped logic)
+      const allGoals = await storage.getGoals({});
+
+      const results = await Promise.all(reps.map(async rep => {
+        const repTps = allTps.filter((t: any) => t.loggedById === rep.id);
+        const weeklyTotal = repTps.length;
+        const weeklyCalls = repTps.filter((t: any) => t.type === "call").length;
+        const weeklyEmails = repTps.filter((t: any) => t.type === "email").length;
+        const weeklyTexts = repTps.filter((t: any) => t.type === "text").length;
+        const weeklySiteVisits = repTps.filter((t: any) => t.type === "site_visit").length;
+        const weeklyMeaningful = repTps.filter((t: any) => t.isMeaningful).length;
+        const contactsAdded = contactsThisMonth.filter(c => c.createdBy === rep.id).length;
+
+        const repGoals = allGoals.filter((g: any) => g.userId === rep.id && g.period === period);
+        const touchpointGoal = repGoals.find((g: any) => g.metric === "touchpoints");
+        const meaningfulGoal = repGoals.find((g: any) => g.metric === "meaningful_touchpoints");
+        const contactsGoal = repGoals.find((g: any) => g.metric === "contacts_added");
+
+        return {
+          userId: rep.id,
+          name: rep.name,
+          role: rep.role,
+          weeklyTotal,
+          weeklyCalls,
+          weeklyEmails,
+          weeklyTexts,
+          weeklySiteVisits,
+          weeklyMeaningful,
+          contactsAdded,
+          touchpointGoalTarget: touchpointGoal?.targetValue != null ? Number(touchpointGoal.targetValue) : null,
+          meaningfulGoalTarget: meaningfulGoal?.targetValue != null ? Number(meaningfulGoal.targetValue) : null,
+          contactsGoalTarget: contactsGoal?.targetValue != null ? Number(contactsGoal.targetValue) : null,
+        };
+      }));
+
+      results.sort((a, b) => b.weeklyTotal - a.weeklyTotal);
+      res.json({ weekStart: weekStartStr, results });
+    } catch (err: any) {
+      console.error("[rep-scorecard]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to load rep scorecard" });
+    }
+  });
+
   return httpServer;
 }

@@ -1413,6 +1413,125 @@ export default function CompanyDetail() {
         {/* ── Activity tab: Tasks, Callouts, Touch Log ── */}
         <TabsContent value="activity" className="space-y-4 mt-2">
 
+      {/* ── Unified Activity Timeline ──────────────────────────────────────── */}
+      {(() => {
+        const TYPE_COLORS: Record<string, string> = {
+          call:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+          email:      "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+          text:       "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+          site_visit: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+          task:       "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+        };
+        const TYPE_LABELS: Record<string, string> = {
+          call: "Call", email: "Email", text: "Text", site_visit: "Site Visit", task: "Task",
+        };
+        const TYPE_ICONS: Record<string, typeof PhoneCall> = {
+          call: PhoneCall, email: Mail, text: MessageSquare, site_visit: Building2, task: ClipboardList,
+        };
+
+        type TimelineItem = {
+          id: string;
+          sortKey: string;
+          type: string;
+          label: string;
+          subLabel?: string;
+          notes?: string;
+          who?: string;
+          status?: string;
+        };
+
+        const tpItems: TimelineItem[] = touchLogEntries.map(tp => ({
+          id: `tp-${tp.id}`,
+          sortKey: tp.createdAt || tp.date,
+          type: tp.type,
+          label: tp.contactName ?? "Company touch",
+          subLabel: tp.isMeaningful ? "Meaningful" : undefined,
+          notes: tp.notes ?? undefined,
+          who: tp.loggedByName,
+        }));
+
+        const taskItems: TimelineItem[] = companyTasks
+          .filter(t => t.status === "completed" || t.dueDate)
+          .map(t => ({
+            id: `task-${t.id}`,
+            sortKey: t.dueDate ? t.dueDate + "T00:00:00" : "",
+            type: "task",
+            label: t.title,
+            status: t.status,
+            who: teamMembers.find(u => u.id === t.assignedTo)?.name,
+          }));
+
+        const all = [...tpItems, ...taskItems]
+          .filter(i => i.sortKey)
+          .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
+          .slice(0, 20);
+
+        if (all.length === 0) return null;
+
+        const timeAgo = (iso: string) => {
+          try {
+            const diff = Date.now() - new Date(iso).getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 60) return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return `${hrs}h ago`;
+            const days = Math.floor(hrs / 24);
+            return days < 30 ? `${days}d ago` : new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          } catch { return ""; }
+        };
+
+        return (
+          <Card data-testid="card-activity-timeline">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Activity className="h-4 w-4 text-violet-500" />
+                Activity Timeline
+                <Badge variant="secondary" className="ml-1 font-normal">{all.length}</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="relative">
+                <div className="absolute left-[17px] top-0 bottom-0 w-px bg-border" />
+                <div className="space-y-0">
+                  {all.map(item => {
+                    const Icon = TYPE_ICONS[item.type] ?? ClipboardList;
+                    const colorClass = TYPE_COLORS[item.type] ?? "bg-muted text-muted-foreground";
+                    return (
+                      <div key={item.id} className="flex items-start gap-3 py-2.5 pl-1" data-testid={`timeline-item-${item.id}`}>
+                        <div className={`relative z-10 flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${colorClass} border-2 border-background`}>
+                          <Icon className="h-3.5 w-3.5" />
+                        </div>
+                        <div className="flex-1 min-w-0 pt-0.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-xs font-medium text-foreground">{item.label}</span>
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded text-muted-foreground bg-muted">
+                              {TYPE_LABELS[item.type] ?? item.type}
+                            </span>
+                            {item.subLabel && (
+                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300">{item.subLabel}</span>
+                            )}
+                            {item.status === "completed" && (
+                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">Done</span>
+                            )}
+                          </div>
+                          {item.notes && (
+                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{item.notes}</p>
+                          )}
+                          <p className="text-[10px] text-muted-foreground mt-0.5">
+                            {item.who && <span>{item.who} · </span>}
+                            {timeAgo(item.sortKey)}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* Account Tasks */}
       <Card data-testid="card-company-tasks">
         <CardHeader className="pb-3">
