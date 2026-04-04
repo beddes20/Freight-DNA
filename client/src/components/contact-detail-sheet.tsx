@@ -18,13 +18,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Phone, Mail, MapPin, Route, DollarSign, FileText, PhoneCall, Copy, Check,
-  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo, X, History,
+  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo, X, History, Send,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Contact, Touchpoint } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 import { ContactLaneManager } from "@/components/relationship-freight-portlet";
+import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 
 const TYPE_CONFIG: Record<string, { label: string; icon: React.ElementType; color: string }> = {
   call:       { label: "Call",       icon: PhoneCall,    color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" },
@@ -86,6 +87,7 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [tpPendingFiles, setTpPendingFiles] = useState<PendingFile[]>([]);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [composeOpen, setComposeOpen] = useState(false);
 
   function copyToClipboard(value: string, field: string) {
     navigator.clipboard.writeText(value).then(() => {
@@ -219,6 +221,14 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
                       <Mail className="h-4 w-4 shrink-0" />
                       <span className="truncate">{contact.email}</span>
                     </a>
+                    <button
+                      onClick={() => setComposeOpen(true)}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-blue-500 shrink-0"
+                      title="Send email via Outlook"
+                      data-testid="button-send-outlook-email"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                    </button>
                     <button
                       onClick={() => copyToClipboard(contact.email!, "email")}
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0"
@@ -456,6 +466,14 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <OutlookComposeDialog
+        open={composeOpen}
+        onClose={() => setComposeOpen(false)}
+        toEmail={contact?.email || ""}
+        toName={contact?.name || ""}
+        companyName={(contact as any)?.companyName || ""}
+      />
     </>
   );
 }

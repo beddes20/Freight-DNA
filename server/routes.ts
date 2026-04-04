@@ -7300,6 +7300,56 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
   });
 
   // ── Rep Progress Report ───────────────────────────────────────────────────
+  // ── Outlook / Microsoft Graph Email ─────────────────────────────────────
+  app.get("/api/outlook/status", requireAuth, async (_req, res) => {
+    const { outlookEnabled } = await import("./outlookService");
+    res.json({ enabled: outlookEnabled() });
+  });
+
+  app.post("/api/outlook/send", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+
+      const { toEmail, toName, subject, body, ccEmails, isHtml } = req.body || {};
+      if (!toEmail || !subject || !body) {
+        return res.status(400).json({ error: "toEmail, subject, and body are required" });
+      }
+
+      // The "from" address is the logged-in user's username (which is their email)
+      const fromEmail = currentUser.username;
+      if (!fromEmail || !fromEmail.includes("@")) {
+        return res.status(400).json({ error: "Your account username must be a valid email address to send via Outlook" });
+      }
+
+      const { sendOutlookEmail, outlookEnabled } = await import("./outlookService");
+      if (!outlookEnabled()) {
+        return res.status(503).json({ error: "Outlook integration is not configured on this server" });
+      }
+
+      const result = await sendOutlookEmail({
+        fromEmail,
+        toEmail,
+        toName,
+        subject,
+        body,
+        ccEmails: ccEmails || [],
+        isHtml: isHtml !== false,
+        saveToSentItems: true,
+      });
+
+      if (result.ok) {
+        res.json({ success: true, message: "Email sent successfully" });
+      } else {
+        res.status(500).json({ success: false, error: result.error });
+      }
+    } catch (error: any) {
+      console.error("[outlook] send error:", error);
+      res.status(500).json({ error: "Failed to send email" });
+    }
+  });
+  // ── End Outlook ──────────────────────────────────────────────────────────
+
   app.post("/api/report/rep/:userId/send-email", requireAuth, async (req, res) => {
     try {
       const viewer = await getCurrentUser(req);
