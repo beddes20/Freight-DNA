@@ -216,24 +216,40 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
 
                     <div className="mt-3 space-y-2">
                       {(contact.email || contact.phone) && (
-                        <div className="flex flex-wrap gap-3 text-sm">
+                        <div className="space-y-1.5">
+                          <div className="flex flex-wrap gap-3 text-sm">
+                            {contact.email && (
+                              <a
+                                href={`mailto:${contact.email}`}
+                                onClick={e => e.stopPropagation()}
+                                className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                              >
+                                <Mail className="h-3.5 w-3.5" />
+                                <span className="truncate">{contact.email}</span>
+                              </a>
+                            )}
+                            {contact.phone && (
+                              <a
+                                href={`tel:${contact.phone}`}
+                                onClick={e => e.stopPropagation()}
+                                className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                              >
+                                <Phone className="h-3.5 w-3.5" />
+                                <span>{contact.phone}</span>
+                              </a>
+                            )}
+                          </div>
                           {contact.email && (
-                            <a
-                              href={`mailto:${contact.email}`}
-                              className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="w-full gap-2 text-blue-600 border-blue-200 hover:bg-blue-50 hover:border-blue-400 dark:text-blue-400 dark:border-blue-800 dark:hover:bg-blue-950/40"
+                              onClick={(e) => { e.stopPropagation(); setComposeTarget(contact); }}
+                              data-testid={`button-send-email-card-${contact.id}`}
                             >
-                              <Mail className="h-3.5 w-3.5" />
-                              <span className="truncate">{contact.email}</span>
-                            </a>
-                          )}
-                          {contact.phone && (
-                            <a
-                              href={`tel:${contact.phone}`}
-                              className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
-                            >
-                              <Phone className="h-3.5 w-3.5" />
-                              <span>{contact.phone}</span>
-                            </a>
+                              <Send className="h-3.5 w-3.5" />
+                              Send Email
+                            </Button>
                           )}
                         </div>
                       )}
