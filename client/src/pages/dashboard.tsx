@@ -150,7 +150,7 @@ export default function Dashboard() {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>();
   const [viewContact, setViewContact] = useState<Contact | null>(null);
-  const [composeContact, setComposeContact] = useState<{ email: string; name: string; companyName: string } | null>(null);
+  const [composeContact, setComposeContact] = useState<{ email: string; name: string; companyName: string; contactId?: string; companyId?: string } | null>(null);
   const [feedContent, setFeedContent] = useState("");
   const [feedCategory, setFeedCategory] = useState<"trend" | "growth" | "idea" | "celebrate">("idea");
   const [mentionState, setMentionState] = useState<{ mentionStart: number; query: string } | null>(null);
@@ -2603,7 +2603,7 @@ export default function Dashboard() {
                           data-testid={`button-email-cold-${contact.id}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setComposeContact({ email: contact.email!, name: contact.name, companyName: company.name });
+                            setComposeContact({ email: contact.email!, name: contact.name, companyName: company.name, contactId: contact.id, companyId: company.id });
                           }}
                         >
                           <Send className="h-3.5 w-3.5" />
@@ -3601,6 +3601,8 @@ export default function Dashboard() {
         toEmail={composeContact?.email || ""}
         toName={composeContact?.name || ""}
         companyName={composeContact?.companyName || ""}
+        contactId={composeContact?.contactId}
+        companyId={composeContact?.companyId}
       />
 
     </div>

@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Phone, Mail, MapPin, Route, DollarSign, FileText, PhoneCall, Copy, Check,
-  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo, X, History, Send,
+  MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo, X, History, Send, Star,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -148,6 +148,19 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
       setDeleteTarget(null);
       toast({ title: "Touchpoint deleted" });
     },
+  });
+
+  const toggleMeaningfulMutation = useMutation({
+    mutationFn: async ({ id, isMeaningful }: { id: string; isMeaningful: boolean }) => {
+      const res = await apiRequest("PATCH", `/api/touchpoints/${id}`, { isMeaningful });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts", contact?.id, "touchpoints"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", contact?.companyId, "touchpoints"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/cold-contacts"] });
+    },
+    onError: () => toast({ title: "Failed to update touchpoint", variant: "destructive" }),
   });
 
   if (!contact) return null;
@@ -431,18 +444,28 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
                       </span>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-muted-foreground">{dateLabel}</p>
-                        {tp.notes && <p className="text-sm mt-0.5 line-clamp-2">{tp.notes}</p>}
+                        {tp.notes && <p className="text-sm mt-0.5 whitespace-pre-line line-clamp-4">{tp.notes}</p>}
                         <FileAttachmentList entityType="touchpoint" entityIds={[tp.id]} />
                       </div>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0"
-                        onClick={() => setDeleteTarget(tp.id)}
-                        data-testid={`button-delete-tp-${tp.id}`}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => toggleMeaningfulMutation.mutate({ id: tp.id, isMeaningful: !tp.isMeaningful })}
+                          title={tp.isMeaningful ? "Marked meaningful — click to unmark" : "Mark as meaningful conversation"}
+                          className={`h-6 w-6 flex items-center justify-center rounded transition-colors ${tp.isMeaningful ? "text-amber-500 hover:text-amber-400" : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-amber-500"}`}
+                          data-testid={`button-meaningful-tp-${tp.id}`}
+                        >
+                          <Star className={`h-3.5 w-3.5 ${tp.isMeaningful ? "fill-current" : ""}`} />
+                        </button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0"
+                          onClick={() => setDeleteTarget(tp.id)}
+                          data-testid={`button-delete-tp-${tp.id}`}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
                     </div>
                   );
                 })}
@@ -473,6 +496,8 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
         toEmail={contact?.email || ""}
         toName={contact?.name || ""}
         companyName={(contact as any)?.companyName || ""}
+        contactId={contact?.id}
+        companyId={contact?.companyId ?? undefined}
       />
     </>
   );

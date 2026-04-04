@@ -7311,7 +7311,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
 
-      const { toEmail, toName, subject, body, ccEmails, isHtml } = req.body || {};
+      const { toEmail, toName, subject, body, ccEmails, isHtml, contactId } = req.body || {};
       if (!toEmail || !subject || !body) {
         return res.status(400).json({ error: "toEmail, subject, and body are required" });
       }
@@ -7338,14 +7338,64 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         saveToSentItems: true,
       });
 
-      if (result.ok) {
-        res.json({ success: true, message: "Email sent successfully" });
-      } else {
-        res.status(500).json({ success: false, error: result.error });
+      if (!result.ok) {
+        return res.status(500).json({ success: false, error: result.error });
       }
+
+      // Auto-log a touchpoint if a contactId was provided
+      let touchpoint = null;
+      if (contactId) {
+        try {
+          const contact = await storage.getContact(contactId as string);
+          if (contact) {
+            const now = new Date();
+            const notes = `Subject: ${subject}\n\n${body}`;
+            touchpoint = await storage.createTouchpoint({
+              contactId,
+              companyId: contact.companyId,
+              type: "email",
+              date: now.toISOString().split("T")[0],
+              notes,
+              sentiment: null,
+              isMeaningful: false,
+              loggedById: currentUser.id,
+              createdAt: now.toISOString(),
+            });
+            cacheInvalidatePrefix(`cold-contacts:${currentUser.id}`);
+          }
+        } catch (tpErr) {
+          console.error("[outlook] touchpoint log failed:", tpErr);
+        }
+      }
+
+      res.json({ success: true, message: "Email sent successfully", touchpoint });
     } catch (error: any) {
       console.error("[outlook] send error:", error);
       res.status(500).json({ error: "Failed to send email" });
+    }
+  });
+
+  // Update a touchpoint (toggle meaningful, edit notes)
+  app.patch("/api/touchpoints/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const tp = await storage.getTouchpoint(req.params.id as string);
+      if (!tp) return res.status(404).json({ error: "Touchpoint not found" });
+      const updates: { isMeaningful?: boolean; notes?: string } = {};
+      if (req.body.isMeaningful !== undefined) updates.isMeaningful = req.body.isMeaningful === true;
+      if (req.body.notes !== undefined) updates.notes = req.body.notes;
+      const updated = await storage.updateTouchpoint(tp.id, updates);
+      if (updated.isMeaningful) {
+        const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
+        const count = await storage.countMeaningfulThisMonth(user.id, monthStart);
+        if (count >= 2) await tryClaimEasterEgg("first_meaningful_2", user.id);
+      }
+      cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
+      res.json(updated);
+    } catch (error) {
+      console.error("Failed to update touchpoint:", error);
+      res.status(500).json({ error: "Failed to update touchpoint" });
     }
   });
   // ── End Outlook ──────────────────────────────────────────────────────────

@@ -334,6 +334,8 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
         toEmail={composeTarget?.email || ""}
         toName={composeTarget?.name || ""}
         companyName=""
+        contactId={composeTarget?.id}
+        companyId={composeTarget?.companyId ?? undefined}
       />
     </div>
   );

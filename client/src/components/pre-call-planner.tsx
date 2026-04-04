@@ -587,6 +587,8 @@ export function PreCallPlanner({
       toEmail={composeTarget?.email || ""}
       toName={composeTarget?.name || ""}
       companyName={company?.name || ""}
+      contactId={composeTarget?.id}
+      companyId={composeTarget?.companyId ?? undefined}
     />
     </>
   );

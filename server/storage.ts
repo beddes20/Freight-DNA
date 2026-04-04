@@ -291,6 +291,7 @@ export interface IStorage {
   getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]>;
   getTouchpointsByOrg(organizationId: string): Promise<Touchpoint[]>;
   createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint>;
+  updateTouchpoint(id: string, data: { isMeaningful?: boolean; notes?: string }): Promise<Touchpoint>;
   deleteTouchpoint(id: string): Promise<boolean>;
   getColdContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>>;
   getMeaningfulOverdueContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSinceLastMeaningful: number }>>;
@@ -1461,6 +1462,11 @@ export class DatabaseStorage implements IStorage {
   async createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint> {
     const [created] = await db.insert(touchpoints).values(tp).returning();
     return created;
+  }
+
+  async updateTouchpoint(id: string, data: { isMeaningful?: boolean; notes?: string }): Promise<Touchpoint> {
+    const [updated] = await db.update(touchpoints).set(data).where(eq(touchpoints.id, id)).returning();
+    return updated;
   }
 
   async deleteTouchpoint(id: string): Promise<boolean> {

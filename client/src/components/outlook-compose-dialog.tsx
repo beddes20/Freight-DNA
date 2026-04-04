@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Mail, Send, X, AlertTriangle, CheckCircle2 } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 interface OutlookComposeProps {
@@ -20,6 +20,8 @@ interface OutlookComposeProps {
   defaultSubject?: string;
   defaultBody?: string;
   companyName?: string;
+  contactId?: string;
+  companyId?: string;
 }
 
 export function OutlookComposeDialog({
@@ -30,6 +32,8 @@ export function OutlookComposeDialog({
   defaultSubject = "",
   defaultBody = "",
   companyName = "",
+  contactId,
+  companyId,
 }: OutlookComposeProps) {
   const { toast } = useToast();
   const [to, setTo] = useState(toEmail);
@@ -67,6 +71,7 @@ export function OutlookComposeDialog({
         body: body.trim(),
         ccEmails,
         isHtml: false,
+        contactId: contactId || undefined,
       });
       return res.json();
     },
@@ -74,6 +79,13 @@ export function OutlookComposeDialog({
       if (data.success) {
         setSent(true);
         toast({ title: "Email sent!", description: `Your email to ${to} was sent from your Outlook.` });
+        if (contactId) {
+          queryClient.invalidateQueries({ queryKey: ["/api/contacts", contactId, "touchpoints"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/dashboard/cold-contacts"] });
+          if (companyId) {
+            queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "touchpoints"] });
+          }
+        }
       } else {
         toast({
           title: "Failed to send",
