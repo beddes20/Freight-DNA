@@ -229,27 +229,31 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
             {(contact.email || contact.phone) && (
               <div className="space-y-2">
                 {contact.email && (
-                  <div className="flex items-center gap-2 group">
-                    <a href={`mailto:${contact.email}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground flex-1 min-w-0">
-                      <Mail className="h-4 w-4 shrink-0" />
-                      <span className="truncate">{contact.email}</span>
-                    </a>
-                    <button
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2 group">
+                      <a href={`mailto:${contact.email}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground flex-1 min-w-0">
+                        <Mail className="h-4 w-4 shrink-0" />
+                        <span className="truncate">{contact.email}</span>
+                      </a>
+                      <button
+                        onClick={() => copyToClipboard(contact.email!, "email")}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0"
+                        title="Copy email"
+                        data-testid="button-copy-email"
+                      >
+                        {copiedField === "email" ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full gap-2 text-blue-600 border-blue-200 hover:bg-blue-50 hover:border-blue-400 dark:text-blue-400 dark:border-blue-800 dark:hover:bg-blue-950/40"
                       onClick={() => setComposeOpen(true)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-blue-500 shrink-0"
-                      title="Send email via Outlook"
                       data-testid="button-send-outlook-email"
                     >
                       <Send className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      onClick={() => copyToClipboard(contact.email!, "email")}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0"
-                      title="Copy email"
-                      data-testid="button-copy-email"
-                    >
-                      {copiedField === "email" ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
-                    </button>
+                      Send Email
+                    </Button>
                   </div>
                 )}
                 {contact.phone && (

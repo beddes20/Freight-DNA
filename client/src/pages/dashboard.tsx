@@ -2598,7 +2598,7 @@ export default function Dashboard() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500"
+                          className="h-7 w-7 text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40"
                           title="Send email via Outlook"
                           data-testid={`button-email-cold-${contact.id}`}
                           onClick={(e) => {

@@ -421,7 +421,7 @@ export function PreCallPlanner({
                         {c.email && (
                           <button
                             onClick={(e) => { e.stopPropagation(); setComposeTarget(c); }}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600"
+                            className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium"
                             title="Send email via Outlook"
                             data-testid={`precall-email-${c.id}`}
                           >
