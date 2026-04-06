@@ -358,6 +358,10 @@
 .sig-prosemirror a { color: #3b82f6; text-decoration: underline; }
 /* Constrain any stray images that are explicitly huge */
 .sig-prosemirror img { max-width: 400px; height: auto; }
+/* Tables from pasted Outlook signatures — no TipTap blue borders */
+.sig-prosemirror table { border-collapse: collapse; }
+.sig-prosemirror td, .sig-prosemirror th { border: none !important; padding: 2px 6px; vertical-align: middle; }
+.sig-prosemirror .selectedCell { background: transparent !important; }
 .sig-prosemirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
