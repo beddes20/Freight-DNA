@@ -592,7 +592,7 @@ export default function GoalsPage() {
   }
 
   const createGoal = useMutation({
-    mutationFn: (data: object) => apiRequest("POST", "/api/goals", data),
+    mutationFn: (data: object) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/goals/monthly-check"] });
@@ -604,7 +604,7 @@ export default function GoalsPage() {
   });
 
   const updateGoalMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: object }) => apiRequest("PATCH", `/api/goals/${id}`, data),
+    mutationFn: ({ id, data }: { id: string; data: object }) => apiRequest("PATCH", `/api/goals/${id}`, data).then(r => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       setDialogOpen(false);
@@ -614,7 +614,7 @@ export default function GoalsPage() {
   });
 
   const deleteGoalMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("DELETE", `/api/goals/${id}`),
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/goals/${id}`); },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       toast({ description: "Goal deleted." });
@@ -622,8 +622,8 @@ export default function GoalsPage() {
   });
 
   const bulkGoalMutation = useMutation({
-    mutationFn: (data: object) => apiRequest("POST", "/api/goals/bulk", data),
-    onSuccess: (res: any) => {
+    mutationFn: (data: object) => apiRequest("POST", "/api/goals/bulk", data).then(r => r.json()),
+    onSuccess: (res: { created?: number }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/goals/monthly-check"] });
       setBulkOpen(false);

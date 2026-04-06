@@ -51,6 +51,27 @@ import type { ProcurementLaneInfo } from "@/components/carrier-procurement-works
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
 
+type ActionItem = {
+  id: string; text: string; tag: string; status: string; createdAt: string;
+  sessionId: string; addedById: string; namId: string; amId: string;
+  withUserName: string; addedByName: string;
+};
+type TrendingAccount = { name: string; delta: number; isNew?: boolean; companyId?: string };
+type TrendingResponse = { up: TrendingAccount[]; down: TrendingAccount[]; monthFraction?: number; isPartialMonth?: boolean; curMonthLabel?: string };
+type StaleAccount = { id: string; name: string; daysSince: number };
+type TodaysFiveItem = { id: string; name: string; daysSince: number | null; openTasks: number; hasUrgentRfp: boolean; score: number; reasons: string[] };
+type AmRow = { id: string; name: string; touchesWeek: number; touchesMonth: number; coldAccounts: number; openTasks: number; companyCount: number; goalPct: number | null; goalTarget: number | null };
+type TeamActivity = { touches: number; meaningful: number; newContacts: number };
+type RelationshipsMovedData = { count: number };
+type MarginUserMetric = {
+  userId: string; name: string; role: string; margin: number;
+  goal: { id: string; target: number } | null;
+};
+type MarginMetrics = { nams: MarginUserMetric[]; ams: MarginUserMetric[] };
+type PersonalMetrics = { relationshipsMovedThisMonth: number; meaningfulToday: number; contactsAddedToday: number; touchesToday: number };
+type WeeklyRep = { userId: string; name: string; total: number; call: number; email: number; text: number; site_visit: number; meaningful: number };
+type OpportunityLog = { id: string; repId: string; companyId: string | null; type: string; category: string; title: string; description: string | null; estimatedLoads: number | null; estimatedValue: string | null; loggedAt: string; createdAt: string };
+
 const METRIC_LABELS: Record<string, string> = {
   contacts_added: "New Contacts",
   touchpoints: "Touchpoints",
@@ -321,11 +342,6 @@ export default function Dashboard() {
     refetchInterval: 90000,
   });
 
-  type ActionItem = {
-    id: string; text: string; tag: string; status: string; createdAt: string;
-    sessionId: string; addedById: string; namId: string; amId: string;
-    withUserName: string; addedByName: string;
-  };
   const { data: actionItems = [] } = useQuery<ActionItem[]>({
     queryKey: ["/api/one-on-one/action-items"],
     refetchInterval: 90000,
@@ -398,11 +414,9 @@ export default function Dashboard() {
     lp("dash_goals_alert_collapsed", setGoalsAlertCollapsed);
   }, [currentUser, isDirector]);
 
-  type TrendingAccount = { name: string; delta: number; isNew?: boolean; companyId?: string };
-  type TrendingResponse = { up: TrendingAccount[]; down: TrendingAccount[]; monthFraction?: number; isPartialMonth?: boolean; curMonthLabel?: string };
   const { data: trendingAccounts, isLoading: trendingLoading } = useQuery<TrendingResponse>({
     queryKey: ["/api/dashboard/trending-accounts", selectedDirectorId],
-    queryFn: () => fetch(`/api/dashboard/trending-accounts${directorFilterParam}`).then(r => r.json()),
+    queryFn: async () => { const r = await fetch(`/api/dashboard/trending-accounts${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
     enabled: isDirector,
     refetchOnWindowFocus: false,
   });
@@ -420,7 +434,6 @@ export default function Dashboard() {
     refetchOnWindowFocus: false,
   });
 
-  type StaleAccount = { id: string; name: string; daysSince: number };
   const { data: staleAccountsData } = useQuery<{ stale: StaleAccount[] }>({
     queryKey: ["/api/dashboard/stale-accounts"],
     enabled: isAm || isNam,
@@ -428,25 +441,22 @@ export default function Dashboard() {
   });
   const staleAccounts = staleAccountsData?.stale ?? [];
 
-  type TodaysFiveItem = { id: string; name: string; daysSince: number | null; openTasks: number; hasUrgentRfp: boolean; score: number; reasons: string[] };
   const { data: todaysFive = [], isLoading: todaysFiveLoading } = useQuery<TodaysFiveItem[]>({
     queryKey: ["/api/dashboard/todays-five"],
     enabled: isAm,
     staleTime: 120000,
   });
 
-  type AmRow = { id: string; name: string; touchesWeek: number; touchesMonth: number; coldAccounts: number; openTasks: number; companyCount: number; goalPct: number | null; goalTarget: number | null };
   const { data: amComparison = [], isLoading: amComparisonLoading } = useQuery<AmRow[]>({
     queryKey: ["/api/dashboard/am-comparison", selectedDirectorId],
-    queryFn: () => fetch(`/api/dashboard/am-comparison${directorFilterParam}`).then(r => r.json()),
+    queryFn: async () => { const r = await fetch(`/api/dashboard/am-comparison${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
     enabled: isNam || isDirector,
     staleTime: 120000,
   });
 
-  type TeamActivity = { touches: number; meaningful: number; newContacts: number };
   const { data: teamActivity, isLoading: teamActivityLoading } = useQuery<TeamActivity>({
     queryKey: ["/api/dashboard/team-activity", selectedDirectorId],
-    queryFn: () => fetch(`/api/dashboard/team-activity${directorFilterParam}`).then(r => r.json()),
+    queryFn: async () => { const r = await fetch(`/api/dashboard/team-activity${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
     enabled: isDirector,
     refetchInterval: 120000,
   });
@@ -457,10 +467,9 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
-  type RelationshipsMovedData = { count: number };
   const { data: relationshipsMoved, isLoading: relationshipsMovedLoading } = useQuery<RelationshipsMovedData>({
     queryKey: ["/api/dashboard/relationships-moved", selectedDirectorId],
-    queryFn: () => fetch(`/api/dashboard/relationships-moved${directorFilterParam}`).then(r => r.json()),
+    queryFn: async () => { const r = await fetch(`/api/dashboard/relationships-moved${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
     enabled: isDirector,
     refetchInterval: 120000,
   });
@@ -471,14 +480,9 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
-  type MarginUserMetric = {
-    userId: string; name: string; role: string; margin: number;
-    goal: { id: string; target: number } | null;
-  };
-  type MarginMetrics = { nams: MarginUserMetric[]; ams: MarginUserMetric[] };
   const { data: marginMetrics, isLoading: marginMetricsLoading } = useQuery<MarginMetrics>({
     queryKey: ["/api/dashboard/margin-metrics", selectedDirectorId],
-    queryFn: () => fetch(`/api/dashboard/margin-metrics${directorFilterParam}`).then(r => r.json()),
+    queryFn: async () => { const r = await fetch(`/api/dashboard/margin-metrics${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
     enabled: isDirector,
     refetchInterval: 120000,
   });
@@ -489,7 +493,6 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
-  type PersonalMetrics = { relationshipsMovedThisMonth: number; meaningfulToday: number; contactsAddedToday: number; touchesToday: number };
   const { data: personalMetrics, isLoading: personalMetricsLoading } = useQuery<PersonalMetrics>({
     queryKey: ["/api/dashboard/personal-metrics"],
     enabled: isNam || isAm,
@@ -506,7 +509,6 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
-  type WeeklyRep = { userId: string; name: string; total: number; call: number; email: number; text: number; site_visit: number; meaningful: number };
   const { data: weeklyData, isLoading: weeklyLoading } = useQuery<{ weekStart: string; results: WeeklyRep[] }>({
     queryKey: ["/api/leaderboard/weekly-touchpoints"],
     enabled: canSeeTeam,
@@ -514,13 +516,13 @@ export default function Dashboard() {
   });
   const weeklyResults = weeklyData?.results || [];
 
-  type OpportunityLog = { id: string; repId: string; companyId: string | null; type: string; category: string; title: string; description: string | null; estimatedLoads: number | null; estimatedValue: string | null; loggedAt: string; createdAt: string };
   const recentWinsStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
   const { data: recentWins = [] } = useQuery<OpportunityLog[]>({
     queryKey: ["/api/opportunity-logs", "win", recentWinsStart],
     queryFn: async () => {
-      const res = await fetch(`/api/opportunity-logs?type=win&startDate=${recentWinsStart}`, { credentials: "include" });
-      return res.json();
+      const r = await fetch(`/api/opportunity-logs?type=win&startDate=${recentWinsStart}`, { credentials: "include" });
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
     },
     enabled: isDirector || isNam,
     staleTime: 60000,

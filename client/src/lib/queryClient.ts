@@ -7,12 +7,8 @@ function redirectToLogin() {
   }
 }
 
-async function throwIfResNotOk(res: Response, redirect401 = false) {
+async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    if (res.status === 401 && redirect401) {
-      redirectToLogin();
-      return;
-    }
     const text = (await res.text()) || res.statusText;
     throw new Error(`${res.status}: ${text}`);
   }
@@ -51,7 +47,9 @@ export const getQueryFn: <T>(options: {
 
     if (res.status === 401) {
       if (unauthorizedBehavior === "returnNull") return null;
-      redirectToLogin();
+      // Do NOT hard-redirect here — background polls getting a 401 should not
+      // kick the user out of the app. Let the auth state manager (useAuth /
+      // App.tsx) handle session expiry gracefully on the next window focus.
       throw new Error("Unauthorized");
     }
 
