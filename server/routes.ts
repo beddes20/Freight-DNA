@@ -11615,11 +11615,15 @@ Respond with valid JSON only:
       const fromDate = from || new Date(Date.now() - 30 * 24 * 3600000).toISOString().slice(0, 10);
       const toDate = to || new Date().toISOString().slice(0, 10);
 
+      if (!user.organizationId) {
+        return res.json([]);
+      }
+
       let reviewerFilter = "";
       const params: (string | boolean)[] = [user.organizationId, fromDate, toDate];
 
-      if (user.role === "account_manager" || (user.role === "national_account_manager" && !["admin","director"].includes(user.role))) {
-        // NAMs/AMs can only see their own check-ins
+      if (user.role === "account_manager") {
+        // AMs can only see their own submitted check-ins
         params.push(user.id);
         reviewerFilter = `AND c.reviewer_id = $${params.length}`;
       } else if (reviewerId) {
