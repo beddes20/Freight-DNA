@@ -20,6 +20,22 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 type EnrichedTouchpoint = {
   id: string;
   date: string;
@@ -256,8 +272,8 @@ export default function TouchpointHistoryPage() {
                       </td>
                       <td className="px-4 py-3 max-w-xs">
                         {tp.notes ? (
-                          <span className="text-sm text-foreground line-clamp-2" title={tp.notes}>
-                            {tp.notes}
+                          <span className="text-sm text-foreground line-clamp-2" title={stripHtml(tp.notes)}>
+                            {stripHtml(tp.notes)}
                           </span>
                         ) : (
                           <span className="text-muted-foreground italic text-xs">No notes</span>

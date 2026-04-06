@@ -7351,7 +7351,22 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           const contact = await storage.getContact(contactId as string);
           if (contact) {
             const now = new Date();
-            const notes = `Subject: ${subject}\n\n${body}`;
+            // Strip signature (everything after <hr>) and HTML tags, then decode entities
+            const bodyBeforeHr = body.replace(/<hr\b[^>]*>[\s\S]*/i, "");
+            const plainBody = bodyBeforeHr
+              .replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<\/p>/gi, "\n")
+              .replace(/<\/div>/gi, "\n")
+              .replace(/<[^>]+>/g, "")
+              .replace(/&nbsp;/g, " ")
+              .replace(/&amp;/g, "&")
+              .replace(/&lt;/g, "<")
+              .replace(/&gt;/g, ">")
+              .replace(/&quot;/g, '"')
+              .replace(/&#39;/g, "'")
+              .replace(/\n{3,}/g, "\n\n")
+              .trim();
+            const notes = `Subject: ${subject}\n\n${plainBody}`;
             touchpoint = await storage.createTouchpoint({
               contactId,
               companyId: contact.companyId,

@@ -27,6 +27,22 @@ import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type Pend
 import { ContactLaneManager } from "@/components/relationship-freight-portlet";
 import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const TYPE_CONFIG: Record<string, { label: string; icon: React.ElementType; color: string }> = {
   call:       { label: "Call",       icon: PhoneCall,    color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" },
   email:      { label: "Email",      icon: Mail,         color: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" },
@@ -475,7 +491,7 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit, onDeleted }
                       </span>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-muted-foreground">{dateLabel}</p>
-                        {tp.notes && <p className="text-sm mt-0.5 whitespace-pre-line line-clamp-4">{tp.notes}</p>}
+                        {tp.notes && <p className="text-sm mt-0.5 whitespace-pre-line line-clamp-4">{stripHtml(tp.notes)}</p>}
                         <FileAttachmentList entityType="touchpoint" entityIds={[tp.id]} />
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
