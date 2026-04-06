@@ -168,6 +168,7 @@ export const users = pgTable("users", {
   lastLoginAt: text("last_login_at"),
   financialRepId: text("financial_rep_id"),
   createdAt: text("created_at"),
+  emailSignature: text("email_signature"),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({

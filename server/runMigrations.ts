@@ -772,4 +772,15 @@ export async function runMigrations() {
   } finally {
     clientEggCelebrated.release();
   }
+
+  // Email signature field on users (Task #115)
+  const clientEmailSig = await pool.connect();
+  try {
+    await clientEmailSig.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_signature text`);
+    console.log("[migrations] users email_signature column ensured");
+  } catch (err) {
+    console.error("[migrations] users email_signature migration error:", err);
+  } finally {
+    clientEmailSig.release();
+  }
 }

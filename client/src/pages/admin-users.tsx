@@ -399,6 +399,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
   const [role, setRole] = useState(user?.role || "account_manager");
   const [managerId, setManagerId] = useState(user?.managerId || "none");
   const [financialRepId, setFinancialRepId] = useState((user as any)?.financialRepId || "");
+  const [emailSignature, setEmailSignature] = useState(user?.emailSignature || "");
   const { toast } = useToast();
 
   const mutation = useMutation({
@@ -422,7 +423,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const data: any = { name, username, email: email.trim() || null, role, managerId: managerId === "none" ? null : managerId, financialRepId: financialRepId.trim() || null };
+    const data: any = { name, username, email: email.trim() || null, role, managerId: managerId === "none" ? null : managerId, financialRepId: financialRepId.trim() || null, emailSignature: emailSignature.trim() || null };
     if (password) data.password = password;
     if (!user && !password) {
       toast({ title: "Error", description: "Password is required", variant: "destructive" });
@@ -494,6 +495,17 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
           </div>
         </>
       )}
+      <div className="space-y-2">
+        <Label>Email Signature <span className="text-muted-foreground font-normal text-xs">(appended to outgoing emails)</span></Label>
+        <Textarea
+          data-testid="textarea-user-email-signature"
+          value={emailSignature}
+          onChange={(e) => setEmailSignature(e.target.value)}
+          placeholder="e.g. John Smith&#10;Account Manager | Value Truck&#10;john.smith@valuetruck.com"
+          rows={4}
+          className="text-sm resize-none"
+        />
+      </div>
       <Button type="submit" className="w-full" disabled={mutation.isPending} data-testid="button-save-user">
         {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
         {user ? "Update User" : "Create User"}

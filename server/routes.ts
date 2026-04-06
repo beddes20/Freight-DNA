@@ -963,7 +963,7 @@ RULES FOR YOUR RESPONSES:
       if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
         return res.status(403).json({ error: "Access required" });
       }
-      const { username, password, name, role, managerId } = req.body;
+      const { username, password, name, role, managerId, emailSignature } = req.body;
       if (!username || !password || !name) {
         return res.status(400).json({ error: "Username, password, and name are required" });
       }
@@ -986,6 +986,7 @@ RULES FOR YOUR RESPONSES:
         name,
         role: assignedRole,
         managerId: assignedManagerId,
+        emailSignature: emailSignature?.trim() || null,
       });
       const { password: _, ...safeUser } = user;
       res.status(201).json(safeUser);
@@ -1232,6 +1233,7 @@ RULES FOR YOUR RESPONSES:
       if (req.body.username !== undefined) data.username = req.body.username;
       if (req.body.email !== undefined) data.email = req.body.email || null;
       if (req.body.password) data.password = await bcrypt.hash(req.body.password, 10);
+      if (req.body.emailSignature !== undefined) data.emailSignature = req.body.emailSignature?.trim() || null;
       if (currentUser.role === "admin") {
         if (req.body.role !== undefined) {
           if (!userRoles.includes(req.body.role)) {

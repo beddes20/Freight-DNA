@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Mail, Send, X, AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 
 interface OutlookComposeProps {
   open: boolean;
@@ -36,21 +37,29 @@ export function OutlookComposeDialog({
   companyId,
 }: OutlookComposeProps) {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [to, setTo] = useState(toEmail);
   const [cc, setCc] = useState("");
   const [subject, setSubject] = useState(defaultSubject);
   const [body, setBody] = useState(defaultBody);
   const [sent, setSent] = useState(false);
 
+  const signature = user?.emailSignature;
+
+  const bodyWithSignature = (rawBody: string) => {
+    if (!signature) return rawBody;
+    return rawBody ? `${rawBody}\n\n--\n${signature}` : `\n\n--\n${signature}`;
+  };
+
   useEffect(() => {
     if (open) {
       setTo(toEmail);
       setSubject(defaultSubject);
-      setBody(defaultBody);
+      setBody(bodyWithSignature(defaultBody));
       setCc("");
       setSent(false);
     }
-  }, [open, toEmail, defaultSubject, defaultBody]);
+  }, [open, toEmail, defaultSubject, defaultBody, signature]);
 
   const { data: statusData } = useQuery<{ enabled: boolean }>({
     queryKey: ["/api/outlook/status"],
@@ -112,7 +121,7 @@ export function OutlookComposeDialog({
     },
     onSuccess: (data) => {
       if (data.draft) {
-        setBody(data.draft);
+        setBody(bodyWithSignature(data.draft));
         toast({ title: "Draft ready!", description: "AI draft inserted — review and edit before sending." });
       } else {
         toast({ title: "No draft returned", description: "Try again or write manually.", variant: "destructive" });
