@@ -1035,7 +1035,6 @@ function EasterEggPanel({ users }: { users: { id: string; name: string }[] }) {
               {awardMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Award Egg"}
             </Button>
           </div>
-        )}
       </div>
     </div>
   );

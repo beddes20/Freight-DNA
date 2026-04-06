@@ -783,6 +783,7 @@ export async function runMigrations() {
   }
 
   // Change egg unique constraint from (type, month) → (type, winner_id) so eggs are per-user permanent
+  // Also widen month column from varchar(7) to varchar(32) to allow "all-time" as the period key
   const clientEggConstraint = await pool.connect();
   try {
     const exists = await clientEggConstraint.query(`
@@ -794,6 +795,9 @@ export async function runMigrations() {
       await clientEggConstraint.query(`ALTER TABLE easter_egg_winners ADD CONSTRAINT easter_egg_winners_user_unique UNIQUE (type, winner_id)`);
       console.log("[migrations] easter_egg_winners constraint updated to (type, winner_id)");
     }
+    // Widen month column so "all-time" (8 chars) fits
+    await clientEggConstraint.query(`ALTER TABLE easter_egg_winners ALTER COLUMN month TYPE varchar(32)`);
+    console.log("[migrations] easter_egg_winners month column widened");
   } catch (err) {
     console.error("[migrations] easter_egg_winners constraint error:", err);
   } finally {
