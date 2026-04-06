@@ -1441,32 +1441,31 @@ RULES FOR YOUR RESPONSES:
   const EGG_CONFIGS: Record<string, { title: string; message: string }> = {
     first_meaningful_2: {
       title: "🥚 Easter Egg Unlocked — First Meaningful!",
-      message: "LFG! You're the first rep this month to rack up 2 meaningful conversations. The bar has officially been set. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first rep EVER to rack up 2 meaningful conversations. The bar has officially been set. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
     first_nominator: {
       title: "🥚 Easter Egg Unlocked — First Nominator!",
-      message: "LFG! You're the first person this month to nominate a teammate. Leadership is lifting others up. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first person EVER to nominate a teammate. Leadership is lifting others up. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
     first_1on1_close: {
       title: "🥚 Easter Egg Unlocked — First 1:1 Finisher!",
-      message: "LFG! You're the first person this month to close out a full 1:1 session. You just set the standard. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first person EVER to close out a full 1:1 session. You just set the standard. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
     first_relationship_mover: {
       title: "🥚 Easter Egg Unlocked — First Relationship Mover!",
-      message: "LFG! You're the first rep this month to move two contacts up the relationship ladder. Down, not across. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first rep EVER to move two contacts up the relationship ladder. Down, not across. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
     first_opportunity_4: {
       title: "🥚 Easter Egg Unlocked — First Opportunity Logger!",
-      message: "LFG! You're the first rep this month to log 4 opportunities. Hunters find the bag. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
+      message: "LFG! You're the first rep EVER to log 4 opportunities. Hunters find the bag. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
     },
   };
 
   async function tryClaimEasterEgg(type: string, userId: string): Promise<{ type: string; title: string; message: string } | null> {
     const config = EGG_CONFIGS[type];
     if (!config) return null;
-    const now = new Date();
-    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const claimed = await storage.checkAndClaimEasterEgg(type, month, userId);
+    // "all-time" means each egg type can only ever be won once globally — no monthly resets
+    const claimed = await storage.checkAndClaimEasterEgg(type, "all-time", userId);
     if (!claimed) return null;
     return { type, ...config };
   }
@@ -1496,17 +1495,43 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
+  app.get("/api/admin/easter-egg-winners", requireAuth, async (req, res) => {
+    try {
+      const admin = await getCurrentUser(req);
+      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admins only" });
+      const rows = await pool.query<{ id: number; type: string; month: string; winner_id: string; won_at: string; winner_name: string }>(`
+        SELECT e.id, e.type, e.month, e.winner_id, e.won_at,
+               u.name AS winner_name
+        FROM easter_egg_winners e
+        LEFT JOIN users u ON u.id = e.winner_id
+        ORDER BY e.won_at DESC
+      `);
+      res.json(rows.rows);
+    } catch {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
   app.post("/api/admin/award-easter-egg", requireAuth, async (req, res) => {
     try {
       const admin = await getCurrentUser(req);
       if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admins only" });
       const { type, winnerId } = req.body;
       if (!type || !winnerId) return res.status(400).json({ error: "type and winnerId required" });
-      const now = new Date();
-      const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-      const id = await storage.adminAwardEasterEgg(type, month, winnerId);
+      const id = await storage.adminAwardEasterEgg(type, "all-time", winnerId);
       if (!id) return res.status(500).json({ error: "Failed to award egg" });
       res.json({ ok: true, id });
+    } catch {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  app.delete("/api/admin/easter-egg-winners/:id", requireAuth, async (req, res) => {
+    try {
+      const admin = await getCurrentUser(req);
+      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admins only" });
+      await pool.query(`DELETE FROM easter_egg_winners WHERE id = $1`, [req.params.id]);
+      res.json({ ok: true });
     } catch {
       res.status(500).json({ error: "Server error" });
     }
