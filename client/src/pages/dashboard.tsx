@@ -2175,15 +2175,10 @@ export default function Dashboard() {
         <LmDailyCheckInPortlets lmUserId={currentUser.id} canEdit={false} />
       )}
 
-      {/* LM Daily Check-In Portlets for managers — hidden for directors */}
+      {/* LM Daily Check-In Portlets for managers — full chain visibility */}
       {(() => {
-        if (!currentUser || currentUser.role === "logistics_manager" || currentUser.role === "director" || currentUser.role === "sales_director") return null;
-        const directReportIds = new Set(lmDirectReports.map(lm => lm.id));
-        const chainLms = teamMembers.filter(m => m.role === "logistics_manager" && !directReportIds.has(m.id));
-        const allLms = [
-          ...lmDirectReports.map(lm => ({ lm, canEdit: true })),
-          ...chainLms.map(lm => ({ lm, canEdit: false })),
-        ];
+        if (!currentUser || currentUser.role === "logistics_manager") return null;
+        const allLms = lmDirectReports.map(lm => ({ lm, canEdit: lm.managerId === currentUser.id }));
         if (allLms.length === 0) return null;
         return (
           <Card data-testid="card-lm-daily-checkins-group">

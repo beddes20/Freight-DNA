@@ -9,7 +9,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
@@ -3926,11 +3926,24 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { content, recipientIds, parentId } = req.body;
-      // Allow empty content when attachments will follow (attachments are uploaded separately after the post is created)
-      // Only admins/directors can start new threads; anyone who can see the thread can reply
       const isLeadership = user.role === "admin" || user.role === "director";
+      const isNam = user.role === "national_account_manager";
+      // Only leadership can start new threads
       if (!parentId && !isLeadership) {
         return res.status(403).json({ error: "Only admins and directors can start new threads" });
+      }
+      // For replies, verify the user is authorized: leadership always can, NAMs only if they are a recipient on the parent thread
+      if (parentId && !isLeadership) {
+        const [parentPost] = await db.select().from(internalPostsTable).where(eq(internalPostsTable.id, parentId));
+        if (!parentPost) return res.status(404).json({ error: "Parent post not found" });
+        // Walk to the root thread if parent is itself a reply
+        const rootPost = parentPost.parentId
+          ? (await db.select().from(internalPostsTable).where(eq(internalPostsTable.id, parentPost.parentId)))[0] ?? parentPost
+          : parentPost;
+        const recipientList: string[] = Array.isArray(rootPost.recipientIds) ? rootPost.recipientIds : [];
+        if (!isNam || !recipientList.includes(user.id)) {
+          return res.status(403).json({ error: "You are not authorized to reply to this thread" });
+        }
       }
       const post = await storage.createInternalPost({
         content: content.trim(),
@@ -11341,9 +11354,11 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const chainIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+      const chainIdSet = new Set(chainIds);
       const allUsers = await storage.getUsers(user.organizationId);
       const lmDirectReports = allUsers
-        .filter(u => u.role === "logistics_manager" && u.managerId === user.id)
+        .filter(u => u.role === "logistics_manager" && chainIdSet.has(u.id) && u.id !== user.id)
         .map(({ password, ...u }) => u);
       res.json(lmDirectReports);
     } catch (error) {
