@@ -22,7 +22,8 @@ import {
   Thermometer, Snowflake, ChevronDown, ChevronUp, Filter, TrendingUp,
   Truck, Clock, Upload, Sparkles, RefreshCw, FileUp, CheckCircle, XCircle, Download,
   LayoutList, Kanban, Search, Lock, Unlock, DollarSign, History, KeyRound, ServerCog,
-  ShieldCheck, Target, BarChart3, ArrowUpDown,
+  ShieldCheck, Target, BarChart3, ArrowUpDown, Settings, GripVertical, ToggleLeft, ToggleRight,
+  Circle, Palette,
 } from "lucide-react";
 import type { Prospect, ProspectStage, ProspectContact } from "@shared/schema";
 import {
@@ -103,9 +104,9 @@ function isDueToday(dateStr?: string | null): boolean {
   return dateStr === new Date().toISOString().split("T")[0];
 }
 
-function isStale(prospect: EnrichedProspect): boolean {
+function isStale(prospect: EnrichedProspect, thresholdDays = 14): boolean {
   if (CLOSED_STAGES.includes(prospect.stage as ProspectStage)) return false;
-  return daysAgo(prospect.updatedAt as unknown as string) >= 7;
+  return daysAgo(prospect.updatedAt as unknown as string) >= thresholdDays;
 }
 
 function parseSpend(s?: string | null): number {
@@ -364,10 +365,21 @@ function ContactsTab({ prospectId }: { prospectId: number }) {
 // ─── Prospect Form Dialog ─────────────────────────────────────────────────────
 function ProspectFormDialog({
   open, onClose, editing, currentUserId, users,
+  activeStages: stagesOverride, stageLabels: stageLabelsOverride,
+  leadSources: leadSourcesOverride,
+  requiredFields: requiredFieldsOverride,
 }: {
   open: boolean; onClose: () => void; editing?: EnrichedProspect | null;
   currentUserId: string; users: any[];
+  activeStages?: ProspectStage[];
+  stageLabels?: Record<string, string>;
+  leadSources?: Array<{ key: string; label: string }>;
+  requiredFields?: Record<string, boolean>;
 }) {
+  const resolvedActiveStages = stagesOverride ?? ACTIVE_STAGES;
+  const resolvedStageLabels = stageLabelsOverride ?? PROSPECT_STAGE_LABELS;
+  const resolvedLeadSources = leadSourcesOverride ?? PROSPECT_LEAD_SOURCES.map(k => ({ key: k, label: PROSPECT_LEAD_SOURCE_LABELS[k] ?? k }));
+  const resolvedRequiredFields = requiredFieldsOverride ?? {};
   const { toast } = useToast();
   const isEdit = !!editing;
 
@@ -459,6 +471,18 @@ function ProspectFormDialog({
     if (values.dealProbability !== "" && (isNaN(parseInt(values.dealProbability)) || parseInt(values.dealProbability) < 0 || parseInt(values.dealProbability) > 100)) {
       return toast({ title: "Deal probability must be 0–100", variant: "destructive" });
     }
+    // Enforce CRM required fields
+    const RF_CHECK: Array<{ key: string; label: string; value: string | undefined }> = [
+      { key: "primaryContactName", label: "Primary Contact Name", value: values.primaryContactName },
+      { key: "primaryContactEmail", label: "Primary Contact Email", value: values.primaryContactEmail },
+      { key: "leadSource", label: "Lead Source", value: values.leadSource },
+      { key: "estimatedSpend", label: "Est. Freight Spend", value: values.estimatedSpend },
+    ];
+    for (const f of RF_CHECK) {
+      if (resolvedRequiredFields[f.key] && !f.value?.trim()) {
+        return toast({ title: `${f.label} is required`, variant: "destructive" });
+      }
+    }
     const payload = buildPayload();
     isEdit ? updateMutation.mutate(payload) : createMutation.mutate(payload);
   };
@@ -527,7 +551,7 @@ function ProspectFormDialog({
                   <SelectTrigger className="mt-1" data-testid="select-lead-source"><SelectValue placeholder="How did you find them?" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">— Not set —</SelectItem>
-                    {PROSPECT_LEAD_SOURCES.map(s => <SelectItem key={s} value={s}>{PROSPECT_LEAD_SOURCE_LABELS[s]}</SelectItem>)}
+                    {resolvedLeadSources.map(s => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -563,7 +587,7 @@ function ProspectFormDialog({
                 <Select value={values.stage} onValueChange={v => set("stage", v)}>
                   <SelectTrigger className="mt-1" data-testid="select-prospect-stage"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {ACTIVE_STAGES.map(s => <SelectItem key={s} value={s}>{PROSPECT_STAGE_LABELS[s]}</SelectItem>)}
+                    {resolvedActiveStages.map(s => <SelectItem key={s} value={s}>{resolvedStageLabels[s] ?? PROSPECT_STAGE_LABELS[s]}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -1735,7 +1759,10 @@ function AccountHistoryTab({ prospectId, users }: { prospectId: number; users: a
     },
   });
 
-  if (isLoading) return <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>;
+  const [historyPage, setHistoryPage] = useState(1);
+  const PAGE_SIZE = 10;
+
+  if (isLoading) return <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>;
 
   if (history.length === 0) {
     return (
@@ -1747,27 +1774,49 @@ function AccountHistoryTab({ prospectId, users }: { prospectId: number; users: a
     );
   }
 
+  const sorted = [...history].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
+  const paged = sorted.slice((historyPage - 1) * PAGE_SIZE, historyPage * PAGE_SIZE);
+
   return (
     <div className="space-y-2">
-      {[...history].reverse().map(h => (
-        <div key={h.id} className="flex gap-2.5 text-xs" data-testid={`history-row-${h.id}`}>
-          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted mt-0.5">
-            <History className="h-3 w-3 text-muted-foreground" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1 text-muted-foreground">
-              <span className="font-medium text-foreground">{TRACKED_FIELD_LABELS[h.field] ?? h.field}</span>
-              <span>changed by {userMap.get(h.changedById) ?? h.changedById}</span>
-              <span>· {daysAgo(h.createdAt) === 0 ? "Today" : `${daysAgo(h.createdAt)}d ago`}</span>
-            </div>
-            <div className="flex items-center gap-1 mt-0.5">
-              {h.oldValue && <span className="line-through text-muted-foreground">{h.oldValue}</span>}
-              {h.oldValue && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
-              <span className="font-medium">{h.newValue ?? "(cleared)"}</span>
-            </div>
+      <div className="overflow-x-auto rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow className="text-xs">
+              <TableHead className="py-2 px-3 font-semibold">Date</TableHead>
+              <TableHead className="py-2 px-3 font-semibold">Field</TableHead>
+              <TableHead className="py-2 px-3 font-semibold">Changed By</TableHead>
+              <TableHead className="py-2 px-3 font-semibold">Old Value</TableHead>
+              <TableHead className="py-2 px-3 font-semibold">New Value</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {paged.map(h => (
+              <TableRow key={h.id} className="text-xs" data-testid={`history-row-${h.id}`}>
+                <TableCell className="py-1.5 px-3 text-muted-foreground whitespace-nowrap">
+                  {new Date(h.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "2-digit" })}{" "}
+                  <span className="text-[10px]">{new Date(h.createdAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span>
+                </TableCell>
+                <TableCell className="py-1.5 px-3 font-medium">{TRACKED_FIELD_LABELS[h.field] ?? h.field}</TableCell>
+                <TableCell className="py-1.5 px-3 text-muted-foreground">{userMap.get(h.changedById) ?? h.changedById}</TableCell>
+                <TableCell className="py-1.5 px-3 text-muted-foreground max-w-[100px] truncate" title={h.oldValue ?? ""}>{h.oldValue ?? <span className="italic opacity-50">—</span>}</TableCell>
+                <TableCell className="py-1.5 px-3 font-medium max-w-[100px] truncate" title={h.newValue ?? ""}>{h.newValue ?? <span className="italic opacity-50">(cleared)</span>}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+          <span>{sorted.length} changes total</span>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={historyPage <= 1} onClick={() => setHistoryPage(p => p - 1)} data-testid="history-prev-page">← Prev</Button>
+            <span>Page {historyPage} of {totalPages}</span>
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={historyPage >= totalPages} onClick={() => setHistoryPage(p => p + 1)} data-testid="history-next-page">Next →</Button>
           </div>
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -1778,7 +1827,7 @@ function OwnershipRequestDialog({ prospectId, onClose }: { prospectId: number; o
   const { toast } = useToast();
   const [reason, setReason] = useState("");
   const mutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/prospects/${prospectId}/ownership-request`, { reason }).then(r => r.json()),
+    mutationFn: () => apiRequest("POST", `/api/prospects/${prospectId}/ownership-request`, { reason: reason.trim() || null }).then(r => r.json()),
     onSuccess: () => { toast({ title: "Ownership request submitted" }); onClose(); },
     onError: () => toast({ title: "Failed to submit request", variant: "destructive" }),
   });
@@ -1786,11 +1835,11 @@ function OwnershipRequestDialog({ prospectId, onClose }: { prospectId: number; o
     <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
       <DialogContent>
         <DialogHeader><DialogTitle>Request Account Ownership</DialogTitle></DialogHeader>
-        <p className="text-sm text-muted-foreground">Explain why you should be the owner of this account. An admin will review your request.</p>
-        <Textarea value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason for transfer request…" className="min-h-[80px]" data-testid="input-ownership-reason" />
+        <p className="text-sm text-muted-foreground">Submit a request to be assigned as the owner of this account. An admin will review and approve or deny your request.</p>
+        <Textarea value={reason} onChange={e => setReason(e.target.value)} placeholder="Optional: Explain why you should own this account…" className="min-h-[80px]" data-testid="input-ownership-reason" />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => mutation.mutate()} disabled={!reason.trim() || mutation.isPending} data-testid="button-submit-ownership-request">
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} data-testid="button-submit-ownership-request">
             {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Submit Request
           </Button>
         </DialogFooter>
@@ -1801,9 +1850,21 @@ function OwnershipRequestDialog({ prospectId, onClose }: { prospectId: number; o
 
 function ProspectDetailSheet({
   prospect, onClose, users, currentUser,
+  activeStages: stagesOverride, stageLabels: stageLabelsOverride,
+  leadSources: leadSourcesOverride,
+  staleThreshold,
+  requiredFields: requiredFieldsOverride,
 }: {
   prospect: EnrichedProspect; onClose: () => void; users: any[]; currentUser: any;
+  activeStages?: ProspectStage[];
+  stageLabels?: Record<string, string>;
+  leadSources?: Array<{ key: string; label: string }>;
+  staleThreshold?: number;
+  requiredFields?: Record<string, boolean>;
 }) {
+  const resolvedActiveStages = stagesOverride ?? ACTIVE_STAGES;
+  const resolvedStageLabels: Record<string, string> = stageLabelsOverride ?? (PROSPECT_STAGE_LABELS as Record<string, string>);
+  const resolvedRequiredFields = requiredFieldsOverride ?? {};
   const { toast } = useToast();
   const [editOpen, setEditOpen] = useState(false);
   const [convertOpen, setConvertOpen] = useState(false);
@@ -1896,8 +1957,9 @@ function ProspectDetailSheet({
 
   const overdue = isOverdue(prospect.followUpDate);
   const dueToday = isDueToday(prospect.followUpDate);
-  const stale = isStale(prospect);
+  const stale = isStale(prospect, staleThreshold);
   const daysSinceTouch = daysAgo(prospect.updatedAt as unknown as string);
+  const isAdmin = currentUser.role === "admin" || currentUser.role === "sales_director";
 
   return (
     <>
@@ -1923,7 +1985,7 @@ function ProspectDetailSheet({
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                {prospect.ownerId !== currentUser.id && (
+                {prospect.ownerId !== currentUser.id && !isAdmin && (
                   <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground" title="Request Account Ownership" onClick={() => setOwnershipOpen(true)} data-testid="button-request-ownership"><Unlock className="h-3.5 w-3.5" /></Button>
                 )}
                 <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditOpen(true)} data-testid="button-prospect-edit"><Pencil className="h-3.5 w-3.5" /></Button>
@@ -1935,7 +1997,7 @@ function ProspectDetailSheet({
               <Select value={prospect.stage} onValueChange={handleStageChange}>
                 <SelectTrigger className="h-8 text-xs" data-testid="select-detail-stage"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {ACTIVE_STAGES.map(s => <SelectItem key={s} value={s} className="text-xs">{PROSPECT_STAGE_LABELS[s]}</SelectItem>)}
+                  {resolvedActiveStages.map(s => <SelectItem key={s} value={s} className="text-xs">{resolvedStageLabels[s] ?? PROSPECT_STAGE_LABELS[s]}</SelectItem>)}
                   <SelectItem value="lost" className="text-xs text-red-600">Mark as Lost…</SelectItem>
                   <SelectItem value="disqualified" className="text-xs text-red-600">Disqualify…</SelectItem>
                 </SelectContent>
@@ -1973,7 +2035,7 @@ function ProspectDetailSheet({
             {CLOSED_STAGES.includes(prospect.stage as ProspectStage) && (
               <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400 mt-2 bg-red-50 dark:bg-red-900/20 rounded-md px-3 py-2">
                 <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>{PROSPECT_STAGE_LABELS[prospect.stage as ProspectStage]}{prospect.lostReason ? ` — ${PROSPECT_LOST_REASON_LABELS[prospect.lostReason as keyof typeof PROSPECT_LOST_REASON_LABELS] ?? prospect.lostReason}` : ""}</span>
+                <span>{resolvedStageLabels[prospect.stage] || prospect.stage}{prospect.lostReason ? ` — ${PROSPECT_LOST_REASON_LABELS[prospect.lostReason as keyof typeof PROSPECT_LOST_REASON_LABELS] ?? prospect.lostReason}` : ""}</span>
               </div>
             )}
           </SheetHeader>
@@ -2018,6 +2080,9 @@ function ProspectDetailSheet({
                   </span>
                 )}
               </div>
+
+              {/* Admin: direct owner reassignment */}
+              <AdminReassignOwnerSection prospect={prospect} users={users} currentUser={currentUser} />
 
               {/* Primary contact */}
               {(prospect.primaryContactName || prospect.primaryContactEmail || prospect.primaryContactPhone) && (
@@ -2260,7 +2325,7 @@ function ProspectDetailSheet({
           onCancel={() => setLostPendingStage(null)}
         />
       )}
-      {editOpen && <ProspectFormDialog open={editOpen} onClose={() => setEditOpen(false)} editing={prospect} currentUserId={currentUser.id} users={users} />}
+      {editOpen && <ProspectFormDialog open={editOpen} onClose={() => setEditOpen(false)} editing={prospect} currentUserId={currentUser.id} users={users} activeStages={resolvedActiveStages} stageLabels={resolvedStageLabels} leadSources={leadSourcesOverride} requiredFields={resolvedRequiredFields} />}
       {convertOpen && <ConvertDialog prospect={prospect} onClose={() => setConvertOpen(false)} users={users} />}
       {ownershipOpen && <OwnershipRequestDialog prospectId={prospect.id} onClose={() => setOwnershipOpen(false)} />}
 
@@ -2328,11 +2393,11 @@ function AccountStatusBadge({ status, changedAt }: { status?: string | null; cha
 }
 
 // ─── Prospect Card ────────────────────────────────────────────────────────────
-function ProspectCard({ prospect, onClick, oppSummary }: { prospect: EnrichedProspect; onClick: () => void; oppSummary?: { openCount: number; closedWonCount: number; pipelineValue: number } }) {
+function ProspectCard({ prospect, onClick, oppSummary, staleThreshold }: { prospect: EnrichedProspect; onClick: () => void; oppSummary?: { openCount: number; closedWonCount: number; pipelineValue: number }; staleThreshold?: number }) {
   const stage = prospect.stage as ProspectStage;
   const overdue = isOverdue(prospect.followUpDate);
   const dueToday = isDueToday(prospect.followUpDate);
-  const stale = isStale(prospect);
+  const stale = isStale(prospect, staleThreshold);
   const daysSinceTouch = daysAgo(prospect.updatedAt as unknown as string);
 
   return (
@@ -2420,6 +2485,529 @@ function ProspectCard({ prospect, onClick, oppSummary }: { prospect: EnrichedPro
   );
 }
 
+// ─── Admin: Direct Owner Reassignment (for admins in ProspectDetailSheet) ───────
+
+function AdminReassignOwnerSection({ prospect, users, currentUser }: { prospect: EnrichedProspect; users: any[]; currentUser: any }) {
+  const { toast } = useToast();
+  const [newOwnerId, setNewOwnerId] = useState("");
+  const salesUsers = users.filter(u => ["sales", "sales_director", "admin", "national_account_manager", "account_manager"].includes(u.role));
+
+  const reassignMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/prospects/${prospect.id}/owner`, { newOwnerId }).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/prospects"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/prospects", prospect.id, "history"] });
+      toast({ title: "Owner reassigned" });
+      setNewOwnerId("");
+    },
+    onError: () => toast({ title: "Failed to reassign owner", variant: "destructive" }),
+  });
+
+  if (!["admin", "sales_director", "director"].includes(currentUser.role)) return null;
+
+  return (
+    <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+        <ShieldCheck className="h-3.5 w-3.5" /> Admin: Reassign Owner
+      </p>
+      <div className="flex gap-2">
+        <Select value={newOwnerId} onValueChange={setNewOwnerId}>
+          <SelectTrigger className="h-7 text-xs flex-1" data-testid="select-reassign-owner">
+            <SelectValue placeholder="Select new owner…" />
+          </SelectTrigger>
+          <SelectContent>
+            {salesUsers.filter(u => u.id !== prospect.ownerId).map(u => (
+              <SelectItem key={u.id} value={u.id} className="text-xs">{u.name ?? u.username} ({(u.role ?? "").replace(/_/g, " ")})</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          size="sm"
+          className="h-7 text-xs"
+          disabled={!newOwnerId || reassignMutation.isPending}
+          onClick={() => reassignMutation.mutate()}
+          data-testid="button-reassign-owner"
+        >
+          {reassignMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Assign"}
+        </Button>
+      </div>
+      <p className="text-[10px] text-muted-foreground">Current owner: <span className="font-medium text-foreground">{prospect.ownerName ?? prospect.ownerId}</span></p>
+    </div>
+  );
+}
+
+// ─── CRM Settings Dialog ───────────────────────────────────────────────────────
+
+type CrmSettingsItem = { key: string; label: string; active?: boolean };
+type CrmSettingsColorItem = { key: string; label: string; color: string };
+
+type CrmSettings = {
+  pipelineStages: CrmSettingsItem[];
+  opportunityTypes: CrmSettingsItem[];
+  accountStatusLabels: CrmSettingsColorItem[];
+  leadSources: CrmSettingsItem[];
+  ownershipMode: string;
+  staleThresholdDays: number;
+  requiredFields: Record<string, boolean>;
+};
+
+function CrmSettingsDialog({ onClose, openOwnershipQueue }: { onClose: () => void; openOwnershipQueue: () => void }) {
+  const { toast } = useToast();
+  const [activeSection, setActiveSection] = useState("pipeline");
+
+  const { data: settings, isLoading } = useQuery<CrmSettings>({
+    queryKey: ["/api/launchpad/crm-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/launchpad/crm-settings", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: (data: Partial<CrmSettings>) =>
+      apiRequest("PATCH", "/api/launchpad/crm-settings", data).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/launchpad/crm-settings"] });
+      toast({ title: "Settings saved" });
+    },
+    onError: () => toast({ title: "Failed to save", variant: "destructive" }),
+  });
+
+  // Local editable state
+  const [stages, setStages] = useState<CrmSettingsItem[]>([]);
+  const [oppTypes, setOppTypes] = useState<CrmSettingsItem[]>([]);
+  const [statusLabels, setStatusLabels] = useState<CrmSettingsColorItem[]>([]);
+  const [leadSources, setLeadSources] = useState<CrmSettingsItem[]>([]);
+  const [ownershipMode, setOwnershipMode] = useState("approval_required");
+  const [staleThreshold, setStaleThreshold] = useState(14);
+  const [requiredFields, setRequiredFields] = useState<Record<string, boolean>>({});
+  const [newItemLabel, setNewItemLabel] = useState("");
+
+  const synced = useRef(false);
+  if (settings && !synced.current) {
+    setStages(settings.pipelineStages ?? []);
+    setOppTypes(settings.opportunityTypes ?? []);
+    setStatusLabels(settings.accountStatusLabels ?? []);
+    setLeadSources(settings.leadSources ?? []);
+    setOwnershipMode(settings.ownershipMode ?? "approval_required");
+    setStaleThreshold(settings.staleThresholdDays ?? 14);
+    setRequiredFields(settings.requiredFields ?? {});
+    synced.current = true;
+  }
+
+  const saveAll = () => {
+    saveMutation.mutate({
+      pipelineStages: stages,
+      opportunityTypes: oppTypes,
+      accountStatusLabels: statusLabels,
+      leadSources,
+      ownershipMode,
+      staleThresholdDays: staleThreshold,
+      requiredFields,
+    });
+  };
+
+  // Generic list editor for items with active toggle and reorder
+  const ListEditor = ({
+    items, setItems, placeholder,
+  }: { items: CrmSettingsItem[]; setItems: (v: CrmSettingsItem[]) => void; placeholder: string }) => {
+    const [addLabel, setAddLabel] = useState("");
+    const addItem = () => {
+      if (!addLabel.trim()) return;
+      const key = addLabel.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+      setItems([...items, { key, label: addLabel.trim(), active: true }]);
+      setAddLabel("");
+    };
+    const moveItem = (i: number, dir: -1 | 1) => {
+      const arr = [...items];
+      const to = i + dir;
+      if (to < 0 || to >= arr.length) return;
+      [arr[i], arr[to]] = [arr[to], arr[i]];
+      setItems(arr);
+    };
+    return (
+      <div className="space-y-2">
+        {items.map((item, i) => (
+          <div key={item.key} className="flex items-center gap-2 border rounded-md px-3 py-1.5 bg-background" data-testid={`setting-item-${item.key}`}>
+            <div className="flex flex-col shrink-0">
+              <button onClick={() => moveItem(i, -1)} disabled={i === 0} className="text-muted-foreground hover:text-foreground disabled:opacity-30 leading-none" title="Move up" data-testid={`button-move-up-${item.key}`}>
+                <ChevronUp className="h-3 w-3" />
+              </button>
+              <button onClick={() => moveItem(i, 1)} disabled={i === items.length - 1} className="text-muted-foreground hover:text-foreground disabled:opacity-30 leading-none" title="Move down" data-testid={`button-move-down-${item.key}`}>
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </div>
+            <input
+              className="flex-1 text-sm bg-transparent outline-none"
+              value={item.label}
+              onChange={e => setItems(items.map((it, j) => j === i ? { ...it, label: e.target.value } : it))}
+              data-testid={`input-item-label-${item.key}`}
+            />
+            <button
+              onClick={() => setItems(items.map((it, j) => j === i ? { ...it, active: !it.active } : it))}
+              className={`text-xs shrink-0 ${item.active ? "text-emerald-600" : "text-muted-foreground"}`}
+              title={item.active ? "Active – click to deactivate" : "Inactive – click to activate"}
+              data-testid={`toggle-item-${item.key}`}
+            >
+              {item.active ? <ToggleRight className="h-4 w-4" /> : <ToggleLeft className="h-4 w-4" />}
+            </button>
+            <button
+              onClick={() => setItems(items.filter((_, j) => j !== i))}
+              className="text-red-400 hover:text-red-600 shrink-0"
+              data-testid={`button-delete-item-${item.key}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+        <div className="flex gap-2 mt-2">
+          <input
+            className="flex-1 h-7 px-2 text-sm border rounded-md bg-background outline-none focus:ring-1 focus:ring-ring"
+            placeholder={placeholder}
+            value={addLabel}
+            onChange={e => setAddLabel(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && addItem()}
+            data-testid="input-new-item-label"
+          />
+          <Button size="sm" className="h-7 text-xs" onClick={addItem} disabled={!addLabel.trim()} data-testid="button-add-item">
+            <Plus className="h-3 w-3 mr-1" /> Add
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  const StatusLabelEditor = () => {
+    const [addLabel, setAddLabel] = useState("");
+    const [addColor, setAddColor] = useState("#3b82f6");
+    const addItem = () => {
+      if (!addLabel.trim()) return;
+      const key = addLabel.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+      setStatusLabels([...statusLabels, { key, label: addLabel.trim(), color: addColor }]);
+      setAddLabel("");
+    };
+    return (
+      <div className="space-y-2">
+        {statusLabels.map((item, i) => (
+          <div key={item.key} className="flex items-center gap-2 border rounded-md px-3 py-1.5 bg-background" data-testid={`status-item-${item.key}`}>
+            <GripVertical className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <input
+              type="color"
+              className="w-6 h-6 rounded cursor-pointer border-0 shrink-0"
+              value={item.color}
+              onChange={e => setStatusLabels(statusLabels.map((it, j) => j === i ? { ...it, color: e.target.value } : it))}
+              data-testid={`color-item-${item.key}`}
+            />
+            <input
+              className="flex-1 text-sm bg-transparent outline-none"
+              value={item.label}
+              onChange={e => setStatusLabels(statusLabels.map((it, j) => j === i ? { ...it, label: e.target.value } : it))}
+              data-testid={`input-status-label-${item.key}`}
+            />
+            <button
+              onClick={() => setStatusLabels(statusLabels.filter((_, j) => j !== i))}
+              className="text-red-400 hover:text-red-600 shrink-0"
+              data-testid={`button-delete-status-${item.key}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+        <div className="flex gap-2 mt-2">
+          <input type="color" className="w-8 h-7 rounded cursor-pointer border border-border shrink-0" value={addColor} onChange={e => setAddColor(e.target.value)} />
+          <input
+            className="flex-1 h-7 px-2 text-sm border rounded-md bg-background outline-none focus:ring-1 focus:ring-ring"
+            placeholder="New status label…"
+            value={addLabel}
+            onChange={e => setAddLabel(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && addItem()}
+            data-testid="input-new-status-label"
+          />
+          <Button size="sm" className="h-7 text-xs" onClick={addItem} disabled={!addLabel.trim()} data-testid="button-add-status">
+            <Plus className="h-3 w-3 mr-1" /> Add
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  const SECTIONS = [
+    { key: "pipeline", label: "Pipeline Stages" },
+    { key: "opptypes", label: "Opportunity Types" },
+    { key: "statuslabels", label: "Account Status Labels" },
+    { key: "leadsources", label: "Lead Sources" },
+    { key: "ownership", label: "Ownership Rules" },
+    { key: "reqfields", label: "Required Fields" },
+    { key: "queue", label: "Ownership Queue" },
+  ];
+
+  const REQUIRED_FIELD_OPTIONS = [
+    { key: "name", label: "Company Name" },
+    { key: "stage", label: "Stage" },
+    { key: "ownerId", label: "Owner" },
+    { key: "primaryContactName", label: "Primary Contact Name" },
+    { key: "primaryContactEmail", label: "Primary Contact Email" },
+    { key: "leadSource", label: "Lead Source" },
+    { key: "estimatedSpend", label: "Estimated Spend" },
+    { key: "followUpDate", label: "Follow-up Date" },
+    { key: "expectedCloseDate", label: "Expected Close Date" },
+  ];
+
+  return (
+    <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[88vh] overflow-hidden flex flex-col p-0">
+        <DialogHeader className="px-6 pt-6 pb-0 shrink-0">
+          <DialogTitle className="flex items-center gap-2">
+            <Settings className="h-5 w-5" /> Advanced CRM Settings
+          </DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">Admin-only configuration for the Launchpad pipeline</p>
+        </DialogHeader>
+
+        <div className="flex flex-1 min-h-0">
+          {/* Sidebar nav */}
+          <div className="w-44 shrink-0 border-r bg-muted/20 px-2 py-4 space-y-0.5">
+            {SECTIONS.map(s => (
+              <button
+                key={s.key}
+                onClick={() => setActiveSection(s.key)}
+                className={`w-full text-left px-3 py-2 rounded-md text-xs font-medium transition-colors ${activeSection === s.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                data-testid={`nav-crm-${s.key}`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Content area */}
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+            {isLoading ? (
+              <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
+            ) : (
+              <>
+                {activeSection === "pipeline" && (
+                  <div className="space-y-3">
+                    <div>
+                      <h3 className="text-sm font-semibold mb-0.5">Pipeline Stages</h3>
+                      <p className="text-xs text-muted-foreground mb-3">Rename, reorder, or toggle stages. Changes affect how accounts are categorized.</p>
+                    </div>
+                    <ListEditor items={stages} setItems={setStages} placeholder="New stage name…" />
+                  </div>
+                )}
+
+                {activeSection === "opptypes" && (
+                  <div className="space-y-3">
+                    <div>
+                      <h3 className="text-sm font-semibold mb-0.5">Opportunity Types</h3>
+                      <p className="text-xs text-muted-foreground mb-3">Add or toggle opportunity record types used when logging opportunities.</p>
+                    </div>
+                    <ListEditor items={oppTypes} setItems={setOppTypes} placeholder="New opportunity type…" />
+                  </div>
+                )}
+
+                {activeSection === "statuslabels" && (
+                  <div className="space-y-3">
+                    <div>
+                      <h3 className="text-sm font-semibold mb-0.5">Account Status Labels</h3>
+                      <p className="text-xs text-muted-foreground mb-3">Manage account status options with custom colors.</p>
+                    </div>
+                    <StatusLabelEditor />
+                  </div>
+                )}
+
+                {activeSection === "leadsources" && (
+                  <div className="space-y-3">
+                    <div>
+                      <h3 className="text-sm font-semibold mb-0.5">Lead Sources</h3>
+                      <p className="text-xs text-muted-foreground mb-3">Configure lead source options available when creating accounts.</p>
+                    </div>
+                    <ListEditor items={leadSources} setItems={setLeadSources} placeholder="New lead source…" />
+                  </div>
+                )}
+
+                {activeSection === "ownership" && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold mb-0.5">Ownership Rules</h3>
+                      <p className="text-xs text-muted-foreground mb-3">Control how account ownership transfers work.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold">Ownership Request Mode</Label>
+                      <div className="grid grid-cols-1 gap-2">
+                        {[
+                          { value: "approval_required", label: "Requires Admin Approval", desc: "Reps submit a request; admins approve or deny." },
+                          { value: "self_assign", label: "Self-Assign (No Approval)", desc: "Reps can claim any unowned account directly." },
+                        ].map(opt => (
+                          <button
+                            key={opt.value}
+                            onClick={() => setOwnershipMode(opt.value)}
+                            className={`text-left p-3 rounded-md border text-sm transition-colors ${ownershipMode === opt.value ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"}`}
+                            data-testid={`ownership-mode-${opt.value}`}
+                          >
+                            <p className="font-medium">{opt.label}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{opt.desc}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Stale Account Threshold (days)</Label>
+                      <p className="text-xs text-muted-foreground">Accounts not updated in this many days are flagged as stale.</p>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={90}
+                          value={staleThreshold}
+                          onChange={e => setStaleThreshold(parseInt(e.target.value) || 14)}
+                          className="h-8 w-24 text-sm"
+                          data-testid="input-stale-threshold"
+                        />
+                        <span className="text-xs text-muted-foreground">days (default: 14)</span>
+                      </div>
+                    </div>
+
+                    <div className="border-t pt-3">
+                      <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => { onClose(); openOwnershipQueue(); }} data-testid="button-goto-ownership-queue">
+                        <ShieldCheck className="h-3.5 w-3.5" /> View Ownership Request Queue
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {activeSection === "reqfields" && (
+                  <div className="space-y-3">
+                    <div>
+                      <h3 className="text-sm font-semibold mb-0.5">Required Fields</h3>
+                      <p className="text-xs text-muted-foreground mb-3">Toggle which fields must be filled when creating or editing a prospect.</p>
+                    </div>
+                    <div className="space-y-2">
+                      {REQUIRED_FIELD_OPTIONS.map(f => (
+                        <div key={f.key} className="flex items-center justify-between py-1.5 border-b last:border-0" data-testid={`req-field-row-${f.key}`}>
+                          <span className="text-sm">{f.label}</span>
+                          <button
+                            onClick={() => setRequiredFields(rf => ({ ...rf, [f.key]: !rf[f.key] }))}
+                            className={`${requiredFields[f.key] ? "text-emerald-600" : "text-muted-foreground"}`}
+                            data-testid={`toggle-req-field-${f.key}`}
+                          >
+                            {requiredFields[f.key] ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {activeSection === "queue" && (
+                  <div className="space-y-3">
+                    <div>
+                      <h3 className="text-sm font-semibold mb-0.5">Ownership Request Queue</h3>
+                      <p className="text-xs text-muted-foreground mb-3">Approve or deny pending account ownership transfer requests from reps.</p>
+                    </div>
+                    <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => { onClose(); openOwnershipQueue(); }} data-testid="button-open-ownership-queue">
+                      <ShieldCheck className="h-3.5 w-3.5" /> Open Full Ownership Queue
+                    </Button>
+                    <OwnershipQueueInline />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="border-t px-6 py-3 flex justify-end gap-2 shrink-0 bg-background">
+          <Button variant="outline" onClick={onClose} data-testid="button-crm-settings-cancel">Cancel</Button>
+          <Button onClick={saveAll} disabled={saveMutation.isPending || activeSection === "queue"} data-testid="button-crm-settings-save">
+            {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Save Changes
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OwnershipQueueInline() {
+  const { toast } = useToast();
+  const { data: requests = [], isLoading, refetch } = useQuery<any[]>({
+    queryKey: ["/api/launchpad/ownership-requests"],
+    queryFn: async () => {
+      const res = await fetch("/api/launchpad/ownership-requests", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const { data: allUsers = [] } = useQuery<any[]>({ queryKey: ["/api/users"] });
+  const { data: allProspects = [] } = useQuery<EnrichedProspect[]>({ queryKey: ["/api/prospects"] });
+  const userMap = useMemo(() => new Map(allUsers.map((u: any) => [u.id, u.name ?? u.username])), [allUsers]);
+  const prospectMap = useMemo(() => new Map(allProspects.map(p => [p.id, p.name])), [allProspects]);
+  const [denyDialogReqId, setDenyDialogReqId] = useState<number | null>(null);
+  const [denyReason, setDenyReason] = useState("");
+
+  const reviewMutation = useMutation({
+    mutationFn: ({ id, status, adminNote }: { id: number; status: string; adminNote?: string }) =>
+      apiRequest("PATCH", `/api/launchpad/ownership-requests/${id}/review`, { status, adminNote }).then(r => r.json()),
+    onSuccess: () => { refetch(); toast({ title: "Request reviewed" }); },
+    onError: () => toast({ title: "Failed", variant: "destructive" }),
+  });
+
+  const pending = requests.filter(r => r.status === "pending");
+
+  if (isLoading) return <div className="space-y-2">{[1,2].map(i => <Skeleton key={i} className="h-16 w-full" />)}</div>;
+  if (pending.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-6 text-muted-foreground">
+        <CheckCircle className="h-7 w-7 opacity-30" />
+        <p className="text-sm">No pending requests</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="space-y-3">
+        {pending.map(r => (
+          <div key={r.id} className="border rounded-lg p-3 space-y-2" data-testid={`inline-req-${r.id}`}>
+            <div>
+              <p className="font-semibold text-sm">{prospectMap.get(r.prospectId) ?? `Account #${r.prospectId}`}</p>
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium">{userMap.get(r.requesterId)}</span> → from <span className="font-medium">{userMap.get(r.currentOwnerId)}</span>
+              </p>
+              {r.reason && <p className="text-xs mt-1 italic text-foreground/70">"{r.reason}"</p>}
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1" onClick={() => reviewMutation.mutate({ id: r.id, status: "approved" })} data-testid={`inline-approve-${r.id}`}>
+                <CheckCircle className="h-3 w-3" />Approve
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1 text-red-600 border-red-300" onClick={() => { setDenyDialogReqId(r.id); setDenyReason(""); }} data-testid={`inline-deny-${r.id}`}>
+                <XCircle className="h-3 w-3" />Deny
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {denyDialogReqId !== null && (
+        <Dialog open onOpenChange={v => { if (!v) setDenyDialogReqId(null); }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>Deny Ownership Request</DialogTitle></DialogHeader>
+            <p className="text-sm text-muted-foreground">Provide a reason for denying this request.</p>
+            <Textarea value={denyReason} onChange={e => setDenyReason(e.target.value)} placeholder="Reason for denial…" className="min-h-[80px]" data-testid="input-inline-deny-reason" />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDenyDialogReqId(null)}>Cancel</Button>
+              <Button variant="destructive" disabled={!denyReason.trim() || reviewMutation.isPending} onClick={() => { reviewMutation.mutate({ id: denyDialogReqId, status: "denied", adminNote: denyReason.trim() }); setDenyDialogReqId(null); }} data-testid="button-inline-confirm-deny">
+                Confirm Deny
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
 // ─── Admin: Ownership Requests Panel ─────────────────────────────────────────
 
 type OwnershipRequest = { id: number; prospectId: number; requesterId: string; currentOwnerId: string; status: string; reason?: string | null; adminNote?: string | null; createdAt: string };
@@ -2428,7 +3016,8 @@ function OwnershipRequestsAdminPanel({ onClose, users, prospects: allProspects }
   const { toast } = useToast();
   const userMap = useMemo(() => new Map(users.map((u: any) => [u.id, u.name ?? u.username])), [users]);
   const prospectMap = useMemo(() => new Map(allProspects.map(p => [p.id, p.name])), [allProspects]);
-  const [adminNotes, setAdminNotes] = useState<Record<number, string>>({});
+  const [denyDialogReqId, setDenyDialogReqId] = useState<number | null>(null);
+  const [denyReason, setDenyReason] = useState("");
 
   const { data: requests = [], isLoading, refetch } = useQuery<OwnershipRequest[]>({
     queryKey: ["/api/launchpad/ownership-requests"],
@@ -2449,6 +3038,7 @@ function OwnershipRequestsAdminPanel({ onClose, users, prospects: allProspects }
   });
 
   return (
+    <>
     <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
       <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Account Ownership Requests</DialogTitle></DialogHeader>
@@ -2472,18 +3062,11 @@ function OwnershipRequestsAdminPanel({ onClose, users, prospects: allProspects }
                   </div>
                   <span className="text-[10px] text-muted-foreground">{daysAgo(r.createdAt) === 0 ? "Today" : `${daysAgo(r.createdAt)}d ago`}</span>
                 </div>
-                <Input
-                  placeholder="Admin note (optional)"
-                  value={adminNotes[r.id] ?? ""}
-                  onChange={e => setAdminNotes(n => ({ ...n, [r.id]: e.target.value }))}
-                  className="h-7 text-xs"
-                  data-testid={`input-admin-note-${r.id}`}
-                />
                 <div className="flex gap-2">
-                  <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1" onClick={() => reviewMutation.mutate({ id: r.id, status: "approved", adminNote: adminNotes[r.id] })} data-testid={`button-approve-${r.id}`}>
+                  <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1" onClick={() => reviewMutation.mutate({ id: r.id, status: "approved" })} data-testid={`button-approve-${r.id}`}>
                     <CheckCircle className="h-3 w-3" />Approve
                   </Button>
-                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1 text-red-600 border-red-300" onClick={() => reviewMutation.mutate({ id: r.id, status: "denied", adminNote: adminNotes[r.id] })} data-testid={`button-deny-${r.id}`}>
+                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1 text-red-600 border-red-300" onClick={() => { setDenyDialogReqId(r.id); setDenyReason(""); }} data-testid={`button-deny-${r.id}`}>
                     <XCircle className="h-3 w-3" />Deny
                   </Button>
                 </div>
@@ -2507,6 +3090,38 @@ function OwnershipRequestsAdminPanel({ onClose, users, prospects: allProspects }
         )}
       </DialogContent>
     </Dialog>
+
+    {/* Deny reason dialog */}
+    {denyDialogReqId !== null && (
+      <Dialog open onOpenChange={v => { if (!v) setDenyDialogReqId(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Deny Ownership Request</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Provide a reason for denying this request. The requester will be notified.</p>
+          <Textarea
+            value={denyReason}
+            onChange={e => setDenyReason(e.target.value)}
+            placeholder="Reason for denial…"
+            className="min-h-[80px]"
+            data-testid="input-deny-reason"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDenyDialogReqId(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={!denyReason.trim() || reviewMutation.isPending}
+              onClick={() => {
+                reviewMutation.mutate({ id: denyDialogReqId, status: "denied", adminNote: denyReason.trim() });
+                setDenyDialogReqId(null);
+              }}
+              data-testid="button-confirm-deny"
+            >
+              {reviewMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Confirm Deny
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )}
+    </>
   );
 }
 
@@ -2519,6 +3134,7 @@ export default function ProspectsPage() {
   const [selected, setSelected] = useState<EnrichedProspect | null>(null);
   const [lostOpen, setLostOpen] = useState(false);
   const [adminOwnershipOpen, setAdminOwnershipOpen] = useState(false);
+  const [crmSettingsOpen, setCrmSettingsOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"kanban" | "table">("kanban");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterOwner, setFilterOwner] = useState("all");
@@ -2544,6 +3160,42 @@ export default function ProspectsPage() {
       return res.json();
     },
   });
+
+  const { data: crmSettings } = useQuery<any>({
+    queryKey: ["/api/launchpad/crm-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/launchpad/crm-settings", { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const activeStages: ProspectStage[] = useMemo(() => {
+    if (crmSettings?.pipelineStages) {
+      return crmSettings.pipelineStages.filter((s: any) => s.active !== false && s.key !== "lost" && s.key !== "disqualified").map((s: any) => s.key as ProspectStage);
+    }
+    return ACTIVE_STAGES;
+  }, [crmSettings]);
+
+  const stageLabels: Record<string, string> = useMemo(() => {
+    if (crmSettings?.pipelineStages) {
+      const overrides: Record<string, string> = {};
+      crmSettings.pipelineStages.forEach((s: any) => { overrides[s.key] = s.label; });
+      return { ...PROSPECT_STAGE_LABELS, ...overrides };
+    }
+    return PROSPECT_STAGE_LABELS;
+  }, [crmSettings]);
+
+  const settingsLeadSources: Array<{ key: string; label: string }> = useMemo(() => {
+    if (crmSettings?.leadSources) {
+      return crmSettings.leadSources.filter((s: any) => s.active !== false);
+    }
+    return PROSPECT_LEAD_SOURCES.map(k => ({ key: k, label: PROSPECT_LEAD_SOURCE_LABELS[k] ?? k }));
+  }, [crmSettings]);
+
+  const staleThreshold: number = crmSettings?.staleThresholdDays ?? 14;
+  const settingsRequiredFields: Record<string, boolean> = crmSettings?.requiredFields ?? {};
 
   const ownerOptions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -2648,6 +3300,11 @@ export default function ProspectsPage() {
               <ShieldCheck className="h-4 w-4" /> Transfers
             </Button>
           )}
+          {user.role === "admin" && (
+            <Button variant="outline" size="icon" onClick={() => setCrmSettingsOpen(true)} title="CRM Settings" className="h-9 w-9" data-testid="button-crm-settings">
+              <Settings className="h-4 w-4" />
+            </Button>
+          )}
           <Button variant="outline" onClick={() => setImportOpen(true)} className="gap-2" data-testid="button-import-prospects">
             <Upload className="h-4 w-4" /> Import
           </Button>
@@ -2712,7 +3369,7 @@ export default function ProspectsPage() {
           <SelectTrigger className="h-7 text-xs w-36" data-testid="filter-lead-source"><SelectValue placeholder="Lead source" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All sources</SelectItem>
-            {PROSPECT_LEAD_SOURCES.map(s => <SelectItem key={s} value={s}>{PROSPECT_LEAD_SOURCE_LABELS[s]}</SelectItem>)}
+            {settingsLeadSources.map(s => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={filterAccountStatus} onValueChange={setFilterAccountStatus}>
@@ -2739,7 +3396,7 @@ export default function ProspectsPage() {
       {/* Board or List view */}
       {isLoading ? (
         <div className="flex gap-4 overflow-x-auto pb-4">
-          {ACTIVE_STAGES.map(s => (
+          {activeStages.map(s => (
             <div key={s} className="flex-shrink-0 w-64 space-y-2">
               <Skeleton className="h-6 w-32" /><Skeleton className="h-24 w-full" /><Skeleton className="h-24 w-full" />
             </div>
@@ -2747,9 +3404,9 @@ export default function ProspectsPage() {
         </div>
       ) : viewMode === "kanban" ? (
         <div className="flex gap-4 overflow-x-auto pb-4 flex-1 min-h-0">
-          {ACTIVE_STAGES.map(stage => {
+          {activeStages.map(stage => {
             const cards = byStage(stage as ProspectStage);
-            const stageLabel = PROSPECT_STAGE_LABELS[stage as ProspectStage];
+            const stageLabel = stageLabels[stage] ?? stage;
             const isWon = stage === "first_load_won";
             const colWeighted = cards.reduce((sum, p) => sum + weightedValue(p), 0);
 
@@ -2776,7 +3433,7 @@ export default function ProspectsPage() {
                   {cards.length === 0 ? (
                     <div className="flex items-center justify-center h-16 text-xs text-muted-foreground/50">Empty</div>
                   ) : (
-                    cards.map(p => <ProspectCard key={p.id} prospect={p} onClick={() => setSelected(p)} oppSummary={oppsSummary[p.id]} />)
+                    cards.map(p => <ProspectCard key={p.id} prospect={p} onClick={() => setSelected(p)} oppSummary={oppsSummary[p.id]} staleThreshold={staleThreshold} />)
                   )}
                 </div>
               </div>
@@ -2847,7 +3504,7 @@ export default function ProspectsPage() {
                     </TableCell>
                     <TableCell className="py-2">
                       <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${STAGE_BORDER[p.stage]?.replace("border-t-", "text-").replace("-400", "-600").replace("-500", "-600") ?? ""} bg-muted`}>
-                        {PROSPECT_STAGE_LABELS[p.stage as ProspectStage]}
+                        {stageLabels[p.stage] ?? PROSPECT_STAGE_LABELS[p.stage as ProspectStage]}
                       </span>
                     </TableCell>
                     <TableCell className="py-2 text-xs text-muted-foreground">{p.ownerName ?? "—"}</TableCell>
@@ -2914,7 +3571,7 @@ export default function ProspectsPage() {
                       {p.industry && <p className="text-xs text-muted-foreground">{p.industry}</p>}
                     </div>
                     <Badge variant="outline" className="text-[10px] shrink-0 text-red-600 border-red-300 dark:text-red-400 dark:border-red-700">
-                      {PROSPECT_STAGE_LABELS[p.stage as ProspectStage]}
+                      {stageLabels[p.stage] ?? PROSPECT_STAGE_LABELS[p.stage as ProspectStage]}
                     </Badge>
                   </div>
                   {p.lostReason && (
@@ -2930,7 +3587,7 @@ export default function ProspectsPage() {
       )}
 
       {/* Add dialog */}
-      {addOpen && <ProspectFormDialog open={addOpen} onClose={() => setAddOpen(false)} currentUserId={user.id} users={allUsers} />}
+      {addOpen && <ProspectFormDialog open={addOpen} onClose={() => setAddOpen(false)} currentUserId={user.id} users={allUsers} activeStages={activeStages} stageLabels={stageLabels} leadSources={settingsLeadSources} requiredFields={settingsRequiredFields} />}
 
       {/* Import dialog */}
       {importOpen && <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} />}
@@ -2938,8 +3595,16 @@ export default function ProspectsPage() {
       {/* Admin ownership requests panel */}
       {adminOwnershipOpen && <OwnershipRequestsAdminPanel onClose={() => setAdminOwnershipOpen(false)} users={allUsers} prospects={prospects} />}
 
+      {/* CRM Settings dialog (admin/director only) */}
+      {crmSettingsOpen && (
+        <CrmSettingsDialog
+          onClose={() => setCrmSettingsOpen(false)}
+          openOwnershipQueue={() => { setCrmSettingsOpen(false); setAdminOwnershipOpen(true); }}
+        />
+      )}
+
       {/* Detail sheet */}
-      {selected && <ProspectDetailSheet prospect={selected} onClose={() => setSelected(null)} users={allUsers} currentUser={user} />}
+      {selected && <ProspectDetailSheet prospect={selected} onClose={() => setSelected(null)} users={allUsers} currentUser={user} activeStages={activeStages} stageLabels={stageLabels} leadSources={settingsLeadSources} staleThreshold={staleThreshold} requiredFields={settingsRequiredFields} />}
     </div>
   );
 }

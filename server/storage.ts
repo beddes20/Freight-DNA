@@ -402,6 +402,7 @@ export interface IStorage {
 
   // Launchpad CRM — Ownership Requests
   getCrmOwnershipRequests(organizationId: string): Promise<import('../shared/schema').CrmOwnershipRequest[]>;
+  getCrmOwnershipRequestById(id: number): Promise<import('../shared/schema').CrmOwnershipRequest | undefined>;
   getPendingOwnershipRequestsForProspect(prospectId: number): Promise<import('../shared/schema').CrmOwnershipRequest[]>;
   createCrmOwnershipRequest(data: import('../shared/schema').InsertCrmOwnershipRequest): Promise<import('../shared/schema').CrmOwnershipRequest>;
   reviewCrmOwnershipRequest(id: number, status: string, reviewedById: string, adminNote?: string): Promise<import('../shared/schema').CrmOwnershipRequest | undefined>;
@@ -2439,6 +2440,12 @@ export class DatabaseStorage implements IStorage {
   async createCrmOwnershipRequest(data: import('../shared/schema').InsertCrmOwnershipRequest): Promise<import('../shared/schema').CrmOwnershipRequest> {
     const { crmOwnershipRequests } = await import('../shared/schema');
     const [row] = await db.insert(crmOwnershipRequests).values({ ...data, createdAt: new Date() }).returning();
+    return row;
+  }
+
+  async getCrmOwnershipRequestById(id: number): Promise<import('../shared/schema').CrmOwnershipRequest | undefined> {
+    const { crmOwnershipRequests } = await import('../shared/schema');
+    const [row] = await db.select().from(crmOwnershipRequests).where(eq(crmOwnershipRequests.id, id));
     return row;
   }
 

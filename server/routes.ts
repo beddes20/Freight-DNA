@@ -13017,7 +13017,11 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.get("/api/launchpad/ownership-requests", requireAuth, async (req, res) => {
     try {
-      const user = (req as any).user;
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "sales_director", "director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin only" });
+      }
       const rows = await storage.getCrmOwnershipRequests(user.organizationId);
       res.json(rows);
     } catch (err) {
@@ -13029,9 +13033,33 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
   app.post("/api/prospects/:id/ownership-request", requireAuth, requireProspectRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const user = (req as any).user;
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
       const prospect = await storage.getProspect(id);
-      if (!prospect) return res.status(404).json({ error: "Prospect not found" });
+      if (!prospect || prospect.organizationId !== user.organizationId) return res.status(404).json({ error: "Prospect not found" });
+
+      // Check ownership mode from CRM settings
+      const settingKey = `crm_settings_${user.organizationId}`;
+      const raw = await storage.getSetting(settingKey);
+      const crmSettings = raw ? JSON.parse(raw) : {};
+      const ownershipMode = crmSettings.ownershipMode ?? "approval_required";
+
+      if (ownershipMode === "self_assign") {
+        // Directly transfer ownership without going through approval queue
+        const oldOwner = await storage.getUser(prospect.ownerId);
+        await storage.updateProspect(id, { ownerId: user.id });
+        storage.logCrmAccountHistory({
+          prospectId: id,
+          organizationId: user.organizationId,
+          field: "ownerId",
+          oldValue: oldOwner?.name ?? prospect.ownerId,
+          newValue: user.name ?? user.username,
+          changedById: user.id,
+        }).catch(() => {});
+        return res.json({ status: "self_assigned", message: "Ownership transferred directly (self-assign mode)" });
+      }
+
+      // approval_required mode: create a pending request
       const row = await storage.createCrmOwnershipRequest({
         prospectId: id,
         organizationId: user.organizationId,
@@ -13050,18 +13078,54 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
   app.patch("/api/launchpad/ownership-requests/:id/review", requireAuth, async (req, res) => {
     try {
       const reqId = parseInt(req.params.id);
-      const user = (req as any).user;
-      if (!["admin", "sales_director", "director"].includes(user.role)) {
+      const user = await getCurrentUser(req);
+      if (!user || !["admin", "sales_director", "director"].includes(user.role)) {
         return res.status(403).json({ error: "Unauthorized" });
       }
+      // Verify the request belongs to the reviewer's organization
+      const existingReq = await storage.getCrmOwnershipRequestById(reqId);
+      if (!existingReq || existingReq.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "Not found" });
+      }
+      if (existingReq.status !== "pending") {
+        return res.status(400).json({ error: "Request has already been reviewed" });
+      }
       const { status, adminNote } = req.body;
+      if (!["approved", "denied"].includes(status)) {
+        return res.status(400).json({ error: "Status must be 'approved' or 'denied'" });
+      }
       const row = await storage.reviewCrmOwnershipRequest(reqId, status, user.id, adminNote);
       if (!row) return res.status(404).json({ error: "Not found" });
-      // If approved, transfer ownership
+      const prospect = await storage.getProspect(row.prospectId);
+      const prospectName = prospect?.name ?? `Account #${row.prospectId}`;
+      // If approved, transfer ownership and log history
       if (status === "approved") {
-        const fullReq = row;
-        await storage.updateProspect(fullReq.prospectId, { ownerId: fullReq.requesterId });
+        if (prospect) {
+          const oldOwner = await storage.getUser(prospect.ownerId);
+          const newOwner = await storage.getUser(row.requesterId);
+          await storage.updateProspect(row.prospectId, { ownerId: row.requesterId });
+          storage.logCrmAccountHistory({
+            prospectId: row.prospectId,
+            organizationId: user.organizationId,
+            field: "ownerId",
+            oldValue: oldOwner?.name ?? prospect.ownerId,
+            newValue: newOwner?.name ?? row.requesterId,
+            changedById: user.id,
+          }).catch(() => {});
+        }
       }
+      // Notify the requester of the decision
+      storage.createNotification({
+        userId: row.requesterId,
+        type: "ownership_request_reviewed",
+        title: status === "approved" ? "Ownership Request Approved" : "Ownership Request Denied",
+        body: status === "approved"
+          ? `Your request to take ownership of "${prospectName}" has been approved.`
+          : `Your request to take ownership of "${prospectName}" was denied${adminNote ? `: ${adminNote}` : "."}`,
+        link: `/prospects`,
+        relatedId: String(row.prospectId),
+        read: false,
+      }).catch(() => {});
       res.json(row);
     } catch (err) {
       console.error("PATCH /api/launchpad/ownership-requests/:id/review error:", err);
@@ -13073,12 +13137,147 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.get("/api/prospects/:id/history", requireAuth, requireProspectRole, async (req, res) => {
     try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
       const id = parseInt(req.params.id);
+      // Validate prospect belongs to user's org before returning history
+      const prospect = await storage.getProspect(id);
+      if (!prospect || prospect.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "Not found" });
+      }
       const rows = await storage.getCrmAccountHistory(id);
       res.json(rows);
     } catch (err) {
       console.error("GET /api/prospects/:id/history error:", err);
       res.status(500).json({ error: "Failed to fetch account history" });
+    }
+  });
+
+  // ─── Launchpad CRM Settings Routes ─────────────────────────────────────────────
+
+  const CRM_SETTINGS_DEFAULTS = {
+    pipelineStages: [
+      { key: "new_lead", label: "New Lead", active: true },
+      { key: "intro_scheduled", label: "Intro Scheduled", active: true },
+      { key: "intro_completed", label: "Intro Completed", active: true },
+      { key: "follow_up", label: "Active Follow-Up", active: true },
+      { key: "opportunity_sent", label: "Opportunity Sent", active: true },
+      { key: "first_load_won", label: "First Load Won", active: true },
+    ],
+    opportunityTypes: [
+      { key: "single_lane", label: "Single Lane", active: true },
+      { key: "multi_lane", label: "Multi Lane", active: true },
+      { key: "private_hauling", label: "Private Hauling", active: true },
+      { key: "rfp", label: "RFP", active: true },
+      { key: "trucking_opportunity", label: "Trucking Opportunity", active: true },
+    ],
+    accountStatusLabels: [
+      { key: "active", label: "Active", color: "#22c55e" },
+      { key: "at_risk", label: "At Risk", color: "#f59e0b" },
+      { key: "churned", label: "Churned", color: "#ef4444" },
+      { key: "new", label: "New", color: "#3b82f6" },
+    ],
+    leadSources: [
+      { key: "cold_call", label: "Cold Call", active: true },
+      { key: "zoominfo", label: "ZoomInfo", active: true },
+      { key: "linkedin", label: "LinkedIn", active: true },
+      { key: "referral", label: "Referral", active: true },
+      { key: "conference", label: "Conference", active: true },
+      { key: "website_inbound", label: "Website Inbound", active: true },
+      { key: "email_campaign", label: "Email Campaign", active: true },
+      { key: "other", label: "Other", active: true },
+    ],
+    ownershipMode: "approval_required",
+    staleThresholdDays: 14,
+    requiredFields: {
+      name: true,
+      stage: true,
+      ownerId: true,
+      primaryContactName: false,
+      primaryContactEmail: false,
+      leadSource: false,
+      estimatedSpend: false,
+    },
+  };
+
+  app.get("/api/launchpad/crm-settings", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const settingKey = `crm_settings_${user.organizationId}`;
+      const raw = await storage.getSetting(settingKey);
+      if (!raw) return res.json(CRM_SETTINGS_DEFAULTS);
+      const parsed = JSON.parse(raw);
+      res.json({ ...CRM_SETTINGS_DEFAULTS, ...parsed });
+    } catch (err) {
+      console.error("GET /api/launchpad/crm-settings error:", err);
+      res.status(500).json({ error: "Failed to fetch CRM settings" });
+    }
+  });
+
+  app.patch("/api/launchpad/crm-settings", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Admin only" });
+      }
+      const body = req.body;
+      // Lightweight validation: only accept known top-level keys
+      const ALLOWED_KEYS = new Set(["pipelineStages", "opportunityTypes", "accountStatusLabels", "leadSources", "ownershipMode", "staleThresholdDays", "requiredFields"]);
+      const unknown = Object.keys(body).filter(k => !ALLOWED_KEYS.has(k));
+      if (unknown.length > 0) {
+        return res.status(400).json({ error: `Unknown settings keys: ${unknown.join(", ")}` });
+      }
+      // Validate ownershipMode if provided
+      if (body.ownershipMode !== undefined && !["approval_required", "self_assign"].includes(body.ownershipMode)) {
+        return res.status(400).json({ error: "ownershipMode must be 'approval_required' or 'self_assign'" });
+      }
+      const settingKey = `crm_settings_${user.organizationId}`;
+      const current = await storage.getSetting(settingKey);
+      const existing = current ? JSON.parse(current) : {};
+      const merged = { ...existing, ...body };
+      await storage.setSetting(settingKey, JSON.stringify(merged));
+      res.json(merged);
+    } catch (err) {
+      console.error("PATCH /api/launchpad/crm-settings error:", err);
+      res.status(500).json({ error: "Failed to update CRM settings" });
+    }
+  });
+
+  // Direct admin owner reassignment
+  app.patch("/api/prospects/:id/owner", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "sales_director", "director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin only" });
+      }
+      const id = parseInt(req.params.id);
+      const { newOwnerId } = req.body;
+      if (!newOwnerId) return res.status(400).json({ error: "newOwnerId required" });
+      const existing = await storage.getProspect(id);
+      if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
+      // Validate new owner belongs to the same organization
+      const newOwnerUser = await storage.getUser(newOwnerId);
+      if (!newOwnerUser || newOwnerUser.organizationId !== user.organizationId) {
+        return res.status(400).json({ error: "New owner must belong to the same organization" });
+      }
+      const updated = await storage.updateProspect(id, { ownerId: newOwnerId });
+      // Log ownership change to account history
+      const oldOwner = await storage.getUser(existing.ownerId);
+      const newOwner = await storage.getUser(newOwnerId);
+      storage.logCrmAccountHistory({
+        prospectId: id,
+        organizationId: user.organizationId,
+        field: "ownerId",
+        oldValue: oldOwner?.name ?? existing.ownerId,
+        newValue: newOwner?.name ?? newOwnerId,
+        changedById: user.id,
+      }).catch(() => {});
+      res.json(updated);
+    } catch (err) {
+      console.error("PATCH /api/prospects/:id/owner error:", err);
+      res.status(500).json({ error: "Failed to reassign owner" });
     }
   });
 
