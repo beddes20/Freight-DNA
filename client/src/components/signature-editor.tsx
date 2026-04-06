@@ -13,10 +13,11 @@ import TableHeader from "@tiptap/extension-table-header";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Bold, Italic, Underline as UnderlineIcon, Link as LinkIcon,
   Image as ImageIcon, AlignLeft, AlignCenter, AlignRight,
-  Palette, Trash2,
+  Palette, Trash2, Code,
 } from "lucide-react";
 import {
   Popover, PopoverContent, PopoverTrigger,
@@ -38,6 +39,8 @@ export function SignatureEditor({ value, onChange }: SignatureEditorProps) {
   const [imageUrl, setImageUrl] = useState("");
   const [linkOpen, setLinkOpen] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
+  const [sourceMode, setSourceMode] = useState(false);
+  const [sourceHtml, setSourceHtml] = useState(value || "");
 
   const editor = useEditor({
     extensions: [
@@ -63,6 +66,18 @@ export function SignatureEditor({ value, onChange }: SignatureEditorProps) {
   });
 
   if (!editor) return null;
+
+  function toggleSourceMode() {
+    if (!sourceMode) {
+      // entering source mode — snapshot current HTML into textarea
+      setSourceHtml(editor.getHTML());
+    } else {
+      // leaving source mode — push raw HTML back into editor
+      editor.commands.setContent(sourceHtml, false);
+      onChange(sourceHtml);
+    }
+    setSourceMode(s => !s);
+  }
 
   function insertLink() {
     if (!linkUrl) return;
@@ -230,7 +245,16 @@ export function SignatureEditor({ value, onChange }: SignatureEditorProps) {
 
         <button
           type="button"
-          onClick={() => { editor.commands.clearContent(); onChange(""); }}
+          onClick={toggleSourceMode}
+          className={`text-[10px] transition-colors px-1.5 py-0.5 rounded ${sourceMode ? "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 font-medium" : "text-muted-foreground hover:text-foreground"}`}
+          title={sourceMode ? "Back to visual editor" : "Edit raw HTML source"}
+        >
+          {sourceMode ? "Visual" : "Source"}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { editor.commands.clearContent(); setSourceHtml(""); onChange(""); }}
           className="text-[10px] text-muted-foreground hover:text-destructive transition-colors px-1"
           title="Clear signature"
         >
@@ -238,9 +262,19 @@ export function SignatureEditor({ value, onChange }: SignatureEditorProps) {
         </button>
       </div>
 
-      <div className="sig-editor-scroll overflow-y-auto max-h-[180px] bg-background">
-        <EditorContent editor={editor} />
-      </div>
+      {sourceMode ? (
+        <Textarea
+          value={sourceHtml}
+          onChange={e => { setSourceHtml(e.target.value); onChange(e.target.value); }}
+          className="font-mono text-[11px] min-h-[140px] max-h-[180px] overflow-y-auto resize-none rounded-none border-0 border-t border-border focus-visible:ring-0 bg-muted/30"
+          placeholder="<table>...</table>"
+          spellCheck={false}
+        />
+      ) : (
+        <div className="sig-editor-scroll overflow-y-auto max-h-[180px] bg-background">
+          <EditorContent editor={editor} />
+        </div>
+      )}
     </div>
   );
 }
