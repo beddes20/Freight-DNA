@@ -158,7 +158,7 @@ export function OutlookComposeDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="sm:max-w-[600px]" data-testid="dialog-outlook-compose">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] flex flex-col overflow-hidden" data-testid="dialog-outlook-compose">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Mail className="h-4 w-4 text-blue-500" />
@@ -188,7 +188,7 @@ export function OutlookComposeDialog({
             </Button>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3 overflow-y-auto flex-1 min-h-0 pr-1">
             <div className="space-y-1.5">
               <Label htmlFor="outlook-to" className="text-xs font-medium">To</Label>
               <Input
@@ -264,10 +264,12 @@ export function OutlookComposeDialog({
             {signature && (
               <div className="rounded-md border border-border bg-muted/30 overflow-hidden">
                 <p className="text-[10px] text-muted-foreground px-3 py-1.5 border-b border-border bg-muted/60 uppercase tracking-wide font-medium">Signature preview</p>
-                <div
-                  className="px-3 py-2 text-sm prose prose-sm dark:prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: hasHtmlSignature ? signature : signature.replace(/\n/g, "<br>") }}
-                />
+                <div className="overflow-y-auto max-h-[90px]">
+                  <div
+                    className="px-3 py-2 sig-prosemirror"
+                    dangerouslySetInnerHTML={{ __html: hasHtmlSignature ? signature : signature.replace(/\n/g, "<br>") }}
+                  />
+                </div>
               </div>
             )}
 
