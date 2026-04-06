@@ -305,7 +305,7 @@ export default function RfpLaneSearchPage() {
       if (searchParams?.origin) params.set("origin", searchParams.origin);
       if (searchParams?.dest) params.set("destination", searchParams.dest);
       params.set("radius", String(searchParams?.radius ?? 75));
-      const res = await fetch(`/api/rfps/lane-search?${params}`);
+      const res = await fetch(`/api/rfps/lane-search?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },

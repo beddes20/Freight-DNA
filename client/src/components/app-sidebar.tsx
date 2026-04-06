@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone } from "lucide-react";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -39,7 +39,7 @@ const navItems = [
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
   { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare },
   { title: "Tasks",             url: "/tasks",            icon: ListTodo      },
-  { title: "Touch History",     url: "/touchpoint-history", icon: History      },
+  { title: "Touchpoint History", url: "/touchpoint-history", icon: Phone        },
   {
     title: "Team Performance",
     url: "/team-performance",
@@ -47,7 +47,7 @@ const navItems = [
     roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
   },
   { title: "Goals",           url: "/goals",      icon: Target         },
-  { title: "My Report Card",  url: "/report/me",  icon: FileBarChart2, roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
+  { title: "My Scorecard",    url: "/report/me",  icon: FileBarChart2, roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
   { title: "PTO Passoff",     url: "/pto-passoff",icon: Plane          },
   {
     title: "Coordinators Corner",

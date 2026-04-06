@@ -220,6 +220,16 @@ interface LaneMatching {
   hasRfpData: boolean;
 }
 
+type TouchLogEntry = Touchpoint & { loggedByName: string; contactName: string | null };
+type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number };
+type HealthFactor = { name: string; score: number; max: number; label: string };
+type HealthScore = { score: number; grade: string; color: string; momentum: "up" | "flat" | "down"; momentumLabel: string; factors: HealthFactor[] };
+type TrendMonth = { monthKey: string; totalLoads: number; spotLoads: number; totalMargin: number };
+type TrendDest = { city: string; state: string; count: number };
+type TrendCorridor = { origin: string; destination: string; loads: number };
+type TrendsData = { months: TrendMonth[]; topDestinations: TrendDest[]; topCorridors: TrendCorridor[]; totalLoads: number; spotLoads: number; totalMargin: number };
+type SharedRepEntry = { userId: string; territoryNote: string; name: string };
+
 export default function CompanyDetail() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -358,7 +368,6 @@ export default function CompanyDetail() {
     enabled: !!companyId,
   });
 
-  type TouchLogEntry = Touchpoint & { loggedByName: string; contactName: string | null };
   const { data: touchLogEntries = [] } = useQuery<TouchLogEntry[]>({
     queryKey: ["/api/companies", companyId, "touch-logs"],
     enabled: !!companyId,
@@ -424,7 +433,6 @@ export default function CompanyDetail() {
     queryKey: ["/api/callouts/company", companyId],
   });
 
-  type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number };
   const { data: accountSummaryAll = [] } = useQuery<Array<{ customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number; repName: string; byMonth?: Record<string, MonthBucket> }>>({
     queryKey: ["/api/financials/account-summary", "ytd"],
     queryFn: async () => {
@@ -434,8 +442,6 @@ export default function CompanyDetail() {
     },
   });
 
-  type HealthFactor = { name: string; score: number; max: number; label: string };
-  type HealthScore = { score: number; grade: string; color: string; momentum: "up" | "flat" | "down"; momentumLabel: string; factors: HealthFactor[] };
   const { data: healthScore } = useQuery<HealthScore>({
     queryKey: ["/api/companies", companyId, "health-score"],
     enabled: !!companyId,
@@ -521,10 +527,6 @@ export default function CompanyDetail() {
     queryKey: ["/api/companies", companyId, "activity"],
   });
 
-  type TrendMonth = { monthKey: string; totalLoads: number; spotLoads: number; totalMargin: number };
-  type TrendDest = { city: string; state: string; count: number };
-  type TrendCorridor = { origin: string; destination: string; loads: number };
-  type TrendsData = { months: TrendMonth[]; topDestinations: TrendDest[]; topCorridors: TrendCorridor[]; totalLoads: number; spotLoads: number; totalMargin: number };
   const { data: trendsData, isLoading: trendsLoading } = useQuery<TrendsData>({
     queryKey: ["/api/companies", companyId, "historical-trends"],
     enabled: showTrends,
@@ -682,7 +684,6 @@ export default function CompanyDetail() {
   });
 
   const canManageSharedReps = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
-  type SharedRepEntry = { userId: string; territoryNote: string; name: string };
   const { data: sharedReps = [] } = useQuery<SharedRepEntry[]>({
     queryKey: ["/api/companies", companyId, "shared-reps"],
     enabled: !!companyId,

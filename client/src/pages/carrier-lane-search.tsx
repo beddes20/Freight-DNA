@@ -311,7 +311,7 @@ export default function CarrierLaneSearchPage() {
       if (searchParams?.dest)   params.set("destination", searchParams.dest);
       params.set("radius", String(searchParams?.radius ?? 75));
       params.set("minLoadsPerMonth", String(searchParams?.minLoads ?? 5));
-      const res = await fetch(`/api/carriers/lane-search?${params}`);
+      const res = await fetch(`/api/carriers/lane-search?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },

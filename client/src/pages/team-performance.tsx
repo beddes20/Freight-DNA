@@ -529,6 +529,11 @@ function sortReps(arr: RepPerf[], by: SortOption): RepPerf[] {
 }
 
 type BulkSendResult = { sent: number; failed: number; total: number; results: { name: string; email: string | null; ok: boolean }[] };
+type DispatcherSummaryRow = { dispatcherName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+type RepeatCarrierRow = { dispatcherName: string; totalLoads: number; repeatCarrierLoads: number; repeatCarrierPct: number };
+type SalespersonSummaryRow = { salespersonName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+type GapEntry = { name: string; loads: number; column: string };
+type GoalShape = { id: string; amId: string; metric: string; startDate: string; endDate: string; currentValue: string | null; target: string };
 
 export default function TeamPerformancePage() {
   const { user } = useAuth();
@@ -567,7 +572,6 @@ export default function TeamPerformancePage() {
     },
   });
 
-  type DispatcherSummaryRow = { dispatcherName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
   const { data: dispatcherSummary = [] } = useQuery<DispatcherSummaryRow[]>({
     queryKey: ["/api/financials/dispatcher-summary", period],
     queryFn: async () => {
@@ -577,7 +581,6 @@ export default function TeamPerformancePage() {
     },
   });
 
-  type RepeatCarrierRow = { dispatcherName: string; totalLoads: number; repeatCarrierLoads: number; repeatCarrierPct: number };
   const { data: repeatCarriersData = [] } = useQuery<RepeatCarrierRow[]>({
     queryKey: ["/api/financials/repeat-carriers", period],
     queryFn: async () => {
@@ -587,7 +590,6 @@ export default function TeamPerformancePage() {
     },
   });
 
-  type SalespersonSummaryRow = { salespersonName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
   const { data: salespersonSummary = [] } = useQuery<SalespersonSummaryRow[]>({
     queryKey: ["/api/financials/salesperson-summary", period],
     queryFn: async () => {
@@ -602,7 +604,6 @@ export default function TeamPerformancePage() {
   });
 
   const [showGaps, setShowGaps] = useState(false);
-  type GapEntry = { name: string; loads: number; column: string };
   const { data: attributionGaps } = useQuery<{
     opsUserGaps: GapEntry[];
     dispatcherGaps: GapEntry[];
@@ -630,7 +631,6 @@ export default function TeamPerformancePage() {
 
   const [viewMode, setViewMode] = useState<"grid" | "leaderboard">("grid");
 
-  type GoalShape = { id: string; amId: string; metric: string; startDate: string; endDate: string; currentValue: string | null; target: string };
   const { data: goals = [] } = useQuery<GoalShape[]>({
     queryKey: ["/api/goals"],
     staleTime: 60000,
@@ -654,6 +654,7 @@ export default function TeamPerformancePage() {
     queryFn: async () => {
       if (!repIdsParam) return [];
       const res = await fetch(`/api/opportunity-logs/summary?repIds=${repIdsParam}&startDate=${oppPeriodStart}&endDate=${oppPeriodEnd}`, { credentials: "include" });
+      if (!res.ok) return [];
       return res.json();
     },
     enabled: reps.length > 0,
