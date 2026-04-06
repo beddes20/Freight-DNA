@@ -932,4 +932,19 @@ export async function runMigrations() {
   } finally {
     clientAccStatus.release();
   }
+
+  // Prospect intel columns (estimated_annual_revenue, employee_count) — Task #123
+  const clientIntel = await pool.connect();
+  try {
+    await clientIntel.query(`
+      ALTER TABLE prospects
+        ADD COLUMN IF NOT EXISTS estimated_annual_revenue text,
+        ADD COLUMN IF NOT EXISTS employee_count text
+    `);
+    console.log("[migrations] prospects intel columns ensured");
+  } catch (err) {
+    console.error("[migrations] prospects intel columns error:", err);
+  } finally {
+    clientIntel.release();
+  }
 }

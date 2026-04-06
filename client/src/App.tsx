@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -50,7 +50,6 @@ import NotificationsPage from "@/pages/notifications";
 import CoordinatorsCornerPage from "@/pages/coordinators-corner";
 import FeedbackInboxPage from "@/pages/feedback-inbox";
 import ProspectsPage from "@/pages/prospects";
-import PipelineAnalyticsPage from "@/pages/pipeline-analytics";
 import CheckoutSuccessPage from "@/pages/checkout-success";
 import TouchpointHistoryPage from "@/pages/touchpoint-history";
 import RfpCalendarPage from "@/pages/rfp-calendar";
@@ -85,6 +84,12 @@ class ErrorBoundary extends React.Component<
   }
 }
 
+function PipelineAnalyticsRedirect() {
+  const [, nav] = useLocation();
+  useEffect(() => { nav("/prospects?tab=analytics"); }, []);
+  return null;
+}
+
 function Router() {
   return (
     <Switch>
@@ -115,7 +120,7 @@ function Router() {
       <Route path="/coordinators-corner" component={CoordinatorsCornerPage} />
       <Route path="/feedback-inbox" component={FeedbackInboxPage} />
       <Route path="/prospects" component={ProspectsPage} />
-      <Route path="/pipeline-analytics" component={PipelineAnalyticsPage} />
+      <Route path="/pipeline-analytics" component={PipelineAnalyticsRedirect} />
       <Route path="/touchpoint-history" component={TouchpointHistoryPage} />
       <Route path="/rfp-calendar" component={RfpCalendarPage} />
       <Route path="/rep-scorecard" component={RepScorecardPage} />

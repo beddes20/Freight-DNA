@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, LineChart, MapPin, Truck, Calendar, Medal, Settings } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings } from "lucide-react";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -61,7 +61,6 @@ const pipelineItems = [
   { title: "RFP & Awards",       url: "/rfp-awards",         icon: Trophy,    roles: undefined },
   { title: "RFP Calendar",       url: "/rfp-calendar",       icon: Calendar,  roles: undefined },
   { title: "Rep Scorecard",      url: "/rep-scorecard",      icon: Medal,     roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "Pipeline Analytics", url: "/pipeline-analytics", icon: LineChart, roles: ["admin", "sales_director"] },
 ];
 
 const laneToolItems = [

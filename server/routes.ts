@@ -12336,6 +12336,427 @@ Respond with valid JSON only:
     }
   });
 
+  // ── Exec Dashboard Analytics ─────────────────────────────────────────────────
+  app.get("/api/prospects/exec-analytics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Access restricted" });
+      }
+
+      const range = (req.query.range as string) || "month";
+      const now = new Date();
+      const thisYear = now.getFullYear();
+      const thisMonth = now.getMonth(); // 0-based
+
+      let rangeStart: Date;
+      let rangeEnd: Date = new Date(now);
+      let prevRangeStart: Date;
+      let prevRangeEnd: Date;
+
+      if (range === "last_month") {
+        rangeStart = new Date(thisYear, thisMonth - 1, 1);
+        rangeEnd = new Date(thisYear, thisMonth, 1);
+        prevRangeStart = new Date(thisYear, thisMonth - 2, 1);
+        prevRangeEnd = rangeStart;
+      } else if (range === "qtd") {
+        const qMonth = Math.floor(thisMonth / 3) * 3;
+        rangeStart = new Date(thisYear, qMonth, 1);
+        const prevQMonth = qMonth === 0 ? 9 : qMonth - 3;
+        const prevQYear = qMonth === 0 ? thisYear - 1 : thisYear;
+        prevRangeStart = new Date(prevQYear, prevQMonth, 1);
+        prevRangeEnd = rangeStart;
+      } else if (range === "ytd") {
+        rangeStart = new Date(thisYear, 0, 1);
+        prevRangeStart = new Date(thisYear - 1, 0, 1);
+        prevRangeEnd = new Date(thisYear - 1, thisMonth, now.getDate());
+      } else {
+        // month (this month)
+        rangeStart = new Date(thisYear, thisMonth, 1);
+        prevRangeStart = new Date(thisYear, thisMonth - 1, 1);
+        prevRangeEnd = rangeStart;
+      }
+
+      const allProspects = await storage.getProspects(user.organizationId);
+      const allUsers = await storage.getUsers(user.organizationId);
+      const userMap = new Map(allUsers.map(u => [u.id, u.name]));
+
+      const ACTIVE_STAGES = ["new_lead", "intro_scheduled", "intro_completed", "follow_up", "opportunity_sent", "first_load_won"];
+      const CLOSED_STAGES = ["lost", "disqualified"];
+      const STALE_DAYS = 30;
+      const staleThreshold = new Date(Date.now() - STALE_DAYS * 86400000);
+
+      // Classify accounts
+      const prospectingIds = new Set<string>();
+      const dormantIds = new Set<string>();
+      const activeCustomerIds = new Set<string>();
+      const closedWonCFYIds = new Set<string>();
+
+      for (const p of allProspects) {
+        if (p.convertedToCompanyId) {
+          // Converted to customer
+          if (p.convertedAt && new Date(p.convertedAt).getFullYear() === thisYear) {
+            closedWonCFYIds.add(p.ownerId);
+          }
+          activeCustomerIds.add(p.ownerId);
+        } else if (CLOSED_STAGES.includes(p.stage)) {
+          continue;
+        } else if (new Date(p.updatedAt) < staleThreshold) {
+          dormantIds.add(p.id.toString());
+        } else {
+          prospectingIds.add(p.id.toString());
+        }
+      }
+
+      // Helper: build rep breakdown
+      const buildRepBreakdown = (items: typeof allProspects, keyFn: (p: typeof allProspects[0]) => string) => {
+        const map: Record<string, number> = {};
+        for (const p of items) {
+          const key = keyFn(p);
+          if (key) map[key] = (map[key] || 0) + 1;
+        }
+        return Object.entries(map).sort((a, b) => b[1] - a[1]).map(([repId, count]) => ({
+          repId, repName: userMap.get(repId) ?? repId, count,
+        }));
+      };
+
+      // Helper: filter prospects by created or updated within a time window
+      const filterByWindow = (prospects: typeof allProspects, start: Date, end: Date) =>
+        prospects.filter(p => {
+          const created = new Date(p.createdAt);
+          const updated = new Date(p.updatedAt);
+          return (created >= start && created <= end) || (updated >= start && updated <= end);
+        });
+
+      // KPI donut cards — date-range-filtered (prospects created or updated within the range)
+      const prospectsInRange = filterByWindow(allProspects, rangeStart, rangeEnd);
+      const prospectsInPrevRange = filterByWindow(allProspects, prevRangeStart, prevRangeEnd);
+
+      const classifyProspecting = (ps: typeof allProspects) =>
+        ps.filter(p => !p.convertedToCompanyId && !CLOSED_STAGES.includes(p.stage) && new Date(p.updatedAt) >= staleThreshold);
+      const classifyDormant = (ps: typeof allProspects) =>
+        ps.filter(p => !p.convertedToCompanyId && !CLOSED_STAGES.includes(p.stage) && new Date(p.updatedAt) < staleThreshold);
+      const classifyActiveCustomers = (ps: typeof allProspects) =>
+        ps.filter(p => !!p.convertedToCompanyId);
+
+      const prospectingAccounts = classifyProspecting(prospectsInRange);
+      const dormantAccounts = classifyDormant(prospectsInRange);
+      const activeCustomers = classifyActiveCustomers(prospectsInRange);
+
+      const prevProspectingCount = classifyProspecting(prospectsInPrevRange).length;
+      const prevDormantCount = classifyDormant(prospectsInPrevRange).length;
+      const prevActiveCustomersCount = classifyActiveCustomers(prospectsInPrevRange).length;
+
+      // Closed Won CFY — fixed to actual calendar-year (CFY = current fiscal/calendar year)
+      const cfyStart = new Date(thisYear, 0, 1);
+      const cfyEnd = new Date(now);
+      const closedWonCFY = allProspects.filter(p =>
+        p.convertedToCompanyId && p.convertedAt &&
+        new Date(p.convertedAt) >= cfyStart && new Date(p.convertedAt) <= cfyEnd
+      );
+      // Previous CFY = same date range but last year
+      const prevCfyStart = new Date(thisYear - 1, 0, 1);
+      const prevCfyEnd = new Date(thisYear - 1, thisMonth, now.getDate());
+      const prevClosedWonCFYCount = allProspects.filter(p =>
+        p.convertedToCompanyId && p.convertedAt &&
+        new Date(p.convertedAt) >= prevCfyStart && new Date(p.convertedAt) <= prevCfyEnd
+      ).length;
+
+      // Revenue — we use estimatedSpend from converted accounts in the date range
+      const parseSpend = (s?: string | null) => {
+        if (!s) return 0;
+        return parseFloat(s.replace(/[^0-9.]/g, "")) || 0;
+      };
+
+      const revenueByRepMonth: Record<string, number> = {};
+      const revenueByRepCFY: Record<string, number> = {};
+
+      for (const p of allProspects) {
+        if (!p.convertedToCompanyId || !p.convertedAt) continue;
+        const convDate = new Date(p.convertedAt);
+        const spend = parseSpend(p.estimatedSpend);
+        const repId = p.ownerId;
+        if (convDate >= rangeStart && convDate <= rangeEnd) {
+          revenueByRepMonth[repId] = (revenueByRepMonth[repId] || 0) + spend;
+        }
+        if (convDate.getFullYear() === thisYear) {
+          revenueByRepCFY[repId] = (revenueByRepCFY[repId] || 0) + spend;
+        }
+      }
+
+      // Activities (emails to leads) in date range
+      const prospectIds = allProspects.map(p => p.id);
+      const activities = await storage.getOrgProspectActivitiesSince(prospectIds, rangeStart);
+      const filteredActivities = activities.filter(a => new Date(a.createdAt) <= rangeEnd);
+
+      const emailsByRep: Record<string, number> = {};
+      for (const a of filteredActivities) {
+        if (a.type === "email") {
+          emailsByRep[a.createdById] = (emailsByRep[a.createdById] || 0) + 1;
+        }
+      }
+
+      // Funnel, velocity, and lost reasons — date-range-filtered
+      // Active prospects created or updated within the date range
+      const ACTIVE_STAGE_LIST = ["new_lead","intro_scheduled","intro_completed","follow_up","opportunity_sent","first_load_won"];
+      // Active prospects that were active (created or updated) within the date window.
+      // We use updatedAt as the primary signal for "active within range" since a prospect
+      // that was updated after rangeEnd shouldn't appear in a past range view.
+      const activeOnlyProspects = allProspects.filter(p => {
+        if (p.convertedToCompanyId || CLOSED_STAGES.includes(p.stage)) return false;
+        const created = new Date(p.createdAt);
+        const updated = new Date(p.updatedAt);
+        // Include if created within range OR last updated within range
+        // Apply both start AND end bounds on each signal to prevent cross-window leakage
+        const createdInRange = created >= rangeStart && created <= rangeEnd;
+        const updatedInRange = updated >= rangeStart && updated <= rangeEnd;
+        return createdInRange || updatedInRange;
+      });
+
+      const stageCounts: Record<string, number> = {};
+      const stageWeightedValues: Record<string, number> = {};
+      const stageTotalSpends: Record<string, number> = {};
+      const stageAgeSumMs: Record<string, number> = {};
+      const stageAgeCounts: Record<string, number> = {};
+      const now2 = Date.now();
+      const parseSpendExec = (s?: string | null) => {
+        if (!s) return 0;
+        return parseFloat(s.replace(/[^0-9.]/g, "")) || 0;
+      };
+      for (const p of activeOnlyProspects) {
+        stageCounts[p.stage] = (stageCounts[p.stage] || 0) + 1;
+        const spend = parseSpendExec(p.estimatedSpend);
+        const prob = p.dealProbability != null ? p.dealProbability / 100 : 0.5;
+        stageTotalSpends[p.stage] = (stageTotalSpends[p.stage] || 0) + spend;
+        stageWeightedValues[p.stage] = (stageWeightedValues[p.stage] || 0) + spend * prob;
+        const changedAt = p.stageChangedAt ? new Date(p.stageChangedAt).getTime() : new Date(p.createdAt).getTime();
+        const msInStage = now2 - changedAt;
+        stageAgeSumMs[p.stage] = (stageAgeSumMs[p.stage] || 0) + msInStage;
+        stageAgeCounts[p.stage] = (stageAgeCounts[p.stage] || 0) + 1;
+      }
+      const totalWeighted = Object.values(stageWeightedValues).reduce((a, b) => a + b, 0);
+
+      const stageVelocity = ACTIVE_STAGE_LIST.map(stage => ({
+        stage,
+        count: stageCounts[stage] ?? 0,
+        avgDays: stageAgeCounts[stage]
+          ? Math.round(stageAgeSumMs[stage] / stageAgeCounts[stage] / 86400000)
+          : 0,
+      }));
+
+      // Stage avg days (indexed by stage for frontend)
+      const avgDaysInStage: Record<string, number> = {};
+      for (const sv of stageVelocity) {
+        avgDaysInStage[sv.stage] = sv.avgDays;
+      }
+
+      // Lost reason counts — filtered to prospects lost within the date range
+      const lostReasonCounts: Record<string, number> = {};
+      for (const p of allProspects) {
+        if ((p.stage === "lost" || p.stage === "disqualified") && p.lostReason) {
+          const lostDate = new Date(p.updatedAt);
+          if (lostDate >= rangeStart && lostDate <= rangeEnd) {
+            lostReasonCounts[p.lostReason] = (lostReasonCounts[p.lostReason] || 0) + 1;
+          }
+        }
+      }
+
+      // Win/loss (date-range-filtered: prospects closed in range)
+      const closedInRange = allProspects.filter(p => {
+        const closed = CLOSED_STAGES.includes(p.stage) || p.convertedToCompanyId;
+        if (!closed) return false;
+        const closedDate = p.convertedAt ? new Date(p.convertedAt) : new Date(p.updatedAt);
+        return closedDate >= rangeStart && closedDate <= rangeEnd;
+      });
+      const convertedInRange = closedInRange.filter(p => p.convertedToCompanyId).length;
+      const totalClosedInRange = closedInRange.length;
+      const winRate = totalClosedInRange > 0 ? Math.round((convertedInRange / totalClosedInRange) * 100) : 0;
+
+      // Rep stats (date-range: activities in range; conversion based on all-time owned)
+      const repStatsMap: Record<string, {
+        ownerId: string; ownerName: string; prospectsOwned: number;
+        activityCount: number; converted: number; totalOwned: number; dealAgeSumDays: number; dealAgeCount: number;
+      }> = {};
+
+      for (const p of allProspects) {
+        if (!p.ownerId) continue;
+        if (!repStatsMap[p.ownerId]) {
+          repStatsMap[p.ownerId] = {
+            ownerId: p.ownerId,
+            ownerName: userMap.get(p.ownerId) ?? p.ownerId,
+            prospectsOwned: 0, activityCount: 0, converted: 0, totalOwned: 0,
+            dealAgeSumDays: 0, dealAgeCount: 0,
+          };
+        }
+        const rs = repStatsMap[p.ownerId];
+        rs.totalOwned++;
+        if (!CLOSED_STAGES.includes(p.stage) && !p.convertedToCompanyId) {
+          rs.prospectsOwned++;
+          const ageDays = Math.round((now2 - new Date(p.createdAt).getTime()) / 86400000);
+          rs.dealAgeSumDays += ageDays;
+          rs.dealAgeCount++;
+        }
+        if (p.convertedToCompanyId) rs.converted++;
+      }
+
+      // Activities in date range by rep
+      for (const a of filteredActivities) {
+        if (!a.createdById) continue;
+        if (!repStatsMap[a.createdById]) {
+          repStatsMap[a.createdById] = {
+            ownerId: a.createdById, ownerName: userMap.get(a.createdById) ?? a.createdById,
+            prospectsOwned: 0, activityCount: 0, converted: 0, totalOwned: 0,
+            dealAgeSumDays: 0, dealAgeCount: 0,
+          };
+        }
+        repStatsMap[a.createdById].activityCount++;
+      }
+
+      const repStats = Object.values(repStatsMap)
+        .filter(rs => rs.totalOwned > 0)
+        .sort((a, b) => b.activityCount - a.activityCount || b.converted - a.converted)
+        .map(rs => ({
+          ownerId: rs.ownerId,
+          ownerName: rs.ownerName,
+          prospectsOwned: rs.prospectsOwned,
+          activitiesInRange: rs.activityCount,
+          avgDealAge: rs.dealAgeCount > 0 ? Math.round(rs.dealAgeSumDays / rs.dealAgeCount) : 0,
+          conversionRate: rs.totalOwned > 0 ? Math.round((rs.converted / rs.totalOwned) * 100) : 0,
+          converted: rs.converted,
+        }));
+
+      const conversionByRep = repStats.map(rs => ({
+        repName: rs.ownerName,
+        rate: rs.conversionRate,
+        converted: rs.converted,
+        total: rs.prospectsOwned + rs.converted,
+      }));
+
+      // Trend = delta from previous period
+      const trendDelta = (curr: number, prev: number) => curr - prev;
+
+      res.json({
+        prospecting: {
+          total: prospectingAccounts.length,
+          prevTotal: prevProspectingCount,
+          trend: trendDelta(prospectingAccounts.length, prevProspectingCount),
+          byRep: buildRepBreakdown(prospectingAccounts, p => p.ownerId),
+        },
+        dormant: {
+          total: dormantAccounts.length,
+          prevTotal: prevDormantCount,
+          trend: trendDelta(dormantAccounts.length, prevDormantCount),
+          byRep: buildRepBreakdown(dormantAccounts, p => p.ownerId),
+        },
+        activeCustomers: {
+          total: activeCustomers.length,
+          prevTotal: prevActiveCustomersCount,
+          trend: trendDelta(activeCustomers.length, prevActiveCustomersCount),
+          byRep: buildRepBreakdown(activeCustomers, p => p.ownerId),
+        },
+        closedWonCFY: {
+          total: closedWonCFY.length,
+          prevTotal: prevClosedWonCFYCount,
+          trend: trendDelta(closedWonCFY.length, prevClosedWonCFYCount),
+          byRep: buildRepBreakdown(closedWonCFY, p => p.ownerId),
+        },
+        closedWonRevByRepRange: Object.entries(revenueByRepMonth).sort((a, b) => b[1] - a[1]).map(([repId, amount]) => ({
+          repName: userMap.get(repId) ?? repId, amount,
+        })),
+        closedWonRevByRepCFY: Object.entries(revenueByRepCFY).sort((a, b) => b[1] - a[1]).map(([repId, amount]) => ({
+          repName: userMap.get(repId) ?? repId, amount,
+        })),
+        emailsToLeadsByRep: Object.entries(emailsByRep).sort((a, b) => b[1] - a[1]).map(([repId, count]) => ({
+          repName: userMap.get(repId) ?? repId, count,
+        })),
+        stageCounts,
+        stageWeightedValues,
+        stageTotalSpends,
+        totalWeighted,
+        avgDaysInStage,
+        lostReasonCounts,
+        winRate,
+        converted: convertedInRange,
+        totalClosed: totalClosedInRange,
+        totalProspects: allProspects.length,
+        repStats,
+        stageVelocity,
+        conversionByRep,
+      });
+    } catch (err) {
+      console.error("GET /api/prospects/exec-analytics error:", err);
+      res.status(500).json({ error: "Failed to generate exec analytics" });
+    }
+  });
+
+  // ── Rep Personal Analytics ────────────────────────────────────────────────────
+  app.get("/api/prospects/my-analytics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const allProspects = await storage.getProspects(user.organizationId);
+      const myProspects = allProspects.filter(p => p.ownerId === user.id);
+
+      const now = new Date();
+      const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+      const CLOSED_STAGES = ["lost", "disqualified"];
+      const STAGE_LABELS: Record<string, string> = {
+        new_lead: "New Lead", intro_scheduled: "Intro Scheduled",
+        intro_completed: "Intro Completed", follow_up: "Active Follow-Up",
+        opportunity_sent: "Opportunity Sent", first_load_won: "First Load Won",
+        lost: "Lost", disqualified: "Disqualified",
+      };
+
+      const accountsByStatus = Object.entries(
+        myProspects.reduce((acc: Record<string, number>, p) => {
+          const label = STAGE_LABELS[p.stage] ?? p.stage;
+          acc[label] = (acc[label] || 0) + 1;
+          return acc;
+        }, {})
+      ).map(([label, count]) => ({ label, count }));
+
+      // Open opportunities count (non-closed, non-converted)
+      const openProspects = myProspects.filter(p => !CLOSED_STAGES.includes(p.stage) && !p.convertedToCompanyId);
+      const parseSpend = (s?: string | null) => {
+        if (!s) return 0;
+        return parseFloat(s.replace(/[^0-9.]/g, "")) || 0;
+      };
+      const openOpportunityValue = openProspects.reduce((sum, p) => sum + parseSpend(p.estimatedSpend), 0);
+
+      // Activity counts — only calls + emails by the current rep
+      const myProspectIds = myProspects.map(p => p.id);
+      const allActivities = myProspectIds.length > 0
+        ? await storage.getOrgProspectActivitiesSince(myProspectIds, lastMonth)
+        : [];
+
+      // Filter: only call/email types performed by this rep
+      const myCallsEmails = allActivities.filter(a =>
+        a.createdById === user.id && (a.type === "call" || a.type === "email")
+      );
+
+      const activityThisMonth = myCallsEmails.filter(a => new Date(a.createdAt) >= thisMonth).length;
+      const activityLastMonth = myCallsEmails.filter(a =>
+        new Date(a.createdAt) >= lastMonth && new Date(a.createdAt) < thisMonth
+      ).length;
+
+      res.json({
+        accountsByStatus,
+        openOpportunityCount: openProspects.length,
+        openOpportunityValue,
+        activityThisMonth,
+        activityLastMonth,
+        totalAccounts: myProspects.length,
+      });
+    } catch (err) {
+      console.error("GET /api/prospects/my-analytics error:", err);
+      res.status(500).json({ error: "Failed to generate personal analytics" });
+    }
+  });
+
   // ── Prospect Mass Import ─────────────────────────────────────────────────────
   // Allowed text columns that may be passed per-row (no ownerId, no organizationId)
   const IMPORT_ALLOWED_FIELDS = new Set([

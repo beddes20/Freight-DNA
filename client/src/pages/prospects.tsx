@@ -22,7 +22,7 @@ import {
   Thermometer, Snowflake, ChevronDown, ChevronUp, Filter, TrendingUp,
   Truck, Clock, Upload, Sparkles, RefreshCw, FileUp, CheckCircle, XCircle, Download,
   LayoutList, Kanban, Search, Lock, Unlock, DollarSign, History, KeyRound, ServerCog,
-  ShieldCheck, Target, BarChart3, ArrowUpDown, Settings, GripVertical, ToggleLeft, ToggleRight,
+  ShieldCheck, Target, BarChart3, ArrowUpDown, BarChart2, Settings, GripVertical, ToggleLeft, ToggleRight,
   Circle, Palette,
 } from "lucide-react";
 import type { Prospect, ProspectStage, ProspectContact } from "@shared/schema";
@@ -44,7 +44,8 @@ import {
   CRM_OPP_STAGES,
   CRM_OPP_STAGE_LABELS,
 } from "@shared/schema";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
+import { ExecAnalyticsDashboard, RepPersonalAnalytics } from "@/components/exec-analytics";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -3127,8 +3128,22 @@ function OwnershipRequestsAdminPanel({ onClose, users, prospects: allProspects }
 
 const PROSPECTS_ALLOWED_ROLES = ["admin", "sales", "sales_director"];
 
+type LaunchpadTab = "pipeline" | "accounts" | "analytics";
+
 export default function ProspectsPage() {
   const { user } = useAuth();
+  const [, navigate] = useLocation();
+  const searchStr = useSearch();
+  const params = new URLSearchParams(searchStr);
+  const rawTab = params.get("tab") as LaunchpadTab | null;
+  const isSalesDirectorOrAdmin = user.role === "admin" || user.role === "sales_director";
+  const defaultTab: LaunchpadTab = isSalesDirectorOrAdmin ? "analytics" : "pipeline";
+  const activeTab: LaunchpadTab = (rawTab === "pipeline" || rawTab === "accounts" || rawTab === "analytics") ? rawTab : defaultTab;
+
+  const setTab = (tab: LaunchpadTab) => {
+    navigate(`/prospects?tab=${tab}`);
+  };
+
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [selected, setSelected] = useState<EnrichedProspect | null>(null);
@@ -3264,14 +3279,108 @@ export default function ProspectsPage() {
 
   const totalWeightedValue = activeProspects.reduce((sum, p) => sum + weightedValue(p), 0);
 
-  const isSalesDirectorOrAdmin = user.role === "admin" || user.role === "sales_director";
-
   return (
-    <div className="flex flex-col gap-4 p-3 sm:p-6 h-full">
+    <div className="flex flex-col h-full">
+      {/* ── Top tab bar ── */}
+      <div className="flex items-center gap-0 border-b px-4 pt-3 bg-background" data-testid="launchpad-tab-bar">
+        <div className="flex items-center gap-1 flex-1">
+          <h1 className="text-base font-bold mr-4 text-foreground">Launchpad</h1>
+          {(["pipeline", "accounts", "analytics"] as LaunchpadTab[]).map(tab => {
+            const icons = { pipeline: Kanban, accounts: Building2, analytics: BarChart2 };
+            const labels = { pipeline: "Pipeline", accounts: "Accounts", analytics: "Analytics" };
+            const Icon = icons[tab];
+            return (
+              <button
+                key={tab}
+                onClick={() => setTab(tab)}
+                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                  activeTab === tab
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+                }`}
+                data-testid={`tab-${tab}`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {labels[tab]}
+              </button>
+            );
+          })}
+        </div>
+        {user.role === "admin" && (
+          <button
+            onClick={() => setAdminOwnershipOpen(true)}
+            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors mb-1"
+            data-testid="button-launchpad-settings"
+            title="Account transfer requests"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      {/* ── Analytics Tab ── */}
+      {activeTab === "analytics" && (
+        <div className="flex-1 overflow-auto">
+          {isSalesDirectorOrAdmin ? <ExecAnalyticsDashboard /> : <RepPersonalAnalytics />}
+        </div>
+      )}
+
+      {/* ── Accounts Tab (converted customers from Launchpad) ── */}
+      {activeTab === "accounts" && (
+        <div className="flex-1 overflow-auto p-6">
+          <div className="max-w-4xl mx-auto space-y-4">
+            <div>
+              <h2 className="text-lg font-bold">Converted Accounts</h2>
+              <p className="text-sm text-muted-foreground mt-0.5">Prospects that have been converted to active customer accounts.</p>
+            </div>
+            {isLoading ? (
+              <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-16 w-full" />)}</div>
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/40">
+                      <TableHead className="text-xs py-2">Account</TableHead>
+                      <TableHead className="text-xs py-2">Owner</TableHead>
+                      <TableHead className="text-xs py-2">Est. Spend</TableHead>
+                      <TableHead className="text-xs py-2">Converted</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {prospects.filter(p => p.convertedToCompanyId).length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center text-muted-foreground text-sm py-8">
+                          No accounts converted yet. Accounts converted from Pipeline will appear here.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {prospects.filter(p => p.convertedToCompanyId).map(p => (
+                      <TableRow key={p.id} className="cursor-pointer hover:bg-muted/30" onClick={() => setSelected(p)} data-testid={`accounts-row-${p.id}`}>
+                        <TableCell className="py-2">
+                          <p className="font-medium text-sm">{p.name}</p>
+                          {p.industry && <p className="text-xs text-muted-foreground">{p.industry}</p>}
+                        </TableCell>
+                        <TableCell className="py-2 text-xs text-muted-foreground">{p.ownerName ?? "—"}</TableCell>
+                        <TableCell className="py-2 text-xs">{p.estimatedSpend ? `$${p.estimatedSpend}/mo` : "—"}</TableCell>
+                        <TableCell className="py-2 text-xs text-muted-foreground">
+                          <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600 dark:text-emerald-400">Converted</Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Pipeline Tab ── */}
+      {activeTab === "pipeline" && (
+      <div className="flex flex-col gap-4 p-3 sm:p-6 flex-1 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold">Launchpad</h1>
           <p className="text-sm text-muted-foreground">
             Prospects from first contact to first load
             {totalWeightedValue > 0 && <> · <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{formatCurrency(totalWeightedValue)} weighted</span></>}
@@ -3586,13 +3695,12 @@ export default function ProspectsPage() {
         </div>
       )}
 
-      {/* Add dialog */}
+      </div>
+      )}
+
+      {/* Dialogs — rendered at top level so they work across tabs */}
       {addOpen && <ProspectFormDialog open={addOpen} onClose={() => setAddOpen(false)} currentUserId={user.id} users={allUsers} activeStages={activeStages} stageLabels={stageLabels} leadSources={settingsLeadSources} requiredFields={settingsRequiredFields} />}
-
-      {/* Import dialog */}
       {importOpen && <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} />}
-
-      {/* Admin ownership requests panel */}
       {adminOwnershipOpen && <OwnershipRequestsAdminPanel onClose={() => setAdminOwnershipOpen(false)} users={allUsers} prospects={prospects} />}
 
       {/* CRM Settings dialog (admin/director only) */}
