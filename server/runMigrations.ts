@@ -888,4 +888,26 @@ export async function runMigrations() {
   } finally {
     clientHist.release();
   }
+
+  // Account lifecycle status columns on prospects (Task #122)
+  const clientAccStatus = await pool.connect();
+  try {
+    await clientAccStatus.query(`
+      ALTER TABLE prospects
+        ADD COLUMN IF NOT EXISTS account_status text DEFAULT 'prospecting',
+        ADD COLUMN IF NOT EXISTS account_status_changed_at timestamptz
+    `);
+    // Backfill: set account_status_changed_at to created_at for any rows where it is null
+    // This ensures stale/velocity tracking works correctly for pre-existing prospects
+    await clientAccStatus.query(`
+      UPDATE prospects
+        SET account_status_changed_at = created_at
+        WHERE account_status_changed_at IS NULL
+    `);
+    console.log("[migrations] prospects account_status columns ensured");
+  } catch (err) {
+    console.error("[migrations] prospects account_status error:", err);
+  } finally {
+    clientAccStatus.release();
+  }
 }

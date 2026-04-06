@@ -12323,12 +12323,17 @@ Respond with valid JSON only:
     }
   });
 
+  const VALID_ACCOUNT_STATUSES = ["prospecting", "intro_scheduled", "active_customer", "dormant", "lost"];
   app.patch("/api/prospects/:id", requireAuth, requireProspectRole, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const validationError = validateProspectPayload(req.body);
       if (validationError) return res.status(400).json({ error: validationError });
+      // Validate accountStatus if provided
+      if (req.body.accountStatus !== undefined && !VALID_ACCOUNT_STATUSES.includes(req.body.accountStatus)) {
+        return res.status(400).json({ error: `Invalid account status: ${req.body.accountStatus}` });
+      }
       const id = parseInt(req.params.id);
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
@@ -12336,7 +12341,7 @@ Respond with valid JSON only:
       const updated = await storage.updateProspect(id, req.body);
 
       // Log tracked field changes to crm_account_history
-      const TRACKED_FIELDS = ["stage", "ownerId", "priority", "estimatedSpend", "dealProbability", "followUpDate", "expectedCloseDate", "name", "industry"];
+      const TRACKED_FIELDS = ["stage", "ownerId", "priority", "estimatedSpend", "dealProbability", "followUpDate", "expectedCloseDate", "name", "industry", "accountStatus"];
       for (const field of TRACKED_FIELDS) {
         if (field in req.body) {
           const oldVal = (existing as any)[field];
@@ -12654,9 +12659,70 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   // ─── Launchpad CRM — Opportunities ──────────────────────────────────────────
 
+  // Bulk summary: oppCount + pipelineValue for ALL prospects in this org (for Kanban/table views)
+  app.get("/api/prospects/opportunities-summary", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      // Build the summary query, scoped to org and ownership where required
+      // Sales reps only see summaries for prospects they own
+      let rows: unknown;
+      if (user.role === "sales") {
+        rows = await db.execute(sql`
+          SELECT
+            o.prospect_id as "prospectId",
+            COUNT(*) FILTER (WHERE o.stage NOT IN ('closed_won','closed_lost')) as "openCount",
+            COUNT(*) FILTER (WHERE o.stage = 'closed_won') as "closedWonCount",
+            SUM(CASE WHEN o.stage NOT IN ('closed_won','closed_lost')
+              AND o.amount IS NOT NULL AND o.amount ~ '^[^0-9]*[0-9]'
+              THEN CAST(REGEXP_REPLACE(o.amount, '[^0-9.]', '', 'g') AS NUMERIC)
+              ELSE 0 END) as "pipelineValue"
+          FROM crm_opportunities o
+          INNER JOIN prospects p ON p.id = o.prospect_id
+          WHERE o.organization_id = ${user.organizationId}
+            AND p.owner_id = ${user.id}
+          GROUP BY o.prospect_id
+        `);
+      } else {
+        rows = await db.execute(sql`
+          SELECT
+            prospect_id as "prospectId",
+            COUNT(*) FILTER (WHERE stage NOT IN ('closed_won','closed_lost')) as "openCount",
+            COUNT(*) FILTER (WHERE stage = 'closed_won') as "closedWonCount",
+            SUM(CASE WHEN stage NOT IN ('closed_won','closed_lost')
+              AND amount IS NOT NULL AND amount ~ '^[^0-9]*[0-9]'
+              THEN CAST(REGEXP_REPLACE(amount, '[^0-9.]', '', 'g') AS NUMERIC)
+              ELSE 0 END) as "pipelineValue"
+          FROM crm_opportunities
+          WHERE organization_id = ${user.organizationId}
+          GROUP BY prospect_id
+        `);
+      }
+      const result: Record<number, { openCount: number; closedWonCount: number; pipelineValue: number }> = {};
+      const rowArray = Array.isArray(rows) ? rows : ((rows as { rows?: unknown[] }).rows ?? []);
+      for (const row of rowArray as Array<{ prospectId: unknown; openCount: unknown; closedWonCount: unknown; pipelineValue: unknown }>) {
+        result[Number(row.prospectId)] = {
+          openCount: Number(row.openCount ?? 0),
+          closedWonCount: Number(row.closedWonCount ?? 0),
+          pipelineValue: Number(row.pipelineValue ?? 0),
+        };
+      }
+      res.json(result);
+    } catch (err) {
+      console.error("GET /api/prospects/opportunities-summary error:", err);
+      res.status(500).json({ error: "Failed to fetch opportunities summary" });
+    }
+  });
+
   app.get("/api/prospects/:id/opportunities", requireAuth, requireProspectRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      // Verify prospect belongs to this org (and sales role can only read their own)
+      const prospect = await storage.getProspect(id);
+      if (!prospect || prospect.organizationId !== user.organizationId) return res.status(404).json({ error: "Prospect not found" });
+      if (user.role === "sales" && prospect.ownerId !== user.id) return res.status(403).json({ error: "Forbidden" });
       const rows = await storage.getCrmOpportunities(id);
       res.json(rows);
     } catch (err) {
@@ -12665,12 +12731,43 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
     }
   });
 
+  // Allowed values for opportunity fields (server-side validation)
+  const VALID_OPP_RECORD_TYPES = ["single_multi_lane", "private_hauling", "rfp", "trucking_opportunity"];
+  const VALID_OPP_STAGES = ["qualification", "discovery", "proposal", "negotiation", "closed_won", "closed_lost"];
+
+  function validateOppPayload(body: any): string | null {
+    if (!body.name || typeof body.name !== "string" || !body.name.trim()) return "Name is required";
+    if (body.recordType && !VALID_OPP_RECORD_TYPES.includes(body.recordType)) return `Invalid record type: ${body.recordType}`;
+    if (body.stage && !VALID_OPP_STAGES.includes(body.stage)) return `Invalid stage: ${body.stage}`;
+    if (body.probability != null) {
+      const p = Number(body.probability);
+      if (isNaN(p) || p < 0 || p > 100) return "Probability must be 0–100";
+    }
+    return null;
+  }
+
   app.post("/api/prospects/:id/opportunities", requireAuth, requireProspectRole, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const user = (req as any).user;
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      // Verify prospect belongs to this org and the user has access to it
+      const prospect = await storage.getProspect(id);
+      if (!prospect || prospect.organizationId !== user.organizationId) return res.status(404).json({ error: "Prospect not found" });
+      if (user.role === "sales" && prospect.ownerId !== user.id) return res.status(403).json({ error: "Forbidden" });
+      const validationError = validateOppPayload(req.body);
+      if (validationError) return res.status(400).json({ error: validationError });
+      // Whitelist permitted create fields — never trust client-provided prospectId/orgId/createdById
+      const { name, recordType, stage, amount, closeDate, probability, notes, lostReason } = req.body;
       const row = await storage.createCrmOpportunity({
-        ...req.body,
+        name,
+        recordType: recordType ?? "single_multi_lane",
+        stage: stage ?? "qualification",
+        amount: amount ?? null,
+        closeDate: closeDate ?? null,
+        probability: probability ?? null,
+        notes: notes ?? null,
+        lostReason: lostReason ?? null,
         prospectId: id,
         organizationId: user.organizationId,
         createdById: user.id,
@@ -12684,8 +12781,34 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.patch("/api/prospects/:id/opportunities/:oppId", requireAuth, requireProspectRole, async (req, res) => {
     try {
+      const id = parseInt(req.params.id);
       const oppId = parseInt(req.params.oppId);
-      const row = await storage.updateCrmOpportunity(oppId, req.body);
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      // Verify the opportunity belongs to this prospect AND this org (IDOR protection)
+      const existing = await storage.getCrmOpportunityById(oppId);
+      if (!existing || existing.prospectId !== id || existing.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "Opportunity not found" });
+      }
+      if (user.role === "sales") {
+        const prospect = await storage.getProspect(id);
+        if (!prospect || prospect.ownerId !== user.id) return res.status(403).json({ error: "Forbidden" });
+      }
+      // Whitelist editable fields only — prevent mass-assignment of prospectId, organizationId, createdById, etc.
+      type OppEditableFields = Pick<import('../shared/schema').InsertCrmOpportunity, "name" | "recordType" | "stage" | "amount" | "closeDate" | "probability" | "notes" | "lostReason">;
+      const body = req.body as Partial<OppEditableFields>;
+      const safeUpdate: Partial<OppEditableFields> = {};
+      if ("name" in body && body.name !== undefined) safeUpdate.name = body.name;
+      if ("recordType" in body) safeUpdate.recordType = body.recordType;
+      if ("stage" in body) safeUpdate.stage = body.stage;
+      if ("amount" in body) safeUpdate.amount = body.amount;
+      if ("closeDate" in body) safeUpdate.closeDate = body.closeDate;
+      if ("probability" in body) safeUpdate.probability = body.probability;
+      if ("notes" in body) safeUpdate.notes = body.notes;
+      if ("lostReason" in body) safeUpdate.lostReason = body.lostReason;
+      const validationError = validateOppPayload({ name: existing.name, ...safeUpdate });
+      if (validationError) return res.status(400).json({ error: validationError });
+      const row = await storage.updateCrmOpportunity(oppId, safeUpdate);
       if (!row) return res.status(404).json({ error: "Not found" });
       res.json(row);
     } catch (err) {
@@ -12696,7 +12819,19 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.delete("/api/prospects/:id/opportunities/:oppId", requireAuth, requireProspectRole, async (req, res) => {
     try {
+      const id = parseInt(req.params.id);
       const oppId = parseInt(req.params.oppId);
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      // Verify the opportunity belongs to this prospect AND this org (IDOR protection)
+      const existing = await storage.getCrmOpportunityById(oppId);
+      if (!existing || existing.prospectId !== id || existing.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "Opportunity not found" });
+      }
+      if (user.role === "sales") {
+        const prospect = await storage.getProspect(id);
+        if (!prospect || prospect.ownerId !== user.id) return res.status(403).json({ error: "Forbidden" });
+      }
       await storage.deleteCrmOpportunity(oppId);
       res.json({ success: true });
     } catch (err) {

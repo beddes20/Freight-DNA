@@ -393,6 +393,7 @@ export interface IStorage {
 
   // Launchpad CRM — Opportunities
   getCrmOpportunities(prospectId: number): Promise<import('../shared/schema').CrmOpportunity[]>;
+  getCrmOpportunityById(id: number): Promise<import('../shared/schema').CrmOpportunity | undefined>;
   createCrmOpportunity(data: import('../shared/schema').InsertCrmOpportunity): Promise<import('../shared/schema').CrmOpportunity>;
   updateCrmOpportunity(id: number, data: Partial<import('../shared/schema').InsertCrmOpportunity>): Promise<import('../shared/schema').CrmOpportunity | undefined>;
   deleteCrmOpportunity(id: number): Promise<boolean>;
@@ -2281,7 +2282,13 @@ export class DatabaseStorage implements IStorage {
   async createProspect(data: import('../shared/schema').InsertProspect): Promise<import('../shared/schema').Prospect> {
     const { prospects } = await import('../shared/schema');
     const now = new Date();
-    const [row] = await db.insert(prospects).values({ ...data, createdAt: now, updatedAt: now }).returning();
+    // Initialize accountStatusChangedAt so stale/velocity tracking works immediately
+    const [row] = await db.insert(prospects).values({
+      ...data,
+      accountStatusChangedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
     return row;
   }
 
@@ -2290,14 +2297,18 @@ export class DatabaseStorage implements IStorage {
     // If the stage is changing, stamp stageChangedAt so analytics can compute
     // time-in-stage as (now - stageChangedAt) instead of using updatedAt.
     let stageChangedAt: Date | undefined;
-    if (data.stage !== undefined) {
-      const [existing] = await db.select({ stage: prospects.stage }).from(prospects).where(eq(prospects.id, id));
-      if (existing && existing.stage !== data.stage) {
+    let accountStatusChangedAt: Date | undefined;
+    if (data.stage !== undefined || data.accountStatus !== undefined) {
+      const [existing] = await db.select({ stage: prospects.stage, accountStatus: prospects.accountStatus }).from(prospects).where(eq(prospects.id, id));
+      if (existing && data.stage !== undefined && existing.stage !== data.stage) {
         stageChangedAt = new Date();
+      }
+      if (existing && data.accountStatus !== undefined && existing.accountStatus !== data.accountStatus) {
+        accountStatusChangedAt = new Date();
       }
     }
     const [row] = await db.update(prospects)
-      .set({ ...data, updatedAt: new Date(), ...(stageChangedAt ? { stageChangedAt } : {}) })
+      .set({ ...data, updatedAt: new Date(), ...(stageChangedAt ? { stageChangedAt } : {}), ...(accountStatusChangedAt ? { accountStatusChangedAt } : {}) })
       .where(eq(prospects.id, id))
       .returning();
     return row;
@@ -2368,6 +2379,12 @@ export class DatabaseStorage implements IStorage {
   async getCrmOpportunities(prospectId: number): Promise<import('../shared/schema').CrmOpportunity[]> {
     const { crmOpportunities } = await import('../shared/schema');
     return db.select().from(crmOpportunities).where(eq(crmOpportunities.prospectId, prospectId)).orderBy(crmOpportunities.createdAt);
+  }
+
+  async getCrmOpportunityById(id: number): Promise<import('../shared/schema').CrmOpportunity | undefined> {
+    const { crmOpportunities } = await import('../shared/schema');
+    const [row] = await db.select().from(crmOpportunities).where(eq(crmOpportunities.id, id)).limit(1);
+    return row;
   }
 
   async createCrmOpportunity(data: import('../shared/schema').InsertCrmOpportunity): Promise<import('../shared/schema').CrmOpportunity> {

@@ -33,6 +33,15 @@ import {
   PROSPECT_LOST_REASON_LABELS,
   PROSPECT_PRIORITIES,
   PROSPECT_CONTACT_ROLES,
+  ACCOUNT_STATUS_LABELS,
+  ACCOUNT_STATUS_COLORS,
+  accountStatuses,
+  type AccountStatus,
+  CRM_OPP_RECORD_TYPES,
+  CRM_OPP_RECORD_TYPE_LABELS,
+  CRM_OPP_RECORD_TYPE_DESCRIPTIONS,
+  CRM_OPP_STAGES,
+  CRM_OPP_STAGE_LABELS,
 } from "@shared/schema";
 import { useLocation } from "wouter";
 
@@ -1121,26 +1130,17 @@ function SalesIntelTab({ prospect }: { prospect: EnrichedProspect }) {
   );
 }
 
+// ─── Account Status Colors ──────────────────────────────────────────────────
+
+const ACCOUNT_STATUS_DOT: Record<string, string> = {
+  prospecting: "bg-slate-400",
+  intro_scheduled: "bg-blue-400",
+  active_customer: "bg-emerald-500",
+  dormant: "bg-amber-400",
+  lost: "bg-red-400",
+};
+
 // ─── Opportunity Record Types / Stages ─────────────────────────────────────
-
-const OPP_RECORD_TYPES: Record<string, string> = {
-  single_lane: "Single Lane",
-  multi_lane: "Multi-Lane",
-  private_hauling: "Private Fleet Conversion",
-  rfp: "RFP Response",
-  trucking: "Full Truckload",
-  ltl: "LTL",
-  drayage: "Drayage",
-};
-
-const OPP_STAGES: Record<string, string> = {
-  qualification: "Qualification",
-  discovery: "Discovery",
-  proposal: "Proposal",
-  negotiation: "Negotiation",
-  closed_won: "Closed Won",
-  closed_lost: "Closed Lost",
-};
 
 const OPP_STAGE_COLORS: Record<string, string> = {
   qualification: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
@@ -1151,16 +1151,279 @@ const OPP_STAGE_COLORS: Record<string, string> = {
   closed_lost: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 };
 
+const OPP_TYPE_COLORS: Record<string, string> = {
+  single_multi_lane: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
+  private_hauling: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
+  rfp: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300",
+  trucking_opportunity: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300",
+};
+
 // ─── Opportunities Tab ──────────────────────────────────────────────────────
 
 type CrmOpportunity = { id: number; prospectId: number; organizationId: string; name: string; recordType: string; stage: string; amount?: string | null; closeDate?: string | null; probability?: number | null; notes?: string | null; lostReason?: string | null; createdById: string; createdAt: string; updatedAt: string };
 
-function OpportunitiesTab({ prospectId, orgId, userId }: { prospectId: number; orgId: string; userId: string }) {
-  const { toast } = useToast();
-  const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<CrmOpportunity | null>(null);
+function parseAmount(s?: string | null): number {
+  if (!s) return 0;
+  return parseFloat(s.replace(/[^0-9.]/g, "")) || 0;
+}
 
-  const { data: opps = [], isLoading } = useQuery<CrmOpportunity[]>({
+// Two-step New Opportunity dialog
+function NewOpportunityDialog({
+  prospectId,
+  onClose,
+  onCreated,
+}: {
+  prospectId: number;
+  onClose: () => void;
+  onCreated: (opp: CrmOpportunity) => void;
+}) {
+  const { toast } = useToast();
+  const [step, setStep] = useState<1 | 2>(1);
+  const [recordType, setRecordType] = useState<string>("");
+  const [form, setForm] = useState({ name: "", stage: "qualification", amount: "", closeDate: "", probability: "", notes: "" });
+
+  const createMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", `/api/prospects/${prospectId}/opportunities`, data).then(r => r.json()),
+    onSuccess: (created) => { toast({ title: "Opportunity created" }); onCreated(created); onClose(); },
+    onError: () => toast({ title: "Failed to create opportunity", variant: "destructive" }),
+  });
+
+  function handleSubmit() {
+    if (!form.name.trim()) return toast({ title: "Name is required", variant: "destructive" });
+    const payload = { ...form, recordType, probability: form.probability ? parseInt(form.probability) : null };
+    createMutation.mutate(payload);
+  }
+
+  return (
+    <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>
+            {step === 1 ? "New Opportunity — Select Type" : "New Opportunity — Details"}
+          </DialogTitle>
+        </DialogHeader>
+
+        {step === 1 ? (
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">Choose the record type that best describes this opportunity.</p>
+            <div className="grid gap-2">
+              {CRM_OPP_RECORD_TYPES.map(rt => (
+                <button
+                  key={rt}
+                  onClick={() => setRecordType(rt)}
+                  className={`text-left p-3 rounded-lg border transition-all ${recordType === rt ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:border-primary/50 hover:bg-muted/40"}`}
+                  data-testid={`opp-type-${rt}`}
+                >
+                  <p className={`font-semibold text-sm ${recordType === rt ? "text-primary" : "text-foreground"}`}>{CRM_OPP_RECORD_TYPE_LABELS[rt as keyof typeof CRM_OPP_RECORD_TYPE_LABELS]}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{CRM_OPP_RECORD_TYPE_DESCRIPTIONS[rt as keyof typeof CRM_OPP_RECORD_TYPE_DESCRIPTIONS]}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4 py-2">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${OPP_TYPE_COLORS[recordType] ?? "bg-muted text-muted-foreground"}`}>
+                {CRM_OPP_RECORD_TYPE_LABELS[recordType as keyof typeof CRM_OPP_RECORD_TYPE_LABELS]}
+              </span>
+            </div>
+
+            <div className="grid gap-3">
+              <div>
+                <Label>Opportunity Name *</Label>
+                <Input
+                  value={form.name}
+                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Chicago → Dallas lanes (12 loads/wk)"
+                  className="mt-1"
+                  data-testid="input-opp-name"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Stage</Label>
+                  <Select value={form.stage} onValueChange={v => setForm(f => ({ ...f, stage: v }))}>
+                    <SelectTrigger className="mt-1" data-testid="select-opp-stage"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {CRM_OPP_STAGES.map(s => <SelectItem key={s} value={s}>{CRM_OPP_STAGE_LABELS[s]}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Probability %</Label>
+                  <Input
+                    type="number" min="0" max="100"
+                    value={form.probability}
+                    onChange={e => setForm(f => ({ ...f, probability: e.target.value }))}
+                    placeholder="0–100"
+                    className="mt-1"
+                    data-testid="input-opp-prob"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Est. Revenue / Mo</Label>
+                  <Input
+                    value={form.amount}
+                    onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
+                    placeholder="$50,000"
+                    className="mt-1"
+                    data-testid="input-opp-amount"
+                  />
+                </div>
+                <div>
+                  <Label>Est. Close Date</Label>
+                  <Input
+                    type="date"
+                    value={form.closeDate}
+                    onChange={e => setForm(f => ({ ...f, closeDate: e.target.value }))}
+                    className="mt-1"
+                    data-testid="input-opp-close"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label>Notes</Label>
+                <Textarea
+                  value={form.notes}
+                  onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                  placeholder="Key details, lane specifics, requirements…"
+                  className="mt-1 min-h-[70px]"
+                  data-testid="input-opp-notes"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <DialogFooter>
+          {step === 1 ? (
+            <>
+              <Button variant="outline" onClick={onClose} data-testid="button-opp-cancel">Cancel</Button>
+              <Button
+                onClick={() => setStep(2)}
+                disabled={!recordType}
+                data-testid="button-opp-next"
+              >
+                Next
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => setStep(1)} data-testid="button-opp-back">Back</Button>
+              <Button
+                onClick={handleSubmit}
+                disabled={!form.name.trim() || createMutation.isPending}
+                data-testid="button-opp-save"
+              >
+                {createMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                Create Opportunity
+              </Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Edit Opportunity Dialog
+function EditOpportunityDialog({
+  opp,
+  prospectId,
+  onClose,
+  onUpdated,
+}: {
+  opp: CrmOpportunity;
+  prospectId: number;
+  onClose: () => void;
+  onUpdated: (updated: CrmOpportunity) => void;
+}) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    name: opp.name,
+    recordType: opp.recordType,
+    stage: opp.stage,
+    amount: opp.amount ?? "",
+    closeDate: opp.closeDate ?? "",
+    probability: opp.probability != null ? String(opp.probability) : "",
+    notes: opp.notes ?? "",
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("PATCH", `/api/prospects/${prospectId}/opportunities/${opp.id}`, data).then(r => r.json()),
+    onSuccess: (updated: CrmOpportunity) => { toast({ title: "Opportunity updated" }); onUpdated(updated); onClose(); },
+    onError: () => toast({ title: "Failed to update opportunity", variant: "destructive" }),
+  });
+
+  function handleSubmit() {
+    if (!form.name.trim()) return toast({ title: "Name is required", variant: "destructive" });
+    const payload = { ...form, probability: form.probability ? parseInt(form.probability) : null };
+    updateMutation.mutate(payload);
+  }
+
+  return (
+    <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader><DialogTitle>Edit Opportunity</DialogTitle></DialogHeader>
+        <div className="space-y-4 py-2">
+          <div>
+            <Label>Opportunity Name *</Label>
+            <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="mt-1" data-testid="input-edit-opp-name" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Type</Label>
+              <Select value={form.recordType} onValueChange={v => setForm(f => ({ ...f, recordType: v }))}>
+                <SelectTrigger className="mt-1" data-testid="select-edit-opp-type"><SelectValue /></SelectTrigger>
+                <SelectContent>{CRM_OPP_RECORD_TYPES.map(rt => <SelectItem key={rt} value={rt}>{CRM_OPP_RECORD_TYPE_LABELS[rt]}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Stage</Label>
+              <Select value={form.stage} onValueChange={v => setForm(f => ({ ...f, stage: v }))}>
+                <SelectTrigger className="mt-1" data-testid="select-edit-opp-stage"><SelectValue /></SelectTrigger>
+                <SelectContent>{CRM_OPP_STAGES.map(s => <SelectItem key={s} value={s}>{CRM_OPP_STAGE_LABELS[s]}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Est. Revenue / Mo</Label>
+              <Input value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="$50,000" className="mt-1" data-testid="input-edit-opp-amount" />
+            </div>
+            <div>
+              <Label>Probability %</Label>
+              <Input type="number" min="0" max="100" value={form.probability} onChange={e => setForm(f => ({ ...f, probability: e.target.value }))} className="mt-1" data-testid="input-edit-opp-prob" />
+            </div>
+          </div>
+          <div>
+            <Label>Est. Close Date</Label>
+            <Input type="date" value={form.closeDate} onChange={e => setForm(f => ({ ...f, closeDate: e.target.value }))} className="mt-1" data-testid="input-edit-opp-close" />
+          </div>
+          <div>
+            <Label>Notes</Label>
+            <Textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="mt-1 min-h-[60px]" data-testid="input-edit-opp-notes" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={!form.name.trim() || updateMutation.isPending} data-testid="button-edit-opp-save">
+            {updateMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Save Changes
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OpportunitiesTab({ prospectId, orgId, userId, onClosedWon }: { prospectId: number; orgId: string; userId: string; onClosedWon?: () => void }) {
+  const { toast } = useToast();
+  const [newOpen, setNewOpen] = useState(false);
+  const [editingOpp, setEditingOpp] = useState<CrmOpportunity | null>(null);
+
+  const { data: opps = [], isLoading, refetch } = useQuery<CrmOpportunity[]>({
     queryKey: ["/api/prospects", prospectId, "opportunities"],
     queryFn: async () => {
       const res = await fetch(`/api/prospects/${prospectId}/opportunities`, { credentials: "include" });
@@ -1169,74 +1432,46 @@ function OpportunitiesTab({ prospectId, orgId, userId }: { prospectId: number; o
     },
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", `/api/prospects/${prospectId}/opportunities`, data).then(r => r.json()),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/prospects", prospectId, "opportunities"] }); setFormOpen(false); toast({ title: "Opportunity created" }); },
-    onError: () => toast({ title: "Failed to create opportunity", variant: "destructive" }),
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: any }) => apiRequest("PATCH", `/api/prospects/${prospectId}/opportunities/${id}`, data).then(r => r.json()),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/prospects", prospectId, "opportunities"] }); setEditing(null); toast({ title: "Opportunity updated" }); },
-    onError: () => toast({ title: "Failed to update", variant: "destructive" }),
-  });
-
   const deleteMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/prospects/${prospectId}/opportunities/${id}`).then(r => r.json()),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/prospects", prospectId, "opportunities"] }); toast({ title: "Deleted" }); },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/prospects/opportunities-summary"] }); toast({ title: "Deleted" }); },
     onError: () => toast({ title: "Failed to delete", variant: "destructive" }),
   });
 
-  const [form, setForm] = useState({ name: "", recordType: "single_lane", stage: "qualification", amount: "", closeDate: "", probability: "", notes: "" });
+  const openOpps = opps.filter(o => o.stage !== "closed_won" && o.stage !== "closed_lost");
+  const totalPipeline = openOpps.reduce((sum, o) => sum + parseAmount(o.amount), 0);
 
-  function resetForm() { setForm({ name: "", recordType: "single_lane", stage: "qualification", amount: "", closeDate: "", probability: "", notes: "" }); }
+  const handleCreated = (created: CrmOpportunity) => {
+    refetch();
+    queryClient.invalidateQueries({ queryKey: ["/api/prospects/opportunities-summary"] });
+    // If a Closed Won opp was just created, notify the parent to prompt for status upgrade
+    if (created.stage === "closed_won" && onClosedWon) onClosedWon();
+  };
 
-  function openEdit(o: CrmOpportunity) {
-    setForm({ name: o.name, recordType: o.recordType, stage: o.stage, amount: o.amount ?? "", closeDate: o.closeDate ?? "", probability: o.probability != null ? String(o.probability) : "", notes: o.notes ?? "" });
-    setEditing(o);
-  }
-
-  function submitForm() {
-    const payload = { ...form, probability: form.probability ? parseInt(form.probability) : null };
-    if (editing) updateMutation.mutate({ id: editing.id, data: payload });
-    else createMutation.mutate(payload);
-  }
+  const handleUpdated = (updated: CrmOpportunity) => {
+    refetch();
+    queryClient.invalidateQueries({ queryKey: ["/api/prospects/opportunities-summary"] });
+    // Use the freshly-returned updated opp to check for closed_won (not stale query state)
+    if (updated.stage === "closed_won" && onClosedWon) onClosedWon();
+  };
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Opportunities ({opps.length})</p>
-        <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => { resetForm(); setEditing(null); setFormOpen(true); }} data-testid="button-add-opportunity"><Plus className="h-3 w-3" />New</Button>
-      </div>
-
-      {(formOpen || editing) && (
-        <div className="border rounded-lg p-3 space-y-2 bg-muted/30">
-          <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Opportunity name *" className="h-7 text-xs" data-testid="input-opp-name" />
-          <div className="grid grid-cols-2 gap-2">
-            <Select value={form.recordType} onValueChange={v => setForm(f => ({ ...f, recordType: v }))}>
-              <SelectTrigger className="h-7 text-xs" data-testid="select-opp-record-type"><SelectValue /></SelectTrigger>
-              <SelectContent>{Object.entries(OPP_RECORD_TYPES).map(([k, v]) => <SelectItem key={k} value={k} className="text-xs">{v}</SelectItem>)}</SelectContent>
-            </Select>
-            <Select value={form.stage} onValueChange={v => setForm(f => ({ ...f, stage: v }))}>
-              <SelectTrigger className="h-7 text-xs" data-testid="select-opp-stage"><SelectValue /></SelectTrigger>
-              <SelectContent>{Object.entries(OPP_STAGES).map(([k, v]) => <SelectItem key={k} value={k} className="text-xs">{v}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Input value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="Est. value ($/mo)" className="h-7 text-xs" data-testid="input-opp-amount" />
-            <Input value={form.probability} onChange={e => setForm(f => ({ ...f, probability: e.target.value }))} placeholder="Probability %" className="h-7 text-xs" data-testid="input-opp-prob" />
-          </div>
-          <Input value={form.closeDate} onChange={e => setForm(f => ({ ...f, closeDate: e.target.value }))} placeholder="Est. close date (YYYY-MM-DD)" className="h-7 text-xs" data-testid="input-opp-close" />
-          <Textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes…" className="text-xs min-h-[48px]" data-testid="input-opp-notes" />
-          <div className="flex gap-2">
-            <Button size="sm" className="h-7 text-xs" onClick={submitForm} disabled={!form.name.trim() || createMutation.isPending || updateMutation.isPending} data-testid="button-opp-save">
-              {(createMutation.isPending || updateMutation.isPending) && <Loader2 className="h-3 w-3 animate-spin mr-1" />}
-              {editing ? "Update" : "Create"}
-            </Button>
-            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setFormOpen(false); setEditing(null); }}>Cancel</Button>
-          </div>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Opportunities ({opps.length})
+          </p>
+          {totalPipeline > 0 && (
+            <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-0.5">
+              {formatCurrency(totalPipeline)}/mo open pipeline
+            </p>
+          )}
         </div>
-      )}
+        <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setNewOpen(true)} data-testid="button-add-opportunity">
+          <Plus className="h-3 w-3" />New
+        </Button>
+      </div>
 
       {isLoading ? (
         <div className="space-y-2">{[1, 2].map(i => <Skeleton key={i} className="h-16 w-full" />)}</div>
@@ -1247,30 +1482,60 @@ function OpportunitiesTab({ prospectId, orgId, userId }: { prospectId: number; o
           <p className="text-xs">Track lanes, bids, and deals</p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {opps.map(o => (
-            <div key={o.id} className="border rounded-lg p-3 space-y-1.5" data-testid={`opp-row-${o.id}`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm leading-tight">{o.name}</p>
-                  <p className="text-xs text-muted-foreground">{OPP_RECORD_TYPES[o.recordType] ?? o.recordType}</p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => openEdit(o)} data-testid={`button-edit-opp-${o.id}`}><Pencil className="h-3 w-3" /></Button>
-                  <Button size="icon" variant="ghost" className="h-6 w-6 text-red-500" onClick={() => { if (confirm("Delete opportunity?")) deleteMutation.mutate(o.id); }} data-testid={`button-delete-opp-${o.id}`}><Trash2 className="h-3 w-3" /></Button>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${OPP_STAGE_COLORS[o.stage] ?? "bg-muted text-muted-foreground"}`}>{OPP_STAGES[o.stage] ?? o.stage}</span>
-                {o.amount && <span className="text-[10px] text-muted-foreground flex items-center gap-0.5"><DollarSign className="h-2.5 w-2.5" />{o.amount}/mo</span>}
-                {o.probability != null && <span className="text-[10px] text-muted-foreground">{o.probability}% likely</span>}
-                {o.closeDate && <span className="text-[10px] text-muted-foreground flex items-center gap-0.5"><Calendar className="h-2.5 w-2.5" />{o.closeDate}</span>}
-              </div>
-              {o.notes && <p className="text-xs text-foreground/70 leading-snug">{o.notes}</p>}
-            </div>
-          ))}
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-muted/40">
+                <th className="text-left py-2 px-3 font-medium text-muted-foreground">Name</th>
+                <th className="text-left py-2 px-2 font-medium text-muted-foreground">Type</th>
+                <th className="text-left py-2 px-2 font-medium text-muted-foreground">Stage</th>
+                <th className="text-right py-2 px-2 font-medium text-muted-foreground">Amount</th>
+                <th className="text-left py-2 px-2 font-medium text-muted-foreground">Close</th>
+                <th className="text-right py-2 px-2 font-medium text-muted-foreground">Prob</th>
+                <th className="py-2 px-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {opps.map(o => (
+                <tr key={o.id} className="border-b last:border-0 hover:bg-muted/20 transition-colors" data-testid={`opp-row-${o.id}`}>
+                  <td className="py-2 px-3 font-medium max-w-[140px]">
+                    <p className="truncate">{o.name}</p>
+                    {o.notes && <p className="text-muted-foreground truncate text-[10px]">{o.notes}</p>}
+                  </td>
+                  <td className="py-2 px-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold whitespace-nowrap ${OPP_TYPE_COLORS[o.recordType] ?? "bg-muted text-muted-foreground"}`}>
+                      {CRM_OPP_RECORD_TYPE_LABELS[o.recordType as keyof typeof CRM_OPP_RECORD_TYPE_LABELS] ?? o.recordType}
+                    </span>
+                  </td>
+                  <td className="py-2 px-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold whitespace-nowrap ${OPP_STAGE_COLORS[o.stage] ?? "bg-muted text-muted-foreground"}`}>
+                      {CRM_OPP_STAGE_LABELS[o.stage as keyof typeof CRM_OPP_STAGE_LABELS] ?? o.stage}
+                    </span>
+                  </td>
+                  <td className="py-2 px-2 text-right whitespace-nowrap">
+                    {o.amount ? <span className="font-medium">{o.amount}</span> : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="py-2 px-2 text-muted-foreground whitespace-nowrap">
+                    {o.closeDate || "—"}
+                  </td>
+                  <td className="py-2 px-2 text-right whitespace-nowrap">
+                    {o.probability != null ? `${o.probability}%` : "—"}
+                  </td>
+                  <td className="py-2 px-2">
+                    <div className="flex gap-0.5 justify-end">
+                      <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setEditingOpp(o)} data-testid={`button-edit-opp-${o.id}`}><Pencil className="h-3 w-3" /></Button>
+                      <Button size="icon" variant="ghost" className="h-6 w-6 text-red-500" onClick={() => { if (confirm("Delete opportunity?")) deleteMutation.mutate(o.id); }} data-testid={`button-delete-opp-${o.id}`}><Trash2 className="h-3 w-3" /></Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
+
+      {newOpen && <NewOpportunityDialog prospectId={prospectId} onClose={() => setNewOpen(false)} onCreated={handleCreated} />}
+      {editingOpp && <EditOpportunityDialog opp={editingOpp} prospectId={prospectId} onClose={() => setEditingOpp(null)} onUpdated={handleUpdated} />}
     </div>
   );
 }
@@ -1373,6 +1638,7 @@ function ProspectDetailSheet({
   const [ownershipOpen, setOwnershipOpen] = useState(false);
   const [activityType, setActivityType] = useState("call");
   const [activityNotes, setActivityNotes] = useState("");
+  const [suggestActiveCustomer, setSuggestActiveCustomer] = useState(false);
 
   const { data: activities = [], isLoading: activitiesLoading } = useQuery<ActivityWithName[]>({
     queryKey: ["/api/prospects", prospect.id, "activities"],
@@ -1405,6 +1671,23 @@ function ProspectDetailSheet({
     },
     onError: () => toast({ title: "Failed to update stage", variant: "destructive" }),
   });
+
+  const accountStatusMutation = useMutation({
+    mutationFn: async (accountStatus: string) =>
+      (await apiRequest("PATCH", `/api/prospects/${prospect.id}`, { accountStatus })).json(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/prospects"] });
+      toast({ title: "Account status updated" });
+    },
+    onError: () => toast({ title: "Failed to update account status", variant: "destructive" }),
+  });
+
+  // When Closed Won opp detected, prompt if status isn't already active_customer
+  const handleClosedWon = () => {
+    if (prospect.accountStatus !== "active_customer") {
+      setSuggestActiveCustomer(true);
+    }
+  };
 
   const deleteMutation = useMutation({
     mutationFn: async () => { await apiRequest("DELETE", `/api/prospects/${prospect.id}`); },
@@ -1461,13 +1744,31 @@ function ProspectDetailSheet({
               </div>
             </div>
 
-            <div className="mt-3">
+            <div className="mt-3 grid grid-cols-2 gap-2">
               <Select value={prospect.stage} onValueChange={handleStageChange}>
                 <SelectTrigger className="h-8 text-xs" data-testid="select-detail-stage"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {ACTIVE_STAGES.map(s => <SelectItem key={s} value={s} className="text-xs">{PROSPECT_STAGE_LABELS[s]}</SelectItem>)}
                   <SelectItem value="lost" className="text-xs text-red-600">Mark as Lost…</SelectItem>
                   <SelectItem value="disqualified" className="text-xs text-red-600">Disqualify…</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select
+                value={prospect.accountStatus ?? "prospecting"}
+                onValueChange={v => accountStatusMutation.mutate(v)}
+              >
+                <SelectTrigger className="h-8 text-xs" data-testid="select-account-status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {accountStatuses.map(s => (
+                    <SelectItem key={s} value={s} className="text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${ACCOUNT_STATUS_DOT[s] ?? "bg-slate-400"}`} />
+                        {ACCOUNT_STATUS_LABELS[s]}
+                      </div>
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -1595,7 +1896,7 @@ function ProspectDetailSheet({
 
             {/* Opportunities Tab */}
             <TabsContent value="opportunities" className="mt-0">
-              <OpportunitiesTab prospectId={prospect.id} orgId={prospect.organizationId} userId={currentUser.id} />
+              <OpportunitiesTab prospectId={prospect.id} orgId={prospect.organizationId} userId={currentUser.id} onClosedWon={handleClosedWon} />
             </TabsContent>
 
             {/* Contacts Tab */}
@@ -1715,12 +2016,72 @@ function ProspectDetailSheet({
       {editOpen && <ProspectFormDialog open={editOpen} onClose={() => setEditOpen(false)} editing={prospect} currentUserId={currentUser.id} users={users} />}
       {convertOpen && <ConvertDialog prospect={prospect} onClose={() => setConvertOpen(false)} users={users} />}
       {ownershipOpen && <OwnershipRequestDialog prospectId={prospect.id} onClose={() => setOwnershipOpen(false)} />}
+
+      {/* Suggest Active Customer after Closed Won opp */}
+      {suggestActiveCustomer && (
+        <Dialog open onOpenChange={v => { if (!v) setSuggestActiveCustomer(false); }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                Closed Won — Upgrade Account Status?
+              </DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              You have a Closed Won opportunity. Would you like to mark <strong>{prospect.name}</strong> as an <strong>Active Customer</strong>?
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSuggestActiveCustomer(false)}>Not now</Button>
+              <Button
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={() => {
+                  accountStatusMutation.mutate("active_customer");
+                  setSuggestActiveCustomer(false);
+                }}
+                data-testid="button-confirm-active-customer"
+              >
+                Yes, Mark Active Customer
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   );
 }
 
+// ─── Account Status Badge ─────────────────────────────────────────────────────
+const ACCOUNT_STATUS_STALE_DAYS = 14;
+
+function AccountStatusBadge({ status, changedAt }: { status?: string | null; changedAt?: string | Date | null }) {
+  const s = (status ?? "prospecting") as AccountStatus;
+  const label = ACCOUNT_STATUS_LABELS[s] ?? s;
+  const badge = ACCOUNT_STATUS_COLORS[s] ?? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
+  const dot = ACCOUNT_STATUS_DOT[s] ?? "bg-slate-400";
+  const daysInStatus = changedAt
+    ? Math.floor((Date.now() - new Date(changedAt).getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+  const isStaleStatus = daysInStatus != null && daysInStatus >= ACCOUNT_STATUS_STALE_DAYS;
+  return (
+    <span className="flex items-center gap-0.5 flex-wrap">
+      <span
+        className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5 ${badge}`}
+        data-testid="badge-account-status"
+      >
+        <span className={`inline-block w-1.5 h-1.5 rounded-full ${dot}`} />
+        {label}
+      </span>
+      {isStaleStatus && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 font-semibold" data-testid="badge-status-stale" title={`${daysInStatus} days in this status`}>
+          {daysInStatus}d
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ─── Prospect Card ────────────────────────────────────────────────────────────
-function ProspectCard({ prospect, onClick }: { prospect: EnrichedProspect; onClick: () => void }) {
+function ProspectCard({ prospect, onClick, oppSummary }: { prospect: EnrichedProspect; onClick: () => void; oppSummary?: { openCount: number; closedWonCount: number; pipelineValue: number } }) {
   const stage = prospect.stage as ProspectStage;
   const overdue = isOverdue(prospect.followUpDate);
   const dueToday = isDueToday(prospect.followUpDate);
@@ -1738,8 +2099,9 @@ function ProspectCard({ prospect, onClick }: { prospect: EnrichedProspect; onCli
         <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
       </div>
 
-      {/* Priority + probability */}
+      {/* Account status + priority + probability */}
       <div className="flex items-center gap-1.5 flex-wrap">
+        <AccountStatusBadge status={prospect.accountStatus} changedAt={prospect.accountStatusChangedAt} />
         <PriorityBadge priority={prospect.priority} />
         {prospect.dealProbability != null && (
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 font-semibold" data-testid={`prob-badge-${prospect.id}`}>
@@ -1757,6 +2119,27 @@ function ProspectCard({ prospect, onClick }: { prospect: EnrichedProspect; onCli
 
       {prospect.estimatedSpend && (
         <p className="text-xs text-muted-foreground">~{prospect.estimatedSpend}/mo</p>
+      )}
+
+      {/* Opportunity summary */}
+      {oppSummary && (oppSummary.openCount > 0 || oppSummary.closedWonCount > 0) && (
+        <div className="flex items-center gap-2 text-[10px]">
+          {oppSummary.openCount > 0 && (
+            <span className="text-blue-600 dark:text-blue-400 flex items-center gap-0.5" data-testid={`opp-count-${prospect.id}`}>
+              <Target className="h-2.5 w-2.5" />{oppSummary.openCount} open
+            </span>
+          )}
+          {oppSummary.pipelineValue > 0 && (
+            <span className="text-emerald-600 dark:text-emerald-400 font-semibold" data-testid={`pipeline-value-${prospect.id}`}>
+              {formatCurrency(oppSummary.pipelineValue)}/mo
+            </span>
+          )}
+          {oppSummary.closedWonCount > 0 && (
+            <span className="text-emerald-700 dark:text-emerald-300 flex items-center gap-0.5">
+              <CheckCircle2 className="h-2.5 w-2.5" />{oppSummary.closedWonCount} won
+            </span>
+          )}
+        </div>
       )}
 
       {prospect.currentCarrier && (
@@ -1894,6 +2277,9 @@ export default function ProspectsPage() {
   const [filterOwner, setFilterOwner] = useState("all");
   const [filterPriority, setFilterPriority] = useState("all");
   const [filterLeadSource, setFilterLeadSource] = useState("all");
+  const [filterAccountStatus, setFilterAccountStatus] = useState("all");
+  const [tableSortField, setTableSortField] = useState<"name" | "accountStatus" | "openOpps" | "pipeline" | "lastActivity">("name");
+  const [tableSortDir, setTableSortDir] = useState<"asc" | "desc">("asc");
 
   const { data: prospects = [], isLoading } = useQuery<EnrichedProspect[]>({
     queryKey: ["/api/prospects"],
@@ -1901,6 +2287,15 @@ export default function ProspectsPage() {
 
   const { data: allUsers = [] } = useQuery<any[]>({
     queryKey: ["/api/users"],
+  });
+
+  const { data: oppsSummary = {} } = useQuery<Record<number, { openCount: number; closedWonCount: number; pipelineValue: number }>>({
+    queryKey: ["/api/prospects/opportunities-summary"],
+    queryFn: async () => {
+      const res = await fetch("/api/prospects/opportunities-summary", { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
   });
 
   const ownerOptions = useMemo(() => {
@@ -1913,12 +2308,40 @@ export default function ProspectsPage() {
     if (filterOwner !== "all" && p.ownerId !== filterOwner) return false;
     if (filterPriority !== "all" && p.priority !== filterPriority) return false;
     if (filterLeadSource !== "all" && p.leadSource !== filterLeadSource) return false;
+    if (filterAccountStatus !== "all" && (p.accountStatus ?? "prospecting") !== filterAccountStatus) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       if (!p.name.toLowerCase().includes(q) && !(p.industry ?? "").toLowerCase().includes(q) && !(p.primaryContactName ?? "").toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [prospects, filterOwner, filterPriority, filterLeadSource, searchQuery]);
+  }), [prospects, filterOwner, filterPriority, filterLeadSource, filterAccountStatus, searchQuery]);
+
+  const tableSorted = useMemo(() => {
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      let cmp = 0;
+      switch (tableSortField) {
+        case "accountStatus": {
+          const order = ["prospecting", "intro_scheduled", "active_customer", "dormant", "lost"];
+          cmp = (order.indexOf(a.accountStatus ?? "prospecting")) - (order.indexOf(b.accountStatus ?? "prospecting"));
+          break;
+        }
+        case "openOpps":
+          cmp = (oppsSummary[a.id]?.openCount ?? 0) - (oppsSummary[b.id]?.openCount ?? 0);
+          break;
+        case "pipeline":
+          cmp = (oppsSummary[a.id]?.pipelineValue ?? 0) - (oppsSummary[b.id]?.pipelineValue ?? 0);
+          break;
+        case "lastActivity":
+          cmp = new Date(a.updatedAt ?? 0).getTime() - new Date(b.updatedAt ?? 0).getTime();
+          break;
+        default:
+          cmp = a.name.localeCompare(b.name);
+      }
+      return tableSortDir === "asc" ? cmp : -cmp;
+    });
+    return arr;
+  }, [filtered, tableSortField, tableSortDir, oppsSummary]);
 
   if (!user || !PROSPECTS_ALLOWED_ROLES.includes(user.role ?? "")) {
     return (
@@ -2045,8 +2468,22 @@ export default function ProspectsPage() {
             {PROSPECT_LEAD_SOURCES.map(s => <SelectItem key={s} value={s}>{PROSPECT_LEAD_SOURCE_LABELS[s]}</SelectItem>)}
           </SelectContent>
         </Select>
-        {(filterOwner !== "all" || filterPriority !== "all" || filterLeadSource !== "all") && (
-          <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => { setFilterOwner("all"); setFilterPriority("all"); setFilterLeadSource("all"); }}>
+        <Select value={filterAccountStatus} onValueChange={setFilterAccountStatus}>
+          <SelectTrigger className="h-7 text-xs w-36" data-testid="filter-account-status"><SelectValue placeholder="Account status" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            {accountStatuses.map(s => (
+              <SelectItem key={s} value={s}>
+                <span className="flex items-center gap-1.5">
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${ACCOUNT_STATUS_DOT[s] ?? "bg-slate-400"}`} />
+                  {ACCOUNT_STATUS_LABELS[s]}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {(filterOwner !== "all" || filterPriority !== "all" || filterLeadSource !== "all" || filterAccountStatus !== "all") && (
+          <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => { setFilterOwner("all"); setFilterPriority("all"); setFilterLeadSource("all"); setFilterAccountStatus("all"); }}>
             Clear filters
           </Button>
         )}
@@ -2092,7 +2529,7 @@ export default function ProspectsPage() {
                   {cards.length === 0 ? (
                     <div className="flex items-center justify-center h-16 text-xs text-muted-foreground/50">Empty</div>
                   ) : (
-                    cards.map(p => <ProspectCard key={p.id} prospect={p} onClick={() => setSelected(p)} />)
+                    cards.map(p => <ProspectCard key={p.id} prospect={p} onClick={() => setSelected(p)} oppSummary={oppsSummary[p.id]} />)
                   )}
                 </div>
               </div>
@@ -2105,22 +2542,46 @@ export default function ProspectsPage() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/40">
-                <TableHead className="text-xs py-2">Account</TableHead>
-                <TableHead className="text-xs py-2">Stage</TableHead>
-                <TableHead className="text-xs py-2">Owner</TableHead>
-                <TableHead className="text-xs py-2">Priority</TableHead>
-                <TableHead className="text-xs py-2">Est. Spend</TableHead>
-                <TableHead className="text-xs py-2">Follow-up</TableHead>
-                <TableHead className="text-xs py-2">Loaded</TableHead>
+                {([
+                  { key: "name", label: "Account" },
+                  { key: "accountStatus", label: "Account Status" },
+                  { key: "stage", label: "Stage" },
+                  { key: "owner", label: "Owner" },
+                  { key: "priority", label: "Priority" },
+                  { key: "openOpps", label: "Open Opps" },
+                  { key: "pipeline", label: "Pipeline" },
+                  { key: "followUp", label: "Follow-up" },
+                  { key: "lastActivity", label: "Last Activity" },
+                ] as const).map(col => {
+                  const sortable = ["name", "accountStatus", "openOpps", "pipeline", "lastActivity"].includes(col.key);
+                  const isActive = tableSortField === col.key;
+                  return (
+                    <TableHead
+                      key={col.key}
+                      className={`text-xs py-2 ${sortable ? "cursor-pointer select-none hover:bg-muted/60" : ""}`}
+                      onClick={sortable ? () => {
+                        if (isActive) setTableSortDir(d => d === "asc" ? "desc" : "asc");
+                        else { setTableSortField(col.key as typeof tableSortField); setTableSortDir("asc"); }
+                      } : undefined}
+                      data-testid={sortable ? `th-sort-${col.key}` : undefined}
+                    >
+                      <span className="flex items-center gap-1">
+                        {col.label}
+                        {isActive && <span className="text-[10px]">{tableSortDir === "asc" ? "↑" : "↓"}</span>}
+                      </span>
+                    </TableHead>
+                  );
+                })}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {activeProspects.length === 0 && (
-                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground text-sm py-8">No accounts match your filters</TableCell></TableRow>
+              {tableSorted.length === 0 && (
+                <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground text-sm py-8">No accounts match your filters</TableCell></TableRow>
               )}
-              {activeProspects.map(p => {
+              {tableSorted.map(p => {
                 const overdue = isOverdue(p.followUpDate);
                 const dueToday = isDueToday(p.followUpDate);
+                const summary = oppsSummary[p.id];
                 return (
                   <TableRow
                     key={p.id}
@@ -2135,6 +2596,9 @@ export default function ProspectsPage() {
                       </div>
                     </TableCell>
                     <TableCell className="py-2">
+                      <AccountStatusBadge status={p.accountStatus} changedAt={p.accountStatusChangedAt} />
+                    </TableCell>
+                    <TableCell className="py-2">
                       <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${STAGE_BORDER[p.stage]?.replace("border-t-", "text-").replace("-400", "-600").replace("-500", "-600") ?? ""} bg-muted`}>
                         {PROSPECT_STAGE_LABELS[p.stage as ProspectStage]}
                       </span>
@@ -2146,7 +2610,16 @@ export default function ProspectsPage() {
                       {p.priority === "cold" && <span className="text-[10px] font-semibold text-blue-600">🔵 Cold</span>}
                       {!p.priority && <span className="text-xs text-muted-foreground">—</span>}
                     </TableCell>
-                    <TableCell className="py-2 text-xs">{p.estimatedSpend ? `$${p.estimatedSpend}/mo` : "—"}</TableCell>
+                    <TableCell className="py-2 text-xs">
+                      {summary?.openCount ? (
+                        <span className="text-blue-600 font-medium" data-testid={`table-opp-count-${p.id}`}>{summary.openCount}</span>
+                      ) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="py-2 text-xs">
+                      {summary?.pipelineValue ? (
+                        <span className="text-emerald-600 font-semibold" data-testid={`table-pipeline-${p.id}`}>{formatCurrency(summary.pipelineValue)}/mo</span>
+                      ) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell className="py-2 text-xs">
                       {p.followUpDate ? (
                         <span className={overdue ? "text-red-600 font-medium" : dueToday ? "text-amber-600 font-medium" : "text-muted-foreground"}>

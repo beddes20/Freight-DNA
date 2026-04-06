@@ -707,6 +707,72 @@ export type ToolLink = typeof toolLinks.$inferSelect;
 
 // ── Sales Prospect Pipeline ───────────────────────────────────────────────────
 
+export const accountStatuses = [
+  "prospecting",
+  "intro_scheduled",
+  "active_customer",
+  "dormant",
+  "lost",
+] as const;
+export type AccountStatus = typeof accountStatuses[number];
+
+export const ACCOUNT_STATUS_LABELS: Record<AccountStatus, string> = {
+  prospecting: "Prospecting",
+  intro_scheduled: "Intro Scheduled",
+  active_customer: "Active Customer",
+  dormant: "Dormant",
+  lost: "Lost",
+};
+
+export const ACCOUNT_STATUS_COLORS: Record<AccountStatus, string> = {
+  prospecting: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+  intro_scheduled: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+  active_customer: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
+  dormant: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  lost: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+};
+
+export const CRM_OPP_RECORD_TYPES = [
+  "single_multi_lane",
+  "private_hauling",
+  "rfp",
+  "trucking_opportunity",
+] as const;
+export type CrmOppRecordType = typeof CRM_OPP_RECORD_TYPES[number];
+
+export const CRM_OPP_RECORD_TYPE_LABELS: Record<CrmOppRecordType, string> = {
+  single_multi_lane: "Single/Multi Lane",
+  private_hauling: "Private Hauling",
+  rfp: "RFP",
+  trucking_opportunity: "Trucking Opportunity",
+};
+
+export const CRM_OPP_RECORD_TYPE_DESCRIPTIONS: Record<CrmOppRecordType, string> = {
+  single_multi_lane: "Standard spot or contract lanes — single or multi-lane freight program",
+  private_hauling: "Converting private fleet operations to outsourced trucking",
+  rfp: "Responding to a formal Request for Proposal (bid event)",
+  trucking_opportunity: "Full truckload opportunity — contract, spot, or dedicated",
+};
+
+export const CRM_OPP_STAGES = [
+  "qualification",
+  "discovery",
+  "proposal",
+  "negotiation",
+  "closed_won",
+  "closed_lost",
+] as const;
+export type CrmOppStage = typeof CRM_OPP_STAGES[number];
+
+export const CRM_OPP_STAGE_LABELS: Record<CrmOppStage, string> = {
+  qualification: "Qualification",
+  discovery: "Discovery",
+  proposal: "Proposal",
+  negotiation: "Negotiation",
+  closed_won: "Closed Won",
+  closed_lost: "Closed Lost",
+};
+
 export const prospectStages = [
   "new_lead",
   "intro_scheduled",
@@ -826,6 +892,8 @@ export const prospects = pgTable("prospects", {
   tmsPassword: text("tms_password"),
   phone: text("phone"),
   billingAddress: text("billing_address"),
+  accountStatus: text("account_status").default("prospecting"),
+  accountStatusChangedAt: timestamp("account_status_changed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -872,7 +940,7 @@ export const crmOpportunities = pgTable("crm_opportunities", {
   prospectId: integer("prospect_id").notNull().references(() => prospects.id, { onDelete: "cascade" }),
   organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  recordType: text("record_type").notNull().default("single_lane"),
+  recordType: text("record_type").notNull().default("single_multi_lane"),
   stage: text("stage").notNull().default("qualification"),
   amount: text("amount"),
   closeDate: text("close_date"),
