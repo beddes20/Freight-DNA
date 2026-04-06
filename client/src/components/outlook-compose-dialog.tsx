@@ -47,6 +47,14 @@ function cleanSignatureHtml(html: string): string {
     .replace(/<p[^>]*>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, "")
     // collapse 3+ consecutive <br> tags into at most 2
     .replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>")
+    // inject margin:0;padding:0; onto every <p> tag so email clients don't add extra spacing
+    .replace(/<p(\s[^>]*)?>/gi, (match, attrs) => {
+      const existing = attrs || "";
+      if (/style\s*=/i.test(existing)) {
+        return match.replace(/style\s*=\s*["']([^"']*)["']/i, (_, s) => `style="margin:0;padding:0;${s}"`);
+      }
+      return `<p${existing} style="margin:0;padding:0;">`;
+    })
     .trim();
 }
 
