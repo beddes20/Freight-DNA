@@ -7415,7 +7415,57 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         }
       }
 
-      res.json({ success: true, message: "Email sent successfully", touchpoint });
+      // Email auto-logging: if no contactId provided, try to match recipient domain to a CRM company
+      let autoLinkedCompanyId: string | null = null;
+      if (!contactId && toEmail && toEmail.includes("@")) {
+        try {
+          const domain = toEmail.split("@")[1]?.toLowerCase();
+          if (domain && domain.length > 3 && !["gmail.com","yahoo.com","hotmail.com","outlook.com","icloud.com"].includes(domain)) {
+            const allCompanies = await storage.getCompanies(currentUser.organizationId);
+            const visibleIds = await getVisibleCompanyIds(currentUser);
+            const visibleCompanies = visibleIds === null
+              ? allCompanies
+              : allCompanies.filter(c => visibleIds.includes(c.id));
+            const match = visibleCompanies.find(c => {
+              if (c.archivedAt) return false;
+              const website = (c.website || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+              return website && website === domain;
+            }) || visibleCompanies.find(c => {
+              if (c.archivedAt) return false;
+              const nameDomain = c.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+              const emailDomainCore = domain.split(".")[0].replace(/[^a-z0-9]/g, "");
+              return emailDomainCore.length >= 4 && (nameDomain.includes(emailDomainCore) || emailDomainCore.includes(nameDomain.substring(0, 8)));
+            });
+            if (match) {
+              autoLinkedCompanyId = match.id;
+              const now = new Date();
+              const bodyBeforeHr = body.replace(/<hr\b[^>]*>[\s\S]*/i, "");
+              const plainBody = bodyBeforeHr
+                .replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n").replace(/<\/div>/gi, "\n")
+                .replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+                .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+                .replace(/\n{3,}/g, "\n\n").trim();
+              const notes = `Subject: ${subject}\nTo: ${toEmail}\n\n${plainBody}`;
+              await storage.createTouchpoint({
+                contactId: null,
+                companyId: match.id,
+                type: "email",
+                date: now.toISOString().split("T")[0],
+                notes,
+                sentiment: null,
+                isMeaningful: false,
+                loggedById: currentUser.id,
+                createdAt: now.toISOString(),
+              });
+              cacheInvalidatePrefix(`cold-contacts:${currentUser.id}`);
+            }
+          }
+        } catch (autoErr) {
+          console.error("[outlook] auto-log email failed:", autoErr);
+        }
+      }
+
+      res.json({ success: true, message: "Email sent successfully", touchpoint, autoLinkedCompanyId });
     } catch (error: any) {
       console.error("[outlook] send error:", error);
       res.status(500).json({ error: "Failed to send email" });
@@ -9838,6 +9888,32 @@ Respond with valid JSON only:
     }
   });
 
+  // ZoomInfo field mapping settings (org-scoped)
+  app.get("/api/settings/zoominfo-mapping", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const val = await storage.getSetting(`zoominfo_field_mapping_${user.organizationId}`);
+      res.json({ mapping: val ? JSON.parse(val) : {} });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch ZoomInfo mapping" });
+    }
+  });
+
+  app.put("/api/settings/zoominfo-mapping", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+      const { mapping } = req.body;
+      if (!mapping || typeof mapping !== "object") return res.status(400).json({ error: "mapping must be an object" });
+      await storage.setSetting(`zoominfo_field_mapping_${user.organizationId}`, JSON.stringify(mapping));
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to save ZoomInfo mapping" });
+    }
+  });
+
   // Saved customer filters
   app.get("/api/users/saved-filters", requireAuth, async (req, res) => {
     try {
@@ -12253,13 +12329,63 @@ Respond with valid JSON only:
     "name", "industry", "estimatedSpend", "website",
     "primaryContactName", "primaryContactTitle", "primaryContactEmail", "primaryContactPhone", "primaryContactLinkedin",
     "currentCarrier", "topLanes", "commodity", "leadSource", "notes", "nextSteps", "painPoints",
+    "estLoadsPerWeek", "estimatedAnnualRevenue", "employeeCount",
   ]);
+
+  // ZoomInfo preview endpoint — returns mapped rows with duplicate flags, does NOT create anything
+  app.post("/api/prospects/import/preview", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const rows: any[] = req.body.rows;
+      if (!Array.isArray(rows)) return res.status(400).json({ error: "rows required" });
+
+      const existingProspects = await storage.getProspects(user.organizationId);
+      const existingNames = new Set(existingProspects.map(p => p.name.toLowerCase().trim()));
+      const existingWebsites = new Set(
+        existingProspects
+          .filter(p => p.website)
+          .map(p => p.website!.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0])
+      );
+      const batchNames = new Set<string>();
+
+      const preview = rows.map((row, i) => {
+        const rawName = typeof row.name === "string" ? row.name.trim() : "";
+        const nameLower = rawName.toLowerCase();
+        const website = typeof row.website === "string"
+          ? row.website.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0]
+          : "";
+        let duplicateReason: string | null = null;
+        if (!rawName) duplicateReason = "Missing company name";
+        else if (existingNames.has(nameLower)) duplicateReason = `Already in pipeline (name match)`;
+        else if (website && existingWebsites.has(website)) duplicateReason = `Already in pipeline (website match)`;
+        else if (batchNames.has(nameLower)) duplicateReason = `Duplicate within file`;
+
+        if (!duplicateReason && rawName) batchNames.add(nameLower);
+
+        return {
+          rowIndex: i,
+          name: rawName,
+          isDuplicate: !!duplicateReason,
+          duplicateReason,
+          row,
+        };
+      });
+
+      res.json({ preview });
+    } catch (err) {
+      console.error("POST /api/prospects/import/preview error:", err);
+      res.status(500).json({ error: "Preview failed" });
+    }
+  });
 
   app.post("/api/prospects/import", requireAuth, requireProspectRole, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const rows: any[] = req.body.rows;
+      const skipDuplicates: boolean = req.body.skipDuplicates !== false; // default true
+      const isZoomInfo: boolean = req.body.isZoomInfo === true;
       if (!Array.isArray(rows) || rows.length === 0) {
         return res.status(400).json({ error: "rows must be a non-empty array" });
       }
@@ -12284,7 +12410,9 @@ Respond with valid JSON only:
         }
         const nameLower = rawName.toLowerCase();
         if (existingNames.has(nameLower)) {
-          errors.push({ row: i + 1, error: `Duplicate: "${rawName}" already exists in your pipeline` });
+          if (skipDuplicates) {
+            errors.push({ row: i + 1, error: `Duplicate: "${rawName}" already exists in your pipeline` });
+          }
           continue;
         }
         if (batchNames.has(nameLower)) {
@@ -12302,15 +12430,47 @@ Respond with valid JSON only:
         }
 
         try {
-          await storage.createProspect({
+          const prospect = await storage.createProspect({
             ...safeRow,
             name: rawName,
             organizationId: user.organizationId,
             ownerId: user.id,
             stage: "new_lead",
+            leadSource: isZoomInfo ? "zoominfo" : (safeRow.leadSource || null),
             dealProbability: null,
           });
           existingNames.add(nameLower); // prevent same name in later rows of same batch
+
+          // Log an activity entry
+          const activityNote = isZoomInfo
+            ? `Imported from ZoomInfo${row.estimatedAnnualRevenue ? ` — Est. Revenue: ${row.estimatedAnnualRevenue}` : ""}${row.employeeCount ? `, ~${row.employeeCount} employees` : ""}`
+            : `Imported via CSV`;
+          await storage.createProspectActivity({
+            prospectId: prospect.id,
+            type: "note",
+            notes: activityNote,
+            createdById: user.id,
+          });
+
+          // Create additional contacts (ZoomInfo contacts 2 & 3) if provided
+          if (isZoomInfo) {
+            for (let ci = 2; ci <= 3; ci++) {
+              const cName = typeof row[`contact${ci}Name`] === "string" ? row[`contact${ci}Name`].trim() : "";
+              if (cName) {
+                await storage.createProspectContact({
+                  prospectId: prospect.id,
+                  name: cName,
+                  title: row[`contact${ci}Title`] || null,
+                  email: row[`contact${ci}Email`] || null,
+                  phone: row[`contact${ci}Phone`] || null,
+                  linkedin: null,
+                  role: "other",
+                  notes: null,
+                });
+              }
+            }
+          }
+
           created++;
         } catch (err: any) {
           errors.push({ row: i + 1, error: err.message ?? "Failed to create" });

@@ -1045,6 +1045,96 @@ function EasterEggPanel({ users }: { users: { id: string; name: string }[] }) {
   );
 }
 
+// ─── ZoomInfo Mapping Panel ───────────────────────────────────────────────────
+
+const ZOOMINFO_CRM_FIELDS = [
+  { key: "name",                   label: "Company Name *" },
+  { key: "industry",               label: "Industry" },
+  { key: "estimatedAnnualRevenue", label: "Est. Annual Revenue" },
+  { key: "employeeCount",          label: "Employee Count" },
+  { key: "website",                label: "Website" },
+  { key: "primaryContactName",     label: "Contact 1 Name" },
+  { key: "primaryContactTitle",    label: "Contact 1 Title" },
+  { key: "primaryContactEmail",    label: "Contact 1 Email" },
+  { key: "primaryContactPhone",    label: "Contact 1 Phone" },
+  { key: "contact2Name",           label: "Contact 2 Name" },
+  { key: "contact2Email",          label: "Contact 2 Email" },
+  { key: "contact3Name",           label: "Contact 3 Name" },
+  { key: "contact3Email",          label: "Contact 3 Email" },
+  { key: "currentCarrier",         label: "Current Carrier" },
+  { key: "notes",                  label: "Notes" },
+];
+
+function ZoomInfoMappingPanel() {
+  const { toast } = useToast();
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [saved, setSaved] = useState(false);
+
+  const { data, isLoading } = useQuery<{ mapping: Record<string, string> }>({
+    queryKey: ["/api/settings/zoominfo-mapping"],
+  });
+
+  useEffect(() => {
+    if (data?.mapping) setMapping(data.mapping);
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PUT", "/api/settings/zoominfo-mapping", { mapping });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/zoominfo-mapping"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      toast({ title: "ZoomInfo field mapping saved" });
+    },
+    onError: () => toast({ title: "Failed to save mapping", variant: "destructive" }),
+  });
+
+  return (
+    <div className="rounded-xl border border-border p-5 space-y-4" data-testid="section-zoominfo-mapping">
+      <div>
+        <p className="font-semibold text-sm flex items-center gap-1.5 mb-1">
+          <Database className="w-4 h-4 text-blue-600" /> ZoomInfo Column Mapping
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Configure which ZoomInfo export column names map to CRM fields. These defaults are used when auto-detecting columns during import. Leave blank to use built-in auto-detection.
+        </p>
+      </div>
+
+      {isLoading ? (
+        <div className="text-xs text-muted-foreground">Loading…</div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {ZOOMINFO_CRM_FIELDS.map(f => (
+            <div key={f.key} className="flex items-center gap-2">
+              <label className="text-xs w-36 shrink-0 text-muted-foreground">{f.label}</label>
+              <Input
+                value={mapping[f.key] || ""}
+                onChange={e => setMapping(prev => ({ ...prev, [f.key]: e.target.value }))}
+                placeholder="ZoomInfo column name…"
+                className="h-7 text-xs flex-1"
+                data-testid={`zoominfo-mapping-${f.key}`}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Button
+        size="sm"
+        className="gap-1.5 h-8 text-xs"
+        onClick={() => saveMutation.mutate()}
+        disabled={saveMutation.isPending}
+        data-testid="button-save-zoominfo-mapping"
+      >
+        {saveMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Save className="h-3.5 w-3.5" />}
+        {saved ? "Saved!" : "Save Mapping"}
+      </Button>
+    </div>
+  );
+}
+
 // ─── Demo Org Tools ───────────────────────────────────────────────────────────
 
 function DemoOrgTools() {
@@ -1566,6 +1656,10 @@ export default function AdminUsers() {
             )}
           </div>
         </div>
+      )}
+
+      {(currentUser?.role === "admin" || currentUser?.role === "director") && (
+        <ZoomInfoMappingPanel />
       )}
 
       {currentUser?.role === "admin" && (

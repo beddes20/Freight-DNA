@@ -1442,15 +1442,32 @@ export default function CompanyDetail() {
           status?: string;
         };
 
-        const tpItems: TimelineItem[] = touchLogEntries.map(tp => ({
-          id: `tp-${tp.id}`,
-          sortKey: tp.createdAt || tp.date,
-          type: tp.type,
-          label: tp.contactName ?? "Company touch",
-          subLabel: tp.isMeaningful ? "Meaningful" : undefined,
-          notes: tp.notes ?? undefined,
-          who: tp.loggedByName,
-        }));
+        // Parse structured email notes: "Subject: ...\nTo: ...\n\nbody"
+        const parseEmailNotes = (notes: string | null | undefined) => {
+          if (!notes) return { subject: null, to: null, body: notes ?? undefined };
+          const lines = notes.split("\n");
+          const subjectLine = lines.find(l => l.startsWith("Subject: "));
+          const toLine = lines.find(l => l.startsWith("To: "));
+          const subject = subjectLine ? subjectLine.replace("Subject: ", "") : null;
+          const to = toLine ? toLine.replace("To: ", "") : null;
+          const bodyStart = lines.findIndex((l, i) => i > 0 && !l.startsWith("Subject: ") && !l.startsWith("To: ") && l.trim() !== "");
+          const body = bodyStart !== -1 ? lines.slice(bodyStart).join("\n").trim() : undefined;
+          return { subject, to, body };
+        };
+
+        const tpItems: TimelineItem[] = touchLogEntries.map(tp => {
+          const isEmail = tp.type === "email";
+          const parsed = isEmail ? parseEmailNotes(tp.notes) : null;
+          return {
+            id: `tp-${tp.id}`,
+            sortKey: tp.createdAt || tp.date,
+            type: tp.type,
+            label: isEmail && parsed?.subject ? parsed.subject : (tp.contactName ?? "Company touch"),
+            subLabel: tp.isMeaningful ? "Meaningful" : (isEmail && parsed?.to ? `To: ${parsed.to}` : undefined),
+            notes: isEmail ? (parsed?.body ?? undefined) : (tp.notes ?? undefined),
+            who: tp.loggedByName,
+          };
+        });
 
         const taskItems: TimelineItem[] = companyTasks
           .filter(t => t.status === "completed" || t.dueDate)
@@ -1825,10 +1842,24 @@ export default function CompanyDetail() {
                 <div className="space-y-0">
                   {touchLogEntries.map((tp) => {
                     const TypeIcon = TYPE_ICONS[tp.type] ?? PhoneCall;
+                    const isEmail = tp.type === "email";
+                    // Parse structured email notes
+                    let emailSubjectLine = "";
+                    let emailToLine = "";
+                    let emailBodyPreview = tp.notes || "";
+                    if (isEmail && tp.notes) {
+                      const lines = tp.notes.split("\n");
+                      const sl = lines.find(l => l.startsWith("Subject: "));
+                      const tl = lines.find(l => l.startsWith("To: "));
+                      if (sl) emailSubjectLine = sl.replace("Subject: ", "");
+                      if (tl) emailToLine = tl.replace("To: ", "");
+                      const bodyStart = lines.findIndex((l, i) => i > 0 && !l.startsWith("Subject: ") && !l.startsWith("To: ") && l.trim() !== "");
+                      emailBodyPreview = bodyStart !== -1 ? lines.slice(bodyStart).join(" ").trim() : "";
+                    }
                     return (
                       <div
                         key={tp.id}
-                        className="flex items-start gap-3 py-2 border-b last:border-0 cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors"
+                        className={`flex items-start gap-3 py-2 border-b last:border-0 cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors ${isEmail ? "bg-blue-50/40 dark:bg-blue-950/10" : ""}`}
                         onClick={() => setSelectedTouchpoint(tp)}
                         data-testid={`touch-log-row-${tp.id}`}
                       >
@@ -1838,9 +1869,11 @@ export default function CompanyDetail() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            {tp.contactName && (
+                            {isEmail && emailSubjectLine ? (
+                              <span className="text-xs font-semibold text-foreground truncate max-w-[200px]" data-testid={`touch-log-email-subject-${tp.id}`}>{emailSubjectLine}</span>
+                            ) : tp.contactName ? (
                               <span className="text-xs font-medium text-foreground">{tp.contactName}</span>
-                            )}
+                            ) : null}
                             {tp.sentiment && (
                               <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${VIBE_COLORS[tp.sentiment] ?? "bg-muted text-muted-foreground"}`} data-testid={`touch-log-vibe-${tp.id}`}>
                                 {tp.sentiment.charAt(0).toUpperCase() + tp.sentiment.slice(1)}
@@ -1852,9 +1885,16 @@ export default function CompanyDetail() {
                               </span>
                             )}
                           </div>
-                          {tp.notes && (
-                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`touch-log-notes-${tp.id}`}>{tp.notes}</p>
+                          {isEmail && emailToLine && (
+                            <p className="text-[10px] text-blue-600 dark:text-blue-400 mt-0.5 flex items-center gap-0.5" data-testid={`touch-log-email-to-${tp.id}`}>
+                              <Mail className="h-2.5 w-2.5 shrink-0" />To: {emailToLine}
+                            </p>
                           )}
+                          {isEmail ? (
+                            emailBodyPreview && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1" data-testid={`touch-log-notes-${tp.id}`}>{emailBodyPreview}</p>
+                          ) : tp.notes ? (
+                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`touch-log-notes-${tp.id}`}>{tp.notes}</p>
+                          ) : null}
                           <p className="text-xs text-muted-foreground mt-1">
                             {tp.loggedByName} · {timeAgo(tp.createdAt || tp.date)}
                           </p>
@@ -2528,11 +2568,39 @@ export default function CompanyDetail() {
                   Touchpoint Detail
                 </DialogTitle>
               </DialogHeader>
+              {/* Parse email notes for structured display */}
+              {(() => {
+                const isEmail = tp.type === "email";
+                let emailSubject = "";
+                let emailTo = "";
+                let emailBody = "";
+                if (isEmail && tp.notes) {
+                  const lines = tp.notes.split("\n");
+                  const sl = lines.find(l => l.startsWith("Subject: "));
+                  const tl = lines.find(l => l.startsWith("To: "));
+                  if (sl) emailSubject = sl.replace("Subject: ", "");
+                  if (tl) emailTo = tl.replace("To: ", "");
+                  const bodyStart = lines.findIndex((l, i) => i > 0 && !l.startsWith("Subject: ") && !l.startsWith("To: ") && l.trim() !== "");
+                  emailBody = bodyStart !== -1 ? lines.slice(bodyStart).join("\n").trim() : "";
+                }
+                return (
               <div className="space-y-4 py-1">
                 {tp.contactName && (
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">Contact</p>
                     <p className="text-sm font-medium" data-testid="tp-detail-contact">{tp.contactName}</p>
+                  </div>
+                )}
+                {isEmail && emailSubject && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">Subject</p>
+                    <p className="text-sm font-semibold text-blue-700 dark:text-blue-300" data-testid="tp-detail-email-subject">{emailSubject}</p>
+                  </div>
+                )}
+                {isEmail && emailTo && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">To</p>
+                    <p className="text-sm text-blue-600 dark:text-blue-400" data-testid="tp-detail-email-to">{emailTo}</p>
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2">
@@ -2555,7 +2623,14 @@ export default function CompanyDetail() {
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">Date &amp; Time</p>
                   <p className="text-sm" data-testid="tp-detail-date">{dateStr}{timeStr ? ` · ${timeStr}` : ""}</p>
                 </div>
-                {tp.notes ? (
+                {isEmail ? (
+                  emailBody ? (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Email Body</p>
+                      <p className="text-sm whitespace-pre-wrap leading-relaxed" data-testid="tp-detail-notes">{emailBody}</p>
+                    </div>
+                  ) : null
+                ) : tp.notes ? (
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Notes</p>
                     <p className="text-sm whitespace-pre-wrap leading-relaxed" data-testid="tp-detail-notes">{tp.notes}</p>
@@ -2567,6 +2642,8 @@ export default function CompanyDetail() {
                   </div>
                 )}
               </div>
+                );
+              })()}
             </DialogContent>
           </Dialog>
         );

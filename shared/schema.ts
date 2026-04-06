@@ -881,6 +881,8 @@ export const prospects = pgTable("prospects", {
   commodity: text("commodity"),
   currentCarrier: text("current_carrier"),
   painPoints: text("pain_points"),
+  estimatedAnnualRevenue: text("estimated_annual_revenue"),
+  employeeCount: text("employee_count"),
   intelBrief: text("intel_brief"),
   stageChangedAt: timestamp("stage_changed_at"),
   // TMS / Portal fields (Launchpad)

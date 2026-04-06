@@ -684,19 +684,27 @@ function ConvertDialog({ prospect, onClose, users }: { prospect: EnrichedProspec
 // ─── Import Dialog ────────────────────────────────────────────────────────────
 
 const IMPORT_FIELDS = [
-  { key: "name",               label: "Company Name *",      required: true  },
-  { key: "industry",           label: "Industry",            required: false },
-  { key: "estimatedSpend",     label: "Est. Freight Spend",  required: false },
-  { key: "primaryContactName", label: "Contact Name",        required: false },
-  { key: "primaryContactTitle",label: "Contact Title",       required: false },
-  { key: "primaryContactEmail",label: "Contact Email",       required: false },
-  { key: "primaryContactPhone",label: "Contact Phone",       required: false },
-  { key: "website",            label: "Website",             required: false },
-  { key: "currentCarrier",     label: "Current Carrier",     required: false },
-  { key: "topLanes",           label: "Top Lanes",           required: false },
-  { key: "commodity",          label: "Commodity",           required: false },
-  { key: "leadSource",         label: "Lead Source",         required: false },
-  { key: "notes",              label: "Notes",               required: false },
+  { key: "name",               label: "Company Name *",          required: true  },
+  { key: "industry",           label: "Industry",                required: false },
+  { key: "estimatedSpend",     label: "Est. Freight Spend",      required: false },
+  { key: "estimatedAnnualRevenue", label: "Est. Annual Revenue", required: false },
+  { key: "employeeCount",      label: "Employee Count",          required: false },
+  { key: "primaryContactName", label: "Contact 1 Name",          required: false },
+  { key: "primaryContactTitle",label: "Contact 1 Title",         required: false },
+  { key: "primaryContactEmail",label: "Contact 1 Email",         required: false },
+  { key: "primaryContactPhone",label: "Contact 1 Phone",         required: false },
+  { key: "contact2Name",       label: "Contact 2 Name",          required: false },
+  { key: "contact2Title",      label: "Contact 2 Title",         required: false },
+  { key: "contact2Email",      label: "Contact 2 Email",         required: false },
+  { key: "contact2Phone",      label: "Contact 2 Phone",         required: false },
+  { key: "contact3Name",       label: "Contact 3 Name",          required: false },
+  { key: "contact3Title",      label: "Contact 3 Title",         required: false },
+  { key: "contact3Email",      label: "Contact 3 Email",         required: false },
+  { key: "website",            label: "Website",                 required: false },
+  { key: "currentCarrier",     label: "Current Carrier",         required: false },
+  { key: "topLanes",           label: "Top Lanes",               required: false },
+  { key: "commodity",          label: "Commodity",               required: false },
+  { key: "notes",              label: "Notes",                   required: false },
 ] as const;
 
 type ImportFieldKey = typeof IMPORT_FIELDS[number]["key"];
@@ -705,15 +713,23 @@ const HEADER_SYNONYMS: Record<ImportFieldKey, string[]> = {
   name:                ["company", "company name", "account", "organization", "business", "account name"],
   industry:            ["industry", "sector", "vertical", "market"],
   estimatedSpend:      ["spend", "freight spend", "monthly spend", "estimated spend", "budget", "est spend"],
-  primaryContactName:  ["contact", "contact name", "primary contact", "name", "first name", "full name", "person"],
-  primaryContactTitle: ["title", "contact title", "job title", "position", "role"],
-  primaryContactEmail: ["email", "e-mail", "email address", "contact email"],
-  primaryContactPhone: ["phone", "phone number", "telephone", "mobile", "contact phone", "cell"],
-  website:             ["website", "url", "web", "site", "domain"],
+  estimatedAnnualRevenue: ["revenue", "annual revenue", "estimated annual revenue", "est revenue", "est. annual revenue", "total revenue"],
+  employeeCount:       ["employees", "employee count", "headcount", "# employees", "num employees", "employee size"],
+  primaryContactName:  ["contact 1 name", "contact name", "primary contact", "first contact", "contact first name", "contact full name"],
+  primaryContactTitle: ["contact 1 title", "contact title", "job title", "position"],
+  primaryContactEmail: ["contact 1 email", "contact email", "email", "e-mail"],
+  primaryContactPhone: ["contact 1 phone", "contact phone", "phone", "phone number"],
+  contact2Name:        ["contact 2 name", "second contact name", "contact 2"],
+  contact2Title:       ["contact 2 title", "second contact title"],
+  contact2Email:       ["contact 2 email", "second contact email"],
+  contact2Phone:       ["contact 2 phone", "second contact phone"],
+  contact3Name:        ["contact 3 name", "third contact name", "contact 3"],
+  contact3Title:       ["contact 3 title", "third contact title"],
+  contact3Email:       ["contact 3 email", "third contact email"],
+  website:             ["website", "url", "web", "site", "domain", "company website"],
   currentCarrier:      ["carrier", "current carrier", "incumbent", "current broker", "broker"],
   topLanes:            ["lanes", "top lanes", "routes", "corridors", "freight lanes"],
   commodity:           ["commodity", "product", "freight type", "product type", "goods", "cargo"],
-  leadSource:          ["source", "lead source", "how found", "channel", "origin"],
   notes:               ["notes", "comments", "note", "description", "remarks"],
 };
 
@@ -729,17 +745,28 @@ function autoDetectMapping(headers: string[]): Record<string, string> {
   return mapping;
 }
 
+type PreviewRow = { rowIndex: number; name: string; isDuplicate: boolean; duplicateReason: string | null; row: Record<string, string>; skipped: boolean };
+
 function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [step, setStep] = useState<"upload" | "map" | "result">("upload");
+  const [step, setStep] = useState<"upload" | "map" | "preview" | "result">("upload");
   const [rawHeaders, setRawHeaders] = useState<string[]>([]);
   const [rawRows, setRawRows] = useState<string[][]>([]);
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importResult, setImportResult] = useState<{ created: number; errors: { row: number; error: string }[] } | null>(null);
+  const [previewData, setPreviewData] = useState<PreviewRow[]>([]);
+  const [skippedRows, setSkippedRows] = useState<Set<number>>(new Set());
+  const [isZoomInfo, setIsZoomInfo] = useState(false);
 
   // headerOriginalIndex[i] = original column index in the spreadsheet for rawHeaders[i]
   const [headerOriginalIndex, setHeaderOriginalIndex] = useState<number[]>([]);
+
+  // Load saved ZoomInfo column mapping from admin settings
+  const { data: savedMappingData } = useQuery<{ mapping: Record<string, string> }>({
+    queryKey: ["/api/settings/zoominfo-mapping"],
+    staleTime: 60000,
+  });
 
   const handleFile = async (file: File) => {
     const XLSX = await import("xlsx");
@@ -751,8 +778,6 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
       toast({ title: "File must have at least a header row and one data row.", variant: "destructive" });
       return;
     }
-    // Build header list and keep track of original column indices so blank
-    // header columns in between don't cause index shift when reading row values
     const hdrs: string[] = [];
     const origIdxs: number[] = [];
     data[0].forEach((h, i) => {
@@ -763,7 +788,26 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
     setRawHeaders(hdrs);
     setHeaderOriginalIndex(origIdxs);
     setRawRows(rows as string[][]);
-    setMapping(autoDetectMapping(hdrs));
+
+    // Apply auto-detection with saved mapping overrides
+    const savedMap = savedMappingData?.mapping ?? {};
+    const detectedMapping = autoDetectMapping(hdrs);
+    // Override built-in detection with admin-configured column names
+    const finalMapping: Record<string, string> = { ...detectedMapping };
+    for (const [crmKey, colName] of Object.entries(savedMap)) {
+      if (colName && hdrs.includes(colName)) {
+        finalMapping[crmKey] = colName;
+      } else if (colName) {
+        // Case-insensitive fallback
+        const found = hdrs.find(h => h.toLowerCase() === colName.toLowerCase());
+        if (found) finalMapping[crmKey] = found;
+      }
+    }
+    setMapping(finalMapping);
+    // Detect ZoomInfo if Revenue or Employee Count columns are mapped
+    const hdrNorm = hdrs.map(h => h.toLowerCase());
+    const looksLikeZoomInfo = hdrNorm.some(h => h.includes("revenue") || h.includes("employee") || h.includes("contact 2") || h.includes("contact 3"));
+    setIsZoomInfo(looksLikeZoomInfo);
     setStep("map");
   };
 
@@ -773,24 +817,42 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
     if (file) handleFile(file);
   };
 
+  const buildMappedRows = () => rawRows.map(row => {
+    const obj: Record<string, string> = {};
+    IMPORT_FIELDS.forEach(f => {
+      const col = mapping[f.key];
+      if (col) {
+        const hdrIdx = rawHeaders.indexOf(col);
+        const origIdx = hdrIdx !== -1 ? headerOriginalIndex[hdrIdx] : -1;
+        if (origIdx !== -1 && row[origIdx] != null) {
+          obj[f.key] = String(row[origIdx]).trim();
+        }
+      }
+    });
+    return obj;
+  });
+
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      const rows = buildMappedRows();
+      const res = await apiRequest("POST", "/api/prospects/import/preview", { rows });
+      return res.json();
+    },
+    onSuccess: (data: { preview: PreviewRow[] }) => {
+      const initialSkipped = new Set<number>();
+      data.preview.forEach(p => { if (p.isDuplicate) initialSkipped.add(p.rowIndex); });
+      setSkippedRows(initialSkipped);
+      setPreviewData(data.preview);
+      setStep("preview");
+    },
+    onError: () => toast({ title: "Preview failed", variant: "destructive" }),
+  });
+
   const importMutation = useMutation({
     mutationFn: async () => {
-      const rows = rawRows.map(row => {
-        const obj: Record<string, string> = {};
-        IMPORT_FIELDS.forEach(f => {
-          const col = mapping[f.key];
-          if (col) {
-            const hdrIdx = rawHeaders.indexOf(col);
-            const origIdx = hdrIdx !== -1 ? headerOriginalIndex[hdrIdx] : -1;
-            if (origIdx !== -1 && row[origIdx] != null) {
-              obj[f.key] = String(row[origIdx]).trim();
-            }
-          }
-        });
-        return obj;
-      });
-      // Send all rows — backend validates and returns per-row errors
-      const res = await apiRequest("POST", "/api/prospects/import", { rows });
+      const allRows = buildMappedRows();
+      const rows = allRows.filter((_, i) => !skippedRows.has(i));
+      const res = await apiRequest("POST", "/api/prospects/import", { rows, isZoomInfo, skipDuplicates: false });
       return res.json();
     },
     onSuccess: (data) => {
@@ -801,8 +863,8 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
     onError: () => toast({ title: "Import failed", variant: "destructive" }),
   });
 
-  const previewRows = rawRows.slice(0, 5);
   const mappedFields = IMPORT_FIELDS.filter(f => mapping[f.key]);
+  const previewSampleRows = rawRows.slice(0, 3);
 
   const handleClose = () => {
     setStep("upload");
@@ -810,18 +872,21 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
     setRawRows([]);
     setMapping({});
     setImportResult(null);
+    setPreviewData([]);
+    setSkippedRows(new Set());
+    setIsZoomInfo(false);
     onClose();
   };
 
   const downloadTemplate = () => {
-    const headers = IMPORT_FIELDS.map(f => f.label.replace(" *", ""));
-    const exampleRow = ["Acme Logistics", "Manufacturing", "Chicago, IL", "TL, LTL", "500000", "Jane Smith", "VP of Logistics", "jane@acmelogistics.com", "312-555-0100", "Chicago-Dallas, Memphis-Atlanta"];
+    const headers = ["Company Name", "Industry", "Est. Annual Revenue", "Employee Count", "Website", "Contact 1 Name", "Contact 1 Title", "Contact 1 Email", "Contact 1 Phone", "Contact 2 Name", "Contact 2 Email", "Notes"];
+    const exampleRow = ["Acme Logistics", "Manufacturing", "$45,000,000", "250", "https://acmelogistics.com", "Jane Smith", "VP of Logistics", "jsmith@acmelogistics.com", "312-555-0100", "Bob Johnson", "bjohnson@acmelogistics.com", "Key prospect in Chicago market"];
     const csv = [headers, exampleRow].map(row => row.map(v => `"${v}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "freight-dna-prospect-import-template.csv";
+    a.download = "zoominfo-import-template.csv";
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -848,20 +913,23 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
     URL.revokeObjectURL(url);
   };
 
+  const toImportCount = previewData.filter(p => !skippedRows.has(p.rowIndex)).length;
+  const duplicateCount = previewData.filter(p => p.isDuplicate).length;
+
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) handleClose(); }}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileUp className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-            {step === "upload" ? "Import Prospects" : step === "map" ? "Map Columns" : "Import Complete"}
+            {step === "upload" ? "Import Leads" : step === "map" ? "Map Columns" : step === "preview" ? "Review & Confirm" : "Import Complete"}
           </DialogTitle>
         </DialogHeader>
 
         {step === "upload" && (
           <div className="space-y-4 py-2">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm text-muted-foreground">Upload a CSV or Excel file exported from ZoomInfo, LinkedIn Sales Navigator, or any spreadsheet.</p>
+              <p className="text-sm text-muted-foreground">Upload a CSV or Excel file exported from ZoomInfo, LinkedIn Sales Navigator, or any spreadsheet. Contacts, revenue, and employee count are auto-detected.</p>
               <Button size="sm" variant="outline" className="shrink-0 gap-1.5 text-xs h-8" onClick={downloadTemplate} data-testid="button-download-template">
                 <Download className="h-3.5 w-3.5" /> Template
               </Button>
@@ -885,25 +953,39 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
                 data-testid="input-import-file"
               />
             </div>
-            <div className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
-              <p className="font-medium text-foreground">Supported columns (auto-detected):</p>
-              <p>{IMPORT_FIELDS.map(f => f.label.replace(" *", "")).join(" · ")}</p>
+            <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/40 p-3 text-xs text-muted-foreground space-y-1">
+              <p className="font-medium text-blue-800 dark:text-blue-300">ZoomInfo columns auto-detected:</p>
+              <p className="text-blue-700 dark:text-blue-400">Company Name · Industry · Est. Annual Revenue · Employee Count · Website · up to 3 Contacts (Name, Title, Email, Phone)</p>
             </div>
           </div>
         )}
 
         {step === "map" && (
           <div className="space-y-4 py-2">
-            <p className="text-sm text-muted-foreground">
-              Match your spreadsheet columns to prospect fields. <span className="font-medium text-foreground">{rawRows.length} rows detected.</span>
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">
+                Match your columns to CRM fields. <span className="font-medium text-foreground">{rawRows.length} rows detected.</span>
+              </p>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-muted-foreground flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isZoomInfo}
+                    onChange={e => setIsZoomInfo(e.target.checked)}
+                    className="h-3.5 w-3.5"
+                    data-testid="checkbox-is-zoominfo"
+                  />
+                  ZoomInfo export
+                </label>
+              </div>
+            </div>
 
             {/* Mapping table */}
             <div className="border rounded-lg overflow-hidden">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-xs">Prospect Field</TableHead>
+                    <TableHead className="text-xs">CRM Field</TableHead>
                     <TableHead className="text-xs">Your Column</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -939,23 +1021,23 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
               </Table>
             </div>
 
-            {/* Preview */}
-            {mappedFields.length > 0 && (
+            {/* Sample preview */}
+            {mappedFields.length > 0 && previewSampleRows.length > 0 && (
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Preview (first {Math.min(5, previewRows.length)} rows)</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Sample (first {Math.min(3, previewSampleRows.length)} rows)</p>
                 <div className="border rounded-lg overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        {mappedFields.map(f => (
+                        {mappedFields.slice(0, 6).map(f => (
                           <TableHead key={f.key} className="text-xs whitespace-nowrap">{f.label.replace(" *", "")}</TableHead>
                         ))}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {previewRows.map((row, i) => (
+                      {previewSampleRows.map((row, i) => (
                         <TableRow key={i}>
-                          {mappedFields.map(f => {
+                          {mappedFields.slice(0, 6).map(f => {
                             const hdrIdx = rawHeaders.indexOf(mapping[f.key] ?? "");
                             const origIdx = hdrIdx !== -1 ? headerOriginalIndex[hdrIdx] : -1;
                             return (
@@ -974,26 +1056,105 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
           </div>
         )}
 
+        {step === "preview" && (
+          <div className="space-y-4 py-2">
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex-1">
+                <p className="text-sm font-medium">{previewData.length} records analyzed</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {toImportCount} will be imported · {skippedRows.size} skipped
+                  {duplicateCount > 0 && ` · ${duplicateCount} duplicate${duplicateCount !== 1 ? "s" : ""} found`}
+                </p>
+              </div>
+              {duplicateCount > 0 && (
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setSkippedRows(new Set(previewData.filter(p => p.isDuplicate).map(p => p.rowIndex)))}>
+                    Skip all duplicates
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setSkippedRows(prev => { const next = new Set(prev); previewData.filter(p => p.isDuplicate).forEach(p => next.delete(p.rowIndex)); return next; })}>
+                    Import all duplicates
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <div className="border rounded-lg overflow-hidden max-h-[400px] overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-xs w-8">Include</TableHead>
+                    <TableHead className="text-xs">Company</TableHead>
+                    <TableHead className="text-xs">Industry</TableHead>
+                    <TableHead className="text-xs">Website</TableHead>
+                    <TableHead className="text-xs">Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {previewData.map(p => {
+                    const isSkipped = skippedRows.has(p.rowIndex);
+                    return (
+                      <TableRow key={p.rowIndex} className={isSkipped ? "opacity-40" : ""} data-testid={`preview-row-${p.rowIndex}`}>
+                        <TableCell className="py-1.5">
+                          <input
+                            type="checkbox"
+                            checked={!isSkipped}
+                            onChange={e => {
+                              setSkippedRows(prev => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.delete(p.rowIndex);
+                                else next.add(p.rowIndex);
+                                return next;
+                              });
+                            }}
+                            className="h-3.5 w-3.5"
+                            data-testid={`preview-checkbox-${p.rowIndex}`}
+                          />
+                        </TableCell>
+                        <TableCell className="text-xs py-1.5 font-medium">{p.row.name || "—"}</TableCell>
+                        <TableCell className="text-xs py-1.5 text-muted-foreground">{p.row.industry || "—"}</TableCell>
+                        <TableCell className="text-xs py-1.5 text-muted-foreground max-w-[120px] truncate">{p.row.website || "—"}</TableCell>
+                        <TableCell className="text-xs py-1.5">
+                          {p.isDuplicate ? (
+                            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                              <AlertCircle className="h-3 w-3 shrink-0" />{p.duplicateReason}
+                            </span>
+                          ) : (
+                            <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                              <CheckCircle className="h-3 w-3 shrink-0" />New
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        )}
+
         {step === "result" && importResult && (
           <div className="space-y-4 py-2">
             <div className="flex items-center gap-3 p-4 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800">
               <CheckCircle className="h-8 w-8 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <div>
-                <p className="font-semibold text-emerald-700 dark:text-emerald-300">{importResult.created} prospect{importResult.created !== 1 ? "s" : ""} imported</p>
+                <p className="font-semibold text-emerald-700 dark:text-emerald-300">{importResult.created} account{importResult.created !== 1 ? "s" : ""} imported at New Lead stage</p>
+                {isZoomInfo && <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">Lead source set to ZoomInfo · Activity logged on each account</p>}
                 {importResult.errors.length > 0 && (
-                  <p className="text-sm text-muted-foreground">{importResult.errors.length} row{importResult.errors.length !== 1 ? "s" : ""} skipped due to errors</p>
+                  <p className="text-sm text-muted-foreground mt-1">{importResult.errors.length} row{importResult.errors.length !== 1 ? "s" : ""} skipped</p>
                 )}
               </div>
             </div>
             {importResult.errors.length > 0 && (
               <div className="space-y-1">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Skipped Rows</p>
-                {importResult.errors.map(e => (
+                {importResult.errors.slice(0, 10).map(e => (
                   <div key={e.row} className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
                     <XCircle className="h-3.5 w-3.5 shrink-0" />
                     <span>Row {e.row}: {e.error}</span>
                   </div>
                 ))}
+                {importResult.errors.length > 10 && <p className="text-xs text-muted-foreground">…and {importResult.errors.length - 10} more</p>}
               </div>
             )}
           </div>
@@ -1007,11 +1168,23 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
             <>
               <Button variant="outline" onClick={() => setStep("upload")} data-testid="button-import-back">Back</Button>
               <Button
+                onClick={() => previewMutation.mutate()}
+                disabled={!mapping["name"] || previewMutation.isPending}
+                data-testid="button-import-preview"
+              >
+                {previewMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Checking…</> : <>Preview {rawRows.length} Records</>}
+              </Button>
+            </>
+          )}
+          {step === "preview" && (
+            <>
+              <Button variant="outline" onClick={() => setStep("map")} data-testid="button-preview-back">Back</Button>
+              <Button
                 onClick={() => importMutation.mutate()}
-                disabled={!mapping["name"] || importMutation.isPending}
+                disabled={toImportCount === 0 || importMutation.isPending}
                 data-testid="button-import-confirm"
               >
-                {importMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Importing…</> : <>Import {rawRows.length} Prospects</>}
+                {importMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Importing…</> : <>Import {toImportCount} Account{toImportCount !== 1 ? "s" : ""}</>}
               </Button>
             </>
           )}
@@ -1639,6 +1812,8 @@ function ProspectDetailSheet({
   const [activityType, setActivityType] = useState("call");
   const [activityNotes, setActivityNotes] = useState("");
   const [suggestActiveCustomer, setSuggestActiveCustomer] = useState(false);
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailTo, setEmailTo] = useState("");
 
   const { data: activities = [], isLoading: activitiesLoading } = useQuery<ActivityWithName[]>({
     queryKey: ["/api/prospects", prospect.id, "activities"],
@@ -1650,10 +1825,22 @@ function ProspectDetailSheet({
   });
 
   const logMutation = useMutation({
-    mutationFn: async () => (await apiRequest("POST", `/api/prospects/${prospect.id}/activities`, { type: activityType, notes: activityNotes })).json(),
+    mutationFn: async () => {
+      let notes = activityNotes;
+      if (activityType === "email") {
+        const parts: string[] = [];
+        if (emailSubject.trim()) parts.push(`Subject: ${emailSubject.trim()}`);
+        if (emailTo.trim()) parts.push(`To: ${emailTo.trim()}`);
+        if (activityNotes.trim()) parts.push(`\n${activityNotes.trim()}`);
+        notes = parts.join("\n");
+      }
+      return (await apiRequest("POST", `/api/prospects/${prospect.id}/activities`, { type: activityType, notes })).json();
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/prospects", prospect.id, "activities"] });
       setActivityNotes("");
+      setEmailSubject("");
+      setEmailTo("");
       toast({ title: "Activity logged" });
     },
     onError: () => toast({ title: "Failed to log activity", variant: "destructive" }),
@@ -1958,7 +2145,7 @@ function ProspectDetailSheet({
               {/* Log activity form */}
               <div className="border rounded-lg p-3 space-y-2 bg-muted/30">
                 <div className="flex gap-2">
-                  <Select value={activityType} onValueChange={setActivityType}>
+                  <Select value={activityType} onValueChange={v => { setActivityType(v); setEmailSubject(""); setEmailTo(""); }}>
                     <SelectTrigger className="h-8 w-32 text-xs" data-testid="select-activity-type"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="call">Call</SelectItem>
@@ -1969,8 +2156,31 @@ function ProspectDetailSheet({
                     </SelectContent>
                   </Select>
                 </div>
-                <Textarea value={activityNotes} onChange={e => setActivityNotes(e.target.value)} placeholder="What happened? What was discussed?" className="text-sm min-h-[60px]" data-testid="input-activity-notes" />
-                <Button size="sm" className="h-7 text-xs gap-1.5" onClick={() => { if (activityNotes.trim()) logMutation.mutate(); }} disabled={!activityNotes.trim() || logMutation.isPending} data-testid="button-log-activity">
+                {activityType === "email" && (
+                  <div className="space-y-1.5">
+                    <Input
+                      value={emailSubject}
+                      onChange={e => setEmailSubject(e.target.value)}
+                      placeholder="Subject (optional)"
+                      className="h-7 text-xs"
+                      data-testid="input-email-subject"
+                    />
+                    <Input
+                      value={emailTo}
+                      onChange={e => setEmailTo(e.target.value)}
+                      placeholder="To: recipient@company.com (optional)"
+                      className="h-7 text-xs"
+                      data-testid="input-email-to"
+                    />
+                  </div>
+                )}
+                <Textarea value={activityNotes} onChange={e => setActivityNotes(e.target.value)} placeholder={activityType === "email" ? "Email body / summary…" : "What happened? What was discussed?"} className="text-sm min-h-[60px]" data-testid="input-activity-notes" />
+                <Button size="sm" className="h-7 text-xs gap-1.5" onClick={() => {
+                  const hasContent = activityType === "email"
+                    ? (emailSubject.trim() || emailTo.trim() || activityNotes.trim())
+                    : activityNotes.trim();
+                  if (hasContent) logMutation.mutate();
+                }} disabled={!(activityType === "email" ? (emailSubject.trim() || emailTo.trim() || activityNotes.trim()) : activityNotes.trim()) || logMutation.isPending} data-testid="button-log-activity">
                   {logMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}Log
                 </Button>
               </div>
@@ -1983,15 +2193,52 @@ function ProspectDetailSheet({
                 <div className="space-y-2">
                   {[...activities].reverse().map(a => {
                     const Icon = ACTIVITY_ICONS[a.type] ?? NotebookPen;
+                    const isEmail = a.type === "email";
+
+                    // Parse structured email notes: "Subject: ...\nTo: ...\n\nbody"
+                    let emailSubjectLine = "";
+                    let emailToLine = "";
+                    let emailBody = a.notes || "";
+                    if (isEmail && a.notes) {
+                      const lines = a.notes.split("\n");
+                      const subjectLine = lines.find(l => l.startsWith("Subject: "));
+                      const toLine = lines.find(l => l.startsWith("To: "));
+                      if (subjectLine) emailSubjectLine = subjectLine.replace("Subject: ", "");
+                      if (toLine) emailToLine = toLine.replace("To: ", "");
+                      // Body is everything after the structured header lines
+                      const bodyStart = lines.findIndex((l, i) => i > 0 && !l.startsWith("Subject: ") && !l.startsWith("To: ") && l.trim() !== "");
+                      emailBody = bodyStart !== -1 ? lines.slice(bodyStart).join("\n").trim() : "";
+                    }
+
                     return (
-                      <div key={a.id} className="flex gap-2.5 text-sm" data-testid={`activity-row-${a.id}`}>
-                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted mt-0.5"><Icon className="h-3.5 w-3.5 text-muted-foreground" /></div>
+                      <div
+                        key={a.id}
+                        className={`flex gap-2.5 text-sm rounded-lg p-2 ${isEmail ? "bg-blue-50/50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40" : ""}`}
+                        data-testid={`activity-row-${a.id}`}
+                      >
+                        <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full mt-0.5 ${isEmail ? "bg-blue-100 dark:bg-blue-900/40" : "bg-muted"}`}>
+                          <Icon className={`h-3.5 w-3.5 ${isEmail ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground"}`} />
+                        </div>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-medium capitalize text-xs">{a.type}</span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {isEmail && emailSubjectLine ? (
+                              <span className="font-semibold text-xs text-blue-800 dark:text-blue-200 truncate max-w-[200px]">{emailSubjectLine}</span>
+                            ) : (
+                              <span className="font-medium capitalize text-xs">{a.type}</span>
+                            )}
                             <span className="text-xs text-muted-foreground">· {a.createdByName} · {daysAgo(a.createdAt) === 0 ? "Today" : `${daysAgo(a.createdAt)}d ago`}</span>
                           </div>
-                          <p className="text-xs text-foreground/80 mt-0.5 whitespace-pre-wrap">{a.notes}</p>
+                          {isEmail && emailToLine && (
+                            <p className="text-[10px] text-blue-600 dark:text-blue-400 mt-0.5 flex items-center gap-1">
+                              <Mail className="h-2.5 w-2.5 shrink-0" />To: {emailToLine}
+                            </p>
+                          )}
+                          {emailBody && (
+                            <p className="text-xs text-foreground/80 mt-0.5 whitespace-pre-wrap">{emailBody}</p>
+                          )}
+                          {!isEmail && a.notes && (
+                            <p className="text-xs text-foreground/80 mt-0.5 whitespace-pre-wrap">{a.notes}</p>
+                          )}
                         </div>
                       </div>
                     );
