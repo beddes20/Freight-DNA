@@ -217,8 +217,8 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
 
                     <div className="mt-3 space-y-2">
                       {(contact.email || contact.phone) && (
-                        <div className="space-y-1.5">
-                          <div className="flex flex-wrap gap-3 text-sm">
+                        <div className="space-y-1.5 min-w-0">
+                          <div className="flex flex-wrap gap-3 text-sm min-w-0">
                             {contact.email && (
                               <a
                                 href={`mailto:${contact.email}`}
@@ -256,11 +256,11 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                       )}
 
                       {contact.regions && contact.regions.length > 0 && (
-                        <div className="flex items-start gap-2">
+                        <div className="flex items-start gap-2 min-w-0">
                           <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                          <div className="flex flex-wrap gap-1">
+                          <div className="flex flex-wrap gap-1 min-w-0 overflow-hidden">
                             {contact.regions.map((region, i) => (
-                              <Badge key={i} variant="secondary" className="text-xs">
+                              <Badge key={i} variant="secondary" className="text-xs whitespace-normal break-words max-w-full">
                                 {region}
                               </Badge>
                             ))}
@@ -269,11 +269,11 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                       )}
 
                       {contact.lanes && contact.lanes.length > 0 && (
-                        <div className="flex items-start gap-2">
+                        <div className="flex items-start gap-2 min-w-0">
                           <Route className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                          <div className="flex flex-wrap gap-1">
+                          <div className="flex flex-wrap gap-1 min-w-0 overflow-hidden">
                             {contact.lanes.map((lane, i) => (
-                              <Badge key={i} variant="outline" className="text-xs">
+                              <Badge key={i} variant="outline" className="text-xs whitespace-normal break-words max-w-full">
                                 {lane}
                               </Badge>
                             ))}
@@ -282,8 +282,8 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                       )}
 
                       {contact.freightSpend && (
-                        <div className="flex items-center gap-2">
-                          <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
+                        <div className="flex items-center gap-2 min-w-0">
+                          <DollarSign className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                           <span className="text-sm font-medium">
                             ${Number(contact.freightSpend).toLocaleString()}
                           </span>
