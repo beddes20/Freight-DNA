@@ -782,6 +782,24 @@ export async function runMigrations() {
     clientEggCelebrated.release();
   }
 
+  // Change egg unique constraint from (type, month) → (type, winner_id) so eggs are per-user permanent
+  const clientEggConstraint = await pool.connect();
+  try {
+    const exists = await clientEggConstraint.query(`
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'easter_egg_winners_user_unique' AND conrelid = 'easter_egg_winners'::regclass
+    `);
+    if ((exists.rowCount ?? 0) === 0) {
+      await clientEggConstraint.query(`ALTER TABLE easter_egg_winners DROP CONSTRAINT IF EXISTS easter_egg_winners_unique`);
+      await clientEggConstraint.query(`ALTER TABLE easter_egg_winners ADD CONSTRAINT easter_egg_winners_user_unique UNIQUE (type, winner_id)`);
+      console.log("[migrations] easter_egg_winners constraint updated to (type, winner_id)");
+    }
+  } catch (err) {
+    console.error("[migrations] easter_egg_winners constraint error:", err);
+  } finally {
+    clientEggConstraint.release();
+  }
+
   // Email signature field on users (Task #115)
   const clientEmailSig = await pool.connect();
   try {

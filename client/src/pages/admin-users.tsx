@@ -958,8 +958,7 @@ function EasterEggPanel({ users }: { users: { id: string; name: string }[] }) {
     onError: () => toast({ title: "Failed to remove egg", variant: "destructive" }),
   });
 
-  const claimedTypes = new Set(winners.map(w => w.type));
-  const unclaimedTypes = Object.keys(EGG_TYPE_LABELS).filter(t => !claimedTypes.has(t));
+  const allTypes = Object.keys(EGG_TYPE_LABELS);
 
   return (
     <div className="rounded-xl border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/30 p-5 space-y-4" data-testid="section-easter-eggs">
@@ -968,7 +967,7 @@ function EasterEggPanel({ users }: { users: { id: string; name: string }[] }) {
           <Egg className="w-4 h-4" /> Easter Egg Management
         </p>
         <p className="text-xs text-purple-700 dark:text-purple-400">
-          Eggs are now permanent (no monthly reset). Each egg type can only be won once — globally, all-time.
+          Eggs are permanent — each person can win each egg type once, forever. Multiple people can find the same egg.
         </p>
       </div>
 
@@ -1005,16 +1004,13 @@ function EasterEggPanel({ users }: { users: { id: string; name: string }[] }) {
       {/* Award new egg */}
       <div className="space-y-2">
         <p className="text-xs font-medium text-purple-800 dark:text-purple-300">Award an Egg</p>
-        {unclaimedTypes.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">All egg types have been claimed.</p>
-        ) : (
-          <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap">
             <Select value={awardType} onValueChange={setAwardType}>
               <SelectTrigger className="h-8 text-xs w-56" data-testid="select-egg-type">
                 <SelectValue placeholder="Egg type…" />
               </SelectTrigger>
               <SelectContent>
-                {unclaimedTypes.map(t => (
+                {allTypes.map(t => (
                   <SelectItem key={t} value={t}>{EGG_TYPE_LABELS[t]}</SelectItem>
                 ))}
               </SelectContent>

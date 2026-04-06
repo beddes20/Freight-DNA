@@ -2474,10 +2474,12 @@ export class DatabaseStorage implements IStorage {
 
   async checkAndClaimEasterEgg(type: string, month: string, winnerId: string): Promise<boolean> {
     try {
+      // Use easter_egg_winners_user_unique (type, winner_id) so each user wins each type once permanently.
+      // Fall back to the old constraint name for environments not yet migrated.
       const result = await pool.query(
         `INSERT INTO easter_egg_winners (type, month, winner_id, won_at)
          VALUES ($1, $2, $3, now())
-         ON CONFLICT ON CONSTRAINT easter_egg_winners_unique DO NOTHING
+         ON CONFLICT (type, winner_id) DO NOTHING
          RETURNING id`,
         [type, month, winnerId]
       );
@@ -2512,8 +2514,8 @@ export class DatabaseStorage implements IStorage {
       const result = await pool.query(
         `INSERT INTO easter_egg_winners (type, month, winner_id, won_at)
          VALUES ($1, $2, $3, now())
-         ON CONFLICT ON CONSTRAINT easter_egg_winners_unique DO UPDATE
-           SET winner_id = $3, won_at = now(), celebrated_at = NULL
+         ON CONFLICT (type, winner_id) DO UPDATE
+           SET won_at = now(), celebrated_at = NULL
          RETURNING id`,
         [type, month, winnerId]
       );
