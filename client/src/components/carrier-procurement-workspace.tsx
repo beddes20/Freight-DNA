@@ -438,8 +438,9 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
     staleTime: 5 * 60 * 1000,
   });
   const lmUsers = allUsers.filter(u =>
-    u.role === "logistics_manager" || u.role === "logistics_coordinator"
-  );
+    u.role === "logistics_manager" || u.role === "logistics_coordinator" ||
+    u.role === "national_account_manager" || u.role === "account_manager"
+  ).sort((a, b) => a.name.localeCompare(b.name));
 
   const assignLmMutation = useMutation({
     mutationFn: async ({ lane, assignToUserId }: { lane: string; assignToUserId: string }) => {
@@ -611,17 +612,23 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
           <div className="flex items-center gap-2">
             <Select value={selectedLmId} onValueChange={setSelectedLmId}>
               <SelectTrigger className="h-8 text-xs flex-1" data-testid="select-assign-lm">
-                <SelectValue placeholder="Select a Logistics Manager…" />
+                <SelectValue placeholder="Select a user…" />
               </SelectTrigger>
               <SelectContent>
                 {lmUsers.length === 0 ? (
-                  <SelectItem value="_none" disabled>No LMs found in your org</SelectItem>
+                  <SelectItem value="_none" disabled>No eligible users found in your org</SelectItem>
                 ) : (
                   lmUsers.map(u => (
                     <SelectItem key={u.id} value={u.id} data-testid={`option-lm-${u.id}`}>
                       {u.name}
                       {u.role === "logistics_coordinator" && (
                         <span className="ml-1 text-muted-foreground">(LC)</span>
+                      )}
+                      {u.role === "account_manager" && (
+                        <span className="ml-1 text-muted-foreground">(AM)</span>
+                      )}
+                      {u.role === "national_account_manager" && (
+                        <span className="ml-1 text-muted-foreground">(NAM)</span>
                       )}
                     </SelectItem>
                   ))
