@@ -367,11 +367,11 @@ export function AppSidebar() {
     </Sidebar>
 
     <Dialog open={profileOpen} onOpenChange={(v) => !v && setProfileOpen(false)}>
-      <DialogContent className="sm:max-w-md" data-testid="dialog-my-profile">
+      <DialogContent className="sm:max-w-md max-h-[85vh] flex flex-col overflow-hidden" data-testid="dialog-my-profile">
         <DialogHeader>
           <DialogTitle>My Profile</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 py-2">
+        <div className="space-y-4 py-2 overflow-y-auto flex-1 min-h-0">
           <div className="space-y-1">
             <p className="text-sm font-medium">{user?.name}</p>
             <p className="text-xs text-muted-foreground">{user?.username}</p>

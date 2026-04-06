@@ -49,7 +49,7 @@ export function SignatureEditor({ value, onChange }: SignatureEditorProps) {
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
     editorProps: {
       attributes: {
-        class: "min-h-[120px] max-h-[280px] overflow-y-auto px-3 py-2 text-sm focus:outline-none",
+        class: "min-h-[100px] max-h-[160px] overflow-y-auto px-3 py-2 text-sm focus:outline-none",
       },
     },
   });

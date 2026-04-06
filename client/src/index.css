@@ -346,14 +346,24 @@
 /* ── TipTap / ProseMirror Signature Editor ──────────────────────────────── */
 .ProseMirror {
   outline: none;
+  font-size: 0.8125rem;
+  line-height: 1.45;
 }
-.ProseMirror p { margin: 0 0 4px; }
+.ProseMirror p { margin: 0 0 2px; }
 .ProseMirror p:last-child { margin-bottom: 0; }
 .ProseMirror strong { font-weight: 600; }
 .ProseMirror em { font-style: italic; }
 .ProseMirror u { text-decoration: underline; }
 .ProseMirror a { color: #3b82f6; text-decoration: underline; }
-.ProseMirror img { display: inline-block; max-width: 300px; height: auto; }
+/* Scale down images & tables pasted from Outlook */
+.ProseMirror img { display: inline-block; max-width: 180px; height: auto; }
+.ProseMirror table { font-size: 0.8125rem; border-collapse: collapse; max-width: 100%; }
+.ProseMirror td, .ProseMirror th { padding: 1px 4px; vertical-align: top; }
+/* Suppress large inline font-size / padding Outlook pastes */
+.ProseMirror [style*="font-size"] { font-size: inherit !important; }
+.ProseMirror [style*="padding"] { padding: 0 !important; }
+.ProseMirror [style*="margin-top"] { margin-top: 0 !important; }
+.ProseMirror [style*="margin-bottom"] { margin-bottom: 2px !important; }
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
