@@ -248,10 +248,14 @@ function parseLaneString(laneStr: string, awardId: string): ProcurementLaneInfo 
   };
 }
 
-function getHighVolumeLanes(award: Award): ProcurementLaneInfo[] {
+function getHighVolumeLanes(award: Award, customerName?: string): ProcurementLaneInfo[] {
   if (!award.lanes || award.lanes.length === 0) return [];
   return award.lanes
-    .map(l => parseLaneString(l, award.id))
+    .map(l => {
+      const parsed = parseLaneString(l, award.id);
+      if (!parsed) return null;
+      return { ...parsed, awardTitle: award.title, customerName };
+    })
     .filter((l): l is ProcurementLaneInfo => l !== null);
 }
 
@@ -268,7 +272,7 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
   const [procurementDialogOpen, setProcurementDialogOpen] = useState(false);
   const [activeProcLanes, setActiveProcLanes] = useState<ProcurementLaneInfo[]>([]);
   const [generatingTasks, setGeneratingTasks] = useState(false);
-  const highVolumeLanes = getHighVolumeLanes(award);
+  const highVolumeLanes = getHighVolumeLanes(award, company?.name);
 
   const { data: awardCarriers = [] } = useQuery<LaneCarrier[]>({
     queryKey: ["/api/awards", award.id, "lane-carriers"],

@@ -45,6 +45,8 @@ import {
   Star,
   UserPlus,
   Check,
+  Building,
+  Trophy,
 } from "lucide-react";
 import type { LaneCarrier, User } from "@shared/schema";
 
@@ -56,6 +58,9 @@ export interface ProcurementLaneInfo {
   volume: number;
   awardId: string;
   taskId?: string;
+  awardTitle?: string;
+  customerName?: string;
+  rate?: string;
 }
 
 interface CarrierEntry {
@@ -586,6 +591,23 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
             <UserPlus className="h-4 w-4 text-primary" />
             {assignedLmName ? `Reassign lane — currently ${assignedLmName}` : "Assign lane to a Logistics Manager"}
           </div>
+          {/* Self-assign shortcut for NAMs and AMs */}
+          {currentUser && (currentUser.role === "national_account_manager" || currentUser.role === "account_manager") && (
+            <div className="pb-1">
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-8 text-xs w-full"
+                disabled={assignLmMutation.isPending}
+                onClick={() => assignLmMutation.mutate({ lane: laneInfo.lane, assignToUserId: currentUser.id })}
+                data-testid="button-assign-to-me"
+              >
+                {assignLmMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
+                Assign to me
+              </Button>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <Select value={selectedLmId} onValueChange={setSelectedLmId}>
               <SelectTrigger className="h-8 text-xs flex-1" data-testid="select-assign-lm">
@@ -742,8 +764,37 @@ export function CarrierProcurementWorkspace({ lanes, fallbackTaskId }: CarrierPr
     );
   }
 
+  const firstLane = lanes[0];
+  const sharedAwardTitle = firstLane?.awardTitle;
+  const sharedCustomerName = firstLane?.customerName;
+
   return (
     <div className="space-y-3">
+      {/* Workspace context header — customer, award, lane summary */}
+      {(sharedCustomerName || sharedAwardTitle) && (
+        <div className="rounded-lg border bg-primary/5 dark:bg-primary/10 px-3 py-2.5 space-y-0.5" data-testid="section-workspace-context">
+          {sharedCustomerName && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
+              <Building className="h-3 w-3" />
+              <span data-testid="text-workspace-customer">{sharedCustomerName}</span>
+            </div>
+          )}
+          {sharedAwardTitle && (
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <Trophy className="h-3 w-3 text-amber-500" />
+              <span data-testid="text-workspace-award">{sharedAwardTitle}</span>
+            </div>
+          )}
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
+            <Route className="h-3 w-3" />
+            {lanes.length === 1 ? (
+              <span data-testid="text-workspace-lane">{lanes[0].origin} → {lanes[0].destination}</span>
+            ) : (
+              <span data-testid="text-workspace-lanes">{lanes.length} procurement lanes · target 5–10 carriers each</span>
+            )}
+          </div>
+        </div>
+      )}
       <div className="flex items-center gap-2 text-sm font-semibold">
         <Route className="h-4 w-4 text-primary" />
         Carrier Procurement Workspace

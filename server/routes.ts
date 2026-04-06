@@ -14252,6 +14252,9 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
       // Process all server-computed qualifying lanes (any parseable origin → destination)
       const validLaneEntries = [...qualifyingLaneMap.entries()];
       if (validLaneEntries.length === 0) return res.status(400).json({ error: "No parseable lanes found for this award. Use format: Origin → Destination" });
+      const company = award.companyId ? await storage.getCompany(award.companyId) : null;
+      const customerName = company?.name ?? null;
+      const awardTitle = award.title ?? null;
       // Per-key serialization prevents concurrent requests from creating duplicate tasks for the same lane
       const results = await Promise.all(validLaneEntries.map(([laneName, meta]) => {
         const lockKey = `${awardId}:${laneName}`;
@@ -14268,7 +14271,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
               assignedBy: user.id,
               companyId: award.companyId ?? null,
               contactId: null,
-              attachedLaneData: [{ type: "carrier_procurement", lane: laneName, origin: meta.origin, destination: meta.destination, volume: meta.volume, awardId }],
+              attachedLaneData: [{ type: "carrier_procurement", lane: laneName, origin: meta.origin, destination: meta.destination, volume: meta.volume, awardId, awardTitle, customerName }],
               createdAt: new Date().toISOString(),
             });
             return { lane: laneName, taskId: task.id, created: true };
@@ -14315,6 +14318,10 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
       let taskId: string;
       let created = false;
 
+      const lmCompany = award.companyId ? await storage.getCompany(award.companyId) : null;
+      const lmCustomerName = lmCompany?.name ?? null;
+      const lmAwardTitle = award.title ?? null;
+
       const existing = await storage.findProcurementTask(awardId, lane);
       if (existing) {
         // Reassign existing task to the LM
@@ -14331,7 +14338,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
           assignedBy: user.id,
           companyId: award.companyId ?? null,
           contactId: null,
-          attachedLaneData: [{ type: "carrier_procurement", lane, origin, destination, volume, awardId }],
+          attachedLaneData: [{ type: "carrier_procurement", lane, origin, destination, volume, awardId, awardTitle: lmAwardTitle, customerName: lmCustomerName }],
           createdAt: new Date().toISOString(),
         });
         taskId = task.id;

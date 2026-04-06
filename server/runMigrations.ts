@@ -359,12 +359,11 @@ export async function runMigrations() {
     );
     console.log("[migrations] jordan.baumgart password reset applied");
 
-    // Ensure Ben Beddes (main admin) always has the correct password
+    // Ensure Ben Beddes (main admin) always has the correct role
     await client.query(
-      `UPDATE users SET password = $1, role = 'admin' WHERE username = 'ben.beddes@valuetruck.com'`,
-      ['$2b$10$XV/Yel63VoBrjfAqW2doNeBoWm14rLfsxFDPN7m5kgXbTXvxH/y/e']
+      `UPDATE users SET role = 'admin' WHERE username = 'ben.beddes@valuetruck.com'`
     );
-    console.log("[migrations] ben.beddes admin password ensured");
+    console.log("[migrations] ben.beddes admin role ensured");
 
     // Fix stale startDate on active 1:1 sessions that still carry old dates (before April 2026)
     await client.query(`

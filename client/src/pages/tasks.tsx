@@ -27,6 +27,7 @@ import {
   ChevronDown, ChevronUp, Bell, BellRing, Loader2, MessageSquare,
   List, ChevronLeft, ChevronRight as ChevronRightIcon, Plane,
   AlertTriangle, Users, User as UserIcon, StickyNote,
+  Truck, Route,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -34,7 +35,8 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useMarkNotificationsRead, TASK_NOTIFICATION_TYPES } from "@/hooks/use-notifications";
 import { TaskDialog } from "@/components/task-dialog";
 import { FileAttachmentList } from "@/components/file-attachment";
-import type { Company, Task, User, PersonalAlert } from "@shared/schema";
+import type { ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
+import type { Company, Task, User, PersonalAlert, LaneCarrier } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
 type SafeUser = Omit<User, "password">;
@@ -396,6 +398,47 @@ function AlertDialog({ open, onOpenChange, companies }: { open: boolean; onOpenC
   );
 }
 
+function ProcurementTaskMiniSummary({ lane, taskId }: { lane: ProcurementLaneInfo; taskId: string }) {
+  const { data: carriers = [] } = useQuery<LaneCarrier[]>({
+    queryKey: ["/api/tasks", taskId, "lane-carriers"],
+    staleTime: 2 * 60 * 1000,
+  });
+  const laneName = lane.lane;
+  const activeCount = carriers.filter((c: LaneCarrier) => c.lane === laneName && c.status !== "declined").length;
+  const committedCount = carriers.filter((c: LaneCarrier) => c.lane === laneName && c.status === "committed").length;
+  let coverageColor = "bg-red-500/10 text-red-700 dark:text-red-400";
+  if (activeCount >= 5) coverageColor = "bg-green-500/10 text-green-700 dark:text-green-400";
+  else if (activeCount > 0) coverageColor = "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
+
+  return (
+    <div className="mt-1 space-y-0.5" data-testid={`procurement-summary-${taskId}`}>
+      {(lane.customerName || lane.awardTitle) && (
+        <div className="text-xs text-muted-foreground">
+          {lane.customerName && <span className="font-medium">{lane.customerName}</span>}
+          {lane.customerName && lane.awardTitle && " · "}
+          {lane.awardTitle && <span>{lane.awardTitle}</span>}
+        </div>
+      )}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <Route className="h-3 w-3" />
+          <span>{lane.origin} → {lane.destination}</span>
+        </div>
+        {lane.volume > 0 && (
+          <span className="text-xs text-muted-foreground">{Number(lane.volume).toLocaleString()} loads/yr</span>
+        )}
+        {lane.rate && (
+          <span className="text-xs text-muted-foreground">${lane.rate}/load</span>
+        )}
+      </div>
+      <Badge className={`text-xs h-5 px-1.5 ${coverageColor}`} data-testid={`badge-proc-coverage-${taskId}`}>
+        <Truck className="h-2.5 w-2.5 mr-1" />
+        {committedCount}/{activeCount} committed · {activeCount}/5 contacted
+      </Badge>
+    </div>
+  );
+}
+
 export default function TasksPage() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
@@ -534,15 +577,23 @@ export default function TasksPage() {
     const companyName = getCompanyName(task.companyId);
     const assigneeName = getUserName(task.assignedTo);
     const assignerName = getUserName(task.assignedBy);
-    const isMyTask = task.assignedTo === currentUser?.id;
+    const procLane = (() => {
+      if (!Array.isArray(task.attachedLaneData)) return null;
+      return (task.attachedLaneData as Array<Record<string, unknown>>).find(
+        (l): l is ProcurementLaneInfo =>
+          l != null && l.type === "carrier_procurement" && typeof l.lane === "string"
+      ) ?? null;
+    })();
 
     return (
       <div
         key={task.id}
-        className={`flex items-center gap-3 p-3 rounded-lg border transition-all group cursor-pointer
+        className={`flex items-start gap-3 p-3 rounded-lg border transition-all group cursor-pointer
           ${urgent
             ? "border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/10 hover:bg-red-50 dark:hover:bg-red-950/20"
-            : "border-transparent hover:border-border hover:bg-muted/50"}
+            : procLane
+              ? "border-primary/20 bg-primary/3 hover:border-primary/40 hover:bg-primary/5"
+              : "border-transparent hover:border-border hover:bg-muted/50"}
           ${isCompleted ? "opacity-60" : ""}`}
         data-testid={`task-row-${task.id}`}
         onClick={() => { setEditingTask(task); setFocusComments(false); setTaskDialogOpen(true); }}
@@ -554,7 +605,7 @@ export default function TasksPage() {
             const newStatus = task.status === "completed" ? "open" : "completed";
             toggleStatusMutation.mutate({ id: task.id, status: newStatus });
           }}
-          className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all hover:scale-110
+          className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all hover:scale-110 mt-0.5
             ${task.status === "completed"
               ? "bg-green-500 border-green-500 text-white"
               : urgent
@@ -570,7 +621,7 @@ export default function TasksPage() {
         {!isCompleted && (
           <button
             onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }}
-            className="shrink-0 hover:scale-110 transition-transform"
+            className="shrink-0 hover:scale-110 transition-transform mt-0.5"
             title={`Status: ${task.status}. Click to advance.`}
             data-testid={`button-toggle-status-${task.id}`}
           >
@@ -601,10 +652,27 @@ export default function TasksPage() {
               </span>
             )}
           </div>
+          {procLane && (
+            <ProcurementTaskMiniSummary lane={procLane} taskId={task.id} />
+          )}
+          {procLane && !isCompleted && (
+            <div className="mt-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-xs border-primary/30 text-primary hover:bg-primary/10"
+                onClick={(e) => { e.stopPropagation(); setEditingTask(task); setFocusComments(false); setTaskDialogOpen(true); }}
+                data-testid={`button-open-workspace-${task.id}`}
+              >
+                <Truck className="h-3 w-3 mr-1" />
+                Open Workspace
+              </Button>
+            </div>
+          )}
           <FileAttachmentList entityType="task" entityIds={[task.id]} />
         </div>
 
-        {!isCompleted && dueDateBadge(task.dueDate)}
+        {!isCompleted && !procLane && dueDateBadge(task.dueDate)}
 
         {(task.commentCount ?? 0) > 0 && (
           <button

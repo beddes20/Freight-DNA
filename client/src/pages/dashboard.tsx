@@ -20,6 +20,7 @@ import {
   Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search, MoreHorizontal,
   Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell, Pencil, ArrowUpRight, ArrowDownRight,
   Activity, UserPlus, Repeat2, Trophy, Settings2,
+  Truck, Route,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -34,7 +35,7 @@ import { TaskDialog } from "@/components/task-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import InternalCommsPortlet from "@/components/internal-comms-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
-import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification } from "@shared/schema";
+import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification, LaneCarrier } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
 import { LmCareerPanel } from "@/components/lm-career-panel";
 import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
@@ -45,6 +46,7 @@ import { useDashboardLayout } from "@/hooks/use-dashboard-layout";
 import { DashboardLayoutPanel } from "@/components/dashboard-layout-panel";
 import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
 import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
+import type { ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
 
 type SafeUser = Omit<User, "password">;
 type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
@@ -141,6 +143,53 @@ function MarginGoalEditButton({ userId, goalId, currentTarget, onSave }: {
         <p className="text-[10px] text-muted-foreground mt-1.5">Enter target margin in dollars for this month.</p>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function ProcurementTaskSummary({ lane, taskId }: { lane: ProcurementLaneInfo; taskId: string }) {
+  const { data: carriers = [] } = useQuery<LaneCarrier[]>({
+    queryKey: ["/api/tasks", taskId, "lane-carriers"],
+    staleTime: 2 * 60 * 1000,
+  });
+  const laneName = lane.lane;
+  const activeCount = carriers.filter((c: LaneCarrier) => c.lane === laneName && c.status !== "declined").length;
+  const committedCount = carriers.filter((c: LaneCarrier) => c.lane === laneName && c.status === "committed").length;
+
+  let coverageColor = "bg-red-500/10 text-red-700 dark:text-red-400";
+  if (activeCount >= 5) coverageColor = "bg-green-500/10 text-green-700 dark:text-green-400";
+  else if (activeCount > 0) coverageColor = "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
+
+  return (
+    <div className="mt-1.5 space-y-1" data-testid={`procurement-summary-${taskId}`}>
+      {(lane.customerName || lane.awardTitle) && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {lane.customerName && (
+            <span className="text-xs text-muted-foreground font-medium" data-testid={`text-proc-customer-${taskId}`}>{lane.customerName}</span>
+          )}
+          {lane.awardTitle && (
+            <span className="text-xs text-muted-foreground" data-testid={`text-proc-award-${taskId}`}>· {lane.awardTitle}</span>
+          )}
+        </div>
+      )}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <Route className="h-3 w-3" />
+          <span data-testid={`text-proc-lane-${taskId}`}>{lane.origin} → {lane.destination}</span>
+        </div>
+        {lane.volume > 0 && (
+          <span className="text-xs text-muted-foreground">{Number(lane.volume).toLocaleString()} loads/yr</span>
+        )}
+        {lane.rate && (
+          <span className="text-xs text-muted-foreground">${lane.rate}/load</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge className={`text-xs h-5 px-1.5 ${coverageColor}`} data-testid={`badge-proc-coverage-${taskId}`}>
+          <Truck className="h-2.5 w-2.5 mr-1" />
+          {committedCount}/{activeCount} committed · {activeCount}/5 contacted
+        </Badge>
+      </div>
+    </div>
   );
 }
 
@@ -2456,14 +2505,21 @@ export default function Dashboard() {
                     const companyName = getCompanyName(task.companyId);
                     const assignerName = getUserName(task.assignedBy);
                     const hasNewComment = taskCommentNotifIds.has(task.id);
+                    const procLane = (() => {
+                      if (!Array.isArray(task.attachedLaneData)) return null;
+                      return (task.attachedLaneData as Array<Record<string, unknown>>).find(
+                        (l): l is ProcurementLaneInfo =>
+                          l != null && l.type === "carrier_procurement" && typeof l.lane === "string"
+                      ) ?? null;
+                    })();
                     return (
                       <div
                         key={task.id}
-                        className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group cursor-pointer ${task.status === "completed" ? "opacity-50" : ""}`}
+                        className={`flex items-start gap-3 p-3 rounded-lg border transition-all group cursor-pointer ${procLane ? "border-primary/20 bg-primary/3 hover:border-primary/40 hover:bg-primary/5" : "border-transparent hover:border-border hover:bg-muted/50"} ${task.status === "completed" ? "opacity-50" : ""}`}
                         data-testid={`task-row-${task.id}`}
                         onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
                       >
-                        <button onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }} className="shrink-0 hover:scale-110 transition-transform" title={`Status: ${task.status}`} data-testid={`button-toggle-status-${task.id}`}>{statusIcon(task.status)}</button>
+                        <button onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }} className="shrink-0 hover:scale-110 transition-transform mt-0.5" title={`Status: ${task.status}`} data-testid={`button-toggle-status-${task.id}`}>{statusIcon(task.status)}</button>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`} data-testid={`text-task-title-${task.id}`}>{task.title}</p>
@@ -2477,9 +2533,24 @@ export default function Dashboard() {
                             {companyName && <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`} onClick={(e) => e.stopPropagation()}>{companyName}</Link>}
                             {assignerName && task.assignedBy !== currentUser?.id && <span className="text-xs text-muted-foreground">from {assignerName}</span>}
                           </div>
+                          {procLane && (
+                            <ProcurementTaskSummary lane={procLane} taskId={task.id} />
+                          )}
                         </div>
-                        {dueDateBadge(task.dueDate)}
-                        <button onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
+                        {procLane && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0 h-7 px-2 text-xs border-primary/30 text-primary hover:bg-primary/10 mt-0.5"
+                            onClick={(e) => { e.stopPropagation(); setEditingTask(task); setTaskDialogOpen(true); }}
+                            data-testid={`button-open-workspace-${task.id}`}
+                          >
+                            <Truck className="h-3 w-3 mr-1" />
+                            Open Workspace
+                          </Button>
+                        )}
+                        {!procLane && dueDateBadge(task.dueDate)}
+                        <button onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity mt-0.5" data-testid={`button-delete-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
                       </div>
                     );
                   })}
