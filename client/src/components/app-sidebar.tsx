@@ -18,7 +18,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { SignatureEditor } from "@/components/signature-editor";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -377,17 +377,10 @@ export function AppSidebar() {
             <p className="text-xs text-muted-foreground">{user?.username}</p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="email-signature">Email Signature</Label>
-            <Textarea
-              id="email-signature"
-              placeholder="e.g. John Smith | Value Truck&#10;📞 555-867-5309"
-              value={signature}
-              onChange={(e) => setSignature(e.target.value)}
-              rows={5}
-              data-testid="textarea-profile-email-signature"
-            />
+            <Label>Email Signature</Label>
+            <SignatureEditor value={signature} onChange={setSignature} />
             <p className="text-xs text-muted-foreground">
-              Appended automatically to every email you compose. Leave blank to send without a signature.
+              Supports bold, italic, underline, color, alignment, links, and logos. Appended automatically to every email you compose.
             </p>
           </div>
         </div>

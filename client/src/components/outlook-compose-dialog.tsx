@@ -25,6 +25,21 @@ interface OutlookComposeProps {
   companyId?: string;
 }
 
+function plainTextToHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .split(/\n\n+/)
+    .map(para => `<p>${para.replace(/\n/g, "<br>")}</p>`)
+    .join("")
+    .replace(/<p><\/p>/g, "<p><br></p>");
+}
+
+function isHtmlContent(str: string): boolean {
+  return /<[a-z][\s\S]*>/i.test(str);
+}
+
 export function OutlookComposeDialog({
   open,
   onClose,
@@ -44,22 +59,28 @@ export function OutlookComposeDialog({
   const [body, setBody] = useState(defaultBody);
   const [sent, setSent] = useState(false);
 
-  const signature = user?.emailSignature;
+  const signature = user?.emailSignature ?? null;
+  const hasHtmlSignature = signature ? isHtmlContent(signature) : false;
 
-  const bodyWithSignature = (rawBody: string) => {
-    if (!signature) return rawBody;
-    return rawBody ? `${rawBody}\n\n--\n${signature}` : `\n\n--\n${signature}`;
-  };
+  function buildEmailHtml(): string {
+    const bodyHtml = plainTextToHtml(body.trim());
+    if (!signature) return bodyHtml;
+    if (hasHtmlSignature) {
+      return `${bodyHtml}<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;">${signature}`;
+    }
+    const sigHtml = plainTextToHtml(signature);
+    return `${bodyHtml}<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;">${sigHtml}`;
+  }
 
   useEffect(() => {
     if (open) {
       setTo(toEmail);
       setSubject(defaultSubject);
-      setBody(bodyWithSignature(defaultBody));
+      setBody(defaultBody);
       setCc("");
       setSent(false);
     }
-  }, [open, toEmail, defaultSubject, defaultBody, signature]);
+  }, [open, toEmail, defaultSubject, defaultBody]);
 
   const { data: statusData } = useQuery<{ enabled: boolean }>({
     queryKey: ["/api/outlook/status"],
@@ -77,9 +98,9 @@ export function OutlookComposeDialog({
         toEmail: to.trim(),
         toName,
         subject: subject.trim(),
-        body: body.trim(),
+        body: buildEmailHtml(),
         ccEmails,
-        isHtml: false,
+        isHtml: true,
         contactId: contactId || undefined,
       });
       return res.json();
@@ -121,7 +142,7 @@ export function OutlookComposeDialog({
     },
     onSuccess: (data) => {
       if (data.draft) {
-        setBody(bodyWithSignature(data.draft));
+        setBody(data.draft);
         toast({ title: "Draft ready!", description: "AI draft inserted — review and edit before sending." });
       } else {
         toast({ title: "No draft returned", description: "Try again or write manually.", variant: "destructive" });
@@ -240,12 +261,22 @@ export function OutlookComposeDialog({
               )}
             </div>
 
+            {signature && (
+              <div className="rounded-md border border-border bg-muted/30 overflow-hidden">
+                <p className="text-[10px] text-muted-foreground px-3 py-1.5 border-b border-border bg-muted/60 uppercase tracking-wide font-medium">Signature preview</p>
+                <div
+                  className="px-3 py-2 text-sm prose prose-sm dark:prose-invert max-w-none"
+                  dangerouslySetInnerHTML={{ __html: hasHtmlSignature ? signature : signature.replace(/\n/g, "<br>") }}
+                />
+              </div>
+            )}
+
             {companyName && (
               <div className="flex items-center gap-2">
                 <Badge variant="secondary" className="text-xs font-normal">
                   Re: {companyName}
                 </Badge>
-                <span className="text-xs text-muted-foreground">This email will be sent from your Outlook and saved to Sent Items.</span>
+                <span className="text-xs text-muted-foreground">Sent from your Outlook, saved to Sent Items.</span>
               </div>
             )}
           </div>

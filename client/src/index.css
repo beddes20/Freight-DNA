@@ -342,3 +342,22 @@
   0%, 100% { outline-color: #f59e0b; }
   50%       { outline-color: #fbbf24; outline-width: 4px; }
 }
+
+/* ── TipTap / ProseMirror Signature Editor ──────────────────────────────── */
+.ProseMirror {
+  outline: none;
+}
+.ProseMirror p { margin: 0 0 4px; }
+.ProseMirror p:last-child { margin-bottom: 0; }
+.ProseMirror strong { font-weight: 600; }
+.ProseMirror em { font-style: italic; }
+.ProseMirror u { text-decoration: underline; }
+.ProseMirror a { color: #3b82f6; text-decoration: underline; }
+.ProseMirror img { display: inline-block; max-width: 300px; height: auto; }
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: hsl(var(--muted-foreground));
+  pointer-events: none;
+  height: 0;
+}
