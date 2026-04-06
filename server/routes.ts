@@ -1219,16 +1219,18 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
-        return res.status(403).json({ error: "Access required" });
-      }
-      // Non-admins can always edit their OWN profile (for email signature etc).
-      // If editing someone else's profile, they must be a manager and that person must be on their team.
       const isSelf = (req.params.id as string) === currentUser.id;
-      if (!isSelf && (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director")) {
-        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-        if (!teamIds.includes((req.params.id as string))) {
-          return res.status(403).json({ error: "Cannot edit this user" });
+      // Any authenticated user can update their own profile (name, email signature, etc.)
+      // Editing another user requires manager-level access
+      if (!isSelf) {
+        const canEditOthers = currentUser.role === "admin" || currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director";
+        if (!canEditOthers) return res.status(403).json({ error: "Cannot edit other users" });
+        // Managers can only edit their own team members (not arbitrary users)
+        if (currentUser.role !== "admin") {
+          const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+          if (!teamIds.includes((req.params.id as string))) {
+            return res.status(403).json({ error: "Cannot edit this user" });
+          }
         }
       }
       const data: any = {};
