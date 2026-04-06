@@ -13247,29 +13247,61 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const reps = allUsers.filter(u => repRoles.includes(u.role ?? ""));
 
       const now = new Date();
-      // Monday of current week
-      const weekStart = new Date(now);
-      const day = weekStart.getDay();
-      weekStart.setDate(weekStart.getDate() - (day === 0 ? 6 : day - 1));
-      weekStart.setHours(0, 0, 0, 0);
-      const weekStartStr = weekStart.toISOString().split("T")[0];
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const monthStartStr = monthStart.toISOString().split("T")[0];
+      const range = (req.query.range as string) || "last_week";
+
+      let rangeStart: Date;
+      let rangeEnd: Date = new Date(now);
+      rangeEnd.setHours(23, 59, 59, 999);
+
+      if (range === "mtd") {
+        rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        rangeStart.setHours(0, 0, 0, 0);
+      } else if (range === "last_month") {
+        rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        rangeStart.setHours(0, 0, 0, 0);
+        rangeEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        rangeEnd.setHours(23, 59, 59, 999);
+      } else if (range === "ytd") {
+        rangeStart = new Date(now.getFullYear(), 0, 1);
+        rangeStart.setHours(0, 0, 0, 0);
+      } else {
+        // last_week: Monday–Sunday of previous week
+        const day = now.getDay();
+        const daysToLastMonday = (day === 0 ? 6 : day - 1) + 7;
+        rangeStart = new Date(now);
+        rangeStart.setDate(rangeStart.getDate() - daysToLastMonday);
+        rangeStart.setHours(0, 0, 0, 0);
+        rangeEnd = new Date(rangeStart);
+        rangeEnd.setDate(rangeEnd.getDate() + 6);
+        rangeEnd.setHours(23, 59, 59, 999);
+      }
+
+      const rangeStartStr = rangeStart.toISOString().split("T")[0];
+      const rangeEndStr = rangeEnd.toISOString().split("T")[0];
+
+      // Goals always use the current month (targets are not adjusted per selected range)
       const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-      // All weekly touchpoints (bulk fetch, then split per rep)
-      const allTps = await storage.getTouchpointsSince(weekStartStr);
+      // weekStart used only for display label
+      const weekStartStr = rangeStartStr;
+
+      // All touchpoints in range (bulk fetch, then split per rep)
+      const allTps = await storage.getTouchpointsSince(rangeStartStr);
 
       // All contacts (for contacts-added count)
       const allContacts = await storage.getContacts();
       const orgUserIds = new Set(allUsers.map(u => u.id));
-      const contactsThisMonth = allContacts.filter(c => c.createdAt && c.createdAt >= monthStartStr && c.createdBy && orgUserIds.has(c.createdBy));
+      const contactsThisMonth = allContacts.filter(c => {
+        if (!c.createdAt || !c.createdBy || !orgUserIds.has(c.createdBy)) return false;
+        const dateStr = c.createdAt.slice(0, 10);
+        return dateStr >= rangeStartStr && dateStr <= rangeEndStr;
+      });
 
       // All goals (no filter = all org goals via am-scoped logic)
       const allGoals = await storage.getGoals({});
 
       const results = await Promise.all(reps.map(async rep => {
-        const repTps = allTps.filter((t: any) => t.loggedById === rep.id);
+        const repTps = allTps.filter((t: any) => t.loggedById === rep.id && (!t.date || t.date <= rangeEndStr));
         const weeklyTotal = repTps.length;
         const weeklyCalls = repTps.filter((t: any) => t.type === "call").length;
         const weeklyEmails = repTps.filter((t: any) => t.type === "email").length;

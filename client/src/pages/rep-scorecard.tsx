@@ -9,6 +9,15 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
+type TimeRange = "last_week" | "mtd" | "last_month" | "ytd";
+
+const TIME_RANGE_OPTIONS: { value: TimeRange; label: string }[] = [
+  { value: "last_week", label: "Last Week" },
+  { value: "mtd", label: "MTD" },
+  { value: "last_month", label: "Last Month" },
+  { value: "ytd", label: "YTD" },
+];
+
 interface RepResult {
   userId: string;
   name: string;
@@ -69,9 +78,15 @@ export default function RepScorecardPage() {
   const { user } = useAuth();
   const [sortKey, setSortKey] = useState<SortKey>("weeklyTotal");
   const [sortAsc, setSortAsc] = useState(false);
+  const [timeRange, setTimeRange] = useState<TimeRange>("last_week");
 
   const { data, isLoading, error } = useQuery<ScorecardData>({
-    queryKey: ["/api/rep-scorecard"],
+    queryKey: ["/api/rep-scorecard", timeRange],
+    queryFn: async () => {
+      const res = await fetch(`/api/rep-scorecard?range=${timeRange}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch scorecard");
+      return res.json();
+    },
   });
 
   const toggleSort = (key: SortKey) => {
@@ -101,21 +116,40 @@ export default function RepScorecardPage() {
     );
   }
 
+  const selectedRangeLabel = TIME_RANGE_OPTIONS.find(o => o.value === timeRange)?.label ?? "";
+
   return (
     <div className="flex flex-col h-full overflow-auto">
       <div className="max-w-7xl mx-auto w-full px-6 py-6 space-y-6">
 
         {/* Header */}
-        <div className="flex items-start justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <BarChart3 className="h-6 w-6 text-primary" />
               Rep Scorecard
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              {data?.weekStart ? `Week of ${data.weekStart}` : "This week's activity"}
-              {" · "}Contacts added reflects current month
+              {data?.weekStart ? `From ${data.weekStart}` : `${selectedRangeLabel} activity`}
             </p>
+          </div>
+
+          {/* Time range pill toggle */}
+          <div className="flex items-center bg-muted rounded-full p-1 gap-0.5" data-testid="time-range-toggle">
+            {TIME_RANGE_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setTimeRange(opt.value)}
+                data-testid={`range-${opt.value}`}
+                className={`px-3 py-1 rounded-full text-sm font-medium transition-all ${
+                  timeRange === opt.value
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -140,9 +174,9 @@ export default function RepScorecardPage() {
             {/* Summary stat cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
-                { label: "Total Touchpoints (week)", value: sorted.reduce((s, r) => s + r.weeklyTotal, 0), icon: PhoneCall, color: "text-blue-500" },
+                { label: `Total Touchpoints (${selectedRangeLabel})`, value: sorted.reduce((s, r) => s + r.weeklyTotal, 0), icon: PhoneCall, color: "text-blue-500" },
                 { label: "Meaningful Conversations", value: sorted.reduce((s, r) => s + r.weeklyMeaningful, 0), icon: Star, color: "text-amber-500" },
-                { label: "Contacts Added (month)", value: sorted.reduce((s, r) => s + r.contactsAdded, 0), icon: UserPlus, color: "text-emerald-500" },
+                { label: `Contacts Added (${selectedRangeLabel})`, value: sorted.reduce((s, r) => s + r.contactsAdded, 0), icon: UserPlus, color: "text-emerald-500" },
                 { label: "Active Reps", value: sorted.filter(r => r.weeklyTotal > 0).length, icon: Trophy, color: "text-purple-500" },
               ].map(stat => (
                 <Card key={stat.label}>
