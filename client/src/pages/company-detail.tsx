@@ -1184,7 +1184,7 @@ export default function CompanyDetail() {
           )}
 
           <div className="relative inline-flex">
-            <Button variant="outline" onClick={() => navigate("/rfp-awards")} data-testid="button-rfp-awards">
+            <Button variant="outline" onClick={() => { setDetailTab("rfp"); localStorage.setItem("cd_tab", "rfp"); setTimeout(() => { document.querySelector('[data-testid="tab-detail-rfp"]')?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, 50); }} data-testid="button-rfp-awards">
               <Trophy className="h-4 w-4 mr-2" />
               RFP & Awards
             </Button>
