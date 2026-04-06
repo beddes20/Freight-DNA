@@ -8499,7 +8499,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const [allTps, allCompanies, allUsers] = await Promise.all([
         storage.getTouchpointsByOrg(user.organizationId),
         storage.getCompanies(user.organizationId),
-        storage.getUsers(),
+        storage.getUsers(user.organizationId),
       ]);
       const companyIds = allCompanies.map(c => c.id);
       const allContacts = companyIds.length > 0 ? await storage.getContactsByCompanyIds(companyIds) : [];

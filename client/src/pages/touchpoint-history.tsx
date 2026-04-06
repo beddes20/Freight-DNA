@@ -223,7 +223,7 @@ export default function TouchpointHistoryPage() {
                 <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground whitespace-nowrap">Contact</th>
                 <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">Notes</th>
                 <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground whitespace-nowrap">Sentiment</th>
-                {isManager && <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground whitespace-nowrap">Rep</th>}
+                <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground whitespace-nowrap">Rep</th>
                 <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground whitespace-nowrap">⭐</th>
               </tr>
             </thead>
@@ -231,7 +231,7 @@ export default function TouchpointHistoryPage() {
               {isLoading ? (
                 Array.from({ length: 10 }).map((_, i) => (
                   <tr key={i} className="hover:bg-muted/30">
-                    {[160, 80, 140, 120, 240, 80, ...(isManager ? [100] : []), 40].map((w, j) => (
+                    {[160, 80, 140, 120, 240, 80, 100, 40].map((w, j) => (
                       <td key={j} className="px-4 py-3">
                         <Skeleton className="h-4" style={{ width: w }} />
                       </td>
@@ -240,7 +240,7 @@ export default function TouchpointHistoryPage() {
                 ))
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={isManager ? 8 : 7} className="px-4 py-16 text-center text-muted-foreground text-sm">
+                  <td colSpan={8} className="px-4 py-16 text-center text-muted-foreground text-sm">
                     No touchpoints found for the selected filters.
                   </td>
                 </tr>
@@ -289,11 +289,9 @@ export default function TouchpointHistoryPage() {
                           <span className="text-muted-foreground text-xs">—</span>
                         )}
                       </td>
-                      {isManager && (
-                        <td className="px-4 py-3 whitespace-nowrap text-xs text-muted-foreground">
-                          {tp.loggedByName}
-                        </td>
-                      )}
+                      <td className="px-4 py-3 whitespace-nowrap text-xs text-muted-foreground">
+                        {tp.loggedByName}
+                      </td>
                       <td className="px-4 py-3 text-center">
                         {tp.isMeaningful ? (
                           <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500 mx-auto" />
