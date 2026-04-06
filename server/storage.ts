@@ -1106,7 +1106,7 @@ export class DatabaseStorage implements IStorage {
       namId: session.namId,
       amId: session.amId,
       status: "active",
-      startDate: closedAt,
+      startDate: new Date().toISOString(),
     }).returning();
 
     for (const topic of topicsToCarry) {

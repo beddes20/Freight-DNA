@@ -366,6 +366,15 @@ export async function runMigrations() {
     );
     console.log("[migrations] ben.beddes admin password ensured");
 
+    // Fix stale startDate on active 1:1 sessions that still carry old dates (before April 2026)
+    await client.query(`
+      UPDATE one_on_one_sessions
+      SET start_date = $1
+      WHERE status = 'active'
+        AND start_date < '2026-04-01'
+    `, [new Date().toISOString()]);
+    console.log("[migrations] stale 1:1 session startDates patched to today");
+
   } catch (err) {
     console.error("[migrations] Migration error:", err);
   } finally {

@@ -932,7 +932,6 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
                 type="date"
                 className="h-7 px-2 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                 value={dateInput}
-                min={new Date().toISOString().split("T")[0]}
                 onChange={(e) => setDateInput(e.target.value)}
                 data-testid="input-meeting-date"
                 autoFocus
