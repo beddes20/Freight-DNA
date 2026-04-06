@@ -147,7 +147,7 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, o
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h4
-                    className="font-medium truncate hover:underline cursor-pointer"
+                    className="font-medium hover:underline cursor-pointer"
                     data-testid={`text-contact-name-${contact.id}`}
                     onClick={(e) => { e.stopPropagation(); onEdit(contact); }}
                   >
@@ -160,7 +160,7 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, o
                   )}
                 </div>
                 {contact.title && (
-                  <p className="text-sm text-muted-foreground truncate">
+                  <p className="text-sm text-muted-foreground">
                     {contact.title}
                   </p>
                 )}
