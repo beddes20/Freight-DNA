@@ -817,6 +817,15 @@ export const prospects = pgTable("prospects", {
   painPoints: text("pain_points"),
   intelBrief: text("intel_brief"),
   stageChangedAt: timestamp("stage_changed_at"),
+  // TMS / Portal fields (Launchpad)
+  tmsWebsite: text("tms_website"),
+  tmsEmail: text("tms_email"),
+  schedulingWebsite: text("scheduling_website"),
+  schedulingEmail: text("scheduling_email"),
+  tmsUsername: text("tms_username"),
+  tmsPassword: text("tms_password"),
+  phone: text("phone"),
+  billingAddress: text("billing_address"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -854,6 +863,60 @@ export const prospectContacts = pgTable("prospect_contacts", {
 export const insertProspectContactSchema = createInsertSchema(prospectContacts).omit({ id: true, createdAt: true });
 export type InsertProspectContact = typeof insertProspectContactSchema._type;
 export type ProspectContact = typeof prospectContacts.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Launchpad CRM — Opportunities
+export const crmOpportunities = pgTable("crm_opportunities", {
+  id: serial("id").primaryKey(),
+  prospectId: integer("prospect_id").notNull().references(() => prospects.id, { onDelete: "cascade" }),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  recordType: text("record_type").notNull().default("single_lane"),
+  stage: text("stage").notNull().default("qualification"),
+  amount: text("amount"),
+  closeDate: text("close_date"),
+  probability: integer("probability"),
+  notes: text("notes"),
+  lostReason: text("lost_reason"),
+  createdById: varchar("created_by_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertCrmOpportunitySchema = createInsertSchema(crmOpportunities).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertCrmOpportunity = z.infer<typeof insertCrmOpportunitySchema>;
+export type CrmOpportunity = typeof crmOpportunities.$inferSelect;
+
+// Launchpad CRM — Account Ownership Requests
+export const crmOwnershipRequests = pgTable("crm_ownership_requests", {
+  id: serial("id").primaryKey(),
+  prospectId: integer("prospect_id").notNull().references(() => prospects.id, { onDelete: "cascade" }),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  requesterId: varchar("requester_id").notNull().references(() => users.id),
+  currentOwnerId: varchar("current_owner_id").notNull().references(() => users.id),
+  status: text("status").notNull().default("pending"),
+  reason: text("reason"),
+  adminNote: text("admin_note"),
+  reviewedById: varchar("reviewed_by_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  reviewedAt: timestamp("reviewed_at"),
+});
+export const insertCrmOwnershipRequestSchema = createInsertSchema(crmOwnershipRequests).omit({ id: true, createdAt: true });
+export type InsertCrmOwnershipRequest = z.infer<typeof insertCrmOwnershipRequestSchema>;
+export type CrmOwnershipRequest = typeof crmOwnershipRequests.$inferSelect;
+
+// Launchpad CRM — Account Field Change History
+export const crmAccountHistory = pgTable("crm_account_history", {
+  id: serial("id").primaryKey(),
+  prospectId: integer("prospect_id").notNull().references(() => prospects.id, { onDelete: "cascade" }),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  field: text("field").notNull(),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  changedById: varchar("changed_by_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export type CrmAccountHistory = typeof crmAccountHistory.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────────────────────
 

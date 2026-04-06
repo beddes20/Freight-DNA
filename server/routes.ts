@@ -12304,6 +12304,21 @@ Respond with valid JSON only:
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       if (user.role === "sales" && existing.ownerId !== user.id) return res.status(403).json({ error: "Forbidden" });
       const updated = await storage.updateProspect(id, req.body);
+
+      // Log tracked field changes to crm_account_history
+      const TRACKED_FIELDS = ["stage", "ownerId", "priority", "estimatedSpend", "dealProbability", "followUpDate", "expectedCloseDate", "name", "industry"];
+      for (const field of TRACKED_FIELDS) {
+        if (field in req.body) {
+          const oldVal = (existing as any)[field];
+          const newVal = req.body[field];
+          const oldStr = oldVal != null ? String(oldVal) : null;
+          const newStr = newVal != null ? String(newVal) : null;
+          if (oldStr !== newStr) {
+            storage.logCrmAccountHistory({ prospectId: id, organizationId: user.organizationId, field, oldValue: oldStr, newValue: newStr, changedById: user.id }).catch(() => {});
+          }
+        }
+      }
+
       res.json(updated);
     } catch (err) {
       console.error("PATCH /api/prospects/:id error:", err);
@@ -12604,6 +12619,128 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
     } catch (err) {
       console.error("POST /api/prospects/:id/convert error:", err);
       res.status(500).json({ error: "Failed to convert prospect" });
+    }
+  });
+
+  // ─── Launchpad CRM — Opportunities ──────────────────────────────────────────
+
+  app.get("/api/prospects/:id/opportunities", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const rows = await storage.getCrmOpportunities(id);
+      res.json(rows);
+    } catch (err) {
+      console.error("GET /api/prospects/:id/opportunities error:", err);
+      res.status(500).json({ error: "Failed to fetch opportunities" });
+    }
+  });
+
+  app.post("/api/prospects/:id/opportunities", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const user = (req as any).user;
+      const row = await storage.createCrmOpportunity({
+        ...req.body,
+        prospectId: id,
+        organizationId: user.organizationId,
+        createdById: user.id,
+      });
+      res.json(row);
+    } catch (err) {
+      console.error("POST /api/prospects/:id/opportunities error:", err);
+      res.status(500).json({ error: "Failed to create opportunity" });
+    }
+  });
+
+  app.patch("/api/prospects/:id/opportunities/:oppId", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const oppId = parseInt(req.params.oppId);
+      const row = await storage.updateCrmOpportunity(oppId, req.body);
+      if (!row) return res.status(404).json({ error: "Not found" });
+      res.json(row);
+    } catch (err) {
+      console.error("PATCH /api/prospects/:id/opportunities/:oppId error:", err);
+      res.status(500).json({ error: "Failed to update opportunity" });
+    }
+  });
+
+  app.delete("/api/prospects/:id/opportunities/:oppId", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const oppId = parseInt(req.params.oppId);
+      await storage.deleteCrmOpportunity(oppId);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("DELETE /api/prospects/:id/opportunities/:oppId error:", err);
+      res.status(500).json({ error: "Failed to delete opportunity" });
+    }
+  });
+
+  // ─── Launchpad CRM — Ownership Requests ──────────────────────────────────────
+
+  app.get("/api/launchpad/ownership-requests", requireAuth, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const rows = await storage.getCrmOwnershipRequests(user.organizationId);
+      res.json(rows);
+    } catch (err) {
+      console.error("GET /api/launchpad/ownership-requests error:", err);
+      res.status(500).json({ error: "Failed to fetch ownership requests" });
+    }
+  });
+
+  app.post("/api/prospects/:id/ownership-request", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const user = (req as any).user;
+      const prospect = await storage.getProspect(id);
+      if (!prospect) return res.status(404).json({ error: "Prospect not found" });
+      const row = await storage.createCrmOwnershipRequest({
+        prospectId: id,
+        organizationId: user.organizationId,
+        requesterId: user.id,
+        currentOwnerId: prospect.ownerId,
+        reason: req.body.reason ?? null,
+        status: "pending",
+      });
+      res.json(row);
+    } catch (err) {
+      console.error("POST /api/prospects/:id/ownership-request error:", err);
+      res.status(500).json({ error: "Failed to submit ownership request" });
+    }
+  });
+
+  app.patch("/api/launchpad/ownership-requests/:id/review", requireAuth, async (req, res) => {
+    try {
+      const reqId = parseInt(req.params.id);
+      const user = (req as any).user;
+      if (!["admin", "sales_director", "director"].includes(user.role)) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+      const { status, adminNote } = req.body;
+      const row = await storage.reviewCrmOwnershipRequest(reqId, status, user.id, adminNote);
+      if (!row) return res.status(404).json({ error: "Not found" });
+      // If approved, transfer ownership
+      if (status === "approved") {
+        const fullReq = row;
+        await storage.updateProspect(fullReq.prospectId, { ownerId: fullReq.requesterId });
+      }
+      res.json(row);
+    } catch (err) {
+      console.error("PATCH /api/launchpad/ownership-requests/:id/review error:", err);
+      res.status(500).json({ error: "Failed to review ownership request" });
+    }
+  });
+
+  // ─── Launchpad CRM — Account History ──────────────────────────────────────────
+
+  app.get("/api/prospects/:id/history", requireAuth, requireProspectRole, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const rows = await storage.getCrmAccountHistory(id);
+      res.json(rows);
+    } catch (err) {
+      console.error("GET /api/prospects/:id/history error:", err);
+      res.status(500).json({ error: "Failed to fetch account history" });
     }
   });
 

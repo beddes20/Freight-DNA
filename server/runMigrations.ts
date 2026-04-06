@@ -783,4 +783,100 @@ export async function runMigrations() {
   } finally {
     clientEmailSig.release();
   }
+
+  // Launchpad TMS/Portal fields on prospects (Task #99)
+  const clientTms = await pool.connect();
+  try {
+    await clientTms.query(`
+      ALTER TABLE prospects
+        ADD COLUMN IF NOT EXISTS tms_website text,
+        ADD COLUMN IF NOT EXISTS tms_email text,
+        ADD COLUMN IF NOT EXISTS scheduling_website text,
+        ADD COLUMN IF NOT EXISTS scheduling_email text,
+        ADD COLUMN IF NOT EXISTS tms_username text,
+        ADD COLUMN IF NOT EXISTS tms_password text,
+        ADD COLUMN IF NOT EXISTS phone text,
+        ADD COLUMN IF NOT EXISTS billing_address text
+    `);
+    console.log("[migrations] prospects TMS columns ensured");
+  } catch (err) {
+    console.error("[migrations] prospects TMS columns error:", err);
+  } finally {
+    clientTms.release();
+  }
+
+  // Launchpad crm_opportunities table (Task #99)
+  const clientOpps = await pool.connect();
+  try {
+    await clientOpps.query(`
+      CREATE TABLE IF NOT EXISTS crm_opportunities (
+        id serial PRIMARY KEY,
+        prospect_id integer NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        record_type text NOT NULL DEFAULT 'single_lane',
+        stage text NOT NULL DEFAULT 'qualification',
+        amount text,
+        close_date text,
+        probability integer,
+        notes text,
+        lost_reason text,
+        created_by_id varchar NOT NULL REFERENCES users(id),
+        created_at timestamptz DEFAULT now() NOT NULL,
+        updated_at timestamptz DEFAULT now() NOT NULL
+      )
+    `);
+    console.log("[migrations] crm_opportunities table ensured");
+  } catch (err) {
+    console.error("[migrations] crm_opportunities error:", err);
+  } finally {
+    clientOpps.release();
+  }
+
+  // Launchpad crm_ownership_requests table (Task #99)
+  const clientOwn = await pool.connect();
+  try {
+    await clientOwn.query(`
+      CREATE TABLE IF NOT EXISTS crm_ownership_requests (
+        id serial PRIMARY KEY,
+        prospect_id integer NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        requester_id varchar NOT NULL REFERENCES users(id),
+        current_owner_id varchar NOT NULL REFERENCES users(id),
+        status text NOT NULL DEFAULT 'pending',
+        reason text,
+        admin_note text,
+        reviewed_by_id varchar REFERENCES users(id),
+        created_at timestamptz DEFAULT now() NOT NULL,
+        reviewed_at timestamptz
+      )
+    `);
+    console.log("[migrations] crm_ownership_requests table ensured");
+  } catch (err) {
+    console.error("[migrations] crm_ownership_requests error:", err);
+  } finally {
+    clientOwn.release();
+  }
+
+  // Launchpad crm_account_history table (Task #99)
+  const clientHist = await pool.connect();
+  try {
+    await clientHist.query(`
+      CREATE TABLE IF NOT EXISTS crm_account_history (
+        id serial PRIMARY KEY,
+        prospect_id integer NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        field text NOT NULL,
+        old_value text,
+        new_value text,
+        changed_by_id varchar NOT NULL REFERENCES users(id),
+        created_at timestamptz DEFAULT now() NOT NULL
+      )
+    `);
+    console.log("[migrations] crm_account_history table ensured");
+  } catch (err) {
+    console.error("[migrations] crm_account_history error:", err);
+  } finally {
+    clientHist.release();
+  }
 }

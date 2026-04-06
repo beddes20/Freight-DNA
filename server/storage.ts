@@ -391,6 +391,22 @@ export interface IStorage {
   updateProspectContact(prospectId: number, contactId: number, data: Partial<import('../shared/schema').InsertProspectContact>): Promise<import('../shared/schema').ProspectContact | undefined>;
   deleteProspectContact(prospectId: number, contactId: number): Promise<boolean>;
 
+  // Launchpad CRM — Opportunities
+  getCrmOpportunities(prospectId: number): Promise<import('../shared/schema').CrmOpportunity[]>;
+  createCrmOpportunity(data: import('../shared/schema').InsertCrmOpportunity): Promise<import('../shared/schema').CrmOpportunity>;
+  updateCrmOpportunity(id: number, data: Partial<import('../shared/schema').InsertCrmOpportunity>): Promise<import('../shared/schema').CrmOpportunity | undefined>;
+  deleteCrmOpportunity(id: number): Promise<boolean>;
+
+  // Launchpad CRM — Ownership Requests
+  getCrmOwnershipRequests(organizationId: string): Promise<import('../shared/schema').CrmOwnershipRequest[]>;
+  getPendingOwnershipRequestsForProspect(prospectId: number): Promise<import('../shared/schema').CrmOwnershipRequest[]>;
+  createCrmOwnershipRequest(data: import('../shared/schema').InsertCrmOwnershipRequest): Promise<import('../shared/schema').CrmOwnershipRequest>;
+  reviewCrmOwnershipRequest(id: number, status: string, reviewedById: string, adminNote?: string): Promise<import('../shared/schema').CrmOwnershipRequest | undefined>;
+
+  // Launchpad CRM — Account History
+  getCrmAccountHistory(prospectId: number): Promise<import('../shared/schema').CrmAccountHistory[]>;
+  logCrmAccountHistory(data: { prospectId: number; organizationId: string; field: string; oldValue: string | null; newValue: string | null; changedById: string }): Promise<void>;
+
   // Stripe billing
   updateOrganizationBilling(id: string, data: {
     stripeCustomerId?: string | null;
@@ -2345,6 +2361,72 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(prospectContacts.id, contactId), eq(prospectContacts.prospectId, prospectId)))
       .returning();
     return result.length > 0;
+  }
+
+  // ── Launchpad CRM ─────────────────────────────────────────────────────────────
+
+  async getCrmOpportunities(prospectId: number): Promise<import('../shared/schema').CrmOpportunity[]> {
+    const { crmOpportunities } = await import('../shared/schema');
+    return db.select().from(crmOpportunities).where(eq(crmOpportunities.prospectId, prospectId)).orderBy(crmOpportunities.createdAt);
+  }
+
+  async createCrmOpportunity(data: import('../shared/schema').InsertCrmOpportunity): Promise<import('../shared/schema').CrmOpportunity> {
+    const { crmOpportunities } = await import('../shared/schema');
+    const now = new Date();
+    const [row] = await db.insert(crmOpportunities).values({ ...data, createdAt: now, updatedAt: now }).returning();
+    return row;
+  }
+
+  async updateCrmOpportunity(id: number, data: Partial<import('../shared/schema').InsertCrmOpportunity>): Promise<import('../shared/schema').CrmOpportunity | undefined> {
+    const { crmOpportunities } = await import('../shared/schema');
+    const [row] = await db.update(crmOpportunities).set({ ...data, updatedAt: new Date() }).where(eq(crmOpportunities.id, id)).returning();
+    return row;
+  }
+
+  async deleteCrmOpportunity(id: number): Promise<boolean> {
+    const { crmOpportunities } = await import('../shared/schema');
+    const result = await db.delete(crmOpportunities).where(eq(crmOpportunities.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getCrmOwnershipRequests(organizationId: string): Promise<import('../shared/schema').CrmOwnershipRequest[]> {
+    const { crmOwnershipRequests } = await import('../shared/schema');
+    return db.select().from(crmOwnershipRequests)
+      .where(eq(crmOwnershipRequests.organizationId, organizationId))
+      .orderBy(crmOwnershipRequests.createdAt);
+  }
+
+  async getPendingOwnershipRequestsForProspect(prospectId: number): Promise<import('../shared/schema').CrmOwnershipRequest[]> {
+    const { crmOwnershipRequests } = await import('../shared/schema');
+    return db.select().from(crmOwnershipRequests)
+      .where(and(eq(crmOwnershipRequests.prospectId, prospectId), eq(crmOwnershipRequests.status, 'pending')));
+  }
+
+  async createCrmOwnershipRequest(data: import('../shared/schema').InsertCrmOwnershipRequest): Promise<import('../shared/schema').CrmOwnershipRequest> {
+    const { crmOwnershipRequests } = await import('../shared/schema');
+    const [row] = await db.insert(crmOwnershipRequests).values({ ...data, createdAt: new Date() }).returning();
+    return row;
+  }
+
+  async reviewCrmOwnershipRequest(id: number, status: string, reviewedById: string, adminNote?: string): Promise<import('../shared/schema').CrmOwnershipRequest | undefined> {
+    const { crmOwnershipRequests } = await import('../shared/schema');
+    const [row] = await db.update(crmOwnershipRequests)
+      .set({ status, reviewedById, adminNote: adminNote ?? null, reviewedAt: new Date() })
+      .where(eq(crmOwnershipRequests.id, id))
+      .returning();
+    return row;
+  }
+
+  async getCrmAccountHistory(prospectId: number): Promise<import('../shared/schema').CrmAccountHistory[]> {
+    const { crmAccountHistory } = await import('../shared/schema');
+    return db.select().from(crmAccountHistory)
+      .where(eq(crmAccountHistory.prospectId, prospectId))
+      .orderBy(crmAccountHistory.createdAt);
+  }
+
+  async logCrmAccountHistory(data: { prospectId: number; organizationId: string; field: string; oldValue: string | null; newValue: string | null; changedById: string }): Promise<void> {
+    const { crmAccountHistory } = await import('../shared/schema');
+    await db.insert(crmAccountHistory).values({ ...data, createdAt: new Date() });
   }
 
   // ── Stripe Billing ────────────────────────────────────────────────────────────

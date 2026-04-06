@@ -34,7 +34,7 @@ const PROSPECTS_ROLES = ["admin", "sales", "sales_director"];
 
 const navItems = [
   { title: "Dashboard",         url: "/",                 icon: LayoutGrid    },
-  { title: "Sales Pipeline",    url: "/prospects",        icon: Crosshair,     roles: PROSPECTS_ROLES },
+  { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     roles: PROSPECTS_ROLES },
   { title: "Customers",         url: "/customers",        icon: Network,       roles: SALES_ROLES },
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
   { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare },
