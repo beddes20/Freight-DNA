@@ -943,14 +943,22 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
+
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
+      const allRoles = [...managerRoles, "account_manager", "logistics_manager", "logistics_coordinator"];
+      const withManagers = req.query.includeManagers === "true";
+
+      // Lower-level roles may only call this endpoint when explicitly fetching their coverage chain
+      if (!allRoles.includes(currentUser.role) || (!managerRoles.includes(currentUser.role) && !withManagers)) {
         return res.status(403).json({ error: "Access required" });
       }
+
       const allUsers = await storage.getUsers(req.session.organizationId!);
       const safeUsers = allUsers.map(({ password, ...u }) => u);
       if (currentUser.role === "admin") return res.json(safeUsers);
+
       const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-      if (req.query.includeManagers === "true") {
+      if (withManagers) {
         const managerIds = await storage.getManagerChainIds(currentUser.id, currentUser.organizationId);
         const allIds = Array.from(new Set([...teamIds, ...managerIds]));
         return res.json(safeUsers.filter(u => allIds.includes(u.id)));
