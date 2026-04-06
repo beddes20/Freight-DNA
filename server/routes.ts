@@ -11426,6 +11426,167 @@ Respond with valid JSON only:
     }
   });
 
+  // ── NAM/AM → LM Daily Check-In ───────────────────────────────────────────
+
+  // GET /api/lm-checkins/pending  — which LMs need a check-in from the current user today
+  app.get("/api/lm-checkins/pending", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      // Find LMs directly reporting to this user
+      const lms = await storage.pool.query<{ id: string; name: string; role: string }>(
+        `SELECT id, name, role FROM users
+         WHERE manager_id = $1 AND organization_id = $2
+           AND role IN ('logistics_manager','logistics_coordinator')
+         ORDER BY name`,
+        [user.id, user.organizationId]
+      );
+      if (lms.rows.length === 0) return res.json({ lms: [], pending: [] });
+
+      // Find already-submitted check-ins for today
+      const done = await storage.pool.query<{ lm_id: string; check_type: string }>(
+        `SELECT lm_id, check_type FROM nam_lm_checkins
+         WHERE reviewer_id = $1 AND check_date = $2`,
+        [user.id, today]
+      );
+      const doneSet = new Set(done.rows.map(r => `${r.lm_id}:${r.check_type}`));
+
+      // Determine which check types are "open" right now
+      // Morning: 7:00 AM–11:59 AM CT  (UTC 12–16), Afternoon: 3:30 PM–11:59 PM CT (UTC 20:30–04:59)
+      // We'll return both windows and let the client decide based on its local time
+      const checkTypes = ["morning", "afternoon"] as const;
+      const pending = lms.rows.flatMap(lm =>
+        checkTypes
+          .filter(t => !doneSet.has(`${lm.id}:${t}`))
+          .map(t => ({ lmId: lm.id, lmName: lm.name, lmRole: lm.role, checkType: t }))
+      );
+
+      res.json({ lms: lms.rows, pending });
+    } catch (err) {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  // POST /api/lm-checkins  — submit check-in responses for one or more LMs
+  app.post("/api/lm-checkins", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const { checkType, responses } = req.body as {
+        checkType: "morning" | "afternoon";
+        responses: {
+          lmId: string;
+          checkCallsDone?: boolean;
+          boardClean?: boolean;
+          checkoutDone?: boolean;
+          notes?: string;
+        }[];
+      };
+
+      if (!checkType || !Array.isArray(responses) || responses.length === 0) {
+        return res.status(400).json({ error: "checkType and responses required" });
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const inserted: number[] = [];
+
+      for (const r of responses) {
+        // Verify the LM reports to this user
+        const lmRow = await storage.pool.query(
+          `SELECT 1 FROM users WHERE id = $1 AND manager_id = $2 AND organization_id = $3
+             AND role IN ('logistics_manager','logistics_coordinator')`,
+          [r.lmId, user.id, user.organizationId]
+        );
+        if ((lmRow.rowCount ?? 0) === 0) continue;
+
+        const result = await storage.pool.query<{ id: number }>(
+          `INSERT INTO nam_lm_checkins
+             (reviewer_id, lm_id, organization_id, check_date, check_type,
+              check_calls_done, board_clean, checkout_done, notes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (reviewer_id, lm_id, check_date, check_type)
+           DO UPDATE SET check_calls_done=$6, board_clean=$7, checkout_done=$8, notes=$9
+           RETURNING id`,
+          [user.id, r.lmId, user.organizationId, today, checkType,
+           r.checkCallsDone ?? null, r.boardClean ?? null, r.checkoutDone ?? null, r.notes ?? null]
+        );
+        if (result.rows[0]?.id) inserted.push(result.rows[0].id);
+      }
+
+      // Mark today's lm_checkin notifications as read
+      await storage.pool.query(
+        `UPDATE notifications SET read = true
+         WHERE user_id = $1 AND type = 'lm_checkin' AND read = false`,
+        [user.id]
+      );
+
+      res.json({ ok: true, inserted });
+    } catch (err) {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
+  // GET /api/lm-checkins/history  — admin/director/NAM view of check-in history
+  app.get("/api/lm-checkins/history", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (!managerRoles.includes(user.role) && user.role !== "account_manager") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const { from, to, reviewerId, lmId } = req.query as Record<string, string>;
+      const fromDate = from || new Date(Date.now() - 30 * 24 * 3600000).toISOString().slice(0, 10);
+      const toDate = to || new Date().toISOString().slice(0, 10);
+
+      let reviewerFilter = "";
+      const params: (string | boolean)[] = [user.organizationId, fromDate, toDate];
+
+      if (user.role === "account_manager" || (user.role === "national_account_manager" && !["admin","director"].includes(user.role))) {
+        // NAMs/AMs can only see their own check-ins
+        params.push(user.id);
+        reviewerFilter = `AND c.reviewer_id = $${params.length}`;
+      } else if (reviewerId) {
+        params.push(reviewerId);
+        reviewerFilter = `AND c.reviewer_id = $${params.length}`;
+      }
+
+      let lmFilter = "";
+      if (lmId) {
+        params.push(lmId);
+        lmFilter = `AND c.lm_id = $${params.length}`;
+      }
+
+      const rows = await storage.pool.query(
+        `SELECT
+           c.id, c.check_date, c.check_type,
+           c.check_calls_done, c.board_clean, c.checkout_done, c.notes,
+           c.created_at,
+           r.id AS reviewer_id, r.name AS reviewer_name,
+           l.id AS lm_id, l.name AS lm_name
+         FROM nam_lm_checkins c
+         JOIN users r ON r.id = c.reviewer_id
+         JOIN users l ON l.id = c.lm_id
+         WHERE c.organization_id = $1
+           AND c.check_date >= $2 AND c.check_date <= $3
+           ${reviewerFilter} ${lmFilter}
+         ORDER BY c.check_date DESC, c.check_type DESC, r.name ASC, l.name ASC
+         LIMIT 500`,
+        params
+      );
+
+      res.json(rows.rows);
+    } catch (err) {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
   // ── ZoomInfo Contact Search ───────────────────────────────────────────────
   app.get("/api/zoominfo/search-contacts", requireAuth, async (req, res) => {
     const user = await getCurrentUser(req);

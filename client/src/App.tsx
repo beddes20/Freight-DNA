@@ -17,6 +17,7 @@ import React, { useEffect, useCallback } from "react";
 import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
 import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
 import { EasterEggModal, dispatchEasterEgg } from "@/components/easter-egg-modal";
+import { LmCheckinPopup } from "@/components/lm-checkin-popup";
 import { TourProvider } from "@/components/app-tour";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -54,6 +55,7 @@ import CheckoutSuccessPage from "@/pages/checkout-success";
 import TouchpointHistoryPage from "@/pages/touchpoint-history";
 import RfpCalendarPage from "@/pages/rfp-calendar";
 import RepScorecardPage from "@/pages/rep-scorecard";
+import LmCheckinHistoryPage from "@/pages/lm-checkin-history";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -124,6 +126,7 @@ function Router() {
       <Route path="/touchpoint-history" component={TouchpointHistoryPage} />
       <Route path="/rfp-calendar" component={RfpCalendarPage} />
       <Route path="/rep-scorecard" component={RepScorecardPage} />
+      <Route path="/lm-checkin-history" component={LmCheckinHistoryPage} />
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/terms" component={TermsPage} />
       <Route component={NotFound} />
@@ -303,6 +306,7 @@ function AuthenticatedApp() {
       <CrmChatbot />
       <NotificationToasts />
       <EasterEggModal />
+      <LmCheckinPopup />
     </>
   );
 }

@@ -61,6 +61,7 @@ const pipelineItems = [
   { title: "RFP & Awards",       url: "/rfp-awards",         icon: Trophy,    roles: undefined },
   { title: "RFP Calendar",       url: "/rfp-calendar",       icon: Calendar,  roles: undefined },
   { title: "Rep Scorecard",      url: "/rep-scorecard",      icon: Medal,     roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  { title: "LM Check-In Log",   url: "/lm-checkin-history", icon: History,   roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
 ];
 
 const laneToolItems = [

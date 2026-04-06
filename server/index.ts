@@ -13,6 +13,7 @@ import { initOneOnOneReminderScheduler } from "./oneOnOneReminderScheduler";
 import { initHealthAlertScheduler } from "./healthAlertScheduler";
 import { initPtoReturnScheduler } from "./ptoReturnScheduler";
 import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
+import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
@@ -182,6 +183,7 @@ async function initStripe() {
       initHealthAlertScheduler();
       initPtoReturnScheduler();
       initWeeklyGoalRecapScheduler();
+      initLmCheckinScheduler();
     },
   );
 })();

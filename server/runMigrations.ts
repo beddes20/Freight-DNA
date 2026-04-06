@@ -947,4 +947,36 @@ export async function runMigrations() {
   } finally {
     clientIntel.release();
   }
+
+  // NAM/AM → LM daily check-in table
+  const clientNamLm = await pool.connect();
+  try {
+    await clientNamLm.query(`
+      CREATE TABLE IF NOT EXISTS nam_lm_checkins (
+        id serial PRIMARY KEY,
+        reviewer_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        lm_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        organization_id varchar NOT NULL REFERENCES organizations(id),
+        check_date date NOT NULL DEFAULT CURRENT_DATE,
+        check_type varchar(20) NOT NULL,
+        check_calls_done boolean,
+        board_clean boolean,
+        checkout_done boolean,
+        notes text,
+        created_at timestamptz DEFAULT now(),
+        CONSTRAINT nam_lm_checkins_unique UNIQUE (reviewer_id, lm_id, check_date, check_type)
+      )
+    `);
+    await clientNamLm.query(`
+      CREATE INDEX IF NOT EXISTS idx_nam_lm_checkins_reviewer ON nam_lm_checkins(reviewer_id, check_date)
+    `);
+    await clientNamLm.query(`
+      CREATE INDEX IF NOT EXISTS idx_nam_lm_checkins_lm ON nam_lm_checkins(lm_id, check_date)
+    `);
+    console.log("[migrations] nam_lm_checkins table ensured");
+  } catch (err) {
+    console.error("[migrations] nam_lm_checkins error:", err);
+  } finally {
+    clientNamLm.release();
+  }
 }
