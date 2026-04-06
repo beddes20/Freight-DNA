@@ -67,9 +67,10 @@ interface AwardDialogProps {
   onOpenChange: (open: boolean) => void;
   award?: Award;
   onCreated?: (award: Award) => void;
+  defaultCompanyId?: string;
 }
 
-export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialogProps) {
+export function AwardDialog({ open, onOpenChange, award, onCreated, defaultCompanyId }: AwardDialogProps) {
   const { toast } = useToast();
   const isEditing = !!award;
   const laneFileRef = useRef<HTMLInputElement>(null);
@@ -111,7 +112,7 @@ export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialo
       setManualLanes(existing.length > 0 ? existing.join(", ") : "");
       setParsedLaneFileName(null);
     } else {
-      form.reset({ companyId: "", title: "", value: "", awardDate: "", notes: "" });
+      form.reset({ companyId: defaultCompanyId ?? "", title: "", value: "", awardDate: "", notes: "" });
       setParsedLaneLabels([]);
       setSelectedLaneIdxs(new Set());
       setManualLanes("");

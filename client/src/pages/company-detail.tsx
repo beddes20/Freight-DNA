@@ -116,6 +116,9 @@ import { CalloutDialog } from "@/components/callout-dialog";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 import { MarketShareCard } from "@/components/market-share-card";
+import { RfpDialog } from "@/components/rfp-dialog";
+import { AwardDialog } from "@/components/award-dialog";
+import { ConvertToAwardDialog } from "@/components/convert-to-award-dialog";
 import { PreCallPlanner } from "@/components/pre-call-planner";
 import { ContactIntelModal } from "@/components/contact-intel-modal";
 import { ZoomInfoSuggestionsDialog } from "@/components/zoominfo-suggestions";
@@ -276,6 +279,13 @@ export default function CompanyDetail() {
   const [scorecardPending, setScorecardPending] = useState<PendingFile[]>([]);
   const [scorecardUploading, setScorecardUploading] = useState(false);
   const [rfpIntelCollapsed, setRfpIntelCollapsed] = useState(true);
+  const [cdRfpDialogOpen, setCdRfpDialogOpen] = useState(false);
+  const [cdAwardDialogOpen, setCdAwardDialogOpen] = useState(false);
+  const [cdEditingRfp, setCdEditingRfp] = useState<Rfp | undefined>();
+  const [cdEditingAward, setCdEditingAward] = useState<Award | undefined>();
+  const [cdConvertingRfp, setCdConvertingRfp] = useState<Rfp | null>(null);
+  const [cdDeleteRfpTarget, setCdDeleteRfpTarget] = useState<Rfp | null>(null);
+  const [cdDeleteAwardTarget, setCdDeleteAwardTarget] = useState<Award | null>(null);
   const [showTrends, setShowTrends] = useState(false);
   const [calloutDialogOpen, setCalloutDialogOpen] = useState(false);
   const [calloutReplyTo, setCalloutReplyTo] = useState<{ id: string; title: string } | undefined>();
@@ -884,6 +894,27 @@ export default function CompanyDetail() {
     onError: (error: Error) => {
       toast({ title: "Import failed", description: error.message, variant: "destructive" });
     },
+  });
+
+  const cdDeleteRfpMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/rfps/${id}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      toast({ title: "RFP deleted" });
+      setCdDeleteRfpTarget(null);
+    },
+    onError: (error: Error) => toast({ title: "Error deleting RFP", description: error.message, variant: "destructive" }),
+  });
+
+  const cdDeleteAwardMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/awards/${id}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/awards"] });
+      toast({ title: "Award deleted" });
+      setCdDeleteAwardTarget(null);
+    },
+    onError: (error: Error) => toast({ title: "Error deleting award", description: error.message, variant: "destructive" }),
   });
 
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2852,6 +2883,203 @@ export default function CompanyDetail() {
 
         <TabsContent value="rfp" className="space-y-4 mt-2">
 
+      {/* ── RFP Management ─────────────────────────────────────────────────────── */}
+      <Card data-testid="card-rfp-management">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-base">RFPs</CardTitle>
+              {companyRfps.length > 0 && (
+                <Badge variant="secondary">{companyRfps.length}</Badge>
+              )}
+            </div>
+            <Button
+              size="sm"
+              onClick={() => { setCdEditingRfp(undefined); setCdRfpDialogOpen(true); }}
+              data-testid="button-add-rfp-cd"
+            >
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              Add RFP
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {companyRfps.length === 0 ? (
+            <div className="py-6 text-center">
+              <p className="text-sm text-muted-foreground">No RFPs yet for this account.</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => { setCdEditingRfp(undefined); setCdRfpDialogOpen(true); }}
+                data-testid="button-add-first-rfp-cd"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                Add First RFP
+              </Button>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {companyRfps.map(rfp => {
+                const statusMap: Record<string, { label: string; color: string }> = {
+                  pending: { label: "Pending", color: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400" },
+                  submitted: { label: "Submitted", color: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
+                  awarded: { label: "Awarded", color: "bg-green-500/10 text-green-600 dark:text-green-400" },
+                  partially_awarded: { label: "Partial Award", color: "bg-teal-500/10 text-teal-600 dark:text-teal-400" },
+                  lost: { label: "Lost", color: "bg-red-500/10 text-red-600 dark:text-red-400" },
+                  declined: { label: "Declined", color: "bg-gray-500/10 text-gray-600 dark:text-gray-400" },
+                };
+                const st = statusMap[rfp.status] ?? { label: rfp.status, color: "bg-gray-500/10 text-gray-600" };
+                return (
+                  <div key={rfp.id} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0" data-testid={`row-rfp-${rfp.id}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium truncate">{rfp.title}</span>
+                        <Badge className={`${st.color} text-[10px] px-1.5 py-0 h-4 shrink-0`}>{st.label}</Badge>
+                        {rfp.rfpType && (
+                          <span className="text-[10px] text-muted-foreground shrink-0 capitalize">{rfp.rfpType.replace("_", " ")}</span>
+                        )}
+                      </div>
+                      {rfp.dueDate && (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <Calendar className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-xs text-muted-foreground">Due {rfp.dueDate}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      {rfp.status !== "awarded" && rfp.status !== "partially_awarded" && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+                          title="Mark as Won"
+                          onClick={() => setCdConvertingRfp(rfp)}
+                          data-testid={`button-convert-rfp-cd-${rfp.id}`}
+                        >
+                          <Trophy className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        title="Edit"
+                        onClick={() => { setCdEditingRfp(rfp); setCdRfpDialogOpen(true); }}
+                        data-testid={`button-edit-rfp-cd-${rfp.id}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        title="Delete"
+                        onClick={() => setCdDeleteRfpTarget(rfp)}
+                        data-testid={`button-delete-rfp-cd-${rfp.id}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Awards Management ──────────────────────────────────────────────────── */}
+      <Card data-testid="card-awards-management">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Trophy className="h-4 w-4 text-amber-500" />
+              <CardTitle className="text-base">Awards</CardTitle>
+              {companyAwards.length > 0 && (
+                <Badge variant="secondary">{companyAwards.length}</Badge>
+              )}
+            </div>
+            <Button
+              size="sm"
+              onClick={() => { setCdEditingAward(undefined); setCdAwardDialogOpen(true); }}
+              data-testid="button-add-award-cd"
+            >
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              Add Award
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {companyAwards.length === 0 ? (
+            <div className="py-6 text-center">
+              <p className="text-sm text-muted-foreground">No awards on file for this account.</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => { setCdEditingAward(undefined); setCdAwardDialogOpen(true); }}
+                data-testid="button-add-first-award-cd"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                Add First Award
+              </Button>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {companyAwards.map(award => (
+                <div key={award.id} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0" data-testid={`row-award-${award.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium truncate">{award.title}</span>
+                      {award.value && parseFloat(award.value) > 0 && (
+                        <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium shrink-0">
+                          ${parseFloat(award.value).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+                      {award.awardDate && (
+                        <div className="flex items-center gap-1">
+                          <Calendar className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-xs text-muted-foreground">{award.awardDate}</span>
+                        </div>
+                      )}
+                      {award.lanes && award.lanes.length > 0 && (
+                        <span className="text-xs text-muted-foreground">{award.lanes.length} lane{award.lanes.length !== 1 ? "s" : ""}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      title="Edit"
+                      onClick={() => { setCdEditingAward(award); setCdAwardDialogOpen(true); }}
+                      data-testid={`button-edit-award-cd-${award.id}`}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 text-destructive hover:text-destructive"
+                      title="Delete"
+                      onClick={() => setCdDeleteAwardTarget(award)}
+                      data-testid={`button-delete-award-cd-${award.id}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* ── RFP Intelligence (unified: Coverage + Lane Patterns + Lane Matching) ── */}
       {(facilityCoverage !== undefined || lanePatterns !== undefined || laneMatching !== undefined) && (() => {
         const gapCount = facilityCoverage?.summary.gaps ?? 0;
@@ -3409,6 +3637,69 @@ export default function CompanyDetail() {
           />
         </div>
       )}
+
+      {/* ── RFP tab dialogs ────────────────────────────────────────────────────── */}
+      <RfpDialog
+        open={cdRfpDialogOpen}
+        onOpenChange={(open) => {
+          setCdRfpDialogOpen(open);
+          if (!open) setCdEditingRfp(undefined);
+        }}
+        rfp={cdEditingRfp}
+        defaultCompanyId={companyId}
+      />
+      <AwardDialog
+        open={cdAwardDialogOpen}
+        onOpenChange={(open) => {
+          setCdAwardDialogOpen(open);
+          if (!open) setCdEditingAward(undefined);
+        }}
+        award={cdEditingAward}
+        defaultCompanyId={companyId}
+      />
+      <ConvertToAwardDialog
+        rfp={cdConvertingRfp}
+        company={company}
+        onClose={() => setCdConvertingRfp(null)}
+      />
+      <AlertDialog open={!!cdDeleteRfpTarget} onOpenChange={(open) => !open && setCdDeleteRfpTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete RFP</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{cdDeleteRfpTarget?.title}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => cdDeleteRfpTarget && cdDeleteRfpMutation.mutate(cdDeleteRfpTarget.id)}
+            >
+              {cdDeleteRfpMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={!!cdDeleteAwardTarget} onOpenChange={(open) => !open && setCdDeleteAwardTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Award</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{cdDeleteAwardTarget?.title}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => cdDeleteAwardTarget && cdDeleteAwardMutation.mutate(cdDeleteAwardTarget.id)}
+            >
+              {cdDeleteAwardMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
         </TabsContent>
       </Tabs>

@@ -64,9 +64,10 @@ interface RfpDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   rfp?: Rfp;
+  defaultCompanyId?: string;
 }
 
-export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
+export function RfpDialog({ open, onOpenChange, rfp, defaultCompanyId }: RfpDialogProps) {
   const { toast } = useToast();
   const isEditing = !!rfp;
 
@@ -107,7 +108,7 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
       });
     } else {
       form.reset({
-        companyId: "",
+        companyId: defaultCompanyId ?? "",
         title: "",
         status: "pending",
         rfpType: "",
@@ -118,7 +119,7 @@ export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
         closeNotes: "",
       });
     }
-  }, [rfp, form]);
+  }, [rfp, open, defaultCompanyId]);
 
   const createMutation = useMutation({
     mutationFn: async (data: InsertRfp) => {
