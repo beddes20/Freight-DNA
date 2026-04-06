@@ -14586,7 +14586,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
       const orgId = user.organizationId;
       const allUsers = await storage.getUsers(orgId);
-      const repRoles = ["account_manager", "national_account_manager", "logistics_manager", "logistics_coordinator", "sales"];
+      const repRoles = ["account_manager", "national_account_manager"];
       const reps = allUsers.filter(u => repRoles.includes(u.role ?? ""));
 
       const now = new Date();
@@ -14631,6 +14631,14 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       // All touchpoints in range (bulk fetch, then split per rep)
       const allTps = await storage.getTouchpointsSince(rangeStartStr);
 
+      // All prospects (for relationshipsMoved count)
+      const allProspects = await storage.getProspects(orgId);
+      const prospectsMovedInRange = allProspects.filter(p => {
+        if (!p.stageChangedAt) return false;
+        const changed = new Date(p.stageChangedAt);
+        return changed >= rangeStart && changed <= rangeEnd;
+      });
+
       // All contacts (for contacts-added count)
       const allContacts = await storage.getContacts();
       const orgUserIds = new Set(allUsers.map(u => u.id));
@@ -14652,6 +14660,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         const weeklySiteVisits = repTps.filter((t: any) => t.type === "site_visit").length;
         const weeklyMeaningful = repTps.filter((t: any) => t.isMeaningful).length;
         const contactsAdded = contactsThisMonth.filter(c => c.createdBy === rep.id).length;
+        const relationshipsMoved = prospectsMovedInRange.filter(p => p.ownerId === rep.id).length;
 
         const repGoals = allGoals.filter((g: any) => g.userId === rep.id && g.period === period);
         const touchpointGoal = repGoals.find((g: any) => g.metric === "touchpoints");
@@ -14669,6 +14678,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
           weeklySiteVisits,
           weeklyMeaningful,
           contactsAdded,
+          relationshipsMoved,
           touchpointGoalTarget: touchpointGoal?.targetValue != null ? Number(touchpointGoal.targetValue) : null,
           meaningfulGoalTarget: meaningfulGoal?.targetValue != null ? Number(meaningfulGoal.targetValue) : null,
           contactsGoalTarget: contactsGoal?.targetValue != null ? Number(contactsGoal.targetValue) : null,
