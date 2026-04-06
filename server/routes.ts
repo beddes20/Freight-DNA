@@ -950,6 +950,11 @@ RULES FOR YOUR RESPONSES:
       const safeUsers = allUsers.map(({ password, ...u }) => u);
       if (currentUser.role === "admin") return res.json(safeUsers);
       const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+      if (req.query.includeManagers === "true") {
+        const managerIds = await storage.getManagerChainIds(currentUser.id, currentUser.organizationId);
+        const allIds = Array.from(new Set([...teamIds, ...managerIds]));
+        return res.json(safeUsers.filter(u => allIds.includes(u.id)));
+      }
       return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch users" });

@@ -155,7 +155,9 @@ export interface IStorage {
   deleteUser(id: string, organizationId: string): Promise<boolean>;
   /** Org-scoped team traversal — organizationId is mandatory. */
   getTeamMemberIds(userId: string, organizationId: string): Promise<string[]>;
-  
+  /** Walk the managerId chain upward, returning all ancestor manager IDs. */
+  getManagerChainIds(userId: string, organizationId: string): Promise<string[]>;
+
   getCompanies(organizationId: string): Promise<Company[]>;
   getCompaniesByIds(ids: string[], organizationId: string): Promise<Company[]>;
   /** Auth-only / FK-chain lookup by PK — trusted IDs only. No org filter. */
@@ -519,6 +521,21 @@ export class DatabaseStorage implements IStorage {
           queue.push(report.id);
         }
       }
+    }
+    return ids;
+  }
+
+  async getManagerChainIds(userId: string, organizationId: string): Promise<string[]> {
+    const ids: string[] = [];
+    let currentId = userId;
+    while (true) {
+      const [user] = await db.select().from(users).where(
+        and(eq(users.id, currentId), eq(users.organizationId, organizationId))
+      );
+      if (!user || !user.managerId) break;
+      if (ids.includes(user.managerId)) break;
+      ids.push(user.managerId);
+      currentId = user.managerId;
     }
     return ids;
   }

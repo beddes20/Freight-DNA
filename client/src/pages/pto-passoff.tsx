@@ -841,7 +841,7 @@ export default function PtoPassoffPage() {
   const [createOpen, setCreateOpen] = useState(false);
 
   const { data: passoffs = [], isLoading } = useQuery<PassoffWithItems[]>({ queryKey: ["/api/pto-passoffs"] });
-  const { data: users = [] } = useQuery<SafeUser[]>({ queryKey: ["/api/users"] });
+  const { data: users = [] } = useQuery<SafeUser[]>({ queryKey: ["/api/users?includeManagers=true"] });
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
   if (!currentUser) return null;
