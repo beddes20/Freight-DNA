@@ -64,6 +64,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -1417,6 +1423,7 @@ export default function RfpAwards() {
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
   const [pdfExtractedLanes, setPdfExtractedLanes] = useState<any[]>([]);
   const [pdfRfpType, setPdfRfpType] = useState<"mini_bid" | "full_rfp" | "">("");
+  const [drilldownFilter, setDrilldownFilter] = useState<"rfps" | "awards" | "pipeline" | "awarded" | null>(null);
   const [convertingRfp, setConvertingRfp] = useState<Rfp | null>(null);
 
   const { data: rfps, isLoading: rfpsLoading } = useQuery<Rfp[]>({
@@ -1714,7 +1721,11 @@ export default function RfpAwards() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
-        <Card>
+        <Card
+          className="cursor-pointer hover:bg-accent/50 transition-colors"
+          onClick={() => setDrilldownFilter("rfps")}
+          data-testid="card-stat-active-rfps"
+        >
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1725,7 +1736,11 @@ export default function RfpAwards() {
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          className="cursor-pointer hover:bg-accent/50 transition-colors"
+          onClick={() => setDrilldownFilter("awards")}
+          data-testid="card-stat-awards-won"
+        >
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1736,7 +1751,11 @@ export default function RfpAwards() {
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          className="cursor-pointer hover:bg-accent/50 transition-colors"
+          onClick={() => setDrilldownFilter("pipeline")}
+          data-testid="card-stat-rfp-pipeline"
+        >
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1747,7 +1766,11 @@ export default function RfpAwards() {
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          className="cursor-pointer hover:bg-accent/50 transition-colors"
+          onClick={() => setDrilldownFilter("awarded")}
+          data-testid="card-stat-awarded-value"
+        >
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1761,6 +1784,260 @@ export default function RfpAwards() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Drill-Down Sheet */}
+      <Sheet open={drilldownFilter !== null} onOpenChange={(open) => { if (!open) setDrilldownFilter(null); }}>
+        <SheetContent side="right" className="w-full sm:max-w-xl flex flex-col p-0" data-testid="sheet-drilldown">
+          {(() => {
+            const isRfpView = drilldownFilter === "rfps" || drilldownFilter === "pipeline";
+            const isAwardView = drilldownFilter === "awards" || drilldownFilter === "awarded";
+            const sortByValue = drilldownFilter === "pipeline" || drilldownFilter === "awarded";
+
+            const titleMap = {
+              rfps: "Active RFPs",
+              pipeline: "RFP Pipeline",
+              awards: "Awards Won",
+              awarded: "Awarded Value",
+            };
+            const title = drilldownFilter ? titleMap[drilldownFilter] : "";
+
+            const companyMap = new Map((companies || []).map((c) => [c.id, c]));
+
+            let rfpRows = isRfpView ? [...(rfps || [])] : [];
+            if (sortByValue && isRfpView) {
+              rfpRows = rfpRows.sort((a, b) => (parseFloat(b.value || "0") - parseFloat(a.value || "0")));
+            }
+            const rfpTotal = rfpRows.reduce((acc, r) => acc + (r.value ? parseFloat(r.value) : 0), 0);
+
+            let awardRows = isAwardView ? [...(allAwards || [])] : [];
+            if (sortByValue && isAwardView) {
+              awardRows = awardRows.sort((a, b) => (parseFloat(b.value || "0") - parseFloat(a.value || "0")));
+            }
+            const awardTotal = awardRows.reduce((acc, a) => acc + (a.value ? parseFloat(a.value) : 0), 0);
+
+            const count = isRfpView ? rfpRows.length : awardRows.length;
+            const totalValue = isRfpView ? rfpTotal : awardTotal;
+
+            return (
+              <>
+                <div className="p-6 border-b">
+                  <SheetHeader>
+                    <SheetTitle className="text-xl" data-testid="text-drilldown-title">{title}</SheetTitle>
+                  </SheetHeader>
+                  <div className="flex items-center gap-6 mt-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Count</p>
+                      <p className="text-2xl font-bold" data-testid="text-drilldown-count">{count}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Value</p>
+                      <p className="text-2xl font-bold" data-testid="text-drilldown-value">
+                        ${totalValue >= 1_000_000 ? `${(totalValue / 1_000_000).toFixed(1)}M` : totalValue.toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {isRfpView && (() => {
+                    if (rfpsLoading) {
+                      return (
+                        <div className="space-y-3" data-testid="skeleton-drilldown-loading">
+                          {[1, 2, 3].map((i) => (
+                            <div key={i} className="space-y-1.5">
+                              <div className="flex items-center gap-2">
+                                <Skeleton className="h-8 w-8 rounded-full" />
+                                <div className="space-y-1 flex-1">
+                                  <Skeleton className="h-4 w-32" />
+                                  <Skeleton className="h-3 w-20" />
+                                </div>
+                              </div>
+                              <div className="pl-10 space-y-1.5">
+                                <Skeleton className="h-16 w-full rounded-lg" />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }
+                    if (rfpRows.length === 0) {
+                      return (
+                        <div className="text-center py-12 text-muted-foreground" data-testid="text-drilldown-empty">
+                          <FileText className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                          <p>No RFPs found</p>
+                        </div>
+                      );
+                    }
+                    const grouped: Map<string, typeof rfpRows> = new Map();
+                    for (const rfp of rfpRows) {
+                      const key = rfp.companyId || "__none__";
+                      if (!grouped.has(key)) grouped.set(key, []);
+                      grouped.get(key)!.push(rfp);
+                    }
+                    const groupEntries = Array.from(grouped.entries()).map(([companyId, rows]) => {
+                      const company = companyId !== "__none__" ? companyMap.get(companyId) : undefined;
+                      const groupTotal = rows.reduce((acc, r) => acc + (r.value ? parseFloat(r.value) : 0), 0);
+                      return { companyId, company, rows, groupTotal };
+                    });
+                    if (sortByValue) {
+                      groupEntries.sort((a, b) => b.groupTotal - a.groupTotal);
+                    } else {
+                      groupEntries.sort((a, b) => (a.company?.name || "").localeCompare(b.company?.name || ""));
+                    }
+                    return groupEntries.map(({ companyId, company, rows, groupTotal }) => {
+                      const initials = company ? company.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase() : "?";
+                      return (
+                        <div key={companyId} data-testid={`group-drilldown-company-${companyId}`}>
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
+                              {initials}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-sm truncate">{company?.name || "Unknown Customer"}</p>
+                              <p className="text-xs text-muted-foreground">{rows.length} {rows.length === 1 ? "RFP" : "RFPs"}{groupTotal > 0 ? ` · $${Number(groupTotal).toLocaleString()}` : ""}</p>
+                            </div>
+                          </div>
+                          <div className="space-y-1.5 pl-10">
+                            {rows.map((rfp) => {
+                              const statusCfg = rfpStatusConfig[rfp.status as keyof typeof rfpStatusConfig] || rfpStatusConfig.pending;
+                              const StatusIcon = statusCfg.icon;
+                              return (
+                                <div
+                                  key={rfp.id}
+                                  className="flex items-start gap-3 p-3 rounded-lg border bg-card"
+                                  data-testid={`row-drilldown-rfp-${rfp.id}`}
+                                >
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium text-sm truncate">{rfp.title}</p>
+                                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                                      <Badge className={`${statusCfg.color} text-xs`}>
+                                        <StatusIcon className="h-3 w-3 mr-1" />
+                                        {statusCfg.label}
+                                      </Badge>
+                                      {rfp.dueDate && (
+                                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                          <Calendar className="h-3 w-3" />
+                                          {new Date(rfp.dueDate).toLocaleDateString()}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="shrink-0 text-right">
+                                    {rfp.value && (
+                                      <p className="font-semibold text-sm">${Number(rfp.value).toLocaleString()}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+
+                  {isAwardView && (() => {
+                    if (awardsLoading) {
+                      return (
+                        <div className="space-y-3" data-testid="skeleton-drilldown-loading">
+                          {[1, 2, 3].map((i) => (
+                            <div key={i} className="space-y-1.5">
+                              <div className="flex items-center gap-2">
+                                <Skeleton className="h-8 w-8 rounded-full" />
+                                <div className="space-y-1 flex-1">
+                                  <Skeleton className="h-4 w-32" />
+                                  <Skeleton className="h-3 w-20" />
+                                </div>
+                              </div>
+                              <div className="pl-10 space-y-1.5">
+                                <Skeleton className="h-16 w-full rounded-lg" />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }
+                    if (awardRows.length === 0) {
+                      return (
+                        <div className="text-center py-12 text-muted-foreground" data-testid="text-drilldown-empty">
+                          <Trophy className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                          <p>No awards found</p>
+                        </div>
+                      );
+                    }
+                    const grouped: Map<string, typeof awardRows> = new Map();
+                    for (const award of awardRows) {
+                      const key = award.companyId || "__none__";
+                      if (!grouped.has(key)) grouped.set(key, []);
+                      grouped.get(key)!.push(award);
+                    }
+                    const groupEntries = Array.from(grouped.entries()).map(([companyId, rows]) => {
+                      const company = companyId !== "__none__" ? companyMap.get(companyId) : undefined;
+                      const groupTotal = rows.reduce((acc, a) => acc + (a.value ? parseFloat(a.value) : 0), 0);
+                      return { companyId, company, rows, groupTotal };
+                    });
+                    if (sortByValue) {
+                      groupEntries.sort((a, b) => b.groupTotal - a.groupTotal);
+                    } else {
+                      groupEntries.sort((a, b) => (a.company?.name || "").localeCompare(b.company?.name || ""));
+                    }
+                    return groupEntries.map(({ companyId, company, rows, groupTotal }) => {
+                      const initials = company ? company.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase() : "?";
+                      return (
+                        <div key={companyId} data-testid={`group-drilldown-award-company-${companyId}`}>
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-500/10 text-green-600 dark:text-green-400 text-xs font-bold">
+                              {initials}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-sm truncate">{company?.name || "Unknown Customer"}</p>
+                              <p className="text-xs text-muted-foreground">{rows.length} {rows.length === 1 ? "award" : "awards"}{groupTotal > 0 ? ` · $${Number(groupTotal).toLocaleString()}` : ""}</p>
+                            </div>
+                          </div>
+                          <div className="space-y-1.5 pl-10">
+                            {rows.map((award) => (
+                              <div
+                                key={award.id}
+                                className="flex items-start gap-3 p-3 rounded-lg border bg-card"
+                                data-testid={`row-drilldown-award-${award.id}`}
+                              >
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-medium text-sm truncate">{award.title}</p>
+                                  <div className="flex flex-wrap items-center gap-2 mt-1">
+                                    {award.awardDate && (
+                                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                        <Calendar className="h-3 w-3" />
+                                        {new Date(award.awardDate).toLocaleDateString()}
+                                      </span>
+                                    )}
+                                    {award.lanes && award.lanes.length > 0 && (
+                                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                        <TruckIcon className="h-3 w-3" />
+                                        {award.lanes.length} {award.lanes.length === 1 ? "lane" : "lanes"}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                  {award.value && (
+                                    <p className="font-semibold text-sm text-green-600 dark:text-green-400">
+                                      ${Number(award.value).toLocaleString()}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </>
+            );
+          })()}
+        </SheetContent>
+      </Sheet>
 
       {/* Win/Loss Summary Bar */}
       {(stats.totalRfps > 0 || stats.totalAwards > 0) && (
