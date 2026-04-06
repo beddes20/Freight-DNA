@@ -12,7 +12,6 @@ import {
   ChevronUp,
   FileSpreadsheet,
   Loader2,
-  Paperclip,
   Sparkles,
   X,
 } from "lucide-react";
@@ -73,10 +72,7 @@ interface AwardDialogProps {
 export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialogProps) {
   const { toast } = useToast();
   const isEditing = !!award;
-  const attachFileRef = useRef<HTMLInputElement>(null);
   const laneFileRef = useRef<HTMLInputElement>(null);
-
-  const [selectedFile, setSelectedFile] = useState<{ name: string; data: string } | null>(null);
 
   // Lane extraction — two-step: column mapping → lane checklist
   const [pendingLaneFile, setPendingLaneFile] = useState<File | null>(null);
@@ -109,7 +105,6 @@ export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialo
         awardDate: award.awardDate || "",
         notes: award.notes || "",
       });
-      setSelectedFile(award.fileName ? { name: award.fileName, data: award.fileData || "" } : null);
       const existing = award.lanes ?? [];
       setParsedLaneLabels(existing);
       setSelectedLaneIdxs(new Set(existing.map((_, i) => i)));
@@ -117,7 +112,6 @@ export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialo
       setParsedLaneFileName(null);
     } else {
       form.reset({ companyId: "", title: "", value: "", awardDate: "", notes: "" });
-      setSelectedFile(null);
       setParsedLaneLabels([]);
       setSelectedLaneIdxs(new Set());
       setManualLanes("");
@@ -204,18 +198,6 @@ export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialo
     }
   };
 
-  const handleAttachFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) {
-      toast({ title: "File too large", description: "Please select a file under 10MB.", variant: "destructive" });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => setSelectedFile({ name: file.name, data: reader.result as string });
-    reader.readAsDataURL(file);
-  };
-
   const toggleLane = (idx: number) => {
     setSelectedLaneIdxs(prev => {
       const next = new Set(prev);
@@ -271,8 +253,8 @@ export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialo
       awardDate: data.awardDate || null,
       lanes: lanesArray,
       notes: data.notes || null,
-      fileName: selectedFile?.name || null,
-      fileData: selectedFile?.data || null,
+      fileName: isEditing ? (award?.fileName ?? null) : null,
+      fileData: isEditing ? (award?.fileData ?? null) : null,
     };
 
     if (isEditing) {
@@ -375,38 +357,20 @@ export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialo
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <FormLabel className="mb-0">Awarded Lanes</FormLabel>
-                  <div className="flex items-center gap-2">
-                    {parsedLaneLabels.length > 0 && (
-                      <Badge variant="secondary" className="text-xs">
-                        {selectedCount} of {parsedLaneLabels.length} selected
-                      </Badge>
-                    )}
-                    <input
-                      ref={laneFileRef}
-                      type="file"
-                      className="hidden"
-                      accept=".xlsx,.xls,.csv"
-                      onChange={handleLaneFileSelect}
-                      data-testid="input-lane-file"
-                    />
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs gap-1.5"
-                      disabled={analyzingFile}
-                      onClick={() => laneFileRef.current?.click()}
-                      data-testid="button-upload-lane-file"
-                    >
-                      {analyzingFile ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <Sparkles className="h-3 w-3 text-amber-500" />
-                      )}
-                      {analyzingFile ? "Analyzing…" : "Upload Lane File"}
-                    </Button>
-                  </div>
+                  {parsedLaneLabels.length > 0 && (
+                    <Badge variant="secondary" className="text-xs">
+                      {selectedCount} of {parsedLaneLabels.length} selected
+                    </Badge>
+                  )}
                 </div>
+                <input
+                  ref={laneFileRef}
+                  type="file"
+                  className="hidden"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleLaneFileSelect}
+                  data-testid="input-lane-file"
+                />
 
                 {parsedLaneFileName && !analyzingFile && (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -497,45 +461,30 @@ export function AwardDialog({ open, onOpenChange, award, onCreated }: AwardDialo
                 )}
               />
 
-              {/* Attachment */}
-              <div className="space-y-2">
-                <FormLabel>Attachment (optional)</FormLabel>
-                <input
-                  ref={attachFileRef}
-                  type="file"
-                  className="hidden"
-                  accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg"
-                  onChange={handleAttachFile}
-                  data-testid="input-award-file"
-                />
-                {selectedFile ? (
-                  <div className="flex items-center gap-2 p-2 rounded-md border bg-muted/40">
-                    <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <span className="text-sm truncate flex-1" data-testid="text-award-filename">{selectedFile.name}</span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 shrink-0"
-                      onClick={() => { setSelectedFile(null); if (attachFileRef.current) attachFileRef.current.value = ""; }}
-                      data-testid="button-remove-file"
-                    >
-                      <X className="h-3 w-3" />
-                    </Button>
-                  </div>
-                ) : (
+              {/* ── Upload Lane File ─────────────────────────────────── */}
+              {parsedLaneLabels.length === 0 && (
+                <div className="space-y-2">
+                  <FormLabel>Upload Lane File (optional)</FormLabel>
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full"
-                    onClick={() => attachFileRef.current?.click()}
-                    data-testid="button-browse-file"
+                    className="w-full gap-2"
+                    disabled={analyzingFile}
+                    onClick={() => laneFileRef.current?.click()}
+                    data-testid="button-upload-lane-file"
                   >
-                    <Paperclip className="h-4 w-4 mr-2" />
-                    Browse Files
+                    {analyzingFile ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4 text-amber-500" />
+                    )}
+                    {analyzingFile ? "Analyzing…" : "Upload Excel / CSV"}
                   </Button>
-                )}
-              </div>
+                  <p className="text-xs text-muted-foreground">
+                    Upload a spreadsheet and AI will automatically map the origin, destination, and volume columns.
+                  </p>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-4">
                 <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-award">
