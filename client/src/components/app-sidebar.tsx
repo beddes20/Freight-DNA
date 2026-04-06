@@ -1,4 +1,6 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, LineChart, MapPin, Truck, Calendar, Medal } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, LineChart, MapPin, Truck, Calendar, Medal, Settings } from "lucide-react";
+import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -12,11 +14,18 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { useNotificationCounts } from "@/hooks/use-notifications";
 import { NotificationBell } from "@/components/notification-bell";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
@@ -108,6 +117,27 @@ export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const { taskCount, suggestionCount } = useNotificationCounts();
+  const { toast } = useToast();
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [signature, setSignature] = useState("");
+
+  const saveSignatureMutation = useMutation({
+    mutationFn: async (sig: string) => {
+      const res = await apiRequest("PATCH", `/api/users/${user?.id}`, { emailSignature: sig.trim() || null });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Profile saved" });
+      setProfileOpen(false);
+    },
+    onError: () => toast({ title: "Failed to save profile", variant: "destructive" }),
+  });
+
+  function openProfile() {
+    setSignature(user?.emailSignature ?? "");
+    setProfileOpen(true);
+  }
 
   const isActive = (url: string) =>
     url === "/"
@@ -115,6 +145,7 @@ export function AppSidebar() {
       : location.startsWith(url) || (url === "/customers" && location.startsWith("/companies/"));
 
   return (
+    <>
     <Sidebar collapsible="icon">
       <SidebarHeader className="p-4 border-b border-sidebar-border">
         {/* Expanded sidebar header */}
@@ -309,6 +340,16 @@ export function AppSidebar() {
                 variant="ghost"
                 size="icon"
                 className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                onClick={openProfile}
+                data-testid="button-my-profile"
+                title="My profile"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
                 onClick={() => logout.mutate()}
                 data-testid="button-logout"
                 title="Log out"
@@ -324,5 +365,46 @@ export function AppSidebar() {
         </div>
       </SidebarFooter>
     </Sidebar>
+
+    <Dialog open={profileOpen} onOpenChange={(v) => !v && setProfileOpen(false)}>
+      <DialogContent className="sm:max-w-md" data-testid="dialog-my-profile">
+        <DialogHeader>
+          <DialogTitle>My Profile</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">{user?.name}</p>
+            <p className="text-xs text-muted-foreground">{user?.username}</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="email-signature">Email Signature</Label>
+            <Textarea
+              id="email-signature"
+              placeholder="e.g. John Smith | Value Truck&#10;📞 555-867-5309"
+              value={signature}
+              onChange={(e) => setSignature(e.target.value)}
+              rows={5}
+              data-testid="textarea-profile-email-signature"
+            />
+            <p className="text-xs text-muted-foreground">
+              Appended automatically to every email you compose. Leave blank to send without a signature.
+            </p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setProfileOpen(false)} data-testid="button-cancel-profile">
+            Cancel
+          </Button>
+          <Button
+            onClick={() => saveSignatureMutation.mutate(signature)}
+            disabled={saveSignatureMutation.isPending}
+            data-testid="button-save-profile"
+          >
+            {saveSignatureMutation.isPending ? "Saving..." : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
