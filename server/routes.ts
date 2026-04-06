@@ -1222,9 +1222,12 @@ RULES FOR YOUR RESPONSES:
       if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
         return res.status(403).json({ error: "Access required" });
       }
-      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
+      // Non-admins can always edit their OWN profile (for email signature etc).
+      // If editing someone else's profile, they must be a manager and that person must be on their team.
+      const isSelf = (req.params.id as string) === currentUser.id;
+      if (!isSelf && (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director")) {
         const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-        if (!teamIds.includes((req.params.id as string)) || (req.params.id as string) === currentUser.id) {
+        if (!teamIds.includes((req.params.id as string))) {
           return res.status(403).json({ error: "Cannot edit this user" });
         }
       }
