@@ -15,6 +15,7 @@ import {
   BarChart2, Phone, Mail, MessageCircle, MapPin, Target, CheckCheck, Clock,
   Video, ExternalLink, Link, Lightbulb, Smile, Frown, Meh, Timer,
   SendHorizonal, ArrowRight, Sparkles, Loader2, AlertTriangle, Search,
+  Sun, XCircle, Minus, ClipboardCheck,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -62,6 +63,22 @@ function initials(name: string) {
 }
 
 // ─── Report Card types ────────────────────────────────────────────────────────
+
+interface LmCheckinSummary {
+  totalCheckins: number;
+  morningCount: number;
+  afternoonCount: number;
+  checkCallsDonePct: number | null;
+  boardCleanMorningPct: number | null;
+  boardCleanAfternoonPct: number | null;
+  checkoutDonePct: number | null;
+  recentCheckins: {
+    id: number; check_date: string; check_type: string;
+    check_calls_done: boolean | null; board_clean: boolean | null;
+    checkout_done: boolean | null; notes: string | null;
+    reviewer_name: string;
+  }[];
+}
 
 interface RepReportData {
   rep: { id: string; name: string; role: string };
@@ -739,6 +756,19 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
     staleTime: 60000,
   });
 
+  const repUser = allUsers.find(u => u.id === repId);
+  const isLmRep = repUser?.role === "logistics_manager" || repUser?.role === "logistics_coordinator";
+
+  const { data: lmCheckinSummary } = useQuery<LmCheckinSummary>({
+    queryKey: ["/api/lm-checkins/lm-summary", repId],
+    queryFn: async () => {
+      const res = await fetch(`/api/lm-checkins/lm-summary/${repId}?period=2weeks`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!repId && isLmRep,
+  });
+
   const weeklyReportKey = ["/api/report/rep", repId, "weekly"];
   const monthlyReportKey = ["/api/report/rep", repId, "monthly"];
 
@@ -1124,6 +1154,69 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
                   ? <ReportCardSlice data={monthlyReport} label="This Month" />
                   : <p className="text-xs text-muted-foreground">No monthly data available.</p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* LM Check-In Activity — shown when the 1:1 partner is an LM/LC */}
+      {isLmRep && lmCheckinSummary && lmCheckinSummary.totalCheckins > 0 && (
+        <div className="border-b bg-muted/20 px-6 py-4 space-y-3" data-testid="panel-lm-checkin-activity">
+          <div className="flex items-center gap-2">
+            <ClipboardCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span className="text-sm font-semibold">Check-In Activity</span>
+            <span className="text-xs text-muted-foreground">last 2 weeks · {lmCheckinSummary.totalCheckins} check{lmCheckinSummary.totalCheckins !== 1 ? "s" : ""}</span>
+          </div>
+          {/* Stat row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {[
+              { label: "Check Calls", pct: lmCheckinSummary.checkCallsDonePct, icon: <Sun className="h-3 w-3" /> },
+              { label: "AM Board", pct: lmCheckinSummary.boardCleanMorningPct, icon: <Sun className="h-3 w-3" /> },
+              { label: "Checkout", pct: lmCheckinSummary.checkoutDonePct, icon: <Clock className="h-3 w-3" /> },
+              { label: "PM Board", pct: lmCheckinSummary.boardCleanAfternoonPct, icon: <Clock className="h-3 w-3" /> },
+            ].map(stat => (
+              <div key={stat.label} className="rounded-lg border border-border bg-background p-2.5 text-center" data-testid={`checkin-stat-${stat.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                <div className="flex items-center justify-center gap-0.5 text-xs text-muted-foreground mb-0.5">{stat.icon}{stat.label}</div>
+                {stat.pct === null
+                  ? <span className="text-base font-bold text-muted-foreground/30">—</span>
+                  : <span className={`text-base font-bold ${stat.pct >= 80 ? "text-emerald-600 dark:text-emerald-400" : stat.pct >= 50 ? "text-amber-500" : "text-red-500"}`}>{stat.pct}%</span>
+                }
+              </div>
+            ))}
+          </div>
+          {/* Recent log — compact */}
+          <div className="space-y-0.5">
+            {lmCheckinSummary.recentCheckins.slice(0, 6).map(r => (
+              <div key={r.id} className="flex items-center gap-2 text-xs py-1 border-b border-border/50 last:border-0" data-testid={`checkin-row-${r.id}`}>
+                <span className="text-muted-foreground w-20 shrink-0">{r.check_date}</span>
+                {r.check_type === "morning"
+                  ? <span className="flex items-center gap-0.5 text-amber-600 dark:text-amber-400 w-8 shrink-0"><Sun className="h-3 w-3" />AM</span>
+                  : <span className="flex items-center gap-0.5 text-blue-600 dark:text-blue-400 w-8 shrink-0"><Clock className="h-3 w-3" />PM</span>
+                }
+                {r.check_type === "morning" && (
+                  <span className="flex items-center gap-0.5 text-muted-foreground">
+                    {r.check_calls_done === true ? <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                      : r.check_calls_done === false ? <XCircle className="h-3 w-3 text-red-500" />
+                      : <Minus className="h-3 w-3 text-muted-foreground/30" />}
+                    calls
+                  </span>
+                )}
+                {r.check_type === "afternoon" && (
+                  <span className="flex items-center gap-0.5 text-muted-foreground">
+                    {r.checkout_done === true ? <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                      : r.checkout_done === false ? <XCircle className="h-3 w-3 text-red-500" />
+                      : <Minus className="h-3 w-3 text-muted-foreground/30" />}
+                    checkout
+                  </span>
+                )}
+                <span className="flex items-center gap-0.5 text-muted-foreground">
+                  {r.board_clean === true ? <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                    : r.board_clean === false ? <XCircle className="h-3 w-3 text-red-500" />
+                    : <Minus className="h-3 w-3 text-muted-foreground/30" />}
+                  board
+                </span>
+                {r.notes && <span className="text-muted-foreground truncate max-w-[140px] italic">"{r.notes}"</span>}
+              </div>
+            ))}
           </div>
         </div>
       )}

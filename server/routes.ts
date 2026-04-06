@@ -11530,6 +11530,61 @@ Respond with valid JSON only:
     }
   });
 
+  // GET /api/lm-checkins/lm-summary/:userId  — check-in stats for a specific LM (from their perspective)
+  app.get("/api/lm-checkins/lm-summary/:userId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const { userId } = req.params as { userId: string };
+      const period = (req.query.period as string) || "2weeks";
+
+      const isSelf = userId === user.id;
+      const isManager = ["admin","director","national_account_manager","account_manager","sales_director"].includes(user.role);
+      if (!isSelf && !isManager) return res.status(403).json({ error: "Access denied" });
+
+      const days = period === "month" ? 30 : period === "week" ? 7 : 14;
+      const fromDate = new Date(Date.now() - days * 24 * 3600000).toISOString().slice(0, 10);
+      const toDate = new Date().toISOString().slice(0, 10);
+
+      const rows = await storage.pool.query(
+        `SELECT c.id, c.check_date, c.check_type,
+                c.check_calls_done, c.board_clean, c.checkout_done, c.notes,
+                r.name AS reviewer_name
+         FROM nam_lm_checkins c
+         JOIN users r ON r.id = c.reviewer_id
+         WHERE c.lm_id = $1 AND c.organization_id = $2
+           AND c.check_date >= $3 AND c.check_date <= $4
+         ORDER BY c.check_date DESC, c.check_type DESC
+         LIMIT 60`,
+        [userId, user.organizationId, fromDate, toDate]
+      );
+
+      const all = rows.rows;
+      const morning = all.filter((r: any) => r.check_type === "morning");
+      const afternoon = all.filter((r: any) => r.check_type === "afternoon");
+
+      const pctOf = (arr: any[], field: string) => {
+        const withData = arr.filter((r: any) => r[field] !== null);
+        if (!withData.length) return null;
+        return Math.round(withData.filter((r: any) => r[field] === true).length / withData.length * 100);
+      };
+
+      res.json({
+        totalCheckins: all.length,
+        morningCount: morning.length,
+        afternoonCount: afternoon.length,
+        checkCallsDonePct: pctOf(morning, "check_calls_done"),
+        boardCleanMorningPct: pctOf(morning, "board_clean"),
+        boardCleanAfternoonPct: pctOf(afternoon, "board_clean"),
+        checkoutDonePct: pctOf(afternoon, "checkout_done"),
+        recentCheckins: all.slice(0, 14),
+      });
+    } catch (err) {
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
   // GET /api/lm-checkins/history  — admin/director/NAM view of check-in history
   app.get("/api/lm-checkins/history", requireAuth, async (req, res) => {
     try {
