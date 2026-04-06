@@ -410,6 +410,70 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
   }
 }
 
+async function getCompanyDetails(orgId: string, companyName: string): Promise<string> {
+  try {
+    const allCompanies = await db.select().from(companies).where(eq(companies.organizationId, orgId));
+    const cn = companyName.toLowerCase();
+    const company = allCompanies.find(c => c.name.toLowerCase().includes(cn))
+      || allCompanies.find(c => cn.includes(c.name.toLowerCase().slice(0, 5)));
+    if (!company) return `No company found matching "${companyName}".`;
+
+    const [companyContacts, companyRfps, assignedUserRows] = await Promise.all([
+      db.select().from(contacts).where(eq(contacts.companyId, company.id)),
+      db.select().from(rfps).where(and(eq(rfps.companyId, company.id), eq(rfps.status, "open"))),
+      company.assignedTo ? db.select({ name: users.name, role: users.role }).from(users).where(eq(users.id, company.assignedTo)) : Promise.resolve([]),
+    ]);
+
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+    const recentTps = await db.select().from(touchpoints)
+      .where(and(eq(touchpoints.companyId, company.id), gte(touchpoints.date, sixtyDaysAgo)))
+      .orderBy(desc(touchpoints.date))
+      .limit(15);
+
+    const assignedUser = assignedUserRows[0];
+    let out = `=== ${company.name} ===\n`;
+    if (company.industry) out += `Industry: ${company.industry}\n`;
+    if (company.financialAlias) out += `Financial alias: ${company.financialAlias}\n`;
+    if (company.shippingModes?.length) out += `Shipping modes: ${company.shippingModes.join(", ")}\n`;
+    if (company.estimatedFreightSpend) out += `Est. freight spend: $${Number(company.estimatedFreightSpend).toLocaleString()}\n`;
+    if (assignedUser) out += `Rep: ${assignedUser.name} (${assignedUser.role.replace(/_/g, " ")})\n`;
+    if (company.tenderStyle) out += `Tender style: ${company.tenderStyle}\n`;
+    if (company.accountSummary) out += `\nAccount summary: ${company.accountSummary}\n`;
+    if (company.accountQuirks) out += `Quirks/notes: ${company.accountQuirks}\n`;
+    if (company.processNotes) out += `Process notes: ${company.processNotes}\n`;
+    if (company.spotProcess) out += `Spot process: ${company.spotProcess}\n`;
+    if (company.operatingHours) out += `Operating hours: ${company.operatingHours}\n`;
+
+    out += `\n-- Contacts (${companyContacts.length}) --\n`;
+    companyContacts.forEach(c => {
+      out += `• ${c.name}${c.title ? ` (${c.title})` : ""}`;
+      if (c.relationshipBase) out += ` | Rel: ${c.relationshipBase}`;
+      if (c.email) out += ` | ${c.email}`;
+      if (c.phone) out += ` | ${c.phone}`;
+      if (c.nextSteps) out += ` | Next: ${c.nextSteps}`;
+      out += "\n";
+    });
+
+    out += `\n-- Recent Touchpoints (last 60 days, ${recentTps.length}) --\n`;
+    recentTps.forEach(tp => {
+      const contact = companyContacts.find(c => c.id === tp.contactId);
+      out += `• [${tp.date}] ${tp.type}${contact ? ` w/ ${contact.name}` : ""}${tp.isMeaningful ? " ★" : ""}`;
+      if (tp.notes) out += ` — "${tp.notes.slice(0, 100)}${tp.notes.length > 100 ? "..." : ""}"`;
+      out += "\n";
+    });
+
+    out += `\n-- Open RFPs (${companyRfps.length}) --\n`;
+    companyRfps.forEach(r => {
+      out += `• ${r.title}${r.dueDate ? ` | Due: ${r.dueDate}` : ""}${r.value ? ` | Value: $${Number(r.value).toLocaleString()}` : ""}\n`;
+    });
+
+    return out;
+  } catch (err) {
+    console.error("getCompanyDetails error:", err);
+    return `Failed to load details for "${companyName}".`;
+  }
+}
+
 async function buildCrmContext(userId: string, userRole: string, scope: string): Promise<string> {
   const useEveryone = userRole === "admin" || userRole === "director" || scope === "everyone";
   if (useEveryone) {
@@ -515,11 +579,72 @@ Keep it short and casual — reps are busy. No fluff, no filler.
 - Bullet points for lists, plain sentences otherwise
 - If data isn't there, just say so
 - Talk like a sharp colleague, not a corporate assistant
+- When the user asks for details, full info, or wants to know everything about a SPECIFIC account — use the get_company_details tool
+- When the user says "open", "navigate to", "pull up", "go to", or "show me" a specific account page — use the navigate_to_company tool
 - When the user says they want to LOG A CALL, LOG AN EMAIL, LOG A TEXT, LOG A VISIT, or LOG A TOUCHPOINT — use the log_touchpoint tool
 - When the user says they want to CREATE A TASK, SET A REMINDER, or ADD A TO-DO — use the create_task tool
+- When the user says they want to MARK A TASK DONE, COMPLETE A TASK, or CHECK OFF a to-do — use the complete_task tool
+- When the user says a conversation WAS MEANINGFUL, or wants to MARK A TOUCHPOINT MEANINGFUL — use the mark_meaningful tool
 - When the user asks about CARRIERS on a lane, who runs a corridor, carrier pay rates, what we're paying for a mode on a lane (e.g. "what carriers run TX-CA?", "how much are we paying for dry vans CA-TX?") — use the carrier_lane_search tool`;
 
       const tools: any[] = [
+        {
+          type: "function",
+          function: {
+            name: "get_company_details",
+            description: "Pull the full account profile for a specific company: all contacts with relationship levels, recent touchpoints with notes, open RFPs, account summary, quirks, tendering style, and rep assignment. Use when the user asks for details or full info about a specific account.",
+            parameters: {
+              type: "object",
+              properties: {
+                company_name: { type: "string", description: "Name of the company to look up (partial match is fine)" },
+              },
+              required: ["company_name"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "navigate_to_company",
+            description: "Navigate the user directly to a company's account page in the CRM. Use when the user says 'open', 'go to', 'pull up', 'navigate to', or 'show me the account page for' a specific company.",
+            parameters: {
+              type: "object",
+              properties: {
+                company_name: { type: "string", description: "Name of the company to navigate to" },
+              },
+              required: ["company_name"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "complete_task",
+            description: "Mark an open task as complete/done. Use when the user says they want to mark a task done, complete a task, check off a to-do, or close out a task.",
+            parameters: {
+              type: "object",
+              properties: {
+                task_name: { type: "string", description: "Title or partial name of the task to mark complete" },
+              },
+              required: ["task_name"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "mark_meaningful",
+            description: "Mark the user's most recent touchpoint at a company as meaningful. Use when the user says a call/conversation was meaningful, productive, or they want to flag it as meaningful.",
+            parameters: {
+              type: "object",
+              properties: {
+                company_name: { type: "string", description: "Name of the company where the touchpoint occurred" },
+                contact_name: { type: "string", description: "Name of the contact involved (optional)" },
+              },
+              required: ["company_name"],
+            },
+          },
+        },
         {
           type: "function",
           function: {
@@ -619,18 +744,28 @@ Keep it short and casual — reps are busy. No fluff, no filler.
           try {
             const args = JSON.parse(toolCallArgs);
 
-            if (toolCallName === "carrier_lane_search") {
-              // ── Data-retrieval tool: execute server-side, feed result back to GPT ──
-              const searchResult = await runCarrierLaneSearch(
-                req.session.organizationId!,
-                String(args.origin || ""),
-                String(args.destination || ""),
-                Number(args.radius_miles || 75),
-                String(args.mode || ""),
-                Number(args.min_loads_per_month || 3),
-              );
+            // ── Data-retrieval tools execute server-side then feed result back to GPT ──
+            const dataRetrievalTools = ["carrier_lane_search", "get_company_details"];
 
-              // Build second-pass messages with tool result
+            if (dataRetrievalTools.includes(toolCallName)) {
+              let searchResult = "";
+              let callLabel = "";
+
+              if (toolCallName === "carrier_lane_search") {
+                callLabel = "call_carrier";
+                searchResult = await runCarrierLaneSearch(
+                  req.session.organizationId!,
+                  String(args.origin || ""),
+                  String(args.destination || ""),
+                  Number(args.radius_miles || 75),
+                  String(args.mode || ""),
+                  Number(args.min_loads_per_month || 3),
+                );
+              } else if (toolCallName === "get_company_details") {
+                callLabel = "call_company";
+                searchResult = await getCompanyDetails(req.session.organizationId!, String(args.company_name || ""));
+              }
+
               const toolResultMessages: any[] = [
                 { role: "system", content: systemPrompt },
                 ...chatHistory,
@@ -638,24 +773,23 @@ Keep it short and casual — reps are busy. No fluff, no filler.
                   role: "assistant",
                   content: null,
                   tool_calls: [{
-                    id: toolCallId || "call_carrier",
+                    id: toolCallId || callLabel,
                     type: "function",
-                    function: { name: "carrier_lane_search", arguments: toolCallArgs },
+                    function: { name: toolCallName, arguments: toolCallArgs },
                   }],
                 },
                 {
                   role: "tool",
-                  tool_call_id: toolCallId || "call_carrier",
+                  tool_call_id: toolCallId || callLabel,
                   content: searchResult,
                 },
               ];
 
-              // Stream the final GPT response incorporating search results
               const stream2 = await openai.chat.completions.create({
                 model: "gpt-4o",
                 messages: toolResultMessages,
                 stream: true,
-                max_tokens: 1200,
+                max_tokens: 1500,
               });
 
               for await (const chunk2 of stream2) {
@@ -665,8 +799,78 @@ Keep it short and casual — reps are busy. No fluff, no filler.
                   res.write(`data: ${JSON.stringify({ content: c2 })}\n\n`);
                 }
               }
+
+            } else if (toolCallName === "navigate_to_company") {
+              // ── Navigate: resolve company ID server-side, emit navigate event ──
+              const orgId = req.session.organizationId!;
+              const cn = (args.company_name || "").toLowerCase();
+              const allOrgCompanies = await db.select({ id: companies.id, name: companies.name })
+                .from(companies).where(eq(companies.organizationId, orgId));
+              const matched = allOrgCompanies.find(c => c.name.toLowerCase().includes(cn))
+                || allOrgCompanies.find(c => cn.includes(c.name.toLowerCase().slice(0, 5)));
+              if (matched) {
+                const msg = `Opening ${matched.name}...`;
+                fullResponse += msg;
+                res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+                res.write(`data: ${JSON.stringify({ navigate: `/companies/${matched.id}` })}\n\n`);
+              } else {
+                const msg = `I couldn't find "${args.company_name}" in your CRM.`;
+                fullResponse += msg;
+                res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+              }
+
+            } else if (toolCallName === "complete_task") {
+              // ── Complete task: resolve task by name, emit confirmation card ──
+              const userId = req.session.userId!;
+              const taskName = (args.task_name || "").toLowerCase();
+              const openTasks = await db.select().from(tasks)
+                .where(and(eq(tasks.assignedTo, userId), eq(tasks.status, "open")));
+              const matched = openTasks.find(t =>
+                t.title.toLowerCase().includes(taskName) || taskName.includes(t.title.toLowerCase())
+              );
+              if (matched) {
+                const actionResponse = `Got it — ready to mark this task complete:`;
+                fullResponse += actionResponse;
+                res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
+                res.write(`data: ${JSON.stringify({ action: { tool: "complete_task", args: { task_id: matched.id, task_title: matched.title, due_date: matched.dueDate || "" } } })}\n\n`);
+              } else {
+                const msg = `I couldn't find an open task matching "${args.task_name}". Check your tasks page for the full list.`;
+                fullResponse += msg;
+                res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+              }
+
+            } else if (toolCallName === "mark_meaningful") {
+              // ── Mark meaningful: find most recent touchpoint by user at company ──
+              const orgId = req.session.organizationId!;
+              const userId = req.session.userId!;
+              const cn = (args.company_name || "").toLowerCase();
+              const allOrgCompanies = await db.select({ id: companies.id, name: companies.name })
+                .from(companies).where(eq(companies.organizationId, orgId));
+              const matchedCompany = allOrgCompanies.find(c => c.name.toLowerCase().includes(cn));
+              if (!matchedCompany) {
+                const msg = `I couldn't find "${args.company_name}" in your CRM.`;
+                fullResponse += msg;
+                res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+              } else {
+                const recentTps = await db.select().from(touchpoints)
+                  .where(and(eq(touchpoints.companyId, matchedCompany.id), eq(touchpoints.loggedById, userId)))
+                  .orderBy(desc(touchpoints.createdAt))
+                  .limit(5);
+                if (recentTps.length === 0) {
+                  const msg = `No touchpoints logged by you at ${matchedCompany.name} yet.`;
+                  fullResponse += msg;
+                  res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
+                } else {
+                  const tp = recentTps[0];
+                  const actionResponse = `Here's your most recent touchpoint at ${matchedCompany.name}:`;
+                  fullResponse += actionResponse;
+                  res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
+                  res.write(`data: ${JSON.stringify({ action: { tool: "mark_meaningful", args: { touchpoint_id: tp.id, company_name: matchedCompany.name, type: tp.type, date: tp.date, note: tp.notes || "" } } })}\n\n`);
+                }
+              }
+
             } else {
-              // ── Action tools: emit confirmation card for user to approve ──
+              // ── Action tools (log_touchpoint, create_task): emit confirmation card ──
               const actionResponse = `I can do that for you. Here's what I'll log:`;
               fullResponse += actionResponse;
               res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
