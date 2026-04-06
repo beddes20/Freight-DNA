@@ -77,14 +77,16 @@ interface ContactDetailSheetProps {
   open: boolean;
   onClose: () => void;
   onEdit?: (c: Contact) => void;
+  onDeleted?: () => void;
 }
 
-export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDetailSheetProps) {
+export function ContactDetailSheet({ contact, open, onClose, onEdit, onDeleted }: ContactDetailSheetProps) {
   const { toast } = useToast();
   const [logType, setLogType] = useState("call");
   const [logNotes, setLogNotes] = useState("");
   const [logMeaningful, setLogMeaningful] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [showDeleteContactConfirm, setShowDeleteContactConfirm] = useState(false);
   const [tpPendingFiles, setTpPendingFiles] = useState<PendingFile[]>([]);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
@@ -150,6 +152,19 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
     },
   });
 
+  const deleteContactMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/contacts/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", contact?.companyId, "contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
+      toast({ title: "Contact deleted" });
+      setShowDeleteContactConfirm(false);
+      onDeleted?.();
+      onClose();
+    },
+    onError: () => toast({ title: "Failed to delete contact", variant: "destructive" }),
+  });
+
   const toggleMeaningfulMutation = useMutation({
     mutationFn: async ({ id, isMeaningful }: { id: string; isMeaningful: boolean }) => {
       const res = await apiRequest("PATCH", `/api/touchpoints/${id}`, { isMeaningful });
@@ -208,11 +223,23 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
                 {contact.title && <p className="text-sm text-muted-foreground">{contact.title}</p>}
                 <div className="mt-1">{recencyBadge(touchpoints)}</div>
               </div>
-              {onEdit && (
-                <Button size="sm" variant="outline" onClick={() => { onEdit(contact); onClose(); }}>
-                  Edit
+              <div className="flex items-center gap-2">
+                {onEdit && (
+                  <Button size="sm" variant="outline" onClick={() => { onEdit(contact); onClose(); }} data-testid="button-edit-contact-sheet">
+                    Edit
+                  </Button>
+                )}
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                  onClick={() => setShowDeleteContactConfirm(true)}
+                  title="Delete contact"
+                  data-testid="button-delete-contact-sheet"
+                >
+                  <Trash2 className="h-4 w-4" />
                 </Button>
-              )}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -489,6 +516,27 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit }: ContactDe
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget)}>
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showDeleteContactConfirm} onOpenChange={(v) => !v && setShowDeleteContactConfirm(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Contact</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete {contact?.name}? This will permanently remove the contact and all associated data. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-contact-sheet">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => contact && deleteContactMutation.mutate(contact.id)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-contact-sheet"
+            >
+              {deleteContactMutation.isPending ? "Deleting..." : "Delete Contact"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

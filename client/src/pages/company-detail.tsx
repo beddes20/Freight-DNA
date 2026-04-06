@@ -3622,6 +3622,7 @@ export default function CompanyDetail() {
         open={!!viewContact}
         onClose={() => setViewContact(null)}
         onEdit={(c) => { setViewContact(null); handleEditContact(c); }}
+        onDeleted={() => setViewContact(null)}
       />
 
       {intelContact && (
