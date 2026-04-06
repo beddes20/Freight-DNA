@@ -123,7 +123,12 @@ export function AppSidebar() {
 
   const saveSignatureMutation = useMutation({
     mutationFn: async (sig: string) => {
-      const res = await apiRequest("PATCH", `/api/users/${user?.id}`, { emailSignature: sig.trim() || null });
+      // Remove empty paragraphs before saving so spacing is clean in sent emails
+      const cleaned = sig
+        .replace(/<p[^>]*>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, "")
+        .replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>")
+        .trim();
+      const res = await apiRequest("PATCH", `/api/users/${user?.id}`, { emailSignature: cleaned || null });
       return res.json();
     },
     onSuccess: () => {

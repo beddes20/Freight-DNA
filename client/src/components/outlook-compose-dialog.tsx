@@ -40,6 +40,16 @@ function isHtmlContent(str: string): boolean {
   return /<[a-z][\s\S]*>/i.test(str);
 }
 
+/** Strip empty/whitespace-only paragraphs and excessive <br> runs from signature HTML */
+function cleanSignatureHtml(html: string): string {
+  return html
+    // remove <p> tags that contain only whitespace, &nbsp;, or a lone <br>
+    .replace(/<p[^>]*>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, "")
+    // collapse 3+ consecutive <br> tags into at most 2
+    .replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>")
+    .trim();
+}
+
 export function OutlookComposeDialog({
   open,
   onClose,
@@ -66,7 +76,8 @@ export function OutlookComposeDialog({
     const bodyHtml = plainTextToHtml(body.trim());
     if (!signature) return bodyHtml;
     if (hasHtmlSignature) {
-      return `${bodyHtml}<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;">${signature}`;
+      const cleanSig = cleanSignatureHtml(signature);
+      return `${bodyHtml}<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;">${cleanSig}`;
     }
     const sigHtml = plainTextToHtml(signature);
     return `${bodyHtml}<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;">${sigHtml}`;
