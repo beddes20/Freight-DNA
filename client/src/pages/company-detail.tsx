@@ -121,6 +121,7 @@ import { ContactIntelModal } from "@/components/contact-intel-modal";
 import { ZoomInfoSuggestionsDialog } from "@/components/zoominfo-suggestions";
 import { OpportunityLogDialog } from "@/components/opportunity-log-dialog";
 import { RelationshipFreightCompanyPortlet } from "@/components/relationship-freight-portlet";
+import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
@@ -254,6 +255,7 @@ export default function CompanyDetail() {
   const [transferTo, setTransferTo] = useState("");
   const [viewContact, setViewContact] = useState<Contact | null>(null);
   const [intelContact, setIntelContact] = useState<Contact | null>(null);
+  const [orgEmailContact, setOrgEmailContact] = useState<Contact | null>(null);
   const [expandedDeliveryGroups, setExpandedDeliveryGroups] = useState<Set<string>>(new Set());
   const [expandedDeliveryLanes, setExpandedDeliveryLanes] = useState<Set<string>>(new Set());
   const [expandedPickupGroups, setExpandedPickupGroups] = useState<Set<string>>(new Set());
@@ -2756,6 +2758,7 @@ export default function CompanyDetail() {
                 });
                 setTaskDialogOpen(true);
               }}
+              onSendEmail={(c) => setOrgEmailContact(c)}
             />
           ) : (
             <div className="flex flex-col items-center justify-center py-8">
@@ -3626,6 +3629,19 @@ export default function CompanyDetail() {
           contact={intelContact}
           open={!!intelContact}
           onClose={() => setIntelContact(null)}
+        />
+      )}
+
+      {orgEmailContact && (
+        <OutlookComposeDialog
+          open={!!orgEmailContact}
+          onClose={() => setOrgEmailContact(null)}
+          toEmail={orgEmailContact.email ?? ""}
+          toName={orgEmailContact.name}
+          defaultSubject=""
+          companyName={company.name}
+          contactId={orgEmailContact.id}
+          companyId={company.id}
         />
       )}
 
