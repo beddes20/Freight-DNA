@@ -143,89 +143,92 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
             <Card
               key={contact.id}
               data-testid={`card-contact-list-${contact.id}`}
-              className={onViewContact ? "cursor-pointer hover-elevate" : ""}
+              className={`group min-h-[140px]${onViewContact ? " cursor-pointer hover-elevate" : ""}`}
               onClick={onViewContact ? () => onViewContact(contact) : undefined}
             >
-              <CardContent className="p-4">
+              <CardContent className="p-3">
                 <div className="flex items-start gap-3">
                   <div className="relative shrink-0">
-                    <Avatar className="h-12 w-12">
-                      <AvatarFallback className="bg-primary/10 text-primary font-medium">
+                    <Avatar className="h-10 w-10">
+                      <AvatarFallback className="bg-primary/10 text-primary font-medium text-sm">
                         {initials}
                       </AvatarFallback>
                     </Avatar>
                     <span
-                      className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${days === null ? "bg-muted-foreground/30" : days <= 7 ? "bg-green-500" : days <= 30 ? "bg-amber-500" : "bg-red-500"}`}
+                      className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${days === null ? "bg-muted-foreground/30" : days <= 7 ? "bg-green-500" : days <= 30 ? "bg-amber-500" : "bg-red-500"}`}
                       title={dayLabel}
                     />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <h4 className="font-medium truncate">{contact.name}</h4>
+                        <h4 className="font-semibold text-sm leading-tight truncate">{contact.name}</h4>
                         {contact.title && (
-                          <p className="text-sm text-muted-foreground truncate">
+                          <p className="text-xs text-muted-foreground truncate mt-0.5" title={contact.title}>
                             {contact.title}
                           </p>
                         )}
                         {manager && (
-                          <p className="text-xs text-muted-foreground mt-1">
+                          <p className="text-xs text-muted-foreground/70 mt-0.5">
                             Reports to: {manager.name}
                           </p>
                         )}
-                        <div className="flex items-center gap-2 mt-1 flex-wrap">
-                          <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ${recClass}`}>
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                          <span className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full font-medium ${recClass}`}>
                             <PhoneCall className="h-2.5 w-2.5" />
                             {dayLabel}
                           </span>
-                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                          <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
                             {weekCount} this week
                           </span>
-                          <span className="text-xs text-muted-foreground">{monthCount} this month</span>
+                          <span className="text-[11px] text-muted-foreground">{monthCount} this month</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
                         {contact.email && (
                           <Button
                             size="icon"
                             variant="ghost"
+                            className="h-7 w-7"
                             onClick={(e) => { e.stopPropagation(); setComposeTarget(contact); }}
                             title="Send email via Outlook"
                             data-testid={`button-email-contact-list-${contact.id}`}
                           >
-                            <Send className="h-4 w-4 text-blue-500" />
+                            <Send className="h-3.5 w-3.5 text-blue-500" />
                           </Button>
                         )}
                         <Button
                           size="icon"
                           variant="ghost"
+                          className="h-7 w-7"
                           onClick={(e) => { e.stopPropagation(); onEditContact(contact); }}
                           data-testid={`button-edit-contact-list-${contact.id}`}
                         >
-                          <Pencil className="h-4 w-4" />
+                          <Pencil className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           size="icon"
                           variant="ghost"
+                          className="h-7 w-7"
                           onClick={(e) => { e.stopPropagation(); setDeleteTarget(contact); }}
                           data-testid={`button-delete-contact-${contact.id}`}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </div>
 
-                    <div className="mt-3 space-y-2">
+                    <div className="mt-2 space-y-1.5">
                       {(contact.email || contact.phone) && (
                         <div className="space-y-1.5 min-w-0">
-                          <div className="flex flex-wrap gap-3 text-sm min-w-0">
+                          <div className="flex flex-wrap gap-3 text-xs min-w-0">
                             {contact.email && (
                               <a
                                 href={`mailto:${contact.email}`}
                                 onClick={e => e.stopPropagation()}
                                 className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
                               >
-                                <Mail className="h-3.5 w-3.5" />
+                                <Mail className="h-3 w-3" />
                                 <span className="truncate">{contact.email}</span>
                               </a>
                             )}
@@ -235,7 +238,7 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                                 onClick={e => e.stopPropagation()}
                                 className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
                               >
-                                <Phone className="h-3.5 w-3.5" />
+                                <Phone className="h-3 w-3" />
                                 <span>{contact.phone}</span>
                               </a>
                             )}
@@ -244,11 +247,11 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                             <Button
                               size="sm"
                               variant="outline"
-                              className="w-full gap-2 text-blue-600 border-blue-200 hover:bg-blue-50 hover:border-blue-400 dark:text-blue-400 dark:border-blue-800 dark:hover:bg-blue-950/40"
+                              className="w-full gap-2 h-7 text-xs text-blue-600 border-blue-200 hover:bg-blue-50 hover:border-blue-400 dark:text-blue-400 dark:border-blue-800 dark:hover:bg-blue-950/40"
                               onClick={(e) => { e.stopPropagation(); setComposeTarget(contact); }}
                               data-testid={`button-send-email-card-${contact.id}`}
                             >
-                              <Send className="h-3.5 w-3.5" />
+                              <Send className="h-3 w-3" />
                               Send Email
                             </Button>
                           )}
@@ -256,38 +259,38 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                       )}
 
                       {contact.regions && contact.regions.length > 0 && (
-                        <div className="flex items-start gap-2 min-w-0">
-                          <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                        <div className="flex items-start gap-1.5 min-w-0">
+                          <MapPin className="h-3 w-3 text-muted-foreground shrink-0 mt-0.5" />
                           <div className="flex flex-wrap gap-1 min-w-0 overflow-hidden">
                             {contact.regions.map((region, i) => (
-                              <Badge key={i} variant="secondary" className="text-xs whitespace-normal break-words max-w-full">
-                                {region}
-                              </Badge>
+                              <span key={i} className="inline-flex items-center text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-normal">
+                                {region.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
+                              </span>
                             ))}
                           </div>
                         </div>
                       )}
 
                       {contact.lanes && contact.lanes.length > 0 && (
-                        <div className="flex items-start gap-2 min-w-0">
-                          <Route className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                        <div className="flex items-start gap-1.5 min-w-0">
+                          <Route className="h-3 w-3 text-muted-foreground shrink-0 mt-0.5" />
                           <div className="flex flex-wrap gap-1 min-w-0 overflow-hidden">
                             {contact.lanes.map((lane, i) => (
-                              <Badge key={i} variant="outline" className="text-xs whitespace-normal break-words max-w-full">
-                                {lane}
-                              </Badge>
+                              <span key={i} className="inline-flex items-center text-[11px] px-2 py-0.5 rounded-full bg-muted/60 text-muted-foreground font-normal border border-border/50">
+                                {lane.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
+                              </span>
                             ))}
                           </div>
                         </div>
                       )}
 
                       {contact.freightSpend && (
-                        <div className="flex items-center gap-2 min-w-0">
-                          <DollarSign className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span className="text-sm font-medium">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <DollarSign className="h-3 w-3 text-muted-foreground shrink-0" />
+                          <span className="text-xs font-medium">
                             ${Number(contact.freightSpend).toLocaleString()}
                           </span>
-                          <span className="text-xs text-muted-foreground">annual freight spend</span>
+                          <span className="text-[11px] text-muted-foreground">annual freight spend</span>
                         </div>
                       )}
 
