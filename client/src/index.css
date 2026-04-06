@@ -344,30 +344,28 @@
 }
 
 /* ── TipTap / ProseMirror Signature Editor ──────────────────────────────── */
-.ProseMirror {
+/* Zoom the whole signature content down proportionally so Outlook-style
+   table layouts and images render correctly just at a smaller scale.       */
+.sig-prosemirror {
   outline: none;
-  font-size: 0.8125rem;
-  line-height: 1.45;
+  zoom: 0.62;
+  /* min-height at 100% scale → visually ~60px at 0.62 zoom */
+  min-height: 90px;
 }
-.ProseMirror p { margin: 0 0 2px; }
-.ProseMirror p:last-child { margin-bottom: 0; }
-.ProseMirror strong { font-weight: 600; }
-.ProseMirror em { font-style: italic; }
-.ProseMirror u { text-decoration: underline; }
-.ProseMirror a { color: #3b82f6; text-decoration: underline; }
-/* Scale down images & tables pasted from Outlook */
-.ProseMirror img { display: inline-block; max-width: 180px; height: auto; }
-.ProseMirror table { font-size: 0.8125rem; border-collapse: collapse; max-width: 100%; }
-.ProseMirror td, .ProseMirror th { padding: 1px 4px; vertical-align: top; }
-/* Suppress large inline font-size / padding Outlook pastes */
-.ProseMirror [style*="font-size"] { font-size: inherit !important; }
-.ProseMirror [style*="padding"] { padding: 0 !important; }
-.ProseMirror [style*="margin-top"] { margin-top: 0 !important; }
-.ProseMirror [style*="margin-bottom"] { margin-bottom: 2px !important; }
-.ProseMirror p.is-editor-empty:first-child::before {
+.sig-prosemirror strong { font-weight: 600; }
+.sig-prosemirror em { font-style: italic; }
+.sig-prosemirror u { text-decoration: underline; }
+.sig-prosemirror a { color: #3b82f6; text-decoration: underline; }
+/* Constrain any stray images that are explicitly huge */
+.sig-prosemirror img { max-width: 400px; height: auto; }
+.sig-prosemirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
   color: hsl(var(--muted-foreground));
   pointer-events: none;
   height: 0;
+}
+/* Generic ProseMirror base (for other non-signature editors if added later) */
+.ProseMirror {
+  outline: none;
 }

@@ -49,7 +49,7 @@ export function SignatureEditor({ value, onChange }: SignatureEditorProps) {
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
     editorProps: {
       attributes: {
-        class: "min-h-[100px] max-h-[160px] overflow-y-auto px-3 py-2 text-sm focus:outline-none",
+        class: "sig-prosemirror px-3 py-2 focus:outline-none",
       },
     },
   });
@@ -230,7 +230,9 @@ export function SignatureEditor({ value, onChange }: SignatureEditorProps) {
         </button>
       </div>
 
-      <EditorContent editor={editor} />
+      <div className="sig-editor-scroll overflow-y-auto max-h-[180px] bg-background">
+        <EditorContent editor={editor} />
+      </div>
     </div>
   );
 }
