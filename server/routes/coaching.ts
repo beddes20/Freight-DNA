@@ -86,13 +86,13 @@ export function registerCoachingRoutes(
         try {
           const { build1on1SummaryEmail, sendEmail } = await import("../emailService");
           const topics = await storage.getTopicsBySession((req.params.id as string));
-          const allUsers = await storage.getUsers();
+          const allUsers = await storage.getUsers(user.organizationId);
           const nam = allUsers.find(u => u.id === oldSession.namId);
           const am = allUsers.find(u => u.id === oldSession.amId);
-          if (nam?.email && am?.email) {
+          if (nam?.username && am?.username) {
             const html = build1on1SummaryEmail({ session: { ...oldSession, moraleScore: moraleScore ?? null, sessionSummary: sessionSummary ?? null }, topics, namName: nam.name, amName: am.name });
-            await sendEmail({ to: nam.email, subject: `1:1 Session Recap — ${am.name}`, html });
-            await sendEmail({ to: am.email, subject: `1:1 Session Recap — with ${nam.name}`, html });
+            await sendEmail({ to: nam.username, subject: `1:1 Session Recap — ${am.name}`, html });
+            await sendEmail({ to: am.username, subject: `1:1 Session Recap — with ${nam.name}`, html });
           }
         } catch (emailErr) {
           console.error("[1on1] summary email error:", emailErr);
@@ -281,7 +281,7 @@ export function registerCoachingRoutes(
       const repCompanies = allCompanies.filter(c => c.salesPersonId === repId || c.assignedTo === repId);
 
       const meaningfulTouchpoints = await storage.getTouchpointsByUser(repId, thirtyDaysAgo);
-      const recentMeaningfulIds = new Set(meaningfulTouchpoints.filter(tp => tp.meaningful).map(tp => tp.companyId).filter(Boolean));
+      const recentMeaningfulIds = new Set(meaningfulTouchpoints.filter(tp => tp.isMeaningful).map(tp => tp.companyId).filter(Boolean));
       const overdueAccounts = repCompanies.filter(c => !recentMeaningfulIds.has(c.id)).slice(0, 3);
       for (const co of overdueAccounts) {
         suggestions.push({
@@ -424,7 +424,7 @@ export function registerCoachingRoutes(
         const mySessions = Array.isArray(allSessions) ? allSessions.filter((s: any) => (s.repId === amId || s.managerId === amId) && s.closedAt) : [];
         if (mySessions.length > 0) {
           const lastClosed = mySessions.sort((a: any, b: any) => b.closedAt.localeCompare(a.closedAt))[0];
-          lastSessionDate = lastClosed.closedAt.slice(0, 10);
+          lastSessionDate = lastClosed.closedAt!.slice(0, 10);
           daysSinceSession = Math.floor((new Date(todayStr).getTime() - new Date(lastSessionDate).getTime()) / (1000 * 60 * 60 * 24));
         }
       } catch {}

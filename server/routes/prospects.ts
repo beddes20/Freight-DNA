@@ -1085,7 +1085,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
         shippingModes: existing.shippingModes ?? [],
         estimatedSpend: existing.estimatedSpend ?? undefined,
         notes: existing.notes ? `[Converted from prospect]\n${existing.notes}` : "[Converted from prospect]",
-      });
+      } as any);
       if (existing.primaryContactName) {
         await storage.createContact({
           id: nanoid(10),
@@ -1095,7 +1095,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
           email: existing.primaryContactEmail ?? undefined,
           phone: existing.primaryContactPhone ?? undefined,
           linkedin: existing.primaryContactLinkedin ?? undefined,
-        });
+        } as any);
       }
       await storage.updateProspect(id, {
         convertedToCompanyId: company.id,
