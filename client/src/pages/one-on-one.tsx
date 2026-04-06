@@ -159,7 +159,7 @@ function SessionNotesArea({ sessionId, initialNotes, sessionQueryKey }: { sessio
 
   useEffect(() => {
     setNotes(initialNotes);
-  }, [initialNotes, sessionId]);
+  }, [sessionId]);
 
   const saveNotes = useCallback(async (value: string) => {
     setSaving(true);
@@ -232,20 +232,27 @@ function DevelopmentGoalsPanel({ managerId, repId }: { managerId: string; repId:
   const [saveError, setSaveError] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestRef = useRef("");
+  const initializedForRef = useRef<string | null>(null);
+
+  const pairKey = `${managerId}:${repId}`;
 
   useEffect(() => {
-    if (data?.content !== undefined) {
+    if (data?.content !== undefined && initializedForRef.current !== pairKey) {
+      initializedForRef.current = pairKey;
       setContent(data.content);
       latestRef.current = data.content;
     }
-  }, [data?.content]);
+  }, [data?.content, pairKey]);
 
   const save = useCallback(async (value: string) => {
     setSaving(true);
     setSaveError(false);
     try {
       await apiRequest("PATCH", `/api/1on1/dev-goals?namId=${managerId}&amId=${repId}`, { content: value });
-      queryClient.invalidateQueries({ queryKey: devGoalsKey });
+      queryClient.setQueryData<{ content: string; updatedAt: string | null }>(devGoalsKey, (old) => {
+        if (!old) return { content: value, updatedAt: new Date().toISOString() };
+        return { ...old, content: value };
+      });
     } catch {
       setSaveError(true);
     } finally {
