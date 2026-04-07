@@ -17,74 +17,19 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   ArrowLeft,
   Building2,
-  Users,
-  Plus,
   Pencil,
   Trash2,
   ExternalLink,
-  Network,
-  List,
   Trophy,
-  TruckIcon,
-  AlertTriangle,
-  BarChart3,
-  UserPlus,
-  CheckCircle,
-  Clock,
-  Download,
-  MapPin,
-  ShieldCheck,
-  ShieldAlert,
-  Route,
-  ArrowRightLeft,
-  Warehouse,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Repeat2,
-  Globe,
-  KeyRound,
-  Eye,
-  EyeOff,
-  UserCheck,
-  Zap,
   TrendingUp,
-  ChevronDown,
-  ChevronRight,
   ClipboardList,
-  Circle,
-  PlayCircle,
-  CheckCircle2,
-  Calendar,
-  Megaphone,
-  MessageSquare,
   PhoneCall,
   Archive,
   ArchiveX,
-  DollarSign,
-  AlertCircle,
   FileText,
-  Mail,
   Activity,
-  Printer,
-  Brain,
-  Copy,
-  Search,
   MoreHorizontal,
 } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -150,10 +95,6 @@ export default function CompanyDetail() {
   const [viewContact, setViewContact] = useState<Contact | null>(null);
   const [intelContact, setIntelContact] = useState<Contact | null>(null);
   const [orgEmailContact, setOrgEmailContact] = useState<Contact | null>(null);
-  const [expandedDeliveryGroups, setExpandedDeliveryGroups] = useState<Set<string>>(new Set());
-  const [expandedDeliveryLanes, setExpandedDeliveryLanes] = useState<Set<string>>(new Set());
-  const [expandedPickupGroups, setExpandedPickupGroups] = useState<Set<string>>(new Set());
-  const [expandedPickupLanes, setExpandedPickupLanes] = useState<Set<string>>(new Set());
   const [quickTouchOpen, setQuickTouchOpen] = useState(false);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
