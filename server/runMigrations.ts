@@ -1058,4 +1058,76 @@ export async function runMigrations() {
   } finally {
     clientNba.release();
   }
+
+  // Task schema expansion (Task #147)
+  const clientTaskExpand = await pool.connect();
+  try {
+    await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS org_id varchar REFERENCES organizations(id)`);
+    await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS company_name text`);
+    await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS contact_name text`);
+    // Add opportunity_id as integer FK (idempotent: drop varchar version if present, add integer FK)
+    await clientTaskExpand.query(`
+      DO $$
+      BEGIN
+        -- If column exists as varchar, drop and recreate as integer FK
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'tasks' AND column_name = 'opportunity_id'
+            AND data_type = 'character varying'
+        ) THEN
+          ALTER TABLE tasks DROP COLUMN opportunity_id;
+        END IF;
+        -- Add as integer FK if not present
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'tasks' AND column_name = 'opportunity_id'
+        ) THEN
+          ALTER TABLE tasks ADD COLUMN opportunity_id integer REFERENCES crm_opportunities(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+    `);
+    await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lane_context jsonb`);
+    await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lever text`);
+    await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at text`);
+    await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS description text`);
+    console.log("[migrations] tasks expansion columns ensured");
+  } catch (err) {
+    console.error("[migrations] tasks expansion error:", err);
+  } finally {
+    clientTaskExpand.release();
+  }
+
+  // Forced Focus table (Task #147)
+  const clientFF = await pool.connect();
+  try {
+    await clientFF.query(`
+      CREATE TABLE IF NOT EXISTS forced_focus (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        assigned_to_user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        assigned_by_user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        company_name text,
+        contact_id varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        contact_name text,
+        related_opportunity_id varchar,
+        related_task_id varchar,
+        lever text,
+        action_text text NOT NULL,
+        context_reason text,
+        due_date text,
+        status text NOT NULL DEFAULT 'active',
+        created_at text NOT NULL,
+        updated_at text
+      )
+    `);
+    await clientFF.query(`CREATE INDEX IF NOT EXISTS idx_forced_focus_assigned_to ON forced_focus(assigned_to_user_id, status)`);
+    await clientFF.query(`CREATE INDEX IF NOT EXISTS idx_forced_focus_org ON forced_focus(org_id, status)`);
+    await clientFF.query(`CREATE INDEX IF NOT EXISTS idx_forced_focus_assigned_by ON forced_focus(assigned_by_user_id)`);
+    console.log("[migrations] forced_focus table ensured");
+  } catch (err) {
+    console.error("[migrations] forced_focus error:", err);
+  } finally {
+    clientFF.release();
+  }
 }

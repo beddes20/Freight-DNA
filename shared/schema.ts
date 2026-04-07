@@ -206,13 +206,21 @@ export const tasks = pgTable("tasks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),
   notes: text("notes"),
+  description: text("description"),
   status: text("status").notNull().default("open"),
   dueDate: text("due_date"),
   assignedTo: varchar("assigned_to").notNull().references(() => users.id),
   assignedBy: varchar("assigned_by").notNull().references(() => users.id),
   companyId: varchar("company_id").references(() => companies.id),
   contactId: varchar("contact_id").references(() => contacts.id),
+  orgId: varchar("org_id").references(() => organizations.id),
+  companyName: text("company_name"),
+  contactName: text("contact_name"),
+  opportunityId: integer("opportunity_id").references(() => crmOpportunities.id, { onDelete: "set null" }),
+  laneContext: jsonb("lane_context"),
+  lever: text("lever"),
   createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at"),
   attachedLaneData: jsonb("attached_lane_data"),
   forwardedFrom: varchar("forwarded_from"),
 });
@@ -1105,3 +1113,27 @@ export const insertNbaCardSchema = createInsertSchema(nbaCards).omit({ id: true 
 export type InsertNbaCard = z.infer<typeof insertNbaCardSchema>;
 export type NbaCard = typeof nbaCards.$inferSelect;
 
+// ─── Forced Focus ─────────────────────────────────────────────────────────────
+export const forcedFocus = pgTable("forced_focus", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  assignedToUserId: varchar("assigned_to_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  assignedByUserId: varchar("assigned_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  companyName: text("company_name"),
+  contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+  contactName: text("contact_name"),
+  relatedOpportunityId: varchar("related_opportunity_id"),
+  relatedTaskId: varchar("related_task_id"),
+  lever: text("lever"),
+  actionText: text("action_text").notNull(),
+  contextReason: text("context_reason"),
+  dueDate: text("due_date"),
+  status: text("status").notNull().default("active"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at"),
+});
+
+export const insertForcedFocusSchema = createInsertSchema(forcedFocus).omit({ id: true });
+export type InsertForcedFocus = z.infer<typeof insertForcedFocusSchema>;
+export type ForcedFocus = typeof forcedFocus.$inferSelect;

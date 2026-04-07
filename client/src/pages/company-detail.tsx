@@ -1342,6 +1342,7 @@ export default function CompanyDetail() {
             totalAwardValue={totalAwardValue}
             companyId={companyId}
             companyName={company!.name}
+            isLeadership={currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales_director" || currentUser?.role === "admin"}
             onNbaLogTouch={() => setQuickTouchOpen(true)}
             onNbaCreateTask={() => setTaskDialogOpen(true)}
             onNbaViewRfp={() => {

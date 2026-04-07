@@ -298,11 +298,14 @@ export function WeeklyCommitmentsPanel({ collapsed, onToggle }: WeeklyCommitment
 interface TeamCommitmentsPortletProps {
   collapsed: boolean;
   onToggle: () => void;
+  onAssignForcedFocus?: (userId: string, userName: string) => void;
 }
 
 type CommitmentWithUser = WeeklyCommitment & { userName: string; userRole: string };
 
-export function TeamCommitmentsPortlet({ collapsed, onToggle }: TeamCommitmentsPortletProps) {
+type TeamFFItem = { assignedToUserId: string; status: string; actionText: string; lever?: string | null; dueDate?: string | null };
+
+export function TeamCommitmentsPortlet({ collapsed, onToggle, onAssignForcedFocus }: TeamCommitmentsPortletProps) {
   const [viewingWeek, setViewingWeek] = useState<"last" | "current">("last");
   const weekStart = viewingWeek === "last" ? getLastWeekStart() : getWeekStart();
 
@@ -311,6 +314,17 @@ export function TeamCommitmentsPortlet({ collapsed, onToggle }: TeamCommitmentsP
     queryFn: () =>
       fetch(`/api/weekly-commitments/team?weekStart=${weekStart}`, { credentials: "include" }).then(r => r.json()),
   });
+
+  const { data: teamFf = [] } = useQuery<TeamFFItem[]>({
+    queryKey: ["/api/forced-focus/team"],
+    staleTime: 60_000,
+    enabled: !!onAssignForcedFocus,
+  });
+
+  const ffByUser = teamFf.reduce<Record<string, TeamFFItem>>((acc, f) => {
+    if (f.status === "active") acc[f.assignedToUserId] = f;
+    return acc;
+  }, {});
 
   // Group by user
   const byUser = rows.reduce<Record<string, CommitmentWithUser[]>>((acc, r) => {
@@ -400,12 +414,13 @@ export function TeamCommitmentsPortlet({ collapsed, onToggle }: TeamCommitmentsP
                 const total = items.length;
                 const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
+                const repFf = ffByUser[userId];
                 return (
                   <div key={userId} className="rounded-lg border border-border bg-muted/20 px-3 py-2.5" data-testid={`team-rep-${userId}`}>
                     {/* Rep header */}
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center justify-between mb-1.5">
                       <p className="text-sm font-semibold">{userName}</p>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1.5">
                         {done > 0 && (
                           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">{done} done</span>
                         )}
@@ -415,8 +430,28 @@ export function TeamCommitmentsPortlet({ collapsed, onToggle }: TeamCommitmentsP
                         {missed > 0 && (
                           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400">{missed} missed</span>
                         )}
+                        {onAssignForcedFocus && (
+                          <button
+                            type="button"
+                            className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300 dark:hover:bg-indigo-800/50 transition-colors"
+                            onClick={() => onAssignForcedFocus(userId, userName)}
+                            data-testid={`button-assign-priority-${userId}`}
+                          >
+                            Assign Priority
+                          </button>
+                        )}
                       </div>
                     </div>
+                    {/* Per-rep Forced Focus status inline */}
+                    {repFf ? (
+                      <div className="flex items-center gap-1.5 mb-2 text-[10px]" data-testid={`rep-ff-status-${userId}`}>
+                        <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 font-semibold">Priority Active</span>
+                        <span className="text-muted-foreground truncate max-w-[160px]">{repFf.actionText}</span>
+                        {repFf.lever && <span className="px-1 py-0.5 rounded bg-muted text-muted-foreground">{repFf.lever}</span>}
+                      </div>
+                    ) : onAssignForcedFocus ? (
+                      <p className="text-[10px] text-muted-foreground mb-2" data-testid={`rep-ff-none-${userId}`}>No leadership priority set</p>
+                    ) : null}
 
                     {/* Progress bar */}
                     <div className="h-1 w-full rounded-full bg-muted mb-2 overflow-hidden">

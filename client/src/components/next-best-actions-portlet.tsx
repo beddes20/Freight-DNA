@@ -84,9 +84,10 @@ const PREVIEW_COUNT = 3;
 interface NextBestActionsPortletProps {
   collapsed: boolean;
   onToggle:  () => void;
+  showSystemRecommendationLabel?: boolean;
 }
 
-export function NextBestActionsPortlet({ collapsed, onToggle }: NextBestActionsPortletProps) {
+export function NextBestActionsPortlet({ collapsed, onToggle, showSystemRecommendationLabel }: NextBestActionsPortletProps) {
   const [, navigate] = useLocation();
   const [showAll, setShowAll] = useState(false);
 
@@ -145,7 +146,9 @@ export function NextBestActionsPortlet({ collapsed, onToggle }: NextBestActionsP
       >
         <div className="flex items-center gap-2">
           <Zap className="h-4 w-4 text-amber-500" />
-          <span className="text-sm font-semibold">Do This First</span>
+          <span className="text-sm font-semibold">
+            {showSystemRecommendationLabel ? "System Recommendation" : "Do This First"}
+          </span>
           {!isLoading && !isError && (
             <div className="flex items-center gap-1.5">
               {criticalCount > 0 && (

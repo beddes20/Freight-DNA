@@ -26,6 +26,7 @@ import {
   FileText,
   Route,
   CheckCircle2,
+  Crown,
 } from "lucide-react";
 
 // ── Types (mirror the server types; no shared import needed here) ─────────────
@@ -151,10 +152,11 @@ function buildSignalChips(signals: NbaSignals): Array<{ icon: JSX.Element; text:
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface NextBestActionCardProps {
-  companyId:     string;
-  onLogTouch?:   () => void;
-  onCreateTask?: () => void;
-  onViewRfp?:    () => void;
+  companyId:            string;
+  onLogTouch?:          () => void;
+  onCreateTask?:        () => void;
+  onViewRfp?:           () => void;
+  onAssignForcedFocus?: () => void;
 }
 
 export function NextBestActionCard({
@@ -162,6 +164,7 @@ export function NextBestActionCard({
   onLogTouch,
   onCreateTask,
   onViewRfp,
+  onAssignForcedFocus,
 }: NextBestActionCardProps) {
   const [whyOpen, setWhyOpen] = useState(false);
 
@@ -282,17 +285,31 @@ export function NextBestActionCard({
         </div>
 
         {/* CTA button */}
-        {data.cta !== "none" && (
-          <Button
-            size="sm"
-            variant="default"
-            className="w-full"
-            onClick={handleCta}
-            data-testid="button-nba-cta"
-          >
-            {data.ctaLabel}
-          </Button>
-        )}
+        <div className="flex gap-2">
+          {data.cta !== "none" && (
+            <Button
+              size="sm"
+              variant="default"
+              className="flex-1"
+              onClick={handleCta}
+              data-testid="button-nba-cta"
+            >
+              {data.ctaLabel}
+            </Button>
+          )}
+          {onAssignForcedFocus && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 border-purple-400/40 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/30 shrink-0"
+              onClick={onAssignForcedFocus}
+              data-testid="button-nba-assign-priority"
+            >
+              <Crown className="h-3.5 w-3.5" />
+              Assign Priority
+            </Button>
+          )}
+        </div>
 
         {/* "Why now?" expandable signals section */}
         {chips.length > 0 && (

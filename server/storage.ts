@@ -470,6 +470,15 @@ export interface IStorage {
     ruleType: string; firedCount: number; shownCount: number; actionedCount: number;
     dismissedCount: number; avgHoursToAction: number | null; outcomeLinkCount: number;
   }>>;
+
+  // Forced Focus
+  createForcedFocus(data: import('../shared/schema').InsertForcedFocus): Promise<import('../shared/schema').ForcedFocus>;
+  getActiveForcedFocusForUser(userId: string): Promise<import('../shared/schema').ForcedFocus | undefined>;
+  getTeamForcedFocus(orgId: string, teamMemberIds?: string[]): Promise<Array<import('../shared/schema').ForcedFocus & { assignedToName: string; assignedToRole: string }>>;
+  deactivateForcedFocusForUser(userId: string): Promise<void>;
+  getForcedFocus(id: string): Promise<import('../shared/schema').ForcedFocus | undefined>;
+  updateForcedFocusStatus(id: string, status: string): Promise<import('../shared/schema').ForcedFocus | undefined>;
+  updateForcedFocus(id: string, data: Partial<import('../shared/schema').InsertForcedFocus>): Promise<import('../shared/schema').ForcedFocus | undefined>;
 }
 
 const pool = new Pool({
@@ -2938,6 +2947,75 @@ export class DatabaseStorage implements IStorage {
         : null,
       outcomeLinkCount: e.outcomeLinkCount,
     }));
+  }
+
+  // ── Forced Focus ─────────────────────────────────────────────────────────────
+
+  async createForcedFocus(data: import('../shared/schema').InsertForcedFocus): Promise<import('../shared/schema').ForcedFocus> {
+    const { forcedFocus } = await import('../shared/schema');
+    await this.deactivateForcedFocusForUser(data.assignedToUserId);
+    const [row] = await db.insert(forcedFocus).values(data).returning();
+    return row;
+  }
+
+  async getActiveForcedFocusForUser(userId: string): Promise<import('../shared/schema').ForcedFocus | undefined> {
+    const { forcedFocus } = await import('../shared/schema');
+    const [row] = await db.select().from(forcedFocus)
+      .where(and(eq(forcedFocus.assignedToUserId, userId), eq(forcedFocus.status, "active")))
+      .orderBy(desc(forcedFocus.createdAt))
+      .limit(1);
+    return row;
+  }
+
+  async getTeamForcedFocus(orgId: string, teamMemberIds?: string[]): Promise<Array<import('../shared/schema').ForcedFocus & { assignedToName: string; assignedToRole: string }>> {
+    const { forcedFocus } = await import('../shared/schema');
+    if (teamMemberIds !== undefined && teamMemberIds.length === 0) {
+      return [];
+    }
+    const orgCond = eq(forcedFocus.orgId, orgId);
+    const statusCond = eq(forcedFocus.status, "active");
+    const memberCond = teamMemberIds && teamMemberIds.length > 0
+      ? inArray(forcedFocus.assignedToUserId, teamMemberIds)
+      : undefined;
+    const whereCond = memberCond ? and(orgCond, statusCond, memberCond) : and(orgCond, statusCond);
+    const rows = await db
+      .select({ ff: forcedFocus, assignedToName: users.name, assignedToRole: users.role })
+      .from(forcedFocus)
+      .innerJoin(users, eq(forcedFocus.assignedToUserId, users.id))
+      .where(whereCond)
+      .orderBy(desc(forcedFocus.createdAt));
+    return rows.map(r => ({ ...r.ff, assignedToName: r.assignedToName, assignedToRole: r.assignedToRole }));
+  }
+
+  async deactivateForcedFocusForUser(userId: string): Promise<void> {
+    const { forcedFocus } = await import('../shared/schema');
+    await db.update(forcedFocus)
+      .set({ status: "dismissed", updatedAt: new Date().toISOString() })
+      .where(and(eq(forcedFocus.assignedToUserId, userId), eq(forcedFocus.status, "active")));
+  }
+
+  async getForcedFocus(id: string): Promise<import('../shared/schema').ForcedFocus | undefined> {
+    const { forcedFocus } = await import('../shared/schema');
+    const [row] = await db.select().from(forcedFocus).where(eq(forcedFocus.id, id));
+    return row;
+  }
+
+  async updateForcedFocusStatus(id: string, status: string): Promise<import('../shared/schema').ForcedFocus | undefined> {
+    const { forcedFocus } = await import('../shared/schema');
+    const [row] = await db.update(forcedFocus)
+      .set({ status, updatedAt: new Date().toISOString() })
+      .where(eq(forcedFocus.id, id))
+      .returning();
+    return row;
+  }
+
+  async updateForcedFocus(id: string, data: Partial<import('../shared/schema').InsertForcedFocus>): Promise<import('../shared/schema').ForcedFocus | undefined> {
+    const { forcedFocus } = await import('../shared/schema');
+    const [row] = await db.update(forcedFocus)
+      .set({ ...data, updatedAt: new Date().toISOString() })
+      .where(eq(forcedFocus.id, id))
+      .returning();
+    return row;
   }
 }
 

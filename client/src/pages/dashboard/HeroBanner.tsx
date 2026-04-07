@@ -1,5 +1,5 @@
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
-import { PhoneCall, ListTodo, Settings2 } from "lucide-react";
+import { PhoneCall, ListTodo, Settings2, Crown } from "lucide-react";
 import type { SafeUser } from "./types";
 
 interface BriefingData {
@@ -14,9 +14,11 @@ interface HeroBannerProps {
   briefingData: BriefingData | null | undefined;
   isDirector: boolean;
   onOpenLayoutPanel: () => void;
+  onAssignForcedFocus?: () => void;
+  isLeadership?: boolean;
 }
 
-export function HeroBanner({ currentUser, briefingData, isDirector, onOpenLayoutPanel }: HeroBannerProps) {
+export function HeroBanner({ currentUser, briefingData, isDirector, onOpenLayoutPanel, onAssignForcedFocus, isLeadership }: HeroBannerProps) {
   return (
     <div
       className="relative overflow-hidden rounded-xl px-4 py-4 sm:px-6 sm:py-5 text-white"
@@ -79,6 +81,17 @@ export function HeroBanner({ currentUser, briefingData, isDirector, onOpenLayout
         )}
 
         <div className="shrink-0 flex items-center gap-3">
+          {isLeadership && onAssignForcedFocus && (
+            <button
+              onClick={onAssignForcedFocus}
+              className="hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-purple-500/30 text-purple-300 hover:text-purple-100 hover:border-purple-400/60 hover:bg-purple-500/10 transition-all"
+              title="Assign Leadership Priority to a rep"
+              data-testid="button-assign-forced-focus"
+            >
+              <Crown className="h-3.5 w-3.5" />
+              Assign Priority
+            </button>
+          )}
           {isDirector && (
             <button
               onClick={onOpenLayoutPanel}

@@ -8,6 +8,7 @@ import { registerProspectRoutes } from "./routes/prospects";
 import { registerFinancialRoutes } from "./routes/financials";
 import { registerGoalRoutes } from "./routes/goals";
 import { registerDashboardRoutes } from "./routes/dashboard";
+import { registerForcedFocusRoutes } from "./routes/forcedFocus";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -2881,6 +2882,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   registerTaskRoutes(app);
+  registerForcedFocusRoutes(app);
   registerEngagementRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);

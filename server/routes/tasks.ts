@@ -45,7 +45,10 @@ export function registerTaskRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { title, notes, status, dueDate, assignedTo, companyId, contactId, attachedLaneData } = req.body;
+      const {
+        title, notes, description, status, dueDate, assignedTo, companyId, contactId,
+        attachedLaneData, companyName, contactName, opportunityId, laneContext, lever,
+      } = req.body;
       if (!title || typeof title !== "string" || !title.trim()) {
         return res.status(400).json({ error: "Title is required" });
       }
@@ -67,6 +70,7 @@ export function registerTaskRoutes(app: Express) {
         if (user.managerId) assignableIds.add(user.managerId);
         allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
       } else {
+        // AMs, LMs, coordinators: can self-assign + assign to any logistics_manager in org
         assignableIds = new Set([user.id]);
         if (user.managerId) {
           assignableIds.add(user.managerId);
@@ -74,6 +78,8 @@ export function registerTaskRoutes(app: Express) {
             if (u.managerId === user.managerId) assignableIds.add(u.id);
           });
         }
+        // Allow assigning to any logistics_manager in the org (cross-functional execution)
+        allUsers.filter(u => u.role === "logistics_manager").forEach(u => assignableIds.add(u.id));
         allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
       }
       if (!assignableIds.has(assignedTo)) {
@@ -85,12 +91,19 @@ export function registerTaskRoutes(app: Express) {
       const task = await storage.createTask({
         title: title.trim(),
         notes: notes || null,
+        description: description || null,
         status: taskStatus,
         dueDate: dueDate || null,
         assignedTo,
         assignedBy: user.id,
         companyId: companyId || null,
         contactId: contactId || null,
+        companyName: companyName || null,
+        contactName: contactName || null,
+        opportunityId: opportunityId ? Number(opportunityId) : null,
+        laneContext: laneContext ?? null,
+        lever: lever || null,
+        orgId: user.organizationId || null,
         attachedLaneData: attachedLaneData ?? null,
         createdAt: new Date().toISOString(),
       });
@@ -118,17 +131,47 @@ export function registerTaskRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const existing = await storage.getTask((req.params.id as string));
       if (!existing) return res.status(404).json({ error: "Task not found" });
-      if (existing.assignedTo !== user.id && existing.assignedBy !== user.id && user.role !== "admin") {
-        return res.status(403).json({ error: "Not authorized to edit this task" });
+
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      const isLeadership = user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director";
+
+      if (user.role === "admin") {
+        // admins can edit any task
+      } else if (isLeadership) {
+        // leadership can edit tasks belonging to their team members (org-scoped)
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const taskBelongsToTeam = teamIds.includes(existing.assignedTo) || teamIds.includes(existing.assignedBy);
+        const isSelf = existing.assignedTo === user.id || existing.assignedBy === user.id;
+        if (!taskBelongsToTeam && !isSelf) {
+          return res.status(403).json({ error: "Not authorized to edit this task" });
+        }
+      } else {
+        if (existing.assignedTo !== user.id && existing.assignedBy !== user.id) {
+          return res.status(403).json({ error: "Not authorized to edit this task" });
+        }
       }
+
       const validStatuses = ["open", "in_progress", "completed"];
-      const data: any = {};
+      type TaskPatch = {
+        title?: string; notes?: string | null; description?: string | null; status?: string;
+        dueDate?: string | null; assignedTo?: string; companyName?: string | null;
+        contactName?: string | null; opportunityId?: number | null; lever?: string | null;
+        updatedAt?: string;
+      };
+      const data: TaskPatch = {};
       if (req.body.title !== undefined) {
         const trimmed = String(req.body.title).trim();
         if (!trimmed) return res.status(400).json({ error: "Title cannot be empty" });
         data.title = trimmed;
       }
       if (req.body.notes !== undefined) data.notes = req.body.notes;
+      if (req.body.description !== undefined) data.description = req.body.description;
+      if (req.body.companyName !== undefined) data.companyName = req.body.companyName ?? null;
+      if (req.body.contactName !== undefined) data.contactName = req.body.contactName ?? null;
+      if (req.body.lever !== undefined) data.lever = req.body.lever ?? null;
+      if (req.body.opportunityId !== undefined) {
+        data.opportunityId = req.body.opportunityId ? Number(req.body.opportunityId) : null;
+      }
       if (req.body.status !== undefined) {
         if (!validStatuses.includes(req.body.status)) {
           return res.status(400).json({ error: "Invalid status. Must be open, in_progress, or completed" });
@@ -141,7 +184,29 @@ export function registerTaskRoutes(app: Express) {
         }
         data.dueDate = req.body.dueDate;
       }
+      data.updatedAt = new Date().toISOString();
       if (req.body.assignedTo !== undefined) {
+        // Apply the same assignable-set rules as POST
+        let assignableIds: Set<string>;
+        if (user.role === "admin") {
+          assignableIds = new Set(allUsers.map(u => u.id));
+        } else if (isLeadership) {
+          const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+          assignableIds = new Set(teamIds);
+          if (user.managerId) assignableIds.add(user.managerId);
+          allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
+        } else {
+          assignableIds = new Set([user.id]);
+          if (user.managerId) {
+            assignableIds.add(user.managerId);
+            allUsers.forEach(u => { if (u.managerId === user.managerId) assignableIds.add(u.id); });
+          }
+          allUsers.filter(u => u.role === "logistics_manager").forEach(u => assignableIds.add(u.id));
+          allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
+        }
+        if (!assignableIds.has(req.body.assignedTo)) {
+          return res.status(403).json({ error: "Cannot reassign task to that user" });
+        }
         data.assignedTo = req.body.assignedTo;
       }
       const task = await storage.updateTask((req.params.id as string), data);

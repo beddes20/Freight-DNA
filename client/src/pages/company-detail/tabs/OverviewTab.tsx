@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart3, Trophy, TrendingUp, DollarSign } from "lucide-react";
+import { ForcedFocusDialog } from "@/components/forced-focus-dialog";
 import { RelationshipFreightCompanyPortlet } from "@/components/relationship-freight-portlet";
 import { NextBestActionCard } from "@/components/next-best-action-card";
 import { NbaCompanyCard } from "@/components/NbaCompanyCard";
@@ -24,6 +26,7 @@ interface OverviewTabProps {
   onNbaCreateTask?: () => void;
   onNbaViewRfp?: () => void;
   onOpenContact?: (contactId: string) => void;
+  isLeadership?: boolean;
 }
 
 export function OverviewTab({
@@ -41,7 +44,9 @@ export function OverviewTab({
   onNbaCreateTask,
   onNbaViewRfp,
   onOpenContact,
+  isLeadership,
 }: OverviewTabProps) {
+  const [ffDialogOpen, setFfDialogOpen] = useState(false);
   const fmtMonth = (key: string) => {
     const [y, mo] = key.split("-");
     return new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -94,6 +99,7 @@ export function OverviewTab({
         onLogTouch={onNbaLogTouch}
         onCreateTask={onNbaCreateTask}
         onViewRfp={onNbaViewRfp}
+        onAssignForcedFocus={isLeadership ? () => setFfDialogOpen(true) : undefined}
       />
 
       {accountPerf && (
@@ -175,6 +181,12 @@ export function OverviewTab({
       )}
 
       <RelationshipFreightCompanyPortlet companyId={companyId} companyName={companyName} onOpenContact={onOpenContact} />
+
+      <ForcedFocusDialog
+        open={ffDialogOpen}
+        onClose={() => setFfDialogOpen(false)}
+        prefill={{ companyId, companyName }}
+      />
     </>
   );
 }

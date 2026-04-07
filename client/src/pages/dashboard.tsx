@@ -33,6 +33,8 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { formatTimeAgo } from "@/lib/utils";
 import { TaskDialog } from "@/components/task-dialog";
+import { ForcedFocusBanner } from "@/components/forced-focus-banner";
+import { ForcedFocusDialog } from "@/components/forced-focus-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import InternalCommsPortlet from "@/components/internal-comms-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
@@ -232,6 +234,7 @@ export default function Dashboard() {
 
   const isDirector = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director";
   const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
+  const canAssignForcedFocus = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales_director";
   const isAm = currentUser?.role === "account_manager";
 
   const [, setLocation] = useLocation();
@@ -388,6 +391,25 @@ export default function Dashboard() {
   });
   const weeklyResults = weeklyData?.results || [];
 
+  interface TeamForcedFocusItem {
+    id: string;
+    assignedToUserId: string;
+    assignedByUserId: string;
+    companyName: string | null;
+    lever: string | null;
+    actionText: string;
+    dueDate: string | null;
+    status: string;
+    createdAt: string;
+    assignedToName?: string;
+  }
+  const { data: teamForcedFocus = [] } = useQuery<TeamForcedFocusItem[]>({
+    queryKey: ["/api/forced-focus/team"],
+    enabled: canSeeTeam && canAssignForcedFocus,
+    staleTime: 60_000,
+  });
+  const activeTeamFf = teamForcedFocus.filter(f => f.status === "active");
+
   const recentWinsStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
   const { data: recentWins = [] } = useQuery<OpportunityLog[]>({
     queryKey: ["/api/opportunity-logs", "win", recentWinsStart],
@@ -400,8 +422,11 @@ export default function Dashboard() {
     staleTime: 60000,
   });
 
-  const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string } | undefined>();
+  const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string; notes?: string } | undefined>();
   const [prefillDialogOpen, setPrefillDialogOpen] = useState(false);
+  const [forcedFocusDialogOpen, setForcedFocusDialogOpen] = useState(false);
+  const [forcedFocusEditId, setForcedFocusEditId] = useState<string | undefined>();
+  const [forcedFocusPrefill, setForcedFocusPrefill] = useState<{ assignedToUserId?: string; companyId?: string; companyName?: string; contactId?: string; contactName?: string; lever?: string; actionText?: string; contextReason?: string; dueDate?: string } | undefined>();
   const [briefingDismissed, setBriefingDismissed] = useState(() => {
     const today = new Date().toISOString().slice(0, 10);
     return localStorage.getItem("briefing_dismissed") === today;
@@ -409,6 +434,12 @@ export default function Dashboard() {
 
   // streakData now comes from dashSummary (no separate request needed)
   const streakData = dashSummary?.streak;
+
+  const { data: activeForcedFocus } = useQuery<{ id: string } | null>({
+    queryKey: ["/api/forced-focus/my"],
+    staleTime: 60_000,
+    enabled: !isDirector && !isNam,
+  });
 
   const { data: briefingData } = useQuery<{
     skip?: boolean;
@@ -914,13 +945,36 @@ export default function Dashboard() {
         briefingData={briefingData}
         isDirector={isDirector}
         onOpenLayoutPanel={() => setLayoutPanelOpen(true)}
+        isLeadership={canAssignForcedFocus}
+        onAssignForcedFocus={() => { setForcedFocusEditId(undefined); setForcedFocusPrefill(undefined); setForcedFocusDialogOpen(true); }}
       />
+
+      {/* ── Forced Focus banner (Leadership Priority) — above NBA for reps/LMs ─── */}
+      {!isDirector && !isNam && (
+        <PortletErrorBoundary label="Leadership Priority">
+          <ForcedFocusBanner
+            onCommit={setCommitPayload}
+            onCreateTask={(prefill) => {
+              setTaskPrefill({
+                title: prefill.title,
+                companyId: prefill.companyId,
+                notes: [
+                  prefill.description ? `Context: ${prefill.description}` : null,
+                  prefill.lever ? `Lever: ${prefill.lever}` : null,
+                ].filter(Boolean).join("\n") || undefined,
+              });
+              setPrefillDialogOpen(true);
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
 
       {/* ── "Do This First" — NBA priority actions (top of dashboard) ─────── */}
       {!isLmRole && (
         <PortletErrorBoundary label="Priority Actions">
           <NextBestActionsPortlet
             collapsed={nbaBriefingCollapsed}
+            showSystemRecommendationLabel={!!activeForcedFocus}
             onToggle={() => {
               const next = !nbaBriefingCollapsed;
               setNbaBriefingCollapsed(next);
@@ -1205,6 +1259,11 @@ export default function Dashboard() {
               setTeamCommitmentsCollapsed(next);
               localStorage.setItem("dash_team_commitments_collapsed", String(next));
             }}
+            onAssignForcedFocus={canAssignForcedFocus ? (userId, _userName) => {
+              setForcedFocusEditId(undefined);
+              setForcedFocusPrefill({ assignedToUserId: userId });
+              setForcedFocusDialogOpen(true);
+            } : undefined}
           />
         </PortletErrorBoundary>
       )}
@@ -2299,6 +2358,65 @@ export default function Dashboard() {
         </Card>
       )}
 
+      {/* ── Leadership Priority — Team Overview (directors/NAMs only) ──────── */}
+      {canAssignForcedFocus && activeTeamFf.length > 0 && (
+        <Card data-testid="card-team-forced-focus">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Crown className="h-4 w-4 text-purple-500" />
+              Leadership Priorities — Active
+              <span className="ml-auto text-xs font-normal text-muted-foreground">{activeTeamFf.length} active</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {activeTeamFf.map((ff) => (
+                <div key={ff.id} className="flex items-start gap-2 py-2 border-b last:border-0" data-testid={`team-ff-row-${ff.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-semibold text-purple-700 dark:text-purple-300">
+                        {ff.assignedToName ?? ff.assignedToUserId}
+                      </span>
+                      {ff.companyName && (
+                        <span className="text-xs text-muted-foreground">· {ff.companyName}</span>
+                      )}
+                      {ff.lever && (
+                        <span className="text-[10px] font-medium px-1 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                          {ff.lever}
+                        </span>
+                      )}
+                      {ff.dueDate && (
+                        <span className="text-[10px] text-muted-foreground ml-auto">
+                          Due {new Date(ff.dueDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-foreground/80 truncate mt-0.5">{ff.actionText}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs px-1.5 py-0.5 rounded border border-purple-300 dark:border-purple-700 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
+                    onClick={() => {
+                      setForcedFocusEditId(ff.id);
+                      setForcedFocusPrefill({
+                        companyName: ff.companyName ?? undefined,
+                        lever: ff.lever ?? undefined,
+                        actionText: ff.actionText,
+                        dueDate: ff.dueDate ?? undefined,
+                      });
+                      setForcedFocusDialogOpen(true);
+                    }}
+                    data-testid={`button-team-ff-edit-${ff.id}`}
+                  >
+                    Edit
+                  </button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <TaskDialog
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
@@ -2309,7 +2427,7 @@ export default function Dashboard() {
         open={prefillDialogOpen}
         onOpenChange={(open) => { setPrefillDialogOpen(open); if (!open) setTaskPrefill(undefined); }}
         companyId={taskPrefill?.companyId}
-        prefillData={taskPrefill?.title ? { title: taskPrefill.title } : undefined}
+        prefillData={taskPrefill?.title ? { title: taskPrefill.title, notes: taskPrefill.notes } : undefined}
       />
 
       <ContactDetailSheet
@@ -2337,6 +2455,13 @@ export default function Dashboard() {
       <CommitDialog
         payload={commitPayload}
         onClose={() => setCommitPayload(null)}
+      />
+
+      <ForcedFocusDialog
+        open={forcedFocusDialogOpen}
+        editId={forcedFocusEditId}
+        onClose={() => { setForcedFocusDialogOpen(false); setForcedFocusPrefill(undefined); setForcedFocusEditId(undefined); }}
+        prefill={forcedFocusPrefill}
       />
 
     </div>
