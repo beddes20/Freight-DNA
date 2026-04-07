@@ -4965,6 +4965,95 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
+  // ── Next Best Actions — batch endpoint for dashboard portlet ─────────────
+  // Returns the top actionable accounts for the current user, sorted by
+  // urgency. Uses the shared _nbaCache so results computed by the per-account
+  // route are re-used here and vice-versa.
+  //
+  // Strategy: cap the engine run at MAX_BATCH accounts, prioritising
+  // at-risk / poorly-scored companies first so the most urgent accounts
+  // always appear in the result, even for large orgs.
+  app.get("/api/next-best-actions", requireAuth, async (req, res) => {
+    const MAX_BATCH  = 30; // max companies to evaluate per request
+    const MAX_RESULT = 10; // max rows returned to the frontend
+
+    const URGENCY_RANK: Record<string, number> = {
+      critical: 0,
+      high:     1,
+      moderate: 2,
+      none:     3,
+    };
+
+    // Band priority — at_risk accounts evaluated first.
+    const BAND_RANK: Record<string, number> = {
+      at_risk:        0,
+      stable:         1,
+      growth_ready:   2,
+      high_expansion: 3,
+    };
+
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const rawIds = await getVisibleCompanyIds(user);
+      const visibleIds: string[] = rawIds ?? [];
+      if (visibleIds.length === 0) return res.json({ items: [], totalEvaluated: 0 });
+
+      // Pull cached growth scores to order evaluations (at_risk first).
+      const scores = await storage.getGrowthScoresByOrg(user.organizationId, visibleIds);
+      const scoreMap = new Map(scores.map(s => [s.companyId, s.band]));
+
+      const prioritised = [...visibleIds].sort((a, b) => {
+        const ra = BAND_RANK[scoreMap.get(a) ?? ""] ?? 4;
+        const rb = BAND_RANK[scoreMap.get(b) ?? ""] ?? 4;
+        return ra - rb;
+      }).slice(0, MAX_BATCH);
+
+      // Build company name map for enrichment (single query).
+      const allCompanies = await storage.getCompanies(user.organizationId);
+      const nameMap = new Map(allCompanies.map(c => [c.id, c.name]));
+
+      // Run engine for each company — use cache when available.
+      const now = Date.now();
+      type EnrichedNba = import("./nextBestActionEngine").NextBestAction & {
+        companyId:   string;
+        companyName: string;
+      };
+
+      const results = await Promise.allSettled(
+        prioritised.map(async (companyId): Promise<EnrichedNba> => {
+          const cacheKey = `nba:${companyId}`;
+          const hit = _nbaCache.get(cacheKey);
+          const nba = (hit && hit.expiresAt > now)
+            ? hit.result as import("./nextBestActionEngine").NextBestAction
+            : await computeNextBestAction(companyId, user.organizationId, storage);
+          if (!hit || hit.expiresAt <= now) {
+            _nbaCache.set(cacheKey, { result: nba, expiresAt: now + NBA_TTL_MS });
+          }
+          return { ...nba, companyId, companyName: nameMap.get(companyId) ?? "Unknown" };
+        })
+      );
+
+      // Collect fulfilled results, drop R13 (urgency = none), sort by urgency.
+      const actionable = results
+        .filter((r): r is PromiseFulfilledResult<EnrichedNba> =>
+          r.status === "fulfilled" && r.value.urgency !== "none"
+        )
+        .map(r => r.value)
+        .sort((a, b) => (URGENCY_RANK[a.urgency] ?? 3) - (URGENCY_RANK[b.urgency] ?? 3))
+        .slice(0, MAX_RESULT);
+
+      return res.json({
+        items:          actionable,
+        totalEvaluated: prioritised.length,
+      });
+    } catch (error) {
+      console.error("Error computing next-best-actions batch:", error);
+      return res.status(500).json({ error: "Failed to compute next best actions" });
+    }
+  });
+
   // Personalized chatbot nudges — alerts + smarter suggestions for the greeting card
   app.get("/api/chatbot/nudges", requireAuth, async (req, res) => {
     try {
