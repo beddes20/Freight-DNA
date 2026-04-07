@@ -88,14 +88,25 @@ export async function computeGrowthScore(
   const d45AgoStr      = d45Ago.toISOString().slice(0, 10);
   const d30AgoStr      = d30Ago.toISOString().slice(0, 10);
 
+  // getRfps and getFinancialUploadsForOrg are global / org-level queries.
+  // If either fails (e.g. transient DB error), we fall back to empty arrays so
+  // the touchpoint, relationship, and lane buckets — the most real-time signals —
+  // are still computed correctly.  Without this guard a single query failure
+  // silently swallows the whole recalculation and leaves a stale score in the DB.
   const [company, touchpoints, contacts, laneAttributions, tasks, rfps, uploads] = await Promise.all([
     storage.getCompany(companyId),
     storage.getTouchpointsByCompany(companyId),
     storage.getContactsByCompany(companyId),
     storage.getLaneAttributionsByCompany(companyId),
     storage.getTasksByCompany(companyId),
-    storage.getRfps(),
-    storage.getFinancialUploadsForOrg(organizationId),
+    storage.getRfps().catch((err: unknown) => {
+      console.error("[growthScore] getRfps fallback:", err);
+      return [] as Awaited<ReturnType<typeof storage.getRfps>>;
+    }),
+    storage.getFinancialUploadsForOrg(organizationId).catch((err: unknown) => {
+      console.error("[growthScore] getFinancialUploadsForOrg fallback:", err);
+      return [] as Awaited<ReturnType<typeof storage.getFinancialUploadsForOrg>>;
+    }),
   ]);
 
   if (!company) {

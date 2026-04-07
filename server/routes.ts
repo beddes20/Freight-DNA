@@ -4708,7 +4708,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           const gs = await computeGrowthScore(contact.companyId!, user.organizationId, storage);
           await storage.upsertGrowthScore({ companyId: contact.companyId!, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
         } catch (gsErr) {
-          console.error("[contact-touchpoint] growth score refresh failed:", gsErr);
+          console.error("[contact-touchpoint] growth score refresh failed for company", contact.companyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
         }
       }
       res.json({ ...tp, aiInsights, autoTask });
@@ -4934,11 +4934,12 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
 
       // Background: recompute growth scores for:
       //   (a) visible companies with NO cached score yet (newly visible accounts)
-      //   (b) visible companies with a STALE cached score (older than 6 hours)
-      // This ensures stale "No touchpoints on record" scores are corrected
-      // without requiring a rep to visit each company page individually.
-      const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-      const staleCutoff = new Date(Date.now() - SIX_HOURS_MS).toISOString();
+      //   (b) visible companies with a STALE cached score (older than 2 hours)
+      // 2-hour threshold (down from 6h) means a score that failed to refresh
+      // inline (e.g. transient DB error after a touch) gets corrected quickly on
+      // the next dashboard load rather than sitting stale for hours.
+      const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+      const staleCutoff = new Date(Date.now() - TWO_HOURS_MS).toISOString();
       const cachedIds = new Set(cached.map(s => s.companyId));
       const unscoredIds = visibleIds.filter(id => !cachedIds.has(id));
       const staleIds = cached
@@ -6452,7 +6453,8 @@ Respond with valid JSON only:
         const gs = await computeGrowthScore(companyId, user.organizationId, storage);
         await storage.upsertGrowthScore({ companyId, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
       } catch (gsErr) {
-        console.error("[touch-logs] growth score refresh failed:", gsErr);
+        // Log full stack so transient failures are visible in server logs
+        console.error("[touch-logs] growth score refresh failed for company", companyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
       }
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
