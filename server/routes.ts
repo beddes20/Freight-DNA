@@ -7743,6 +7743,45 @@ Respond with valid JSON only:
       const totalMargin = summaryResult.reduce((s: number, r: any) => s + r.margin, 0);
       const totalContacts = summaryResult.reduce((s: number, r: any) => s + r.contacts, 0);
 
+      // ── Unworked Accounts (no relationship base set on any contact) ──────────
+      const marginKDS = (cols as any).marginDollar ?? "Margin $";
+      const workedCompanyIdsDS = new Set<string>(
+        allContacts.filter((c: any) => c.relationshipBase && c.relationshipBase.trim()).map((c: any) => c.companyId)
+      );
+      const unworkedCompanyIdsDS = visibleCompanyIds.filter(id => !workedCompanyIdsDS.has(id));
+      let unworkedLoadsDS = 0;
+      let unworkedMarginDS = 0;
+      if (rawRows.length > 0) {
+        for (const companyId of unworkedCompanyIdsDS) {
+          const companyNames = companyNameMap[companyId] ?? [];
+          if (companyNames.length === 0) continue;
+          const total = computeCompanyFreightTotal(rawRows, cols, companyNames);
+          unworkedLoadsDS += total.loads;
+          for (const idx of total.allIndices) {
+            unworkedMarginDS += parseFloat(String(rawRows[idx][marginKDS] || 0).replace(/[$,]/g, "")) || 0;
+          }
+        }
+      }
+
+      // ── Unattributed loads (worked companies, unclaimed by any contact lane) ──
+      let totalUnattributedLoadsDS = 0;
+      let totalUnattributedMarginDS = 0;
+      if (rawRows.length > 0) {
+        for (const companyId of visibleCompanyIds) {
+          if (!workedCompanyIdsDS.has(companyId)) continue;
+          const companyNames = companyNameMap[companyId] ?? [];
+          if (companyNames.length === 0) continue;
+          const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
+          const seen = companySeenIndicesDS[companyId] ?? new Set<number>();
+          for (const idx of companyTotal.allIndices) {
+            if (!seen.has(idx)) {
+              totalUnattributedLoadsDS++;
+              totalUnattributedMarginDS += parseFloat(String(rawRows[idx][marginKDS] || 0).replace(/[$,]/g, "")) || 0;
+            }
+          }
+        }
+      }
+
       res.json({
         distribution: {
           levels: distLevels,
@@ -7751,7 +7790,17 @@ Respond with valid JSON only:
           totalContacts: allContacts.length,
           greenfieldCount: greenfieldCount2,
         },
-        summary: { summary: summaryResult, totalContacts, totalLoads, totalMargin },
+        summary: {
+          summary: summaryResult,
+          totalContacts,
+          totalLoads,
+          totalMargin,
+          unattributedLoads: totalUnattributedLoadsDS,
+          unattributedMargin: totalUnattributedMarginDS,
+          unworkedAccounts: unworkedCompanyIdsDS.length,
+          unworkedLoads: unworkedLoadsDS,
+          unworkedMargin: unworkedMarginDS,
+        },
       });
     } catch (e: any) {
       console.error("[dashboard-relationship-summary]", e);

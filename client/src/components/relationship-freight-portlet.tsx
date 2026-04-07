@@ -77,7 +77,7 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
                   <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Contacts grouped by relationship level (1st/2nd/3rd/HR). Each level shows the total freight for the companies where you have relationships at that tier.
+                  Freight claimed by your contacts at each relationship tier. Loads are attributed using specific lane assignments (Explicit) or estimated from coverage regions (Estimate). When two contacts share a lane, the higher-tier contact claims it — Home Run wins over 3rd, 3rd over 2nd, and so on.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -214,7 +214,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !hasContacts ? (
-            <EmptyState message="No contacts with a relationship base found. Set a contact's base level (1st/2nd/3rd/HR) in their contact sheet, then assign lanes there or via the RFP Coverage tab." />
+            <EmptyState message="No contacts with a relationship base found. Open a contact on this account, set their base level (1st/2nd/3rd/HR), then click the + button to assign their lanes." />
           ) : (
             <div className="space-y-4">
               {baseOrder.filter(b => grouped[b]?.length).map(base => {
@@ -317,6 +317,17 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
             {contact.contractedPct != null && (
               <span className="text-[10px] text-muted-foreground">{contact.contractedPct.toFixed(0)}% ct</span>
             )}
+          </>
+        ) : srcCfg.label ? (
+          <>
+            <span
+              className={`text-[9px] font-medium px-1 py-0.5 rounded border ${srcCfg.className}`}
+              title={srcCfg.title}
+              data-testid={`badge-attrib-source-${contact.contactId}`}
+            >
+              {srcCfg.label}
+            </span>
+            <span className="text-[10px] text-muted-foreground italic">no freight match in upload</span>
           </>
         ) : (
           <span className="text-[10px] text-muted-foreground italic">no matching data</span>
