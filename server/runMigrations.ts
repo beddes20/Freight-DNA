@@ -976,4 +976,35 @@ export async function runMigrations() {
   } finally {
     clientAgsPrev.release();
   }
+
+  // Weekly AM Coaching Commitments
+  const clientWc = await pool.connect();
+  try {
+    await clientWc.query(`
+      CREATE TABLE IF NOT EXISTS weekly_commitments (
+        id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        org_id          varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id      varchar REFERENCES companies(id) ON DELETE SET NULL,
+        contact_id      varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        company_name    text,
+        contact_name    text,
+        commitment_text text NOT NULL,
+        lever           text NOT NULL DEFAULT 'Recovery',
+        source          text NOT NULL DEFAULT 'dashboard',
+        week_start      text NOT NULL,
+        due_date        text NOT NULL,
+        status          text NOT NULL DEFAULT 'pending',
+        completed_at    text,
+        created_at      text NOT NULL
+      )
+    `);
+    await clientWc.query(`CREATE INDEX IF NOT EXISTS idx_wc_user_week ON weekly_commitments(user_id, week_start)`);
+    await clientWc.query(`CREATE INDEX IF NOT EXISTS idx_wc_org_week ON weekly_commitments(org_id, week_start)`);
+    console.log("[migrations] weekly_commitments table ensured");
+  } catch (err) {
+    console.error("[migrations] weekly_commitments error:", err);
+  } finally {
+    clientWc.release();
+  }
 }

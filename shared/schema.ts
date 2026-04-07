@@ -1043,3 +1043,27 @@ export const contactBaseHistory = pgTable("contact_base_history", {
 });
 export type ContactBaseHistory = typeof contactBaseHistory.$inferSelect;
 
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Weekly AM Coaching Commitments
+export const weeklyCommitments = pgTable("weekly_commitments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+  companyName: text("company_name"),
+  contactName: text("contact_name"),
+  commitmentText: text("commitment_text").notNull(),
+  lever: text("lever").notNull().default("Recovery"),
+  source: text("source").notNull().default("dashboard"),
+  weekStart: text("week_start").notNull(),
+  dueDate: text("due_date").notNull(),
+  status: text("status").notNull().default("pending"),
+  completedAt: text("completed_at"),
+  createdAt: text("created_at").notNull(),
+});
+export const insertWeeklyCommitmentSchema = createInsertSchema(weeklyCommitments).omit({ id: true });
+export type InsertWeeklyCommitment = z.infer<typeof insertWeeklyCommitmentSchema>;
+export type WeeklyCommitment = typeof weeklyCommitments.$inferSelect;
+

@@ -443,6 +443,13 @@ export interface IStorage {
   upsertGrowthScore(data: import('../shared/schema').InsertAccountGrowthScore): Promise<import('../shared/schema').AccountGrowthScore>;
   getGrowthScore(companyId: string): Promise<import('../shared/schema').AccountGrowthScore | undefined>;
   getGrowthScoresByOrg(organizationId: string, companyIds: string[]): Promise<import('../shared/schema').AccountGrowthScore[]>;
+
+  // Weekly Coaching Commitments
+  getWeeklyCommitments(userId: string, orgId: string, weekStart?: string): Promise<import('../shared/schema').WeeklyCommitment[]>;
+  getTeamWeeklyCommitments(orgId: string, weekStart: string): Promise<Array<import('../shared/schema').WeeklyCommitment & { userName: string; userRole: string }>>;
+  createWeeklyCommitment(data: import('../shared/schema').InsertWeeklyCommitment): Promise<import('../shared/schema').WeeklyCommitment>;
+  updateWeeklyCommitmentStatus(id: string, userId: string, status: string): Promise<import('../shared/schema').WeeklyCommitment | undefined>;
+  deleteWeeklyCommitment(id: string, userId: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -2648,6 +2655,52 @@ export class DatabaseStorage implements IStorage {
     const { accountGrowthScores } = await import('../shared/schema');
     return db.select().from(accountGrowthScores)
       .where(and(eq(accountGrowthScores.organizationId, organizationId), inArray(accountGrowthScores.companyId, companyIds)));
+  }
+
+  // ── Weekly Coaching Commitments ────────────────────────────────────────────
+
+  async getWeeklyCommitments(userId: string, orgId: string, weekStart?: string): Promise<import('../shared/schema').WeeklyCommitment[]> {
+    const { weeklyCommitments } = await import('../shared/schema');
+    const conds = [eq(weeklyCommitments.userId, userId), eq(weeklyCommitments.orgId, orgId)];
+    if (weekStart) conds.push(eq(weeklyCommitments.weekStart, weekStart));
+    return db.select().from(weeklyCommitments).where(and(...conds)).orderBy(desc(weeklyCommitments.createdAt));
+  }
+
+  async getTeamWeeklyCommitments(orgId: string, weekStart: string): Promise<Array<import('../shared/schema').WeeklyCommitment & { userName: string; userRole: string }>> {
+    const { weeklyCommitments } = await import('../shared/schema');
+    const rows = await db
+      .select({ wc: weeklyCommitments, userName: users.name, userRole: users.role })
+      .from(weeklyCommitments)
+      .innerJoin(users, eq(weeklyCommitments.userId, users.id))
+      .where(and(eq(weeklyCommitments.orgId, orgId), eq(weeklyCommitments.weekStart, weekStart)))
+      .orderBy(desc(weeklyCommitments.createdAt));
+    return rows.map(r => ({ ...r.wc, userName: r.userName, userRole: r.userRole }));
+  }
+
+  async createWeeklyCommitment(data: import('../shared/schema').InsertWeeklyCommitment): Promise<import('../shared/schema').WeeklyCommitment> {
+    const { weeklyCommitments } = await import('../shared/schema');
+    const [row] = await db.insert(weeklyCommitments).values(data).returning();
+    return row;
+  }
+
+  async updateWeeklyCommitmentStatus(id: string, userId: string, status: string): Promise<import('../shared/schema').WeeklyCommitment | undefined> {
+    const { weeklyCommitments } = await import('../shared/schema');
+    const completedAt = status === "completed" ? new Date().toISOString() : undefined;
+    const setData: Partial<import('../shared/schema').WeeklyCommitment> = { status };
+    if (completedAt !== undefined) setData.completedAt = completedAt;
+    if (status === "pending") setData.completedAt = undefined;
+    const [row] = await db.update(weeklyCommitments)
+      .set(setData as any)
+      .where(and(eq(weeklyCommitments.id, id), eq(weeklyCommitments.userId, userId)))
+      .returning();
+    return row;
+  }
+
+  async deleteWeeklyCommitment(id: string, userId: string): Promise<boolean> {
+    const { weeklyCommitments } = await import('../shared/schema');
+    const result = await db.delete(weeklyCommitments)
+      .where(and(eq(weeklyCommitments.id, id), eq(weeklyCommitments.userId, userId)));
+    return (result.rowCount ?? 0) > 0;
   }
 }
 

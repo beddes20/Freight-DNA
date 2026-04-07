@@ -8702,5 +8702,110 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     }
   });
 
+  // ── Weekly Coaching Commitments ──────────────────────────────────────────
+
+  function getWeekStart(date = new Date()): string {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    d.setDate(diff);
+    return d.toISOString().split("T")[0];
+  }
+  function getWeekEnd(weekStart: string): string {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + 4);
+    return d.toISOString().split("T")[0];
+  }
+
+  // Team view MUST come before /:id to avoid route collision
+  app.get("/api/weekly-commitments/team", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
+      if (!managerRoles.includes(currentUser.role)) return res.status(403).json({ error: "Manager access required" });
+      const orgId = req.session.organizationId!;
+      const weekStart = (req.query.weekStart as string) || getWeekStart();
+      const rows = await storage.getTeamWeeklyCommitments(orgId, weekStart);
+      res.json(rows);
+    } catch (err: any) {
+      console.error("[weekly-commitments/team]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to load team commitments" });
+    }
+  });
+
+  app.get("/api/weekly-commitments", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = req.session.organizationId!;
+      const weekStart = req.query.weekStart as string | undefined;
+      const rows = await storage.getWeeklyCommitments(currentUser.id, orgId, weekStart);
+      res.json(rows);
+    } catch (err: any) {
+      console.error("[weekly-commitments]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to load commitments" });
+    }
+  });
+
+  app.post("/api/weekly-commitments", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = req.session.organizationId!;
+      const thisWeek = getWeekStart();
+      const dueDate = getWeekEnd(thisWeek);
+      const payload = {
+        userId: currentUser.id,
+        orgId,
+        weekStart: thisWeek,
+        dueDate,
+        createdAt: new Date().toISOString(),
+        companyId: req.body.companyId ?? null,
+        contactId: req.body.contactId ?? null,
+        companyName: req.body.companyName ?? null,
+        contactName: req.body.contactName ?? null,
+        commitmentText: req.body.commitmentText,
+        lever: req.body.lever ?? "Recovery",
+        source: req.body.source ?? "dashboard",
+        status: "pending" as const,
+      };
+      if (!payload.commitmentText) return res.status(400).json({ error: "commitmentText is required" });
+      const row = await storage.createWeeklyCommitment(payload);
+      res.json(row);
+    } catch (err: any) {
+      console.error("[weekly-commitments POST]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to create commitment" });
+    }
+  });
+
+  app.patch("/api/weekly-commitments/:id", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { status } = req.body;
+      if (!["pending", "completed", "missed"].includes(status)) return res.status(400).json({ error: "Invalid status" });
+      const row = await storage.updateWeeklyCommitmentStatus(req.params.id, currentUser.id, status);
+      if (!row) return res.status(404).json({ error: "Commitment not found" });
+      res.json(row);
+    } catch (err: any) {
+      console.error("[weekly-commitments PATCH]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to update commitment" });
+    }
+  });
+
+  app.delete("/api/weekly-commitments/:id", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const ok = await storage.deleteWeeklyCommitment(req.params.id, currentUser.id);
+      if (!ok) return res.status(404).json({ error: "Commitment not found" });
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("[weekly-commitments DELETE]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to delete commitment" });
+    }
+  });
+
   return httpServer;
 }
