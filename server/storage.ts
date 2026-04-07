@@ -108,6 +108,9 @@ import {
   contactBaseHistory,
   type LaneCarrier,
   type InsertLaneCarrier,
+  nbaCards,
+  type NbaCard,
+  type InsertNbaCard,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -139,6 +142,7 @@ export interface RepReportData {
 
 export interface IStorage {
   getDefaultOrganization(): Promise<Organization | undefined>;
+  getOrganizations(): Promise<Organization[]>;
   getOrganizationById(id: string): Promise<Organization | undefined>;
   createOrganization(data: { name: string; slug: string }): Promise<Organization>;
 
@@ -450,6 +454,21 @@ export interface IStorage {
   createWeeklyCommitment(data: import('../shared/schema').InsertWeeklyCommitment): Promise<import('../shared/schema').WeeklyCommitment>;
   updateWeeklyCommitmentStatus(id: string, userId: string, status: string): Promise<import('../shared/schema').WeeklyCommitment | undefined>;
   deleteWeeklyCommitment(id: string, userId: string): Promise<boolean>;
+
+  // NBA Phase 1 Persistent Cards
+  createNbaCard(data: InsertNbaCard): Promise<NbaCard>;
+  getVisibleNbaCards(userId: string, limit?: number): Promise<NbaCard[]>;
+  getRecentNbaCardByType(companyId: string, ruleType: string, dayLimit: number): Promise<NbaCard | undefined>;
+  resolveNbaCard(id: string, userId: string, data: Record<string, unknown>): Promise<NbaCard | undefined>;
+  supersedePreviousNbaCards(companyId: string, winnerCardId: string): Promise<void>;
+  processExpiredNbaCards(orgId: string, touchpointCompanyId?: string): Promise<void>;
+  getNbaManagerSummary(orgId: string, weekStart: string): Promise<Array<{
+    userId: string; userName: string; shown: number; actioned: number; dismissed: number; ignored: number;
+  }>>;
+  getNbaRulePerformance(orgId: string, daysBack?: number): Promise<Array<{
+    ruleType: string; firedCount: number; shownCount: number; actionedCount: number;
+    dismissedCount: number; avgHoursToAction: number | null; outcomeLinkCount: number;
+  }>>;
 }
 
 const pool = new Pool({
@@ -465,6 +484,10 @@ export class DatabaseStorage implements IStorage {
   async getDefaultOrganization(): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, "valuetruck"));
     return org;
+  }
+
+  async getOrganizations(): Promise<Organization[]> {
+    return db.select().from(organizations);
   }
 
   async getOrganizationById(id: string): Promise<Organization | undefined> {
@@ -2703,6 +2726,196 @@ export class DatabaseStorage implements IStorage {
     const result = await db.delete(weeklyCommitments)
       .where(and(eq(weeklyCommitments.id, id), eq(weeklyCommitments.userId, userId)));
     return (result.rowCount ?? 0) > 0;
+  }
+
+  // ── NBA Phase 1 Persistent Cards ────────────────────────────────────────────
+
+  async createNbaCard(data: InsertNbaCard): Promise<NbaCard> {
+    const now = new Date().toISOString();
+    const [row] = await db.insert(nbaCards)
+      .values({ ...data, createdAt: now } as any)
+      .returning();
+    return row;
+  }
+
+  async getVisibleNbaCards(userId: string, limit = 10): Promise<NbaCard[]> {
+    const today = new Date().toISOString().split("T")[0];
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(
+        and(
+          eq(nbaCards.userId, userId),
+          eq(nbaCards.status, "visible"),
+        )
+      )
+      .orderBy(desc(nbaCards.urgencyScore), desc(nbaCards.createdAt))
+      .limit(limit);
+    // Filter out snoozed cards
+    return rows.filter(r => !r.snoozeUntil || r.snoozeUntil <= today);
+  }
+
+  async getRecentNbaCardByType(companyId: string, ruleType: string, dayLimit: number): Promise<NbaCard | undefined> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - dayLimit);
+    const cutoffStr = cutoff.toISOString();
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(
+        and(
+          eq(nbaCards.companyId, companyId),
+          eq(nbaCards.ruleType, ruleType),
+        )
+      )
+      .orderBy((t: any) => t.createdAt)
+      .limit(10);
+    return rows.filter(r => r.createdAt >= cutoffStr)[0];
+  }
+
+  async resolveNbaCard(id: string, userId: string, data: Record<string, unknown>): Promise<NbaCard | undefined> {
+    const now = new Date().toISOString();
+    const [row] = await db.update(nbaCards)
+      .set({ ...data, resolvedAt: now } as any)
+      .where(and(eq(nbaCards.id, id), eq(nbaCards.userId, userId)))
+      .returning();
+    return row;
+  }
+
+  async supersedePreviousNbaCards(companyId: string, winnerCardId: string): Promise<void> {
+    await db.update(nbaCards)
+      .set({ status: "superseded" } as any)
+      .where(
+        and(
+          eq(nbaCards.companyId, companyId),
+          eq(nbaCards.status, "generated"),
+        )
+      );
+  }
+
+  async processExpiredNbaCards(orgId: string, touchpointCompanyId?: string): Promise<void> {
+    // Expire visible cards older than 14 days that haven't been actioned
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 14);
+    const cutoffStr = cutoff.toISOString();
+    await db.update(nbaCards)
+      .set({ status: "expired" } as any)
+      .where(
+        and(
+          eq(nbaCards.orgId, orgId),
+          eq(nbaCards.status, "visible"),
+          sql`${nbaCards.createdAt} < ${cutoffStr}`,
+        )
+      );
+    // If a touchpoint was logged, auto-resolve stale_account cards for that company
+    if (touchpointCompanyId) {
+      await db.update(nbaCards)
+        .set({ status: "actioned", resolutionAction: "auto_touchpoint", resolvedAt: new Date().toISOString() } as any)
+        .where(
+          and(
+            eq(nbaCards.companyId, touchpointCompanyId),
+            eq(nbaCards.ruleType, "stale_account"),
+            eq(nbaCards.status, "visible"),
+          )
+        );
+      await db.update(nbaCards)
+        .set({ status: "actioned", resolutionAction: "auto_touchpoint", resolvedAt: new Date().toISOString() } as any)
+        .where(
+          and(
+            eq(nbaCards.companyId, touchpointCompanyId),
+            eq(nbaCards.ruleType, "single_thread_risk"),
+            eq(nbaCards.status, "visible"),
+          )
+        );
+    }
+  }
+
+  async getNbaManagerSummary(orgId: string, weekStart: string): Promise<Array<{
+    userId: string; userName: string; shown: number; actioned: number; dismissed: number; ignored: number;
+  }>> {
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+    const weekEndStr = weekEnd.toISOString();
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(
+        and(
+          eq(nbaCards.orgId, orgId),
+          // cards created this week
+        )
+      );
+    // Group by userId
+    const map = new Map<string, { userId: string; shown: number; actioned: number; dismissed: number; ignored: number }>();
+    for (const card of rows) {
+      if (card.createdAt < weekStart || card.createdAt >= weekEndStr) continue;
+      if (!map.has(card.userId)) {
+        map.set(card.userId, { userId: card.userId, shown: 0, actioned: 0, dismissed: 0, ignored: 0 });
+      }
+      const entry = map.get(card.userId)!;
+      if (card.status === "visible" || card.status === "actioned" || card.status === "dismissed" || card.status === "expired") {
+        entry.shown++;
+      }
+      if (card.status === "actioned") entry.actioned++;
+      if (card.status === "dismissed") entry.dismissed++;
+      if (card.status === "expired") entry.ignored++;
+    }
+    // Attach user names
+    const allUsers = await db.select({ id: users.id, name: users.name }).from(users);
+    const nameMap = new Map(allUsers.map(u => [u.id, u.name]));
+    return Array.from(map.values()).map(e => ({
+      ...e,
+      userName: nameMap.get(e.userId) ?? e.userId,
+    }));
+  }
+
+  async getNbaRulePerformance(orgId: string, daysBack = 30): Promise<Array<{
+    ruleType: string; firedCount: number; shownCount: number; actionedCount: number;
+    dismissedCount: number; avgHoursToAction: number | null; outcomeLinkCount: number;
+  }>> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysBack);
+    const cutoffStr = cutoff.toISOString();
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(
+        and(
+          eq(nbaCards.orgId, orgId),
+        )
+      );
+    const filtered = rows.filter(r => r.createdAt >= cutoffStr);
+    const map = new Map<string, {
+      ruleType: string; firedCount: number; shownCount: number; actionedCount: number;
+      dismissedCount: number; hoursToAction: number[]; outcomeLinkCount: number;
+    }>();
+    for (const card of filtered) {
+      if (!map.has(card.ruleType)) {
+        map.set(card.ruleType, {
+          ruleType: card.ruleType, firedCount: 0, shownCount: 0, actionedCount: 0,
+          dismissedCount: 0, hoursToAction: [], outcomeLinkCount: 0,
+        });
+      }
+      const e = map.get(card.ruleType)!;
+      e.firedCount++;
+      if (["visible","actioned","dismissed","expired"].includes(card.status)) e.shownCount++;
+      if (card.status === "actioned") {
+        e.actionedCount++;
+        if (card.resolvedAt && card.createdAt) {
+          const hours = (new Date(card.resolvedAt).getTime() - new Date(card.createdAt).getTime()) / 3_600_000;
+          e.hoursToAction.push(hours);
+        }
+      }
+      if (card.status === "dismissed") e.dismissedCount++;
+      if (card.outcomeLinkedAt) e.outcomeLinkCount++;
+    }
+    return Array.from(map.values()).map(e => ({
+      ruleType: e.ruleType,
+      firedCount: e.firedCount,
+      shownCount: e.shownCount,
+      actionedCount: e.actionedCount,
+      dismissedCount: e.dismissedCount,
+      avgHoursToAction: e.hoursToAction.length > 0
+        ? e.hoursToAction.reduce((a, b) => a + b, 0) / e.hoursToAction.length
+        : null,
+      outcomeLinkCount: e.outcomeLinkCount,
+    }));
   }
 }
 

@@ -14,6 +14,7 @@ import { initHealthAlertScheduler } from "./healthAlertScheduler";
 import { initPtoReturnScheduler } from "./ptoReturnScheduler";
 import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
+import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
@@ -184,6 +185,7 @@ async function initStripe() {
       initPtoReturnScheduler();
       initWeeklyGoalRecapScheduler();
       initLmCheckinScheduler();
+      initNbaPhase1Scheduler();
     },
   );
 })();

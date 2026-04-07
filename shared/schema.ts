@@ -1068,3 +1068,40 @@ export const insertWeeklyCommitmentSchema = createInsertSchema(weeklyCommitments
 export type InsertWeeklyCommitment = z.infer<typeof insertWeeklyCommitmentSchema>;
 export type WeeklyCommitment = typeof weeklyCommitments.$inferSelect;
 
+// ─── NBA Phase 1 Persistent Cards ────────────────────────────────────────────
+export const nbaCards = pgTable("nba_cards", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+  companyName: text("company_name"),
+  ruleType: text("rule_type").notNull(),
+  outcomeType: text("outcome_type").notNull().default("protect"),
+  confidence: text("confidence").notNull().default("medium"),
+  signalCount: integer("signal_count").notNull().default(1),
+  signalSummary: jsonb("signal_summary").notNull().default([]),
+  whyThisNow: text("why_this_now").notNull(),
+  suggestedAction: text("suggested_action").notNull(),
+  expectedOutcome: text("expected_outcome").notNull(),
+  growthLever: text("growth_lever"),
+  relationshipMove: text("relationship_move"),
+  accountTier: text("account_tier"),
+  urgencyScore: integer("urgency_score").notNull().default(0),
+  status: text("status").notNull().default("generated"),
+  resolutionAction: text("resolution_action"),
+  dismissReason: text("dismiss_reason"),
+  snoozeUntil: text("snooze_until"),
+  alternateActionNote: text("alternate_action_note"),
+  linkedCommitmentId: varchar("linked_commitment_id"),
+  linkedTouchpointId: varchar("linked_touchpoint_id"),
+  linkedTaskId: varchar("linked_task_id"),
+  outcomeLinkedAt: text("outcome_linked_at"),
+  outcomeTypeLinked: text("outcome_type_linked"),
+  createdAt: text("created_at").notNull(),
+  resolvedAt: text("resolved_at"),
+});
+export const insertNbaCardSchema = createInsertSchema(nbaCards).omit({ id: true });
+export type InsertNbaCard = z.infer<typeof insertNbaCardSchema>;
+export type NbaCard = typeof nbaCards.$inferSelect;
+

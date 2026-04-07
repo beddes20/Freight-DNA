@@ -62,6 +62,7 @@ import type { CommitPayload } from "./dashboard/commitTypes";
 import { WeeklyCommitmentsPanel, TeamCommitmentsPortlet } from "./dashboard/WeeklyCommitmentsPanel";
 import { TasksSection } from "./dashboard/TasksSection";
 import { TeamDirectorySection } from "./dashboard/TeamDirectorySection";
+import { NbaDashboardPanel } from "@/components/NbaDashboardPanel";
 
 const METRIC_LABELS: Record<string, string> = {
   contacts_added: "New Contacts",
@@ -1131,6 +1132,13 @@ export default function Dashboard() {
               localStorage.setItem("dash_weekly_commitments_collapsed", String(next));
             }}
           />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── NBA Phase 1 Persistent Cards — Today's Priorities ───────────────── */}
+      {(isAm || isNam) && (
+        <PortletErrorBoundary label="NBA Today's Priorities">
+          <NbaDashboardPanel userRole={currentUser?.role ?? ""} isAdmin={isAdmin} />
         </PortletErrorBoundary>
       )}
 

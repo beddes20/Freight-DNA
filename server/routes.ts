@@ -8807,5 +8807,168 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     }
   });
 
+  // ─── NBA Phase 1 Persistent Card Routes ──────────────────────────────────────
+
+  // GET /api/nba/cards — fetch visible cards for the current user
+  app.get("/api/nba/cards", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const limit = Math.min(Number(req.query.limit ?? 10), 50);
+      const cards = await storage.getVisibleNbaCards(currentUser.id, limit);
+      res.json(cards);
+    } catch (err: any) {
+      console.error("[nba/cards GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to fetch NBA cards" });
+    }
+  });
+
+  // PATCH /api/nba/cards/:id/resolve — act on a card (action/dismiss/snooze/alternate)
+  app.patch("/api/nba/cards/:id/resolve", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { action, dismissReason, snoozeUntil, alternateActionNote, linkedCommitmentId, linkedTouchpointId, linkedTaskId } = req.body;
+
+      const validActions = ["actioned", "dismissed", "snoozed", "alternate"];
+      if (!validActions.includes(action)) {
+        return res.status(400).json({ error: `action must be one of ${validActions.join(", ")}` });
+      }
+
+      const now = new Date().toISOString();
+      const updateData: Record<string, unknown> = { status: action, resolvedAt: now };
+      if (action === "dismissed")  updateData.dismissReason = dismissReason ?? null;
+      if (action === "snoozed")    updateData.snoozeUntil = snoozeUntil;
+      if (action === "alternate")  updateData.alternateActionNote = alternateActionNote ?? null;
+      if (linkedCommitmentId)      updateData.linkedCommitmentId = linkedCommitmentId;
+      if (linkedTouchpointId)      updateData.linkedTouchpointId = linkedTouchpointId;
+      if (linkedTaskId)            updateData.linkedTaskId = linkedTaskId;
+
+      const updated = await storage.resolveNbaCard(req.params.id, currentUser.id, updateData);
+      if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
+      res.json(updated);
+    } catch (err: any) {
+      console.error("[nba/cards PATCH]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to resolve NBA card" });
+    }
+  });
+
+  // POST /api/nba/cards/:id/link-outcome — attach a touchpoint/task/commitment to a card
+  app.post("/api/nba/cards/:id/link-outcome", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { linkedCommitmentId, linkedTouchpointId, linkedTaskId, outcomeTypeLinked } = req.body;
+      const now = new Date().toISOString();
+      const updateData: Record<string, unknown> = {
+        outcomeLinkedAt: now,
+        outcomeTypeLinked: outcomeTypeLinked ?? null,
+        linkedCommitmentId: linkedCommitmentId ?? null,
+        linkedTouchpointId: linkedTouchpointId ?? null,
+        linkedTaskId: linkedTaskId ?? null,
+      };
+      const updated = await storage.resolveNbaCard(req.params.id, currentUser.id, updateData);
+      if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
+      res.json(updated);
+    } catch (err: any) {
+      console.error("[nba/cards/link-outcome POST]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to link outcome" });
+    }
+  });
+
+  // GET /api/nba/manager-summary — manager view of team NBA card engagement
+  app.get("/api/nba/manager-summary", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { role, organizationId } = currentUser as any;
+      const managerRoles = ["Admin", "Director", "National Account Manager"];
+      if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
+      const weekStart = String(req.query.weekStart ?? new Date().toISOString().split("T")[0].slice(0, 10));
+      const summary = await storage.getNbaManagerSummary(organizationId, weekStart);
+      res.json(summary);
+    } catch (err: any) {
+      console.error("[nba/manager-summary GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to fetch manager summary" });
+    }
+  });
+
+  // GET /api/nba/rule-performance — analytics for the Phase 1 engine
+  app.get("/api/nba/rule-performance", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { role, organizationId } = currentUser as any;
+      const managerRoles = ["Admin", "Director", "National Account Manager"];
+      if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
+      const daysBack = Math.min(Number(req.query.daysBack ?? 30), 90);
+      const performance = await storage.getNbaRulePerformance(organizationId, daysBack);
+      res.json(performance);
+    } catch (err: any) {
+      console.error("[nba/rule-performance GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to fetch rule performance" });
+    }
+  });
+
+  // POST /api/nba/run-engine — manually trigger Phase 1 engine for the current org
+  app.post("/api/nba/run-engine", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { role, organizationId } = currentUser as any;
+      if (role !== "Admin") return res.status(403).json({ error: "Admin only" });
+
+      const { runPhase1EngineForOrg } = await import("./nbaPhase1Engine");
+      const results = await runPhase1EngineForOrg(organizationId, storage);
+
+      let generated = 0;
+      let skipped = 0;
+      const now = new Date().toISOString();
+
+      for (const { userId, result } of results) {
+        if (!result.winner) { skipped++; continue; }
+
+        // Dedup: skip if a visible card for this company + rule already exists in last 7 days
+        const existing = result.winner.ruleType
+          ? await storage.getRecentNbaCardByType(result.companyId, result.winner.ruleType, 7)
+          : undefined;
+        if (existing) { skipped++; continue; }
+
+        // Mark superseded cards (generated but not yet visible) for this company
+        await storage.supersedePreviousNbaCards(result.companyId, "pending");
+
+        const card = await storage.createNbaCard({
+          orgId: organizationId,
+          userId,
+          companyId: result.companyId,
+          companyName: result.companyName,
+          ruleType: result.winner.ruleType,
+          outcomeType: result.winner.outcomeType,
+          confidence: result.winner.confidence,
+          signalCount: result.winner.signalCount,
+          signalSummary: result.winner.signalSummary as any,
+          whyThisNow: result.winner.whyThisNow,
+          suggestedAction: result.winner.suggestedAction,
+          expectedOutcome: result.winner.expectedOutcome,
+          growthLever: result.winner.growthLever,
+          relationshipMove: result.winner.relationshipMove,
+          accountTier: result.winner.accountTier,
+          urgencyScore: result.winner.urgencyScore,
+          status: "visible",
+          createdAt: now,
+          contactId: result.winner.contactId,
+          linkedTaskId: result.winner.linkedTaskId,
+        });
+
+        generated++;
+      }
+
+      res.json({ generated, skipped, total: results.length });
+    } catch (err: any) {
+      console.error("[nba/run-engine POST]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to run NBA engine" });
+    }
+  });
+
   return httpServer;
 }

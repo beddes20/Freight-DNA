@@ -1010,4 +1010,52 @@ export async function runMigrations() {
   } finally {
     clientWc.release();
   }
+
+  // NBA Phase 1 Persistent Cards
+  const clientNba = await pool.connect();
+  try {
+    await clientNba.query(`
+      CREATE TABLE IF NOT EXISTS nba_cards (
+        id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id               varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id              varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        company_id           varchar REFERENCES companies(id) ON DELETE SET NULL,
+        contact_id           varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        company_name         text,
+        rule_type            text NOT NULL,
+        outcome_type         text NOT NULL DEFAULT 'protect',
+        confidence           text NOT NULL DEFAULT 'medium',
+        signal_count         integer NOT NULL DEFAULT 1,
+        signal_summary       jsonb NOT NULL DEFAULT '[]',
+        why_this_now         text NOT NULL,
+        suggested_action     text NOT NULL,
+        expected_outcome     text NOT NULL,
+        growth_lever         text,
+        relationship_move    text,
+        account_tier         text,
+        urgency_score        integer NOT NULL DEFAULT 0,
+        status               text NOT NULL DEFAULT 'generated',
+        resolution_action    text,
+        dismiss_reason       text,
+        snooze_until         text,
+        alternate_action_note text,
+        linked_commitment_id varchar,
+        linked_touchpoint_id varchar,
+        linked_task_id       varchar,
+        outcome_linked_at    text,
+        outcome_type_linked  text,
+        created_at           text NOT NULL,
+        resolved_at          text
+      )
+    `);
+    await clientNba.query(`CREATE INDEX IF NOT EXISTS idx_nba_cards_user_status ON nba_cards(user_id, status)`);
+    await clientNba.query(`CREATE INDEX IF NOT EXISTS idx_nba_cards_org_rule ON nba_cards(org_id, rule_type, status)`);
+    await clientNba.query(`CREATE INDEX IF NOT EXISTS idx_nba_cards_company ON nba_cards(company_id, status)`);
+    await clientNba.query(`CREATE INDEX IF NOT EXISTS idx_nba_cards_snooze ON nba_cards(status, snooze_until)`);
+    console.log("[migrations] nba_cards table ensured");
+  } catch (err) {
+    console.error("[migrations] nba_cards error:", err);
+  } finally {
+    clientNba.release();
+  }
 }

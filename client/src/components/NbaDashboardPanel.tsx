@@ -1,0 +1,171 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { NbaCard } from "./NbaCard";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Brain, RefreshCw, ChevronRight } from "lucide-react";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface NbaCardData {
+  id: string;
+  companyId: string | null;
+  companyName: string | null;
+  contactId: string | null;
+  ruleType: string;
+  outcomeType: string;
+  confidence: string;
+  signalCount: number;
+  signalSummary: string[];
+  whyThisNow: string;
+  suggestedAction: string;
+  expectedOutcome: string;
+  growthLever: string | null;
+  relationshipMove: string | null;
+  accountTier: string | null;
+  urgencyScore: number;
+  status: string;
+}
+
+interface NbaDashboardPanelProps {
+  userRole: string;
+  isAdmin?: boolean;
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps) {
+  const { toast } = useToast();
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [actioned, setActioned] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState(false);
+
+  const { data: cards = [], isLoading, refetch } = useQuery<NbaCardData[]>({
+    queryKey: ["/api/nba/cards"],
+    staleTime: 60_000,
+  });
+
+  const runEngineMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/nba/run-engine", {}),
+    onSuccess: (data: any) => {
+      toast({
+        title: "Engine complete",
+        description: `${data.generated ?? 0} new cards generated, ${data.skipped ?? 0} skipped.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/nba/cards"] });
+    },
+    onError: () => toast({ title: "Engine run failed", variant: "destructive" }),
+  });
+
+  // Filter out resolved cards in local state for instant feedback
+  const visible = cards.filter(c => !dismissed.has(c.id) && !actioned.has(c.id));
+  const displayCards = showAll ? visible : visible.slice(0, 3);
+  const hasMore = visible.length > 3;
+
+  if (isLoading) {
+    return (
+      <div className="rounded-2xl border border-white/8 bg-white/3 p-5 flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Brain className="w-4 h-4 text-amber-400" />
+            <span className="text-sm font-semibold text-white">Today's Priorities</span>
+          </div>
+        </div>
+        {[1, 2, 3].map(i => (
+          <Skeleton key={i} className="h-32 rounded-xl bg-white/5" />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="rounded-2xl border border-white/8 bg-white/3 p-5 flex flex-col gap-4"
+      data-testid="nba-dashboard-panel"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Brain className="w-4 h-4 text-amber-400" />
+          <span className="text-sm font-semibold text-white">Today's Priorities</span>
+          {visible.length > 0 && (
+            <span className="text-[11px] font-semibold bg-amber-500/20 text-amber-400 rounded-full px-2 py-0.5">
+              {visible.length}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => refetch()}
+            className="h-7 w-7 p-0 text-white/30 hover:text-white/60"
+            data-testid="nba-panel-refresh"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+          </Button>
+          {isAdmin && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => runEngineMutation.mutate()}
+              disabled={runEngineMutation.isPending}
+              className="h-7 text-xs text-white/40 hover:text-amber-400 px-2"
+              data-testid="nba-run-engine-btn"
+            >
+              {runEngineMutation.isPending ? "Running…" : "Run engine"}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Empty state */}
+      {visible.length === 0 && !isLoading && (
+        <div className="flex flex-col items-center justify-center py-8 gap-2 text-center">
+          <Brain className="w-8 h-8 text-white/15" />
+          <p className="text-sm text-white/40">No priority recommendations right now.</p>
+          <p className="text-xs text-white/25">Check back tomorrow — the engine runs nightly.</p>
+        </div>
+      )}
+
+      {/* Cards */}
+      <div className="flex flex-col gap-3">
+        {displayCards.map(card => (
+          <NbaCard
+            key={card.id}
+            card={card}
+            onDismissed={(id) => setDismissed(prev => new Set([...prev, id]))}
+            onActioned={(id) => setActioned(prev => new Set([...prev, id]))}
+          />
+        ))}
+      </div>
+
+      {/* Show more / less toggle */}
+      {hasMore && (
+        <button
+          onClick={() => setShowAll(v => !v)}
+          className="flex items-center justify-center gap-1.5 text-xs text-white/35 hover:text-white/60 transition-colors py-1"
+          data-testid="nba-panel-show-more"
+        >
+          {showAll ? (
+            "Show fewer"
+          ) : (
+            <>
+              Show {visible.length - 3} more
+              <ChevronRight className="w-3.5 h-3.5" />
+            </>
+          )}
+        </button>
+      )}
+
+      {/* Footer hint */}
+      {visible.length > 0 && (
+        <p className="text-[10px] text-white/20 text-center -mt-1">
+          Powered by NBA Phase 1 · updates nightly
+        </p>
+      )}
+    </div>
+  );
+}
