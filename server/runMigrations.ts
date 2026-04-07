@@ -961,4 +961,19 @@ export async function runMigrations() {
   } finally {
     clientAgs.release();
   }
+
+  // Account Growth Score — add previous_score / previous_band columns (NBA prep)
+  const clientAgsPrev = await pool.connect();
+  try {
+    await clientAgsPrev.query(`
+      ALTER TABLE account_growth_scores
+        ADD COLUMN IF NOT EXISTS previous_score integer,
+        ADD COLUMN IF NOT EXISTS previous_band  text
+    `);
+    console.log("[migrations] account_growth_scores previous_score/band columns ensured");
+  } catch (err) {
+    console.error("[migrations] account_growth_scores previous columns error:", err);
+  } finally {
+    clientAgsPrev.release();
+  }
 }

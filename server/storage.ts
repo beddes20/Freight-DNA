@@ -2528,10 +2528,14 @@ export class DatabaseStorage implements IStorage {
       .onConflictDoUpdate({
         target: accountGrowthScores.companyId,
         set: {
-          score: data.score,
-          band: data.band,
-          drivers: data.drivers,
-          calculatedAt: data.calculatedAt,
+          // Snapshot the current score/band as "previous" before overwriting —
+          // referencing the table column (not sql`excluded`) reads the existing row value.
+          previousScore: accountGrowthScores.score,
+          previousBand:  accountGrowthScores.band,
+          score:         data.score,
+          band:          data.band,
+          drivers:       data.drivers,
+          calculatedAt:  data.calculatedAt,
         },
       })
       .returning();

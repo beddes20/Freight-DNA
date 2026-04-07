@@ -1021,6 +1021,8 @@ export const accountGrowthScores = pgTable("account_growth_scores", {
   organizationId: varchar("organization_id").notNull().references(() => organizations.id),
   score: integer("score").notNull(),
   band: text("band").notNull(), // at_risk | stable | growth_ready | high_expansion
+  previousScore: integer("previous_score"),       // score from the prior calculation (null on first calc)
+  previousBand: text("previous_band"),            // band from the prior calculation (null on first calc)
   drivers: jsonb("drivers").notNull().default([]),
   calculatedAt: text("calculated_at").notNull(),
 });
