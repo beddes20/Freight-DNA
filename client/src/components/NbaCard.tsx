@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { NbaLogTouchDialog } from "./NbaLogTouchDialog";
 import {
   AlertTriangle,
   Zap,
@@ -13,6 +14,7 @@ import {
   Clock,
   ArrowRight,
   Link2,
+  PhoneCall,
 } from "lucide-react";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -80,6 +82,7 @@ const DISMISS_OPTIONS: { value: string; label: string }[] = [
 export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned }: NbaCardProps) {
   const [showDismiss, setShowDismiss] = useState(false);
   const [dismissValue, setDismissValue] = useState("");
+  const [showLogTouch, setShowLogTouch] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -258,14 +261,42 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             size="sm"
             onClick={handleAction}
             disabled={resolveMutation.isPending}
-            className="h-6 text-[10px] px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30"
+            className="h-6 text-[10px] px-2 bg-white/8 hover:bg-white/12 text-white/50 border border-white/15"
             data-testid={`nba-card-action-${card.id}`}
           >
             <CheckCircle2 className="w-3 h-3 mr-0.5" />
             Done
           </Button>
+          {card.companyId && (
+            <Button
+              size="sm"
+              onClick={() => setShowLogTouch(true)}
+              disabled={resolveMutation.isPending}
+              className="h-6 text-[10px] px-2 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30"
+              data-testid={`nba-card-log-touch-${card.id}`}
+            >
+              <PhoneCall className="w-3 h-3 mr-0.5" />
+              Log Touch
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* Log Touch dialog — only mounted when triggered */}
+      {card.companyId && showLogTouch && (
+        <NbaLogTouchDialog
+          open={showLogTouch}
+          onClose={() => setShowLogTouch(false)}
+          cardId={card.id}
+          companyId={card.companyId}
+          companyName={card.companyName ?? ""}
+          contactId={card.contactId}
+          onActioned={() => {
+            onActioned?.(card.id);
+            setShowLogTouch(false);
+          }}
+        />
+      )}
     </div>
   );
 }
