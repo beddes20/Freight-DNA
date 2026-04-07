@@ -57,6 +57,9 @@ import { DirectorPortlets } from "./dashboard/DirectorPortlets";
 import { NamPortlets } from "./dashboard/NamPortlets";
 import { AmPortlets } from "./dashboard/AmPortlets";
 import { AccountsDriftingPortlet, RelationshipAdvancementPortlet, GrowthCallsPortlet } from "./dashboard/Phase2Portlets";
+import { CommitDialog } from "./dashboard/CommitDialog";
+import type { CommitPayload } from "./dashboard/commitTypes";
+import { WeeklyCommitmentsPanel, TeamCommitmentsPortlet } from "./dashboard/WeeklyCommitmentsPanel";
 import { TasksSection } from "./dashboard/TasksSection";
 import { TeamDirectorySection } from "./dashboard/TeamDirectorySection";
 
@@ -109,6 +112,9 @@ export default function Dashboard() {
   const [accountsDriftingCollapsed, setAccountsDriftingCollapsed] = useState(() => localStorage.getItem("dash_accounts_drifting_collapsed") === "true");
   const [relationshipAdvancementCollapsed, setRelationshipAdvancementCollapsed] = useState(() => localStorage.getItem("dash_rel_advancement_collapsed") === "true");
   const [growthCallsCollapsed, setGrowthCallsCollapsed] = useState(() => localStorage.getItem("dash_growth_calls_collapsed") === "true");
+  const [weeklyCommitmentsCollapsed, setWeeklyCommitmentsCollapsed] = useState(() => localStorage.getItem("dash_weekly_commitments_collapsed") === "true");
+  const [teamCommitmentsCollapsed, setTeamCommitmentsCollapsed] = useState(() => localStorage.getItem("dash_team_commitments_collapsed") === "true");
+  const [commitPayload, setCommitPayload] = useState<CommitPayload | null>(null);
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
   const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") !== "false");
   const [lmCheckInsGroupCollapsed, setLmCheckInsGroupCollapsed] = useState(() => localStorage.getItem("dash_lm_checkins_group_collapsed") === "true");
@@ -1114,6 +1120,20 @@ export default function Dashboard() {
         </PortletErrorBoundary>
       )}
 
+      {/* ── AM Phase 3: My Weekly Commitments ───────────────────────────────── */}
+      {isAm && (
+        <PortletErrorBoundary label="Weekly Commitments">
+          <WeeklyCommitmentsPanel
+            collapsed={weeklyCommitmentsCollapsed}
+            onToggle={() => {
+              const next = !weeklyCommitmentsCollapsed;
+              setWeeklyCommitmentsCollapsed(next);
+              localStorage.setItem("dash_weekly_commitments_collapsed", String(next));
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
+
       {/* ── AM Phase 2: Unified "Accounts Drifting" (replaces Phase 1 stale card) ── */}
       {isAm && (
         <PortletErrorBoundary label="Accounts Drifting">
@@ -1127,6 +1147,7 @@ export default function Dashboard() {
               setAccountsDriftingCollapsed(next);
               localStorage.setItem("dash_accounts_drifting_collapsed", String(next));
             }}
+            onCommit={setCommitPayload}
           />
         </PortletErrorBoundary>
       )}
@@ -1145,6 +1166,7 @@ export default function Dashboard() {
               setRelationshipAdvancementCollapsed(next);
               localStorage.setItem("dash_rel_advancement_collapsed", String(next));
             }}
+            onCommit={setCommitPayload}
           />
         </PortletErrorBoundary>
       )}
@@ -1159,6 +1181,21 @@ export default function Dashboard() {
               const next = !growthCallsCollapsed;
               setGrowthCallsCollapsed(next);
               localStorage.setItem("dash_growth_calls_collapsed", String(next));
+            }}
+            onCommit={setCommitPayload}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── Manager Phase 3: Team Commitment Follow-Through ─────────────────── */}
+      {canSeeTeam && !isAm && (
+        <PortletErrorBoundary label="Team Commitments">
+          <TeamCommitmentsPortlet
+            collapsed={teamCommitmentsCollapsed}
+            onToggle={() => {
+              const next = !teamCommitmentsCollapsed;
+              setTeamCommitmentsCollapsed(next);
+              localStorage.setItem("dash_team_commitments_collapsed", String(next));
             }}
           />
         </PortletErrorBoundary>
@@ -2287,6 +2324,11 @@ export default function Dashboard() {
         companyName={composeContact?.companyName || ""}
         contactId={composeContact?.contactId}
         companyId={composeContact?.companyId}
+      />
+
+      <CommitDialog
+        payload={commitPayload}
+        onClose={() => setCommitPayload(null)}
       />
 
     </div>

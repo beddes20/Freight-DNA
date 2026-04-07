@@ -3,7 +3,7 @@
  * Pre-fills text, lever, and company context. User can adjust before saving.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -17,27 +17,10 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Zap } from "lucide-react";
+import { LEVERS } from "./commitTypes";
+import type { Lever, CommitPayload } from "./commitTypes";
 
-export const LEVERS = [
-  "Recovery",
-  "Contact Mapping",
-  "Lane ID",
-  "Spot-to-Contract",
-  "Referral",
-  "Relationship Advance",
-] as const;
-
-export type Lever = typeof LEVERS[number];
-
-export interface CommitPayload {
-  companyId?: string;
-  companyName?: string;
-  contactId?: string;
-  contactName?: string;
-  defaultText: string;
-  defaultLever: Lever;
-  source: string;
-}
+export type { Lever, CommitPayload };
 
 interface Props {
   payload: CommitPayload | null;
@@ -49,20 +32,29 @@ export function CommitDialog({ payload, onClose }: Props) {
   const [text, setText] = useState(payload?.defaultText ?? "");
   const [lever, setLever] = useState<Lever>(payload?.defaultLever ?? "Recovery");
 
-  // Reset state when payload changes
-  const open = payload !== null;
+  useEffect(() => {
+    if (payload) {
+      setText(payload.defaultText);
+      setLever(payload.defaultLever);
+    }
+  }, [payload]);
 
   const mutation = useMutation({
     mutationFn: (body: object) => apiRequest("POST", "/api/weekly-commitments", body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-commitments"] });
       toast({ title: "Committed for this week!", description: text });
-      onClose();
+      handleClose();
     },
     onError: () => {
       toast({ title: "Failed to save commitment", variant: "destructive" });
     },
   });
+
+  function handleClose() {
+    onClose();
+    setText("");
+  }
 
   function handleSubmit() {
     if (!payload || !text.trim()) return;
@@ -77,18 +69,10 @@ export function CommitDialog({ payload, onClose }: Props) {
     });
   }
 
-  // Keep local state in sync with incoming payload
-  if (payload && text === "" && payload.defaultText) {
-    setText(payload.defaultText);
-    setLever(payload.defaultLever);
-  }
-
   return (
     <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        if (!v) { onClose(); setText(""); }
-      }}
+      open={payload !== null}
+      onOpenChange={(v) => { if (!v) handleClose(); }}
     >
       <DialogContent className="max-w-md" data-testid="commit-dialog">
         <DialogHeader>
@@ -136,11 +120,11 @@ export function CommitDialog({ payload, onClose }: Props) {
         </div>
 
         <p className="text-[10px] text-muted-foreground -mt-1">
-          Due: end of this week (Friday). You can mark it complete from your Commitments panel.
+          Due: end of this week (Friday). Mark it complete from your Commitments panel above.
         </p>
 
         <DialogFooter>
-          <Button variant="ghost" size="sm" onClick={() => { onClose(); setText(""); }} data-testid="button-commit-cancel">
+          <Button variant="ghost" size="sm" onClick={handleClose} data-testid="button-commit-cancel">
             Cancel
           </Button>
           <Button
