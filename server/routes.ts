@@ -6907,17 +6907,65 @@ Respond with valid JSON only:
     }
   });
 
-  // ── Helper: compute freight metrics for a set of lane attributions against financial rows ─
+  /*
+   * ── Relationship-Freight Attribution: How it works ────────────────────────────
+   *
+   * PRIORITY RULE (within-contact, exclusive OR):
+   *   If a contact has one or more explicit lane attributions (rows in
+   *   contact_lane_attributions), those are used exclusively via
+   *   computeFreightMetrics(). The contact's free-text lane strings (lanes/regions
+   *   fields from the RFP Coverage tab) are ignored for that contact.
+   *   Lane strings are only used as a fallback when a contact has zero explicit
+   *   attributions. This prevents the same loads being counted twice for a single
+   *   contact who has both sources configured.
+   *
+   * DEDUPLICATION RULE (cross-contact, per-company aggregate rollup only):
+   *   In the global /api/relationship-freight-summary endpoint, each financial row
+   *   is counted at most once per company. A per-company Set<number> (row index
+   *   tracker) is maintained across contact iterations. If two contacts at the same
+   *   company both match the same financial row, only the first contact's iteration
+   *   claims that row for the aggregate totals. Per-contact metrics shown in the
+   *   company portlet are always computed independently (unaffected by deduplication).
+   *
+   * COMPANY MATCHING:
+   *   Customer name in the financial row is matched against the company's primary
+   *   name and all aliases in the financialAlias field (comma-separated). Matching
+   *   is fuzzy (normalized, alphanumeric-only substring match). The company alias
+   *   field must be maintained manually when a customer's name in the TMS differs
+   *   from the CRM company name.
+   *
+   * UNATTRIBUTED LOADS:
+   *   After processing all contacts for a company, any financial rows belonging to
+   *   that company that were not matched by any contact are counted as
+   *   unattributedLoads / unattributedMargin and surfaced in the API response.
+   *
+   * KNOWN LIMITATIONS:
+   *   - Single-upload snapshot only: attribution is computed against the single
+   *     latest financial upload. Historical period comparison is not supported here.
+   *   - Relationship base reflects current state, not historical: if a contact's
+   *     base level changed after freight shipped, the old loads are attributed to
+   *     the new base level.
+   *   - Company alias must be maintained manually: if the TMS customer name does
+   *     not fuzzy-match the CRM name or any alias, loads will be unattributed.
+   *   - Lane strings shorter than 4 chars that are not state abbreviations, or
+   *     strings not in directional format (X → Y / X to Y), may not parse
+   *     correctly and could produce false matches.
+   */
+
+  // Returns matched row indices in addition to metrics — required for deduplication
   function computeFreightMetrics(
     rows: any[],
     cols: any,
     companyNames: string[], // normalized company name + aliases
-    attributions: { originCity?: string | null; originState?: string | null; destinationCity?: string | null; destinationState?: string | null }[]
-  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number } {
+    attributions: { originCity?: string | null; originState?: string | null; destinationCity?: string | null; destinationState?: string | null }[],
+    skipIndices?: Set<number>
+  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number; matchedIndices: Set<number> } {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
     const companyNorms = companyNames.map(n => norm(n));
     let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
-    for (const row of rows) {
+    const matchedIndices = new Set<number>();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
       const custRaw = getCustomerFromRow(row, cols);
       const custNorm = norm(custRaw);
       const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
@@ -6934,6 +6982,8 @@ Respond with valid JSON only:
         return origCityOk && origStateOk && destCityOk && destStateOk;
       });
       if (!matched) continue;
+      matchedIndices.add(i);
+      if (skipIndices?.has(i)) continue;
       const marginK = cols.marginDollar ?? "Margin $";
       const rowMargin = parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
       const orderTypeK = cols.orderType ?? "Order Type";
@@ -6943,20 +6993,23 @@ Respond with valid JSON only:
       margin += rowMargin;
       if (isSpot) spotLoads++; else contractedLoads++;
     }
-    return { loads, margin, contractedLoads, spotLoads };
+    return { loads, margin, contractedLoads, spotLoads, matchedIndices };
   }
 
   // Compute freight from a contact's free-text lanes/regions arrays (coverage tab data)
+  // Returns matched row indices in addition to metrics — required for deduplication
   function computeFreightFromContactLaneStrings(
     rows: any[],
     cols: any,
     companyNames: string[],
     contactLanes: string[],
-    contactRegions: string[]
-  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number } {
+    contactRegions: string[],
+    skipIndices?: Set<number>
+  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number; matchedIndices: Set<number> } {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
     const companyNorms = companyNames.map(n => norm(n));
     let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
+    const matchedIndices = new Set<number>();
 
     // Convert each lane/region string into a structured matcher
     type LaneMatcher = { originCity?: string; originState?: string; destCity?: string; destState?: string };
@@ -6987,9 +7040,10 @@ Respond with valid JSON only:
       matchers.push({ originCity: t });
     }
 
-    if (matchers.length === 0) return { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+    if (matchers.length === 0) return { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0, matchedIndices };
 
-    for (const row of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
       const custRaw = getCustomerFromRow(row, cols);
       const custNorm = norm(custRaw);
       const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
@@ -7009,6 +7063,8 @@ Respond with valid JSON only:
       });
 
       if (!matched) continue;
+      matchedIndices.add(i);
+      if (skipIndices?.has(i)) continue;
       const marginK = cols.marginDollar ?? "Margin $";
       const rowMargin = parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
       const orderTypeK = cols.orderType ?? "Order Type";
@@ -7017,23 +7073,26 @@ Respond with valid JSON only:
       margin += rowMargin;
       if (isSpot) spotLoads++; else contractedLoads++;
     }
-    return { loads, margin, contractedLoads, spotLoads };
+    return { loads, margin, contractedLoads, spotLoads, matchedIndices };
   }
 
-  // All company freight (no lane filtering) — used when contacts have no lane attributions
+  // All company freight (no lane filtering) — used to compute total company row indices for unattributed calc
   function computeCompanyFreightTotal(
     rows: any[],
     cols: any,
     companyNames: string[]
-  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number } {
+  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number; allIndices: Set<number> } {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
     const companyNorms = companyNames.map(n => norm(n));
     let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
-    for (const row of rows) {
+    const allIndices = new Set<number>();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
       const custRaw = getCustomerFromRow(row, cols);
       const custNorm = norm(custRaw);
       const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
       if (!isCompany) continue;
+      allIndices.add(i);
       const marginK = cols.marginDollar ?? "Margin $";
       const rowMargin = parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
       const orderTypeK = cols.orderType ?? "Order Type";
@@ -7042,7 +7101,7 @@ Respond with valid JSON only:
       margin += rowMargin;
       if (isSpot) spotLoads++; else contractedLoads++;
     }
-    return { loads, margin, contractedLoads, spotLoads };
+    return { loads, margin, contractedLoads, spotLoads, allIndices };
   }
 
   // ── Relationship Freight Summary — company-level ─────────────────────────
@@ -7075,30 +7134,36 @@ Respond with valid JSON only:
         return "unknown";
       }
 
-      // Include contacts that have explicit lane attributions OR coverage lane strings (lanes/regions fields)
+      // Build contact results — include ALL contacts, even those with no relationship base or no attribution.
+      // Contacts with no base are grouped under "unknown" (Unassigned).
+      // Contacts with a base but no attribution appear with 0 loads (not silently hidden).
+      const allContactsMatchedIndices = new Set<number>();
+
       const contactResults = contacts
         .map(contact => {
-          if (!contact.relationshipBase || !contact.relationshipBase.trim()) return null;
           const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
           const hasAttribs = contactAttribs.length > 0;
           const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
-          if (!hasAttribs && !hasLaneStrings) return null;
+          const hasNoAttribution = !hasAttribs && !hasLaneStrings;
 
           let freight = { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
-          if (rawRows.length > 0) {
+          if (rawRows.length > 0 && !hasNoAttribution) {
+            // PRIORITY RULE: explicit attributions take precedence over lane strings (not additive)
             if (hasAttribs) {
               const f1 = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
-              freight.loads += f1.loads;
-              freight.margin += f1.margin;
-              freight.contractedLoads += f1.contractedLoads;
-              freight.spotLoads += f1.spotLoads;
-            }
-            if (hasLaneStrings) {
+              freight.loads = f1.loads;
+              freight.margin = f1.margin;
+              freight.contractedLoads = f1.contractedLoads;
+              freight.spotLoads = f1.spotLoads;
+              f1.matchedIndices.forEach(idx => allContactsMatchedIndices.add(idx));
+            } else {
+              // Fallback: use lane strings only when no explicit attributions exist
               const f2 = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
-              freight.loads += f2.loads;
-              freight.margin += f2.margin;
-              freight.contractedLoads += f2.contractedLoads;
-              freight.spotLoads += f2.spotLoads;
+              freight.loads = f2.loads;
+              freight.margin = f2.margin;
+              freight.contractedLoads = f2.contractedLoads;
+              freight.spotLoads = f2.spotLoads;
+              f2.matchedIndices.forEach(idx => allContactsMatchedIndices.add(idx));
             }
           }
 
@@ -7114,6 +7179,7 @@ Respond with valid JSON only:
             baseLabel: BASE_LABELS[base] || base,
             attributionCount: contactAttribs.length,
             coverageLaneCount: (contact.lanes?.length || 0) + (contact.regions?.length || 0),
+            hasNoAttribution,
             attributions: contactAttribs,
             ...freight,
             marginPerLoad,
@@ -7123,7 +7189,21 @@ Respond with valid JSON only:
         })
         .filter(Boolean);
 
-      res.json({ contacts: contactResults, companyId: company.id });
+      // Compute unattributed loads: all financial rows for this company minus those matched by any contact
+      let unattributedLoads = 0;
+      let unattributedMargin = 0;
+      if (rawRows.length > 0) {
+        const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
+        const marginK = cols.marginDollar ?? "Margin $";
+        for (const idx of companyTotal.allIndices) {
+          if (!allContactsMatchedIndices.has(idx)) {
+            unattributedLoads++;
+            unattributedMargin += parseFloat(String(rawRows[idx][marginK] || 0).replace(/[$,]/g, "")) || 0;
+          }
+        }
+      }
+
+      res.json({ contacts: contactResults, companyId: company.id, unattributedLoads, unattributedMargin });
     } catch (e: any) {
       console.error("[relationship-freight-summary/company]", e);
       res.status(500).json({ error: e.message });
@@ -7194,31 +7274,60 @@ Respond with valid JSON only:
         return "unknown";
       }
 
+      // Per-company deduplication set: tracks row indices already counted for each company's aggregate
+      const companySeenIndices: Record<string, Set<number>> = {};
+
+      // First pass: count all contacts including those with no attribution (base assigned but no lanes)
       for (const contact of allContacts) {
-        if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
         const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
         const hasAttribs = contactAttribs.length > 0;
         const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
-        if (!hasAttribs && !hasLaneStrings) continue;
 
         const base = normBase(contact.relationshipBase);
         grouped[base].contacts++;
 
-        if (rawRows.length > 0) {
+        if (rawRows.length > 0 && (hasAttribs || hasLaneStrings)) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
-          if (hasAttribs) {
-            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
-            grouped[base].loads += m.loads;
-            grouped[base].margin += m.margin;
-            grouped[base].contractedLoads += m.contractedLoads;
-            grouped[base].spotLoads += m.spotLoads;
+          if (!companySeenIndices[contact.companyId]) {
+            companySeenIndices[contact.companyId] = new Set<number>();
           }
-          if (hasLaneStrings) {
-            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
+          const seenForCompany = companySeenIndices[contact.companyId];
+
+          // PRIORITY RULE: explicit attributions take precedence; lane strings are only a fallback
+          if (hasAttribs) {
+            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs, seenForCompany);
             grouped[base].loads += m.loads;
             grouped[base].margin += m.margin;
             grouped[base].contractedLoads += m.contractedLoads;
             grouped[base].spotLoads += m.spotLoads;
+            m.matchedIndices.forEach(idx => seenForCompany.add(idx));
+          } else {
+            // Fallback: lane strings only when no explicit attributions exist
+            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || [], seenForCompany);
+            grouped[base].loads += m.loads;
+            grouped[base].margin += m.margin;
+            grouped[base].contractedLoads += m.contractedLoads;
+            grouped[base].spotLoads += m.spotLoads;
+            m.matchedIndices.forEach(idx => seenForCompany.add(idx));
+          }
+        }
+      }
+
+      // Compute total unattributed loads across all visible companies
+      let totalUnattributedLoads = 0;
+      let totalUnattributedMargin = 0;
+      if (rawRows.length > 0) {
+        const marginK = cols.marginDollar ?? "Margin $";
+        for (const companyId of visibleCompanyIds) {
+          const companyNames = companyNameMap[companyId] ?? [];
+          if (companyNames.length === 0) continue;
+          const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
+          const seen = companySeenIndices[companyId] ?? new Set<number>();
+          for (const idx of companyTotal.allIndices) {
+            if (!seen.has(idx)) {
+              totalUnattributedLoads++;
+              totalUnattributedMargin += parseFloat(String(rawRows[idx][marginK] || 0).replace(/[$,]/g, "")) || 0;
+            }
           }
         }
       }
@@ -7242,7 +7351,7 @@ Respond with valid JSON only:
       const totalMargin = summary.reduce((s, r) => s + r.margin, 0);
       const totalContacts = summary.reduce((s, r) => s + r.contacts, 0);
 
-      res.json({ summary, totalContacts, totalLoads, totalMargin });
+      res.json({ summary, totalContacts, totalLoads, totalMargin, unattributedLoads: totalUnattributedLoads, unattributedMargin: totalUnattributedMargin });
     } catch (e: any) {
       console.error("[relationship-freight-summary]", e);
       res.status(500).json({ error: e.message });

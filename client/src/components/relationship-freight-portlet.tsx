@@ -41,10 +41,19 @@ interface SummaryRow {
   spotPct: number | null;
 }
 
+interface DashboardSummaryData {
+  summary: SummaryRow[];
+  totalContacts: number;
+  totalLoads: number;
+  totalMargin: number;
+  unattributedLoads?: number;
+  unattributedMargin?: number;
+}
+
 // ── Dashboard-level portlet ───────────────────────────────────────────────────
-export function RelationshipFreightDashboardPortlet({ externalData }: { externalData?: { summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number } }) {
+export function RelationshipFreightDashboardPortlet({ externalData }: { externalData?: DashboardSummaryData }) {
   const [collapsed, setCollapsed] = useState(false);
-  const { data: fetchedData, isLoading } = useQuery<{ summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number }>({
+  const { data: fetchedData, isLoading } = useQuery<DashboardSummaryData>({
     queryKey: ["/api/relationship-freight-summary"],
     enabled: !externalData,
   });
@@ -95,6 +104,12 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
               )}
               <SummaryTable rows={data.summary} />
               <ProgressionCallout summary={data.summary} />
+              {(data.unattributedLoads ?? 0) > 0 && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/50 border border-dashed border-muted-foreground/30 text-xs text-muted-foreground mt-2" data-testid="callout-dashboard-unattributed">
+                  <Package className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span>{(data.unattributedLoads ?? 0).toLocaleString()} load{(data.unattributedLoads ?? 0) !== 1 ? "s" : ""} not yet attributed to any contact across all companies</span>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
@@ -120,6 +135,7 @@ interface CompanyContact {
   spotPct: number | null;
   attributions: any[];
   coverageLaneCount: number;
+  hasNoAttribution?: boolean;
 }
 
 interface CompanyPortletProps {
@@ -133,7 +149,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useQuery<{ contacts: CompanyContact[]; companyId: string }>({
+  const { data, isLoading } = useQuery<{ contacts: CompanyContact[]; companyId: string; unattributedLoads: number; unattributedMargin: number }>({
     queryKey: ["/api/companies", companyId, "relationship-freight-summary"],
     queryFn: () => fetch(`/api/companies/${companyId}/relationship-freight-summary`, { credentials: "include" }).then(r => r.json()),
   });
@@ -144,6 +160,8 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
   const totalLoads = contacts.reduce((s, c) => s + c.loads, 0);
   const totalMargin = contacts.reduce((s, c) => s + c.margin, 0);
   const hasAnyAttributions = hasContacts && totalLoads > 0;
+  const unattributedLoads = data?.unattributedLoads ?? 0;
+  const unattributedMargin = data?.unattributedMargin ?? 0;
 
   // Group contacts by base
   const baseOrder = ["hr", "home", "3rd", "2nd", "1st", "unknown"];
@@ -187,7 +205,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !hasContacts ? (
-            <EmptyState message="No contacts with a relationship base and lane or coverage assignments found. Set a contact's base level (1st/2nd/3rd/HR) in their contact sheet, then assign lanes there or via the RFP Coverage tab." />
+            <EmptyState message="No contacts with a relationship base found. Set a contact's base level (1st/2nd/3rd/HR) in their contact sheet, then assign lanes there or via the RFP Coverage tab." />
           ) : (
             <div className="space-y-4">
               {baseOrder.filter(b => grouped[b]?.length).map(base => {
@@ -213,6 +231,12 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
                   </div>
                 );
               })}
+              {unattributedLoads > 0 && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/50 border border-dashed border-muted-foreground/30 text-xs text-muted-foreground" data-testid="callout-unattributed-loads">
+                  <Package className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span>{unattributedLoads.toLocaleString()} load{unattributedLoads !== 1 ? "s" : ""} not yet attributed to any contact{unattributedMargin > 0 ? ` · ${fmt$(unattributedMargin)} margin` : ""}</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -238,6 +262,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
 function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; onAddLane: () => void }) {
   const cfg = BASE_CONFIG[contact.relationshipBase] ?? BASE_CONFIG["unknown"];
   const hasLoads = contact.loads > 0;
+  const noAttribution = contact.hasNoAttribution === true;
 
   return (
     <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-muted/50 group" data-testid={`row-contact-freight-${contact.contactId}`}>
@@ -249,7 +274,9 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
         </div>
       </div>
       <div className="flex items-center gap-3 flex-shrink-0 ml-2">
-        {hasLoads ? (
+        {noAttribution && contact.relationshipBase !== "unknown" ? (
+          <span className="text-[10px] text-amber-600 dark:text-amber-400 italic bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800/40" data-testid={`badge-no-lanes-${contact.contactId}`}>No lanes set — freight not tracked</span>
+        ) : hasLoads ? (
           <>
             <span className="text-xs text-foreground font-mono">{contact.loads.toLocaleString()} loads</span>
             <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono">{fmt$(contact.margin)}</span>
@@ -720,7 +747,7 @@ export function RelationshipBaseDistributionPortlet({ externalData }: { external
 // ── T006: Consolidated dashboard section — single API call for both portlets ──
 type ConsolidatedData = {
   distribution: DistributionData;
-  summary: { summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number };
+  summary: DashboardSummaryData;
 };
 
 export function RelationshipDashboardSection() {
