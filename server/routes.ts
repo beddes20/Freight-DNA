@@ -4168,6 +4168,16 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
               createdAt: now.toISOString(),
             });
             cacheInvalidatePrefix(`cold-contacts:${currentUser.id}`);
+            if (contact.companyId) {
+              (async () => {
+                try {
+                  const gs = await computeGrowthScore(contact.companyId!, currentUser.organizationId, storage);
+                  await storage.upsertGrowthScore({ companyId: contact.companyId!, organizationId: currentUser.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+                } catch (gsErr) {
+                  console.error("[outlook] background growth score refresh failed:", gsErr);
+                }
+              })();
+            }
           }
         } catch (tpErr) {
           console.error("[outlook] touchpoint log failed:", tpErr);
@@ -4217,6 +4227,14 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
                 createdAt: now.toISOString(),
               });
               cacheInvalidatePrefix(`cold-contacts:${currentUser.id}`);
+              (async () => {
+                try {
+                  const gs = await computeGrowthScore(match.id, currentUser.organizationId, storage);
+                  await storage.upsertGrowthScore({ companyId: match.id, organizationId: currentUser.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+                } catch (gsErr) {
+                  console.error("[outlook] background growth score refresh (auto-link) failed:", gsErr);
+                }
+              })();
             }
           }
         } catch (autoErr) {
@@ -4678,6 +4696,16 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
       cacheInvalidatePrefix(`cold-contacts:${user.id}`);
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
+      if (contact.companyId) {
+        (async () => {
+          try {
+            const gs = await computeGrowthScore(contact.companyId!, user.organizationId, storage);
+            await storage.upsertGrowthScore({ companyId: contact.companyId!, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+          } catch (gsErr) {
+            console.error("[contact-touchpoint] background growth score refresh failed:", gsErr);
+          }
+        })();
+      }
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to create touchpoint:", error);
@@ -6341,6 +6369,14 @@ Respond with valid JSON only:
           console.error("Failed to create auto follow-up task for company touchpoint:", taskError);
         }
       }
+      (async () => {
+        try {
+          const gs = await computeGrowthScore(req.params.id as string, user.organizationId, storage);
+          await storage.upsertGrowthScore({ companyId: req.params.id as string, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+        } catch (gsErr) {
+          console.error("[company-touchpoint] background growth score refresh failed:", gsErr);
+        }
+      })();
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touchpoint (company route):", error);
@@ -6385,6 +6421,14 @@ Respond with valid JSON only:
           console.error("Failed to create auto follow-up task for touch-log:", taskError);
         }
       }
+      (async () => {
+        try {
+          const gs = await computeGrowthScore(companyId, user.organizationId, storage);
+          await storage.upsertGrowthScore({ companyId, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+        } catch (gsErr) {
+          console.error("[touch-logs] background growth score refresh failed:", gsErr);
+        }
+      })();
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touch:", error);
