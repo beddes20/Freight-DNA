@@ -7012,6 +7012,31 @@ Respond with valid JSON only:
    */
 
   // Returns matched row indices in addition to metrics — required for deduplication
+  // City alias lookup: maps common abbreviations/variants to normalized full city names
+  const CITY_ALIASES: Record<string, string> = {
+    "stl": "saintlouis",
+    "saintlouispark": "saintlouis",
+    "nyc": "newyork",
+    "newyorkcity": "newyork",
+    "la": "losangeles",
+    "philly": "philadelphia",
+    "chi": "chicago",
+    "kc": "kansascity",
+    "indy": "indianapolis",
+    "cincy": "cincinnati",
+    "cle": "cleveland",
+    "pgh": "pittsburgh",
+    "atl": "atlanta",
+    "dfw": "dallas",
+    "sfbay": "sanfrancisco",
+    "sf": "sanfrancisco",
+  };
+
+  function normCity(raw: string): string {
+    const n = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return CITY_ALIASES[n] ?? n;
+  }
+
   function computeFreightMetrics(
     rows: any[],
     cols: any,
@@ -7029,15 +7054,18 @@ Respond with valid JSON only:
       const custNorm = norm(custRaw);
       const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
       if (!isCompany) continue;
-      const origCity = norm(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
+      const origCity = normCity(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
       const origState = norm(String(row[cols.shipperState] || row[cols.originState] || ""));
-      const destCity = norm(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
+      const destCity = normCity(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
       const destState = norm(String(row[cols.consigneeState] || row[cols.destinationState] || ""));
       const matched = attributions.some(a => {
-        const origCityOk = !a.originCity || origCity.includes(norm(a.originCity)) || norm(a.originCity).includes(origCity.substring(0, 4));
-        const origStateOk = !a.originState || origState === norm(a.originState) || origCity.includes(norm(a.originState));
-        const destCityOk = !a.destinationCity || destCity.includes(norm(a.destinationCity)) || norm(a.destinationCity).includes(destCity.substring(0, 4));
-        const destStateOk = !a.destinationState || destState === norm(a.destinationState) || destCity.includes(norm(a.destinationState));
+        // Phase 2: exact normalized city match after alias resolution (no substring/prefix matching)
+        const normOrigCity = a.originCity ? normCity(a.originCity) : "";
+        const normDestCity = a.destinationCity ? normCity(a.destinationCity) : "";
+        const origCityOk = !a.originCity || origCity === normOrigCity;
+        const origStateOk = !a.originState || origState === norm(a.originState);
+        const destCityOk = !a.destinationCity || destCity === normDestCity;
+        const destStateOk = !a.destinationState || destState === norm(a.destinationState);
         return origCityOk && origStateOk && destCityOk && destStateOk;
       });
       if (!matched) continue;
@@ -7057,6 +7085,11 @@ Respond with valid JSON only:
 
   // Compute freight from a contact's free-text lanes/regions arrays (coverage tab data)
   // Returns matched row indices in addition to metrics — required for deduplication
+  // Phase 2 rules:
+  //   - State-only matchers (no destination, 2-3 char abbreviation) are "broad".
+  //   - Broad matchers are INCLUDED when they are the contact's sole attribution method.
+  //   - Broad matchers are EXCLUDED when more specific (non-broad) matchers also exist.
+  //   - City matching uses exact normalized name after alias resolution.
   function computeFreightFromContactLaneStrings(
     rows: any[],
     cols: any,
@@ -7064,20 +7097,19 @@ Respond with valid JSON only:
     contactLanes: string[],
     contactRegions: string[],
     skipIndices?: Set<number>
-  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number; matchedIndices: Set<number> } {
+  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number; matchedIndices: Set<number>; hasBroadStateOnly: boolean } {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
     const companyNorms = companyNames.map(n => norm(n));
     let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
     const matchedIndices = new Set<number>();
 
     // Convert each lane/region string into a structured matcher
-    type LaneMatcher = { originCity?: string; originState?: string; destCity?: string; destState?: string };
+    type LaneMatcher = { originCity?: string; originState?: string; destCity?: string; destState?: string; isBroadStateOnly: boolean };
     const matchers: LaneMatcher[] = [];
 
     for (const term of [...(contactLanes || []), ...(contactRegions || [])]) {
       const t = term.trim();
       if (!t) continue;
-      // Skip purely descriptive text (contains spaces and is not a direction) unless it's a city name
       const dirMatch = t.match(/^(.+?)(?:→|->|\s+to\s+)(.+)$/i);
       if (dirMatch) {
         const from = dirMatch[1].trim();
@@ -7087,19 +7119,31 @@ Respond with valid JSON only:
           originCity: from.length > 3 ? from : undefined,
           destState: to.length <= 3 && /^[a-zA-Z]+$/.test(to) ? to : undefined,
           destCity: to.length > 3 ? to : undefined,
+          isBroadStateOnly: false, // directional = specific enough
         });
         continue;
       }
-      // State abbreviation (2-3 chars, letters only)
+      // State abbreviation (2-3 chars, letters only) with no destination = broad
       if (t.length <= 3 && /^[a-zA-Z]+$/.test(t)) {
-        matchers.push({ originState: t });
+        matchers.push({ originState: t, isBroadStateOnly: true });
         continue;
       }
-      // City / region name
-      matchers.push({ originCity: t });
+      // City / region name — specific
+      matchers.push({ originCity: t, isBroadStateOnly: false });
     }
 
-    if (matchers.length === 0) return { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0, matchedIndices };
+    if (matchers.length === 0) return { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0, matchedIndices, hasBroadStateOnly: false };
+
+    const hasNonBroad = matchers.some(m => !m.isBroadStateOnly);
+    const hasBroadStateOnly = matchers.some(m => m.isBroadStateOnly) && !hasNonBroad;
+
+    // Phase 2: use only specific matchers when both types exist.
+    // When ONLY broad matchers exist (sole attribution method), allow them.
+    const effectiveMatchers = hasNonBroad
+      ? matchers.filter(m => !m.isBroadStateOnly) // drop broad when more specific ones present
+      : matchers; // sole attribution = allow broad
+
+    if (effectiveMatchers.length === 0) return { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0, matchedIndices, hasBroadStateOnly };
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -7108,15 +7152,18 @@ Respond with valid JSON only:
       const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
       if (!isCompany) continue;
 
-      const origCity = norm(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
+      const origCity = normCity(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
       const origState = norm(String(row[cols.shipperState] || row[cols.originState] || ""));
-      const dstCity = norm(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
+      const dstCity = normCity(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
       const dstState = norm(String(row[cols.consigneeState] || row[cols.destinationState] || ""));
 
-      const matched = matchers.some(m => {
-        const origCityOk = !m.originCity || origCity.includes(norm(m.originCity)) || norm(m.originCity).includes(origCity.substring(0, 4));
+      const matched = effectiveMatchers.some(m => {
+        // Phase 2: exact normalized city match after alias resolution
+        const normOrigCity = m.originCity ? normCity(m.originCity) : "";
+        const normDstCity = m.destCity ? normCity(m.destCity) : "";
+        const origCityOk = !m.originCity || origCity === normOrigCity;
         const origStateOk = !m.originState || origState === norm(m.originState);
-        const destCityOk = !m.destCity || dstCity.includes(norm(m.destCity)) || norm(m.destCity).includes(dstCity.substring(0, 4));
+        const destCityOk = !m.destCity || dstCity === normDstCity;
         const destStateOk = !m.destState || dstState === norm(m.destState);
         return origCityOk && origStateOk && destCityOk && destStateOk;
       });
@@ -7132,7 +7179,7 @@ Respond with valid JSON only:
       margin += rowMargin;
       if (isSpot) spotLoads++; else contractedLoads++;
     }
-    return { loads, margin, contractedLoads, spotLoads, matchedIndices };
+    return { loads, margin, contractedLoads, spotLoads, matchedIndices, hasBroadStateOnly };
   }
 
   // All company freight (no lane filtering) — used to compute total company row indices for unattributed calc
@@ -7193,20 +7240,72 @@ Respond with valid JSON only:
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
 
       const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
+      // Phase 1: base rank for tie-breaking — higher rank wins (hr > 3rd > 2nd > 1st > unknown)
+      const BASE_RANK: Record<string, number> = { hr: 4, "3rd": 3, "2nd": 2, "1st": 1, unknown: 0 };
 
-      // Build contact results — include ALL contacts, even those with no relationship base or no attribution.
-      // Contacts with no base are grouped under "unknown" (Unassigned).
-      // Contacts with a base but no attribution appear with 0 loads (not silently hidden).
-      //
-      // FIX: Process contacts in relationship priority order (HR → 3rd → 2nd → 1st → unknown) and
-      // pass a shared seenForCompany set so each load row is claimed by the highest-level contact
-      // that matches it.  Per-contact loads now reflect "claimed" loads (no double-counting).
-      const BASE_PRIORITY_COMPANY: Record<string, number> = { hr: 0, "3rd": 1, "2nd": 2, "1st": 3, unknown: 4 };
+      // Phase 1: sort contacts by base rank descending so highest-base contacts claim lanes first.
+      // Secondary sort by id ensures fully deterministic same-base ordering.
       const sortedContacts = [...contacts].sort((a, b) => {
-        const pa = BASE_PRIORITY_COMPANY[normRelationshipBase(a.relationshipBase)] ?? 4;
-        const pb = BASE_PRIORITY_COMPANY[normRelationshipBase(b.relationshipBase)] ?? 4;
-        return pa - pb;
+        const rankA = BASE_RANK[normRelationshipBase(a.relationshipBase)] ?? 0;
+        const rankB = BASE_RANK[normRelationshipBase(b.relationshipBase)] ?? 0;
+        if (rankB !== rankA) return rankB - rankA;
+        // Secondary stable sort by id ensures same-base contacts always process in the same order
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
+
+      // First pass: compute which row indices each contact MATCHES (ignoring dedup) and
+      // which indices are claimed by a higher-ranked contact — used for "shared lane" badge.
+      // Maps contactId -> Set of matched indices (pre-dedup, for unattributed calc)
+      const contactMatchedIndices: Map<string, Set<number>> = new Map();
+      const allContactsMatchedIndices = new Set<number>();
+
+      // Build per-contact match data sorted by base rank (tie-breaking: highest base claims first)
+      for (const contact of sortedContacts) {
+        const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
+        const hasAttribs = contactAttribs.length > 0;
+        const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
+        const hasNoAttribution = !hasAttribs && !hasLaneStrings;
+
+        if (rawRows.length > 0 && !hasNoAttribution) {
+          let matched: Set<number>;
+          if (hasAttribs) {
+            const f = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+            matched = f.matchedIndices;
+          } else {
+            const f = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
+            matched = f.matchedIndices;
+          }
+          contactMatchedIndices.set(contact.id, matched);
+          matched.forEach(idx => allContactsMatchedIndices.add(idx));
+        }
+      }
+
+      // Second pass: build final contact results using the sorted (tie-breaking) order.
+      // Each contact's freight = matched indices NOT already claimed by a higher-rank contact.
+      const claimedByHigher = new Set<number>();
+      const contactFreightMap: Map<string, { loads: number; margin: number; contractedLoads: number; spotLoads: number; sharedLane: boolean }> = new Map();
+      for (const contact of sortedContacts) {
+        const matchedForContact = contactMatchedIndices.get(contact.id) ?? new Set<number>();
+        let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
+        let sharedLane = false;
+        const marginK2 = cols.marginDollar ?? "Margin $";
+        const orderTypeK = cols.orderType ?? "Order Type";
+        for (const idx of matchedForContact) {
+          if (claimedByHigher.has(idx)) {
+            sharedLane = true; // this index was won by a higher-ranked contact
+            continue;
+          }
+          const row = rawRows[idx];
+          const rowMargin = parseFloat(String(row[marginK2] || 0).replace(/[$,]/g, "")) || 0;
+          const isSpot = String(row[orderTypeK] || "").toLowerCase().includes("spot");
+          loads++;
+          margin += rowMargin;
+          if (isSpot) spotLoads++; else contractedLoads++;
+        }
+        // Mark all this contact's matched indices as claimed (so lower-rank contacts show sharedLane)
+        matchedForContact.forEach(idx => claimedByHigher.add(idx));
+        contactFreightMap.set(contact.id, { loads, margin, contractedLoads, spotLoads, sharedLane });
+      }
 
       // seenForCompany tracks every row index claimed by any contact (for unattributed + total calc)
       const seenForCompany = new Set<number>();
@@ -7220,28 +7319,19 @@ Respond with valid JSON only:
           const attributionSource: "explicit" | "estimate" | "none" =
             hasAttribs ? "explicit" : hasLaneStrings ? "estimate" : "none";
 
-          let freight = { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
-          if (rawRows.length > 0 && !hasNoAttribution) {
-            // PRIORITY RULE: explicit attributions take precedence over lane strings (not additive).
-            // seenForCompany is passed so already-claimed rows are skipped (claimed loads only).
-            if (hasAttribs) {
-              const f1 = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs, seenForCompany);
-              freight.loads = f1.loads;
-              freight.margin = f1.margin;
-              freight.contractedLoads = f1.contractedLoads;
-              freight.spotLoads = f1.spotLoads;
-              f1.matchedIndices.forEach(idx => seenForCompany.add(idx));
-            } else {
-              // Fallback: use lane strings only when no explicit attributions exist
-              const f2 = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || [], seenForCompany);
-              freight.loads = f2.loads;
-              freight.margin = f2.margin;
-              freight.contractedLoads = f2.contractedLoads;
-              freight.spotLoads = f2.spotLoads;
-              f2.matchedIndices.forEach(idx => seenForCompany.add(idx));
+          // Check broad state-only warning for fallback lane strings.
+          // Only warn if: (1) all matchers are state-only broad, AND (2) matched count > 0,
+          // AND (3) matched rows exceed 20% of the company's total freight.
+          let hasBroadLaneWarning = false;
+          if (!hasAttribs && hasLaneStrings && rawRows.length > 0) {
+            const check = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
+            if (check.hasBroadStateOnly && check.matchedIndices.size > 0) {
+              const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
+              hasBroadLaneWarning = companyTotal.allIndices.size > 0 && (check.matchedIndices.size / companyTotal.allIndices.size) > 0.2;
             }
           }
 
+          const freight = contactFreightMap.get(contact.id) ?? { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0, sharedLane: false };
           const base = normRelationshipBase(contact.relationshipBase);
           const marginPerLoad = freight.loads > 0 ? Math.round((freight.margin / freight.loads) * 100) / 100 : null;
           const contractedPct = freight.loads > 0 ? Math.round(freight.contractedLoads / freight.loads * 1000) / 10 : null;
@@ -7256,8 +7346,13 @@ Respond with valid JSON only:
             coverageLaneCount: (contact.lanes?.length || 0) + (contact.regions?.length || 0),
             hasNoAttribution,
             attributionSource,
+            hasBroadLaneWarning,
+            sharedLane: freight.sharedLane,
             attributions: contactAttribs,
-            ...freight,
+            loads: freight.loads,
+            margin: freight.margin,
+            contractedLoads: freight.contractedLoads,
+            spotLoads: freight.spotLoads,
             marginPerLoad,
             contractedPct,
             spotPct,
@@ -7359,21 +7454,31 @@ Respond with valid JSON only:
       for (const base of BASE_ORDER) grouped[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
       grouped["unknown"] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
+      // Phase 1: base rank for tie-breaking — higher rank wins (hr > 3rd > 2nd > 1st > unknown)
+      const DASH_BASE_RANK: Record<string, number> = { hr: 4, "3rd": 3, "2nd": 2, "1st": 1, unknown: 0 };
+
+      // Phase 1: sort contacts by base rank descending (per company) so highest-rank contacts
+      // claim shared lanes first — makes attribution deterministic and consistent with company portlet.
+      const sortedAllContacts = [...allContacts].sort((a, b) => {
+        const rankA = DASH_BASE_RANK[normRelationshipBase(a.relationshipBase)] ?? 0;
+        const rankB = DASH_BASE_RANK[normRelationshipBase(b.relationshipBase)] ?? 0;
+        if (rankB !== rankA) return rankB - rankA;
+        // Secondary stable sort by id for fully deterministic same-base ordering
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+
       // Per-company deduplication set: tracks row indices already counted for each company's aggregate
       const companySeenIndices: Record<string, Set<number>> = {};
 
-      // FIX: Sort contacts by relationship base priority (HR → 3rd → 2nd → 1st → unknown) before
-      // the attribution loop so that the highest-value contact claims a shared load row first.
-      // Contacts for different companies are interleaved but per-company deduplication (companySeenIndices)
-      // is unaffected — the sort only matters within each company's contact group.
-      const BASE_PRIORITY_DASH: Record<string, number> = { hr: 0, "3rd": 1, "2nd": 2, "1st": 3, unknown: 4 };
-      const sortedAllContacts = [...allContacts].sort((a, b) => {
-        const pa = BASE_PRIORITY_DASH[normRelationshipBase(a.relationshipBase)] ?? 4;
-        const pb = BASE_PRIORITY_DASH[normRelationshipBase(b.relationshipBase)] ?? 4;
-        return pa - pb;
-      });
+      // Count contacts per base first (independent of freight)
+      for (const contact of allContacts) {
+        if (!workedCompanyIds.has(contact.companyId)) continue;
+        const base = normRelationshipBase(contact.relationshipBase);
+        grouped[base].contacts++;
+      }
 
-      // Worked companies: attribute freight to each contact's relationship base
+      // Worked companies: attribute freight to each contact's relationship base (sorted by rank)
+
       for (const contact of sortedAllContacts) {
         if (!workedCompanyIds.has(contact.companyId)) continue; // skip unworked company contacts
 
@@ -7382,7 +7487,6 @@ Respond with valid JSON only:
         const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
 
         const base = normRelationshipBase(contact.relationshipBase);
-        grouped[base].contacts++;
 
         if (rawRows.length > 0 && (hasAttribs || hasLaneStrings)) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
@@ -7398,6 +7502,7 @@ Respond with valid JSON only:
             grouped[base].spotLoads += m.spotLoads;
             m.matchedIndices.forEach(idx => seenForCompany.add(idx));
           } else {
+            // Phase 2: exclude broad state-only lane strings from dashboard rollup
             const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || [], seenForCompany);
             grouped[base].loads += m.loads;
             grouped[base].margin += m.margin;
@@ -7406,6 +7511,16 @@ Respond with valid JSON only:
             m.matchedIndices.forEach(idx => seenForCompany.add(idx));
           }
         }
+      }
+
+      // ── Unassigned contacts (worked company, has lanes, but no base set) ─────
+      let totalUnassignedContacts = 0;
+      for (const contact of allContacts) {
+        if (!workedCompanyIds.has(contact.companyId)) continue;
+        const base = normRelationshipBase(contact.relationshipBase);
+        const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
+        const hasAttribs = allAttributionsList.some(a => a.contactId === contact.id);
+        if (base === "unknown" && (hasLaneStrings || hasAttribs)) totalUnassignedContacts++;
       }
 
       // ── Unworked Accounts freight ────────────────────────────────────────────
@@ -7419,9 +7534,7 @@ Respond with valid JSON only:
           if (companyNames.length === 0) continue;
           const total = computeCompanyFreightTotal(rawRows, cols, companyNames);
           unworkedLoads += total.loads;
-          for (const idx of total.allIndices) {
-            unworkedMargin += parseFloat(String(rawRows[idx][marginK] || 0).replace(/[$,]/g, "")) || 0;
-          }
+          unworkedMargin += total.margin; // reuse already-computed margin (avoids double parsing)
         }
       }
 
@@ -7475,6 +7588,7 @@ Respond with valid JSON only:
         unworkedAccounts: unworkedCompanyCount,
         unworkedLoads,
         unworkedMargin,
+        unassignedContacts: totalUnassignedContacts,
       });
     } catch (e: any) {
       console.error("[relationship-freight-summary]", e);
