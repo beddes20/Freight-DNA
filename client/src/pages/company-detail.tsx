@@ -370,18 +370,17 @@ export default function CompanyDetail() {
 
   const { data: companyTouchpoints = [] } = useQuery<Touchpoint[]>({
     queryKey: ["/api/companies", companyId, "touchpoints"],
-    enabled: !!companyId,
   });
 
   const { data: touchLogEntries = [] } = useQuery<TouchLogEntry[]>({
     queryKey: ["/api/companies", companyId, "touch-logs"],
-    enabled: !!companyId && detailTab === "activity",
+    enabled: detailTab === "activity",
   });
 
   const { data: researchTasks } = useQuery<ResearchTask[]>({
     queryKey: ["/api/research-tasks", { companyId }],
     queryFn: async () => {
-      const res = await fetch(`/api/research-tasks?companyId=${companyId}`);
+      const res = await fetch(`/api/research-tasks?companyId=${companyId}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch research tasks");
       return res.json();
     },
@@ -454,7 +453,6 @@ export default function CompanyDetail() {
 
   const { data: healthScore } = useQuery<HealthScore>({
     queryKey: ["/api/companies", companyId, "health-score"],
-    enabled: !!companyId,
     staleTime: 60_000,
   });
 
@@ -611,17 +609,6 @@ export default function CompanyDetail() {
     Idea: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400",
   };
 
-  const formatCalloutTime = (iso: string) => {
-    const diff = Date.now() - new Date(iso).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    const days = Math.floor(hrs / 24);
-    return `${days}d ago`;
-  };
-
   const REACTION_EMOJIS = ["👍", "❤️", "🔥", "💡", "✅"];
   const canReact = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director";
 
@@ -696,7 +683,6 @@ export default function CompanyDetail() {
   const canManageSharedReps = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
   const { data: sharedReps = [] } = useQuery<SharedRepEntry[]>({
     queryKey: ["/api/companies", companyId, "shared-reps"],
-    enabled: !!companyId,
   });
 
   const [addSharedRepOpen, setAddSharedRepOpen] = useState(false);
