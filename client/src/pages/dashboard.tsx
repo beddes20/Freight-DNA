@@ -41,6 +41,7 @@ import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBas
 import { LmCareerPanel } from "@/components/lm-career-panel";
 import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
+import { AccountGrowthPortlet } from "@/components/account-growth-portlet";
 import { DashboardActivitySheet, type PortletType } from "@/components/dashboard-activity-sheet";
 import { RelationshipDashboardSection } from "@/components/relationship-freight-portlet";
 import { useDashboardLayout } from "@/hooks/use-dashboard-layout";
@@ -99,6 +100,7 @@ export default function Dashboard() {
       return next;
     });
   };
+  const [accountGrowthCollapsed, setAccountGrowthCollapsed] = useState(() => localStorage.getItem("dash_account_growth_collapsed") === "true");
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
   const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") === "true");
   const [lmCheckInsGroupCollapsed, setLmCheckInsGroupCollapsed] = useState(() => localStorage.getItem("dash_lm_checkins_group_collapsed") === "true");
@@ -902,6 +904,21 @@ export default function Dashboard() {
         collapsed={touchpointsTodayCollapsed}
         onToggle={toggleTouchpointsToday}
       />
+
+      {/* ── Account Growth Score ─────────────────────────────────────────────── */}
+      {!isLmRole && companies && companies.length > 0 && (
+        <PortletErrorBoundary label="Account Growth">
+          <AccountGrowthPortlet
+            companies={companies.map(c => ({ id: c.id, name: c.name }))}
+            collapsed={accountGrowthCollapsed}
+            onToggle={() => {
+              const next = !accountGrowthCollapsed;
+              setAccountGrowthCollapsed(next);
+              localStorage.setItem("dash_account_growth_collapsed", String(next));
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
 
       {/* ── Dashboard Layout Editor ──────────────────────────────────────────── */}
       <DashboardLayoutPanel

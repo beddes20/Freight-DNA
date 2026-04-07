@@ -34,6 +34,7 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CompanyDialog } from "@/components/company-dialog";
+import { GrowthScoreBadge } from "@/components/account-growth-portlet";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { useToast } from "@/hooks/use-toast";
@@ -288,6 +289,13 @@ export default function Customers() {
   });
   const msMap = useMemo(() => new Map(msSummary.map(r => [r.companyId, r.currentPct ?? 0])), [msSummary]);
 
+  type GrowthScoreRow = { companyId: string; score: number; band: string; bandLabel: string };
+  const { data: growthScores = [] } = useQuery<GrowthScoreRow[]>({
+    queryKey: ["/api/growth-scores"],
+    staleTime: 10 * 60 * 1000,
+  });
+  const growthScoreMap = useMemo(() => new Map(growthScores.map(r => [r.companyId, r])), [growthScores]);
+
   const thisMonthKey = (() => {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
@@ -368,6 +376,8 @@ export default function Customers() {
         case "margin_desc":  return getFinVal(b, "totalMargin") - getFinVal(a, "totalMargin");
         case "ms_desc":      return (msMap.get(b.id) ?? -1) - (msMap.get(a.id) ?? -1);
         case "margin_pct_desc": return getFinVal(b, "marginPct") - getFinVal(a, "marginPct");
+        case "score_desc":   return (growthScoreMap.get(b.id)?.score ?? -1) - (growthScoreMap.get(a.id)?.score ?? -1);
+        case "score_asc":    return (growthScoreMap.get(a.id)?.score ?? 101) - (growthScoreMap.get(b.id)?.score ?? 101);
         default:             return a.name.localeCompare(b.name);
       }
     });
@@ -461,6 +471,8 @@ export default function Customers() {
                 <SelectItem value="loads_desc">Highest Load Count</SelectItem>
                 <SelectItem value="margin_desc">Highest Margin $</SelectItem>
                 <SelectItem value="margin_pct_desc">Highest Margin %</SelectItem>
+                <SelectItem value="score_desc">Highest Growth Score</SelectItem>
+                <SelectItem value="score_asc">At Risk First</SelectItem>
                 <SelectItem value="ms_desc">Highest Market Share</SelectItem>
               </SelectContent>
             </Select>
@@ -670,6 +682,11 @@ export default function Customers() {
                         <Network className="h-3.5 w-3.5" />
                         <span>Org Chart</span>
                       </div>
+                      {!company.archivedAt && (() => {
+                        const gs = growthScoreMap.get(company.id);
+                        if (!gs) return null;
+                        return <GrowthScoreBadge score={gs.score} band={gs.band} bandLabel={gs.bandLabel} />;
+                      })()}
                       {openTasks > 0 && !company.archivedAt && (
                         <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs">
                           <AlertTriangle className="h-3 w-3 mr-1" />

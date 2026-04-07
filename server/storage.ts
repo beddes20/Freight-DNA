@@ -437,6 +437,11 @@ export interface IStorage {
   createLaneCarrier(data: import('../shared/schema').InsertLaneCarrier): Promise<import('../shared/schema').LaneCarrier>;
   updateLaneCarrier(id: string, data: Partial<import('../shared/schema').InsertLaneCarrier>): Promise<import('../shared/schema').LaneCarrier | undefined>;
   deleteLaneCarrier(id: string): Promise<boolean>;
+
+  // Account Growth Score
+  upsertGrowthScore(data: import('../shared/schema').InsertAccountGrowthScore): Promise<import('../shared/schema').AccountGrowthScore>;
+  getGrowthScore(companyId: string): Promise<import('../shared/schema').AccountGrowthScore | undefined>;
+  getGrowthScoresByOrg(organizationId: string, companyIds: string[]): Promise<import('../shared/schema').AccountGrowthScore[]>;
 }
 
 const pool = new Pool({
@@ -2614,6 +2619,37 @@ export class DatabaseStorage implements IStorage {
   async deleteLaneCarrier(id: string): Promise<boolean> {
     const result = await db.delete(laneCarriers).where(eq(laneCarriers.id, id)).returning();
     return result.length > 0;
+  }
+
+  // Account Growth Score
+  async upsertGrowthScore(data: import('../shared/schema').InsertAccountGrowthScore): Promise<import('../shared/schema').AccountGrowthScore> {
+    const { accountGrowthScores } = await import('../shared/schema');
+    const [row] = await db.insert(accountGrowthScores)
+      .values(data)
+      .onConflictDoUpdate({
+        target: accountGrowthScores.companyId,
+        set: {
+          score: data.score,
+          band: data.band,
+          drivers: data.drivers,
+          calculatedAt: data.calculatedAt,
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async getGrowthScore(companyId: string): Promise<import('../shared/schema').AccountGrowthScore | undefined> {
+    const { accountGrowthScores } = await import('../shared/schema');
+    const [row] = await db.select().from(accountGrowthScores).where(eq(accountGrowthScores.companyId, companyId)).limit(1);
+    return row;
+  }
+
+  async getGrowthScoresByOrg(organizationId: string, companyIds: string[]): Promise<import('../shared/schema').AccountGrowthScore[]> {
+    if (companyIds.length === 0) return [];
+    const { accountGrowthScores } = await import('../shared/schema');
+    return db.select().from(accountGrowthScores)
+      .where(and(eq(accountGrowthScores.organizationId, organizationId), inArray(accountGrowthScores.companyId, companyIds)));
   }
 }
 

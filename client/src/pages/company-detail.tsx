@@ -131,6 +131,7 @@ import { IntelTab } from "./company-detail/tabs/IntelTab";
 import { PeopleTab } from "./company-detail/tabs/PeopleTab";
 import { RfpTab } from "./company-detail/tabs/RfpTab";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
+import { GrowthScoreBadge } from "@/components/account-growth-portlet";
 type TaskWithCount = Task & { commentCount?: number };
 
 interface ResearchTask {
@@ -454,6 +455,12 @@ export default function CompanyDetail() {
   const { data: healthScore } = useQuery<HealthScore>({
     queryKey: ["/api/companies", companyId, "health-score"],
     staleTime: 60_000,
+  });
+
+  type GrowthScore = { score: number; band: string; bandLabel: string; bandColor: string; drivers: { label: string; points: number; positive: boolean }[] };
+  const { data: growthScore } = useQuery<GrowthScore>({
+    queryKey: ["/api/companies", companyId, "growth-score"],
+    staleTime: 6 * 60 * 60 * 1000, // 6h — matches server cache window
   });
 
   const { data: healthNarrative } = useQuery<{ narrative: string }>({
@@ -1156,6 +1163,20 @@ export default function CompanyDetail() {
                       </div>
                       {healthNarrative?.narrative && (
                         <p className="text-xs text-muted-foreground italic leading-relaxed max-w-md" data-testid="health-narrative">{healthNarrative.narrative}</p>
+                      )}
+                      {growthScore && (
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <GrowthScoreBadge
+                            score={growthScore.score}
+                            band={growthScore.band}
+                            bandLabel={growthScore.bandLabel}
+                          />
+                          {growthScore.drivers.length > 0 && (
+                            <span className="text-xs text-muted-foreground" title={growthScore.drivers.map(d => `${d.positive ? "↑" : "↓"} ${d.label}`).join(" · ")}>
+                              — {growthScore.drivers[0].positive ? "↑" : "↓"} {growthScore.drivers[0].label}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   );

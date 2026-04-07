@@ -978,4 +978,31 @@ export async function runMigrations() {
   } finally {
     clientNamLm.release();
   }
+
+  // Account Growth Score — cached scoring table
+  const clientAgs = await pool.connect();
+  try {
+    await clientAgs.query(`
+      CREATE TABLE IF NOT EXISTS account_growth_scores (
+        id serial PRIMARY KEY,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        organization_id varchar NOT NULL REFERENCES organizations(id),
+        score integer NOT NULL,
+        band text NOT NULL,
+        drivers jsonb NOT NULL DEFAULT '[]',
+        calculated_at text NOT NULL
+      )
+    `);
+    await clientAgs.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_ags_company ON account_growth_scores(company_id)
+    `);
+    await clientAgs.query(`
+      CREATE INDEX IF NOT EXISTS idx_ags_org ON account_growth_scores(organization_id, score)
+    `);
+    console.log("[migrations] account_growth_scores table ensured");
+  } catch (err) {
+    console.error("[migrations] account_growth_scores error:", err);
+  } finally {
+    clientAgs.release();
+  }
 }

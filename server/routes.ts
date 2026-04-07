@@ -21,6 +21,7 @@ import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 import { isExcludedRow, parseHistoricalRow, isBadSummaryData, computeLoadsForRepGoal, extractSheetsFromWorkbook, toMonthKey } from "./financialHelpers";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
+import { computeGrowthScore } from "./growthScoreCalculator";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { db } from "./storage";
@@ -4949,6 +4950,78 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to compute health score" });
+    }
+  });
+
+  // ── Account Growth Score (per account) ─────────────────────────────────────
+  // Returns cached score if <6h old, otherwise recomputes and persists.
+  app.get("/api/companies/:id/growth-score", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const companyId = req.params.id as string;
+      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 16);
+
+      const cached = await storage.getGrowthScore(companyId);
+      if (cached && cached.calculatedAt >= sixHoursAgo) {
+        return res.json(cached);
+      }
+
+      const result = await computeGrowthScore(companyId, user.organizationId, storage);
+      const saved = await storage.upsertGrowthScore({
+        companyId,
+        organizationId: user.organizationId,
+        score: result.score,
+        band: result.band,
+        drivers: result.drivers,
+        calculatedAt: new Date().toISOString().slice(0, 16),
+      });
+
+      res.json({ ...saved, bandLabel: result.bandLabel, bandColor: result.bandColor });
+    } catch (error) {
+      console.error("Error computing growth score:", error);
+      res.status(500).json({ error: "Failed to compute growth score" });
+    }
+  });
+
+  // ── Account Growth Scores (bulk — all visible companies) ───────────────────
+  // Used by dashboard portlet and company list. Returns cached scores only;
+  // per-account requests trigger fresh computation.
+  app.get("/api/growth-scores", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const visibleIds = await getVisibleCompanyIds(user);
+      if (visibleIds.length === 0) return res.json([]);
+
+      const cached = await storage.getGrowthScoresByOrg(user.organizationId, visibleIds);
+
+      // Enrich with band labels / colors
+      const BAND_LABELS: Record<string, string> = {
+        high_expansion: "Primed to Grow",
+        growth_ready:   "Growth Ready",
+        stable:         "Stable",
+        at_risk:        "At Risk",
+      };
+      const BAND_COLORS: Record<string, string> = {
+        high_expansion: "green",
+        growth_ready:   "blue",
+        stable:         "amber",
+        at_risk:        "red",
+      };
+
+      const enriched = cached.map(s => ({
+        ...s,
+        bandLabel: BAND_LABELS[s.band] ?? s.band,
+        bandColor: BAND_COLORS[s.band] ?? "amber",
+      }));
+
+      res.json(enriched);
+    } catch (error) {
+      console.error("Error fetching growth scores:", error);
+      res.status(500).json({ error: "Failed to fetch growth scores" });
     }
   });
 

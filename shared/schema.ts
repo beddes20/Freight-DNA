@@ -1014,6 +1014,22 @@ export type LaneCarrier = typeof laneCarriers.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Account Growth Score — cached nightly + on-demand per company
+export const accountGrowthScores = pgTable("account_growth_scores", {
+  id: serial("id").primaryKey(),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  score: integer("score").notNull(),
+  band: text("band").notNull(), // at_risk | stable | growth_ready | high_expansion
+  drivers: jsonb("drivers").notNull().default([]),
+  calculatedAt: text("calculated_at").notNull(),
+});
+export const insertAccountGrowthScoreSchema = createInsertSchema(accountGrowthScores).omit({ id: true });
+export type InsertAccountGrowthScore = z.infer<typeof insertAccountGrowthScoreSchema>;
+export type AccountGrowthScore = typeof accountGrowthScores.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Contact relationship base change history
 export const contactBaseHistory = pgTable("contact_base_history", {
   id: serial("id").primaryKey(),
