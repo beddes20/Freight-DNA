@@ -56,6 +56,7 @@ import { HeroBanner } from "./dashboard/HeroBanner";
 import { DirectorPortlets } from "./dashboard/DirectorPortlets";
 import { NamPortlets } from "./dashboard/NamPortlets";
 import { AmPortlets } from "./dashboard/AmPortlets";
+import { AccountsDriftingPortlet, RelationshipAdvancementPortlet, GrowthCallsPortlet } from "./dashboard/Phase2Portlets";
 import { TasksSection } from "./dashboard/TasksSection";
 import { TeamDirectorySection } from "./dashboard/TeamDirectorySection";
 
@@ -105,6 +106,9 @@ export default function Dashboard() {
   const [nbaBriefingCollapsed, setNbaBriefingCollapsed] = useState(() => localStorage.getItem("dash_nba_briefing_collapsed") === "true");
   const [accountGrowthCollapsed, setAccountGrowthCollapsed] = useState(() => localStorage.getItem("dash_account_growth_collapsed") !== "false");
   const [personalMetricsCollapsed, setPersonalMetricsCollapsed] = useState(() => localStorage.getItem("dash_personal_metrics_collapsed") !== "false");
+  const [accountsDriftingCollapsed, setAccountsDriftingCollapsed] = useState(() => localStorage.getItem("dash_accounts_drifting_collapsed") === "true");
+  const [relationshipAdvancementCollapsed, setRelationshipAdvancementCollapsed] = useState(() => localStorage.getItem("dash_rel_advancement_collapsed") === "true");
+  const [growthCallsCollapsed, setGrowthCallsCollapsed] = useState(() => localStorage.getItem("dash_growth_calls_collapsed") === "true");
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
   const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") !== "false");
   const [lmCheckInsGroupCollapsed, setLmCheckInsGroupCollapsed] = useState(() => localStorage.getItem("dash_lm_checkins_group_collapsed") === "true");
@@ -1110,37 +1114,53 @@ export default function Dashboard() {
         </PortletErrorBoundary>
       )}
 
-      {/* ── AM: Stale Accounts (This Week zone) ─────────────────────────────── */}
-      {isAm && staleAccounts.length > 0 && (
-        <PortletErrorBoundary label="Stale Accounts">
-          <Card data-testid="card-stale-accounts-am">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Clock className="h-4 w-4 text-orange-500" />
-                Accounts Needing Attention
-                <Badge className="ml-auto text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 border-0">
-                  {staleAccounts.length}
-                </Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
-                {staleAccounts.map((acct, idx) => (
-                  <Link key={acct.id ?? idx} href={`/companies/${acct.id}`} data-testid={`stale-account-${acct.id ?? idx}`}>
-                    <div className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50 transition-colors cursor-pointer">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold truncate">{acct.name}</p>
-                        {acct.daysSince != null && (
-                          <p className="text-xs text-muted-foreground mt-0.5">{acct.daysSince}d since last touch</p>
-                        )}
-                      </div>
-                      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+      {/* ── AM Phase 2: Unified "Accounts Drifting" (replaces Phase 1 stale card) ── */}
+      {isAm && (
+        <PortletErrorBoundary label="Accounts Drifting">
+          <AccountsDriftingPortlet
+            staleAccounts={staleAccounts}
+            coldContacts={coldContacts}
+            meaningfulOverdue={meaningfulOverdue}
+            collapsed={accountsDriftingCollapsed}
+            onToggle={() => {
+              const next = !accountsDriftingCollapsed;
+              setAccountsDriftingCollapsed(next);
+              localStorage.setItem("dash_accounts_drifting_collapsed", String(next));
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── AM Phase 2: Relationship Advancement Candidates ─────────────────── */}
+      {isAm && contacts !== undefined && companies !== undefined && (
+        <PortletErrorBoundary label="Relationship Advancement">
+          <RelationshipAdvancementPortlet
+            contacts={contacts}
+            companies={companies}
+            coldContacts={coldContacts}
+            meaningfulOverdue={meaningfulOverdue}
+            collapsed={relationshipAdvancementCollapsed}
+            onToggle={() => {
+              const next = !relationshipAdvancementCollapsed;
+              setRelationshipAdvancementCollapsed(next);
+              localStorage.setItem("dash_rel_advancement_collapsed", String(next));
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── AM Phase 2: Top Growth Calls This Week ──────────────────────────── */}
+      {isAm && (
+        <PortletErrorBoundary label="Growth Calls">
+          <GrowthCallsPortlet
+            opportunityLeaderboard={opportunityLeaderboard}
+            collapsed={growthCallsCollapsed}
+            onToggle={() => {
+              const next = !growthCallsCollapsed;
+              setGrowthCallsCollapsed(next);
+              localStorage.setItem("dash_growth_calls_collapsed", String(next));
+            }}
+          />
         </PortletErrorBoundary>
       )}
 
@@ -1376,7 +1396,7 @@ export default function Dashboard() {
         />
       </PortletErrorBoundary>
 
-      <div style={{ order: getOrder("cold-contacts") }} className={!isVisible("cold-contacts") ? "hidden" : ""} data-tour="tour-contacts-attention">
+      <div style={{ order: getOrder("cold-contacts") }} className={(!isVisible("cold-contacts") || isAm) ? "hidden" : ""} data-tour="tour-contacts-attention">
       {coldContacts.length > 0 && (
         <Card data-testid="card-cold-contacts">
           <CardHeader className={coldContactsCollapsed ? "pb-2" : "pb-3"}>
@@ -1456,7 +1476,7 @@ export default function Dashboard() {
       )}
       </div>{/* end cold-contacts */}
 
-      <div style={{ order: getOrder("meaningful-overdue") }} className={!isVisible("meaningful-overdue") ? "hidden" : ""}>
+      <div style={{ order: getOrder("meaningful-overdue") }} className={(!isVisible("meaningful-overdue") || isAm) ? "hidden" : ""}>
       {meaningfulOverdue.length > 0 && (
         <Card data-testid="card-meaningful-overdue">
           <CardHeader className={meaningfulOverdueCollapsed ? "pb-2" : "pb-3"}>
@@ -1496,7 +1516,7 @@ export default function Dashboard() {
       )}
       </div>{/* end meaningful-overdue */}
 
-      <div style={{ order: getOrder("top-opportunities") }} className={!isVisible("top-opportunities") ? "hidden" : ""}>
+      <div style={{ order: getOrder("top-opportunities") }} className={(!isVisible("top-opportunities") || isAm) ? "hidden" : ""}>
       {opportunityLeaderboard.length > 0 && (
         <Card data-testid="card-opportunity-leaderboard">
           <CardHeader className={topOppsCollapsed ? "pb-2" : "pb-3"}>
