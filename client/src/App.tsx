@@ -16,7 +16,6 @@ import { Loader2, UserX, Clock } from "lucide-react";
 import React, { useEffect, useCallback } from "react";
 import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
 import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
-import { LmCheckinPopup } from "@/components/lm-checkin-popup";
 import { TourProvider } from "@/components/app-tour";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -284,7 +283,6 @@ function AuthenticatedApp() {
       </SidebarProvider>
       <CrmChatbot />
       <NotificationToasts />
-      <LmCheckinPopup />
     </>
   );
 }

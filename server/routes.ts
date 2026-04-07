@@ -6578,7 +6578,34 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const today = new Date().toISOString().slice(0, 10);
+      // ── Timezone-aware date + active window (all CT) ────────────────────────
+      // Using Intl API (built into Node.js) — no extra packages needed.
+      // America/Chicago handles CST (UTC-6) and CDT (UTC-5) automatically.
+      const ctStr = new Date().toLocaleString("en-US", { timeZone: "America/Chicago" });
+      const ctDate = new Date(ctStr);
+      const dow = ctDate.getDay(); // 0=Sun, 6=Sat
+
+      // Weekday guard: outside Mon–Fri there is no active check-in window.
+      const isWeekday = dow >= 1 && dow <= 5;
+
+      // today's date in CT (en-CA gives YYYY-MM-DD format)
+      const today = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Chicago",
+        year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(new Date());
+
+      // Active window is determined server-side so all clients see the same window
+      // regardless of browser timezone.
+      // Morning:   7:00 AM – 11:59 AM CT (covers the 7:30 AM cron alert)
+      // Afternoon: 3:30 PM – 11:59 PM CT (covers the 4:00 PM cron alert)
+      function getActiveWindow(): "morning" | "afternoon" | null {
+        if (!isWeekday) return null;
+        const minutes = ctDate.getHours() * 60 + ctDate.getMinutes();
+        if (minutes >= 7 * 60 && minutes < 12 * 60) return "morning";
+        if (minutes >= 15 * 60 + 30) return "afternoon";
+        return null;
+      }
+      const activeWindow = getActiveWindow();
 
       // Find LMs directly reporting to this user
       const lms = await storage.pool.query<{ id: string; name: string; role: string }>(
@@ -6588,9 +6615,9 @@ Respond with valid JSON only:
          ORDER BY name`,
         [user.id, user.organizationId]
       );
-      if (lms.rows.length === 0) return res.json({ lms: [], pending: [] });
+      if (lms.rows.length === 0) return res.json({ lms: [], pending: [], activeWindow });
 
-      // Find already-submitted check-ins for today
+      // Find already-submitted check-ins for today (CT date)
       const done = await storage.pool.query<{ lm_id: string; check_type: string }>(
         `SELECT lm_id, check_type FROM nam_lm_checkins
          WHERE reviewer_id = $1 AND check_date = $2`,
@@ -6598,9 +6625,9 @@ Respond with valid JSON only:
       );
       const doneSet = new Set(done.rows.map(r => `${r.lm_id}:${r.check_type}`));
 
-      // Determine which check types are "open" right now
-      // Morning: 7:00 AM–11:59 AM CT  (UTC 12–16), Afternoon: 3:30 PM–11:59 PM CT (UTC 20:30–04:59)
-      // We'll return both windows and let the client decide based on its local time
+      // Return pending items for ALL check types (not just the active window) so
+      // the client can show history and let the server's activeWindow field drive
+      // which one is currently actionable.
       const checkTypes = ["morning", "afternoon"] as const;
       const pending = lms.rows.flatMap(lm =>
         checkTypes
@@ -6608,7 +6635,7 @@ Respond with valid JSON only:
           .map(t => ({ lmId: lm.id, lmName: lm.name, lmRole: lm.role, checkType: t }))
       );
 
-      res.json({ lms: lms.rows, pending });
+      res.json({ lms: lms.rows, pending, activeWindow });
     } catch (err) {
       res.status(500).json({ error: "Server error" });
     }

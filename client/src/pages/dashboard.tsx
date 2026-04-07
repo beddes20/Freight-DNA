@@ -40,6 +40,7 @@ import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoi
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
 import { LmCareerPanel } from "@/components/lm-career-panel";
 import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
+import { LmCheckinBanner } from "@/components/lm-checkin-banner";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
 import { AccountGrowthPortlet } from "@/components/account-growth-portlet";
 import { NextBestActionsPortlet } from "@/components/next-best-actions-portlet";
@@ -1039,15 +1040,23 @@ export default function Dashboard() {
       {/* LM Career Panel — operational stats + path-to-AM progress */}
       {currentUser?.role === "logistics_manager" && <LmCareerPanel />}
 
-      {/* LM Daily Check-In Portlets */}
+      {/* ── LM Check-In Banner ───────────────────────────────────────────────
+           Timed alert for managers with direct LM/LC reports.
+           Morning window (7:00 AM–12:00 PM CT) and afternoon (3:30–11:59 PM CT).
+           Server provides activeWindow — no client-side clock detection.
+           Dismiss stored in localStorage (date-scoped, auto-clears next day).
+      ──────────────────────────────────────────────────────────────────────── */}
+      {!isLmRole && <LmCheckinBanner />}
+
+      {/* LM Daily Check-In Portlets — read-only history for LMs themselves */}
       {currentUser?.role === "logistics_manager" && currentUser.id && (
         <LmDailyCheckInPortlets lmUserId={currentUser.id} canEdit={false} />
       )}
 
-      {/* LM Daily Check-In Portlets for managers — full chain visibility */}
+      {/* LM Daily Check-In Portlets for managers — read-only history view */}
       {(() => {
         if (!currentUser || currentUser.role === "logistics_manager") return null;
-        const allLms = lmDirectReports.map(lm => ({ lm, canEdit: lm.managerId === currentUser.id }));
+        const allLms = lmDirectReports.map(lm => lm);
         if (allLms.length === 0) return null;
         return (
           <Card data-testid="card-lm-daily-checkins-group">
@@ -1057,16 +1066,16 @@ export default function Dashboard() {
                 onClick={toggleLmCheckInsGroup}
                 data-testid="button-toggle-lm-checkins-group"
               >
-                <CardTitle className="text-base">LM Daily Check-Ins</CardTitle>
+                <CardTitle className="text-base">LM Daily Check-In History</CardTitle>
                 {lmCheckInsGroupCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground ml-auto" /> : <ChevronDown className="h-4 w-4 text-muted-foreground ml-auto" />}
               </button>
             </CardHeader>
             {!lmCheckInsGroupCollapsed && (
               <CardContent className="space-y-6 pt-0">
-                {allLms.map(({ lm, canEdit }) => (
+                {allLms.map((lm) => (
                   <div key={lm.id} className="space-y-2" data-testid={`section-lm-checkin-${lm.id}`}>
                     <h3 className="text-sm font-semibold text-muted-foreground">{lm.name}</h3>
-                    <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={canEdit} />
+                    <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={false} />
                   </div>
                 ))}
               </CardContent>
