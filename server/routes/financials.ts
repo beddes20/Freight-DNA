@@ -18,6 +18,7 @@ import {
   extractSheetsFromWorkbook,
 } from "../financialHelpers";
 import { performOneDriveSync } from "../monthlyDataRefreshScheduler";
+import { azureCredentialsConfigured } from "../graphService";
 import { geocodeCity, haversineDistance } from "../geocoding";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "../cache";
 
@@ -1245,6 +1246,16 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── OneDrive Sync & Settings ────────────────────────────────────────────────
+
+  app.get("/api/settings/azure-enabled", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      res.json({ enabled: azureCredentialsConfigured() });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to check Azure status" });
+    }
+  });
 
   app.get("/api/settings/onedrive-url", requireAuth, async (req, res) => {
     try {

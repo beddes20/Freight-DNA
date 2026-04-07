@@ -12,56 +12,15 @@
  *   OUTLOOK_CLIENT_SECRET  — Azure app registration client secret
  */
 
+import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService";
+
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
   console.log(`${t} [outlook] ${msg}`);
 }
 
 export function outlookEnabled(): boolean {
-  return !!(
-    process.env.OUTLOOK_TENANT_ID &&
-    process.env.OUTLOOK_CLIENT_ID &&
-    process.env.OUTLOOK_CLIENT_SECRET
-  );
-}
-
-let _cachedToken: { token: string; expiresAt: number } | null = null;
-
-async function getAccessToken(): Promise<string> {
-  if (_cachedToken && Date.now() < _cachedToken.expiresAt - 30_000) {
-    return _cachedToken.token;
-  }
-
-  const tenantId = process.env.OUTLOOK_TENANT_ID!;
-  const clientId = process.env.OUTLOOK_CLIENT_ID!;
-  const clientSecret = process.env.OUTLOOK_CLIENT_SECRET!;
-
-  const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: clientId,
-    client_secret: clientSecret,
-    scope: "https://graph.microsoft.com/.default",
-  });
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Failed to get access token: ${res.status} ${text}`);
-  }
-
-  const data = await res.json();
-  _cachedToken = {
-    token: data.access_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-  };
-
-  return _cachedToken.token;
+  return azureCredentialsConfigured();
 }
 
 export interface OutlookSendOptions {
@@ -81,7 +40,7 @@ export async function sendOutlookEmail(opts: OutlookSendOptions): Promise<{ ok: 
   }
 
   try {
-    const token = await getAccessToken();
+    const token = await getGraphAccessToken();
 
     const toRecipients = [
       {

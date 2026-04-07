@@ -133,6 +133,12 @@ export default function Financials() {
     enabled: canSyncOneDrive,
   });
 
+  const { data: azureStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ["/api/settings/azure-enabled"],
+    enabled: canSyncOneDrive,
+  });
+  const azureEnabled = azureStatus?.enabled ?? false;
+
   const { data: sheetsData } = useQuery<{
     bestDealDaysSpot: Record<string, any>[];
     bestDealDaysAll: Record<string, any>[];
@@ -765,70 +771,87 @@ export default function Financials() {
                 <CloudDownload className="h-3.5 w-3.5" />
                 OneDrive Auto-Sync
               </p>
-              <p className="text-xs text-muted-foreground">
-                Paste a share link to your Excel file on OneDrive. The app will pull the latest data automatically on the first of each month — or you can sync manually below.
-              </p>
-              {editingUrl ? (
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={oneDriveUrlInput}
-                    onChange={e => setOneDriveUrlInput(e.target.value)}
-                    placeholder="https://1drv.ms/x/..."
-                    className="text-sm flex-1"
-                    data-testid="input-onedrive-url"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => saveUrlMutation.mutate(oneDriveUrlInput)}
-                    disabled={saveUrlMutation.isPending || !oneDriveUrlInput.trim()}
-                    data-testid="button-save-onedrive-url"
-                  >
-                    {saveUrlMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                    Save
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => { setEditingUrl(false); setOneDriveUrlInput(oneDriveSetting?.url || ""); }}
-                  >
-                    Cancel
-                  </Button>
+              {!azureEnabled ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-3 py-2.5 space-y-1">
+                  <p className="text-xs font-medium text-amber-800 dark:text-amber-300">Azure not configured</p>
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    OneDrive sync requires Azure AD credentials (OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET) to be set. Contact your administrator to configure them.
+                  </p>
                 </div>
               ) : (
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 min-w-0 rounded-md border bg-muted/30 px-3 py-2">
-                    {oneDriveSetting?.url ? (
-                      <p className="text-xs text-foreground font-mono truncate">{oneDriveSetting.url}</p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground italic">No OneDrive URL configured</p>
-                    )}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => { setEditingUrl(true); setOneDriveUrlInput(oneDriveSetting?.url || ""); }}
-                    data-testid="button-edit-onedrive-url"
-                  >
-                    <Pencil className="h-3.5 w-3.5 mr-1" />
-                    {oneDriveSetting?.url ? "Edit" : "Set URL"}
-                  </Button>
-                </div>
-              )}
-              {oneDriveSetting?.url && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => syncMutation.mutate()}
-                  disabled={syncMutation.isPending}
-                  data-testid="button-sync-onedrive"
-                >
-                  {syncMutation.isPending ? (
-                    <><Loader2 className="h-4 w-4 animate-spin mr-2" />Syncing from OneDrive...</>
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Enter a Microsoft Graph API URL or relative path for your Excel file. The app uses the configured Azure credentials to fetch it — no public sharing required. Syncs automatically on the first business day of each month, or trigger it manually below.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Accepted formats: <span className="font-mono">https://graph.microsoft.com/v1.0/drives/&#123;driveId&#125;/items/&#123;itemId&#125;/content</span> or a relative path like <span className="font-mono">drives/&#123;driveId&#125;/items/&#123;itemId&#125;</span>. A bare item ID alone is not sufficient — a driveId is always required.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    The Azure app must have the <span className="font-mono font-medium">Files.Read.All</span> application permission granted in Azure Portal.
+                  </p>
+                  {editingUrl ? (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={oneDriveUrlInput}
+                        onChange={e => setOneDriveUrlInput(e.target.value)}
+                        placeholder="https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}/content"
+                        className="text-sm flex-1"
+                        data-testid="input-onedrive-url"
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => saveUrlMutation.mutate(oneDriveUrlInput)}
+                        disabled={saveUrlMutation.isPending || !oneDriveUrlInput.trim()}
+                        data-testid="button-save-onedrive-url"
+                      >
+                        {saveUrlMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                        Save
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setEditingUrl(false); setOneDriveUrlInput(oneDriveSetting?.url || ""); }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
                   ) : (
-                    <><CloudDownload className="h-4 w-4 mr-2" />Sync Now</>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 min-w-0 rounded-md border bg-muted/30 px-3 py-2">
+                        {oneDriveSetting?.url ? (
+                          <p className="text-xs text-foreground font-mono truncate">{oneDriveSetting.url}</p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground italic">No OneDrive file path configured</p>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { setEditingUrl(true); setOneDriveUrlInput(oneDriveSetting?.url || ""); }}
+                        data-testid="button-edit-onedrive-url"
+                      >
+                        <Pencil className="h-3.5 w-3.5 mr-1" />
+                        {oneDriveSetting?.url ? "Edit" : "Set Path"}
+                      </Button>
+                    </div>
                   )}
-                </Button>
+                  {oneDriveSetting?.url && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => syncMutation.mutate()}
+                      disabled={syncMutation.isPending}
+                      data-testid="button-sync-onedrive"
+                    >
+                      {syncMutation.isPending ? (
+                        <><Loader2 className="h-4 w-4 animate-spin mr-2" />Syncing from OneDrive...</>
+                      ) : (
+                        <><CloudDownload className="h-4 w-4 mr-2" />Sync Now</>
+                      )}
+                    </Button>
+                  )}
+                </>
               )}
             </div>
           </CardContent>
