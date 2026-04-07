@@ -1,0 +1,83 @@
+I want to KEEP the task system and expand it so tasks can be assigned more flexibly.
+
+Do not make tasks leadership-only.
+
+I want the task model to support:
+1. AM assigning a task to an LM
+2. Any user assigning a task to themselves
+3. Leadership assigning tasks downward as needed
+
+This is important because Freight-DNA needs to support real freight execution, not just coaching.
+Example:
+- an AM should be able to assign an LM a task to source carriers for a lane we won on an award
+- a rep should be able to send themselves a reminder or follow-up task
+- a manager/director/NAM should still be able to assign tasks to reps or LMs
+
+Please update the product model so we now have:
+
+A. TASKS
+Purpose:
+- manual assigned work
+- cross-functional execution
+- self-reminders
+- operational follow-through
+- monthly review action items
+- QBR follow-up items
+
+Assignment rules:
+- AM -> LM allowed
+- AM -> self allowed
+- LM -> self allowed
+- Manager/Director/NAM -> rep allowed
+- Manager/Director/NAM -> LM allowed
+- Self-assignment allowed for everyone
+
+B. COMMITMENTS
+Purpose:
+- weekly growth commitment for AM coaching rhythm
+- tied to account + lever + deadline
+- reviewed next week
+- not a general-purpose task list
+
+C. NBA
+Purpose:
+- system-generated recommendation only
+- do not overwrite with human input
+
+D. FORCED FOCUS
+Purpose:
+- leadership-prioritized action for a rep
+- visible separately from the NBA
+
+TASK SYSTEM REQUIREMENTS
+
+1. Keep current task infrastructure if present.
+2. Expand permissions so users can assign tasks to valid cross-functional teammates and to themselves.
+3. Add or confirm these task fields:
+- id
+- title
+- description nullable
+- assignedByUserId
+- assignedToUserId
+- orgId
+- companyId nullable
+- companyName nullable
+- contactId nullable
+- contactName nullable
+- opportunityId nullable
+- laneContext nullable
+- lever nullable
+- dueDate nullable
+- priority nullable if already exists, otherwise keep simple
+- status
+- createdAt
+- updatedAt
+
+4. Make sure task creation is fast from:
+- account view
+- opportunity view
+- dashboard / home
+- NBA card
+- manager views
+
+5. Add sensible task 
