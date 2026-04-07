@@ -42,10 +42,8 @@ interface ActivityTabProps {
   canReact: boolean;
   expandedCallouts: Set<string>;
   toggleCalloutExpanded: (id: string) => void;
-  calloutReplyTo: { id: string; title: string } | undefined;
   setCalloutReplyTo: (v: { id: string; title: string } | undefined) => void;
   setCalloutDialogOpen: (v: boolean) => void;
-  selectedTouchpoint: (Touchpoint & { loggedByName: string; contactName: string | null }) | null;
   setSelectedTouchpoint: (v: (Touchpoint & { loggedByName: string; contactName: string | null }) | null) => void;
   touchLogCollapsed: boolean;
   setTouchLogCollapsed: (updater: boolean | ((prev: boolean) => boolean)) => void;
@@ -54,10 +52,6 @@ interface ActivityTabProps {
   toggleTaskStatus: { mutate: (v: { id: string; status: string }) => void; isPending: boolean };
   deleteTaskMutation: { mutate: (id: string) => void; isPending: boolean };
   currentUser: Omit<User, "password"> | null | undefined;
-  contacts: Contact[] | undefined;
-  setQuickTouchContactId: (v: string) => void;
-  setQuickTouchOpen: (v: boolean) => void;
-  setViewContact: (v: Contact | null) => void;
   setConfirmDeleteCalloutId: (v: string | null) => void;
   setTaskDialogOpen: (v: boolean) => void;
   setEditingTaskItem: (v: TaskWithCount | undefined) => void;
@@ -75,10 +69,8 @@ export function ActivityTab({
   canReact,
   expandedCallouts,
   toggleCalloutExpanded,
-  calloutReplyTo: _calloutReplyTo,
   setCalloutReplyTo,
   setCalloutDialogOpen,
-  selectedTouchpoint: _selectedTouchpoint,
   setSelectedTouchpoint,
   touchLogCollapsed,
   setTouchLogCollapsed,
@@ -87,10 +79,6 @@ export function ActivityTab({
   toggleTaskStatus,
   deleteTaskMutation,
   currentUser,
-  contacts: _contacts,
-  setQuickTouchContactId: _setQuickTouchContactId,
-  setQuickTouchOpen: _setQuickTouchOpen,
-  setViewContact: _setViewContact,
   setConfirmDeleteCalloutId,
   setTaskDialogOpen,
   setEditingTaskItem,

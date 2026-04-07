@@ -76,8 +76,6 @@ import {
   PhoneCall,
   Archive,
   ArchiveX,
-  Upload,
-  FileSpreadsheet,
   DollarSign,
   AlertCircle,
   FileText,
@@ -91,10 +89,6 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { InfoTooltip } from "@/components/info-tooltip";
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip,
-  ResponsiveContainer, ComposedChart, Line, Legend,
-} from "recharts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -130,6 +124,9 @@ import { ActivityTab } from "./company-detail/tabs/ActivityTab";
 import { IntelTab } from "./company-detail/tabs/IntelTab";
 import { PeopleTab } from "./company-detail/tabs/PeopleTab";
 import { RfpTab } from "./company-detail/tabs/RfpTab";
+import { QuickTouchDialog } from "./company-detail/components/QuickTouchDialog";
+import { TrendsDialog } from "./company-detail/components/TrendsDialog";
+import { ImportContactsDialog } from "./company-detail/components/ImportContactsDialog";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 import { GrowthScoreBadge } from "@/components/account-growth-portlet";
 import type {
@@ -163,10 +160,6 @@ export default function CompanyDetail() {
   const [expandedPickupLanes, setExpandedPickupLanes] = useState<Set<string>>(new Set());
   const [quickTouchOpen, setQuickTouchOpen] = useState(false);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
-  const [quickTouchType, setQuickTouchType] = useState("call");
-  const [quickTouchNote, setQuickTouchNote] = useState("");
-  const [quickTouchSentiment, setQuickTouchSentiment] = useState<string>("");
-  const [quickTouchMeaningful, setQuickTouchMeaningful] = useState(false);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
   const [focusTaskComments, setFocusTaskComments] = useState(false);
@@ -182,8 +175,6 @@ export default function CompanyDetail() {
   const [oppLogOpen, setOppLogOpen] = useState(false);
   const [touchLogCollapsed, setTouchLogCollapsed] = useState(false);
   const [selectedTouchpoint, setSelectedTouchpoint] = useState<TouchLogEntry | null>(null);
-  const [importRows, setImportRows] = useState<any[]>([]);
-  const [importFileName, setImportFileName] = useState("");
   const [detailTab, setDetailTab] = useState<string>(() => {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get("rfpTab") && urlParams.get("rfpTab") !== "coverage") return "rfp";
@@ -223,10 +214,6 @@ export default function CompanyDetail() {
 
   const { data: allRfps = [] } = useQuery<Rfp[]>({ queryKey: ["/api/rfps"] });
   const { data: allAwards = [] } = useQuery<Award[]>({ queryKey: ["/api/awards"] });
-  const { data: customerNames = [] } = useQuery<string[]>({
-    queryKey: ["/api/financials/customer-names"],
-    enabled: showTrends,
-  });
   const urgentRfps = allRfps.filter(r => {
     if (r.companyId !== companyId || !r.dueDate) return false;
     const days = Math.ceil((new Date(r.dueDate + "T00:00:00").getTime() - Date.now()) / 86400000);
@@ -354,11 +341,6 @@ export default function CompanyDetail() {
     queryKey: ["/api/companies", companyId, "activity"],
   });
 
-  const { data: trendsData, isLoading: trendsLoading } = useQuery<TrendsData>({
-    queryKey: ["/api/companies", companyId, "historical-trends"],
-    enabled: showTrends,
-  });
-
   // ── RFP Track Record ─────────────────────────────────────────────────────
   const companyRfps = allRfps.filter(r => r.companyId === companyId);
   const companyAwards = allAwards.filter(a => a.companyId === companyId);
@@ -376,21 +358,6 @@ export default function CompanyDetail() {
     const d = new Date(tp.date || (tp as any).createdAt || "");
     return d >= monthStart;
   }).length;
-
-  // ── Alias suggestions for trends ─────────────────────────────────────────
-  const trendAliasSuggestions = (() => {
-    if (!company || customerNames.length === 0) return [];
-    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-    const crmNorm = normalize(company.name);
-    return customerNames
-      .filter(n => {
-        const norm = normalize(n);
-        const shorter = crmNorm.length <= norm.length ? crmNorm : norm;
-        const longer  = crmNorm.length <= norm.length ? norm : crmNorm;
-        return shorter.length >= 4 && longer.includes(shorter);
-      })
-      .slice(0, 5);
-  })();
 
   const deleteCalloutMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -473,24 +440,6 @@ export default function CompanyDetail() {
     },
   });
 
-  const logTouchFromDetailMutation = useMutation({
-    mutationFn: ({ contactId, type, notes, sentiment, isMeaningful }: { contactId: string; type: string; notes: string; sentiment?: string; isMeaningful?: boolean }) =>
-      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false }).then(r => r.json()),
-    onSuccess: (data: any) => {
-      invalidateAfterTouchpoint(companyId);
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      toast({ title: "Touch logged!" });
-      buildAiToasts(data?.aiInsights, data?.autoTask, toast);
-      setQuickTouchOpen(false);
-      setQuickTouchContactId("");
-      setQuickTouchType("call");
-      setQuickTouchNote("");
-      setQuickTouchSentiment("");
-      setQuickTouchMeaningful(false);
-    },
-    onError: () => toast({ title: "Failed to log touch", variant: "destructive" }),
-  });
-
   const canReassign = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
 
   const deleteMutation = useMutation({
@@ -535,58 +484,6 @@ export default function CompanyDetail() {
       toast({ title: "Error restoring account", description: error.message, variant: "destructive" });
     },
   });
-
-  const bulkImportMutation = useMutation({
-    mutationFn: async (rows: any[]) => {
-      const res = await apiRequest("POST", `/api/companies/${companyId}/contacts/bulk-import`, { contacts: rows });
-      return res;
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
-      setImportDialogOpen(false);
-      setImportRows([]);
-      setImportFileName("");
-      toast({ title: `Imported ${data.count} contact${data.count !== 1 ? "s" : ""}`, description: "Contacts have been added to this account." });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Import failed", description: error.message, variant: "destructive" });
-    },
-  });
-
-  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImportFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const data = ev.target?.result;
-      const wb = XLSX.read(data, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const raw: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
-      const normalized = raw.map(r => {
-        const keys = Object.keys(r);
-        const find = (candidates: string[]) => {
-          for (const c of candidates) {
-            const k = keys.find(k => k.toLowerCase().replace(/[\s_-]/g, "").includes(c.toLowerCase().replace(/[\s_-]/g, "")));
-            if (k && r[k]) return String(r[k]).trim();
-          }
-          return "";
-        };
-        return {
-          name: find(["name", "fullname", "contactname", "contact"]),
-          title: find(["title", "jobtitle", "position", "role"]),
-          email: find(["email", "emailaddress", "mail"]),
-          phone: find(["phone", "phonenumber", "mobile", "cell", "telephone"]),
-          notes: find(["notes", "note", "comments", "comment"]),
-          nextSteps: find(["nextsteps", "nextstep", "next steps", "next step", "action"]),
-        };
-      }).filter(r => r.name.length > 0);
-      setImportRows(normalized);
-    };
-    reader.readAsArrayBuffer(file);
-    e.target.value = "";
-  }
 
   const handleEditContact = (contact: Contact) => {
     setEditingContact(contact);
@@ -973,10 +870,8 @@ export default function CompanyDetail() {
             canReact={canReact}
             expandedCallouts={expandedCallouts}
             toggleCalloutExpanded={toggleCalloutExpanded}
-            calloutReplyTo={calloutReplyTo}
             setCalloutReplyTo={setCalloutReplyTo}
             setCalloutDialogOpen={setCalloutDialogOpen}
-            selectedTouchpoint={selectedTouchpoint}
             setSelectedTouchpoint={setSelectedTouchpoint}
             touchLogCollapsed={touchLogCollapsed}
             setTouchLogCollapsed={setTouchLogCollapsed}
@@ -985,10 +880,6 @@ export default function CompanyDetail() {
             toggleTaskStatus={toggleTaskStatus}
             deleteTaskMutation={deleteTaskMutation}
             currentUser={currentUser}
-            contacts={contacts}
-            setQuickTouchContactId={setQuickTouchContactId}
-            setQuickTouchOpen={setQuickTouchOpen}
-            setViewContact={setViewContact}
             setConfirmDeleteCalloutId={setConfirmDeleteCalloutId}
             setTaskDialogOpen={setTaskDialogOpen}
             setEditingTaskItem={setEditingTaskItem}
@@ -1022,8 +913,7 @@ export default function CompanyDetail() {
             setImportDialogOpen={setImportDialogOpen}
             setViewContact={setViewContact}
             setIntelContact={setIntelContact}
-            setQuickTouchContactId={setQuickTouchContactId}
-            setQuickTouchOpen={setQuickTouchOpen}
+            onLogTouch={(id) => { setQuickTouchContactId(id); setQuickTouchOpen(true); }}
             setEditingTaskItem={setEditingTaskItem}
             setForceLanePrefill={setForceLanePrefill}
             setTaskDialogOpen={setTaskDialogOpen}
@@ -1169,77 +1059,7 @@ export default function CompanyDetail() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={importDialogOpen} onOpenChange={(open) => { setImportDialogOpen(open); if (!open) { setImportRows([]); setImportFileName(""); } }}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <FileSpreadsheet className="h-5 w-5 text-green-600" />
-              Import Contacts from Excel
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            {importRows.length === 0 ? (
-              <div className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-8 text-center">
-                <Upload className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
-                <p className="text-sm font-medium mb-1">Drop your spreadsheet here or click to browse</p>
-                <p className="text-xs text-muted-foreground mb-4">Supports .xlsx, .xls, and .csv files. Columns detected automatically: Name, Title, Email, Phone, Notes.</p>
-                <label className="cursor-pointer">
-                  <Button variant="outline" size="sm" asChild>
-                    <span><Upload className="h-4 w-4 mr-2" />Choose File</span>
-                  </Button>
-                  <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImportFile} data-testid="input-import-contacts-file" />
-                </label>
-                {importFileName && <p className="text-xs text-muted-foreground mt-2">{importFileName}</p>}
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground">{importRows.length} contacts found in <span className="font-medium text-foreground">{importFileName}</span></p>
-                  <label className="cursor-pointer">
-                    <Button variant="ghost" size="sm" asChild>
-                      <span>Change file</span>
-                    </Button>
-                    <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImportFile} />
-                  </label>
-                </div>
-                <div className="border rounded-md overflow-hidden">
-                  <div className="overflow-x-auto max-h-64">
-                    <table className="w-full text-xs">
-                      <thead className="bg-muted/50 sticky top-0">
-                        <tr>
-                          {["Name", "Title", "Email", "Phone", "Notes"].map(h => (
-                            <th key={h} className="text-left px-3 py-2 font-medium text-muted-foreground">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {importRows.slice(0, 20).map((r, i) => (
-                          <tr key={i} className="border-t border-muted/50">
-                            <td className="px-3 py-2 font-medium">{r.name}</td>
-                            <td className="px-3 py-2 text-muted-foreground">{r.title || "—"}</td>
-                            <td className="px-3 py-2 text-muted-foreground">{r.email || "—"}</td>
-                            <td className="px-3 py-2 text-muted-foreground">{r.phone || "—"}</td>
-                            <td className="px-3 py-2 text-muted-foreground truncate max-w-[150px]">{r.notes || "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {importRows.length > 20 && (
-                    <div className="px-3 py-2 text-xs text-muted-foreground border-t bg-muted/30">+{importRows.length - 20} more rows not shown</div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setImportDialogOpen(false); setImportRows([]); setImportFileName(""); }}>Cancel</Button>
-            <Button onClick={() => bulkImportMutation.mutate(importRows)} disabled={importRows.length === 0 || bulkImportMutation.isPending} data-testid="button-confirm-import">
-              {bulkImportMutation.isPending ? "Importing..." : `Import ${importRows.length > 0 ? importRows.length + " " : ""}Contact${importRows.length !== 1 ? "s" : ""}`}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ImportContactsDialog open={importDialogOpen} onOpenChange={setImportDialogOpen} companyId={companyId} />
 
       <ContactDetailSheet
         contact={viewContact}
@@ -1277,291 +1097,22 @@ export default function CompanyDetail() {
         companyName={company.name}
       />
 
-      <Dialog open={quickTouchOpen} onOpenChange={open => { if (!open) { setQuickTouchOpen(false); setQuickTouchContactId(""); setQuickTouchType("call"); setQuickTouchNote(""); setQuickTouchSentiment(""); setQuickTouchMeaningful(false); } }}>
-        <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch-detail">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <PhoneCall className="h-4 w-4 text-primary" />
-              Log Touch — {company.name}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 pt-2">
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Contact</label>
-              <Select value={quickTouchContactId} onValueChange={setQuickTouchContactId}>
-                <SelectTrigger data-testid="select-quick-touch-contact-detail">
-                  <SelectValue placeholder="Pick a contact" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(contacts ?? []).map((c: Contact) => (
-                    <SelectItem key={c.id} value={c.id}>{c.name}{c.title ? ` · ${c.title}` : ""}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Touch Type</label>
-              <div className="flex gap-2">
-                {[{ value: "call", label: "Call" }, { value: "email", label: "Email" }, { value: "text", label: "Text" }, { value: "site_visit", label: "Site Visit" }].map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setQuickTouchType(opt.value)}
-                    data-testid={`button-touch-type-detail-${opt.value}`}
-                    className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${
-                      quickTouchType === opt.value
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "border-border text-muted-foreground hover:bg-muted"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {/* Meaningful toggle */}
-            <div className="flex items-center gap-3 py-1">
-              <button
-                type="button"
-                onClick={() => setQuickTouchMeaningful(v => !v)}
-                data-testid="button-meaningful-toggle"
-                className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ${quickTouchMeaningful ? "bg-green-500" : "bg-muted border border-border"}`}
-              >
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${quickTouchMeaningful ? "left-4" : "left-0.5"}`} />
-              </button>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium">Meaningful conversation?</span>
-                <span
-                  className="text-[10px] text-muted-foreground cursor-help border-b border-dashed border-muted-foreground"
-                  title="A real conversation that moves the needle — freight needs, rates, an opportunity, or account strategy. Not just 'what are you working on?'"
-                  data-testid="tooltip-meaningful"
-                >
-                  What's this?
-                </span>
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
-                Notes {quickTouchMeaningful ? <span className="text-red-500">*required for meaningful</span> : <span className="font-normal">(optional)</span>}
-              </label>
-              <textarea
-                value={quickTouchNote}
-                onChange={e => setQuickTouchNote(e.target.value)}
-                placeholder={quickTouchMeaningful ? "What made this conversation meaningful?" : "What did you discuss? Any follow-ups?"}
-                rows={3}
-                data-testid="textarea-quick-touch-note-detail"
-                className={`w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none ${quickTouchMeaningful && !quickTouchNote.trim() ? "border-red-300 dark:border-red-700" : "border-input"}`}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Call Vibe <span className="font-normal">(optional)</span></label>
-              <div className="flex gap-2">
-                {[{ value: "positive", label: "😊 Positive" }, { value: "neutral", label: "😐 Neutral" }, { value: "negative", label: "😟 Negative" }].map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setQuickTouchSentiment(quickTouchSentiment === opt.value ? "" : opt.value)}
-                    data-testid={`button-sentiment-${opt.value}`}
-                    className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${
-                      quickTouchSentiment === opt.value
-                        ? opt.value === "positive" ? "bg-green-100 text-green-800 border-green-300 dark:bg-green-900/40 dark:text-green-300"
-                          : opt.value === "neutral" ? "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/40 dark:text-blue-300"
-                          : "bg-red-100 text-red-800 border-red-300 dark:bg-red-900/40 dark:text-red-300"
-                        : "border-border text-muted-foreground hover:bg-muted"
-                    }`}
-                  >{opt.label}</button>
-                ))}
-              </div>
-            </div>
-            <div className="flex gap-2 pt-1">
-              <Button variant="outline" className="flex-1" onClick={() => { setQuickTouchOpen(false); setQuickTouchNote(""); setQuickTouchSentiment(""); setQuickTouchMeaningful(false); }} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
-              <Button
-                className="flex-1"
-                disabled={!quickTouchContactId || logTouchFromDetailMutation.isPending || (quickTouchMeaningful && !quickTouchNote.trim())}
-                onClick={() => logTouchFromDetailMutation.mutate({ contactId: quickTouchContactId, type: quickTouchType, notes: quickTouchNote, sentiment: quickTouchSentiment || undefined, isMeaningful: quickTouchMeaningful })}
-                data-testid="button-submit-quick-touch-detail"
-              >
-                Log Touch
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <QuickTouchDialog
+        open={quickTouchOpen}
+        onOpenChange={open => { setQuickTouchOpen(open); if (!open) setQuickTouchContactId(""); }}
+        companyId={companyId}
+        companyName={company.name}
+        contacts={contacts}
+        initialContactId={quickTouchContactId}
+      />
 
-      {/* Historical Trends Dialog */}
-      <Dialog open={showTrends} onOpenChange={setShowTrends}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-primary" />
-              Historical Freight Trends — {company?.name}
-            </DialogTitle>
-          </DialogHeader>
-
-          {trendsLoading ? (
-            <div className="py-12 text-center text-muted-foreground">Loading trends data…</div>
-          ) : !trendsData || trendsData.totalLoads === 0 ? (
-            <div className="py-12 text-center">
-              <TrendingUp className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground">No freight history found for this account.</p>
-              <p className="text-xs text-muted-foreground mt-1">Make sure a financial alias is set if the customer name differs in the uploaded data.</p>
-              {trendAliasSuggestions.length > 0 && (
-                <div className="mt-4 text-left max-w-sm mx-auto">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">Possible matches in uploaded data:</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {trendAliasSuggestions.map(name => (
-                      <span key={name} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300">
-                        {name}
-                      </span>
-                    ))}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-2">Set one of these as the Financial Alias on the account page to link the data.</p>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {/* Summary KPIs */}
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  { label: "Total Loads", value: trendsData.totalLoads.toLocaleString() },
-                  { label: "Spot Loads", value: `${trendsData.spotLoads.toLocaleString()} (${trendsData.totalLoads > 0 ? Math.round((trendsData.spotLoads / trendsData.totalLoads) * 100) : 0}%)` },
-                  { label: "Total Margin", value: `$${trendsData.totalMargin.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` },
-                ].map(kpi => (
-                  <div key={kpi.label} className="rounded-lg border bg-muted/40 px-4 py-3 text-center">
-                    <div className="text-lg font-semibold">{kpi.value}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">{kpi.label}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Monthly Chart */}
-              {trendsData.months.length > 1 && (
-                <div>
-                  <h3 className="text-sm font-semibold mb-3">Monthly Trend</h3>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <ComposedChart data={[...trendsData.months].map(m => {
-                      const [y, mo] = m.monthKey.split("-");
-                      return {
-                        month: new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" }),
-                        loads: m.totalLoads,
-                        spot: m.spotLoads,
-                        margin: Math.round(m.totalMargin),
-                      };
-                    })} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
-                      <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                      <YAxis yAxisId="loads" tick={{ fontSize: 11 }} width={35} />
-                      <YAxis yAxisId="margin" orientation="right" tick={{ fontSize: 11 }} width={55} tickFormatter={v => v >= 1000 ? `$${(v/1000).toFixed(0)}K` : `$${v}`} />
-                      <RechartTooltip
-                        contentStyle={{ fontSize: 12 }}
-                        formatter={(value: number, name: string) => {
-                          if (name === "margin") return [`$${value.toLocaleString()}`, "Margin"];
-                          return [value, name === "loads" ? "Total Loads" : "Spot Loads"];
-                        }}
-                      />
-                      <Legend wrapperStyle={{ fontSize: 12 }} />
-                      <Bar yAxisId="loads" dataKey="loads" fill="#3b82f6" name="Loads" radius={[2,2,0,0]} />
-                      <Bar yAxisId="loads" dataKey="spot" fill="#f59e0b" name="Spot" radius={[2,2,0,0]} />
-                      <Line yAxisId="margin" type="monotone" dataKey="margin" stroke="#10b981" strokeWidth={2} dot={false} name="Margin" />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-
-              {/* Monthly Trend Table */}
-              {trendsData.months.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">Monthly Breakdown</h3>
-                  <div className="rounded-md border overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/50">
-                        <tr>
-                          <th className="text-left px-3 py-2 font-medium text-muted-foreground">Month</th>
-                          <th className="text-right px-3 py-2 font-medium text-muted-foreground">Loads</th>
-                          <th className="text-right px-3 py-2 font-medium text-muted-foreground">Spot</th>
-                          <th className="text-right px-3 py-2 font-medium text-muted-foreground">Margin</th>
-                          <th className="text-right px-3 py-2 font-medium text-muted-foreground">Avg/Load</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {[...trendsData.months].reverse().map(m => {
-                          const [y, mo] = m.monthKey.split("-");
-                          const label = new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleString("default", { month: "short", year: "numeric" });
-                          const avg = m.totalLoads > 0 ? m.totalMargin / m.totalLoads : 0;
-                          return (
-                            <tr key={m.monthKey} className="hover:bg-muted/30 transition-colors">
-                              <td className="px-3 py-2 font-medium">{label}</td>
-                              <td className="px-3 py-2 text-right">{m.totalLoads}</td>
-                              <td className="px-3 py-2 text-right text-muted-foreground">{m.spotLoads}</td>
-                              <td className="px-3 py-2 text-right">{m.totalMargin > 0 ? `$${m.totalMargin.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : "—"}</td>
-                              <td className="px-3 py-2 text-right text-muted-foreground">{avg > 0 ? `$${avg.toFixed(0)}` : "—"}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* Top Destinations + Top Corridors side by side */}
-              <div className="grid grid-cols-2 gap-4">
-                {(trendsData.topDestinations ?? []).length > 0 && (
-                  <div>
-                    <h3 className="text-sm font-semibold mb-2">Top Delivery Destinations</h3>
-                    <div className="rounded-md border overflow-hidden">
-                      <table className="w-full text-sm">
-                        <thead className="bg-muted/50">
-                          <tr>
-                            <th className="text-left px-3 py-2 font-medium text-muted-foreground">Destination</th>
-                            <th className="text-right px-3 py-2 font-medium text-muted-foreground">Loads</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y">
-                          {(trendsData.topDestinations ?? []).map((d, i) => (
-                            <tr key={i} className="hover:bg-muted/30 transition-colors">
-                              <td className="px-3 py-1.5">{d.city}{d.state ? `, ${d.state}` : ""}</td>
-                              <td className="px-3 py-1.5 text-right font-medium">{d.count}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {(trendsData.topCorridors ?? []).length > 0 && (
-                  <div>
-                    <h3 className="text-sm font-semibold mb-2">Top Lane Corridors</h3>
-                    <div className="rounded-md border overflow-hidden">
-                      <table className="w-full text-sm">
-                        <thead className="bg-muted/50">
-                          <tr>
-                            <th className="text-left px-3 py-2 font-medium text-muted-foreground">Lane</th>
-                            <th className="text-right px-3 py-2 font-medium text-muted-foreground">Loads</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y">
-                          {(trendsData.topCorridors ?? []).map((c, i) => (
-                            <tr key={i} className="hover:bg-muted/30 transition-colors">
-                              <td className="px-3 py-1.5 text-xs">
-                                <span className="font-medium">{c.origin}</span>
-                                <span className="text-muted-foreground mx-1">→</span>
-                                <span>{c.destination}</span>
-                              </td>
-                              <td className="px-3 py-1.5 text-right font-medium">{c.loads}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
+      <TrendsDialog
+        open={showTrends}
+        onOpenChange={setShowTrends}
+        companyId={companyId}
+        companyName={company.name}
+        financialAlias={company.financialAlias}
+      />
       {company && (
         <PreCallPlanner
           open={preCallOpen}

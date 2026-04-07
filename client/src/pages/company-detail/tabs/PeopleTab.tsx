@@ -25,8 +25,7 @@ interface PeopleTabProps {
   setImportDialogOpen: (v: boolean) => void;
   setViewContact: (v: Contact | null) => void;
   setIntelContact: (v: Contact | null) => void;
-  setQuickTouchContactId: (v: string) => void;
-  setQuickTouchOpen: (v: boolean) => void;
+  onLogTouch: (contactId: string) => void;
   setEditingTaskItem: (v: TaskWithCount | undefined) => void;
   setForceLanePrefill: (v: { title: string; notes?: string; attachedLaneData?: any[] } | undefined) => void;
   setTaskDialogOpen: (v: boolean) => void;
@@ -45,8 +44,7 @@ export function PeopleTab({
   setImportDialogOpen,
   setViewContact,
   setIntelContact,
-  setQuickTouchContactId,
-  setQuickTouchOpen,
+  onLogTouch,
   setEditingTaskItem,
   setForceLanePrefill,
   setTaskDialogOpen,
@@ -189,7 +187,7 @@ export function PeopleTab({
               touchpoints={companyTouchpoints}
               onEditContact={handleEditContact}
               onViewContact={setViewContact}
-              onLogTouch={(c) => { setQuickTouchContactId(c.id); setQuickTouchOpen(true); }}
+              onLogTouch={(c) => onLogTouch(c.id)}
               onIntelClick={setIntelContact}
               onCreateTask={(c) => {
                 setEditingTaskItem(undefined);
