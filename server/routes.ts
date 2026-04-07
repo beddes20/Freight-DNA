@@ -22,6 +22,7 @@ import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFrom
 import { isExcludedRow, parseHistoricalRow, isBadSummaryData, computeLoadsForRepGoal, extractSheetsFromWorkbook, toMonthKey } from "./financialHelpers";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
 import { computeGrowthScore } from "./growthScoreCalculator";
+import { computeNextBestAction } from "./nextBestActionEngine";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { db } from "./storage";
@@ -4902,6 +4903,65 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     } catch (error) {
       console.error("Error fetching growth scores:", error);
       res.status(500).json({ error: "Failed to fetch growth scores" });
+    }
+  });
+
+  // ── Next Best Action (per account) ────────────────────────────────────────
+  // Calls the NBA engine with all account signals and returns a single
+  // prioritised recommendation.  Results are cached in-process for 30 minutes
+  // to avoid redundant recomputation on rapid page refreshes.
+  //
+  // Cache key: `nba:<companyId>` — invalidated automatically after 30 min.
+  // No DB writes — this is a read-only compute endpoint.
+  const _nbaCache = new Map<string, { result: unknown; expiresAt: number }>();
+  const NBA_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+  app.get("/api/companies/:id/next-best-action", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const companyId = req.params.id as string;
+
+      // Verify company exists and belongs to this user's organisation.
+      const company = await storage.getCompanyInOrg(companyId, user.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      // RBAC: only users who can access this company may fetch its NBA.
+      if (!(await canAccessCompany(user, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      // Check in-process cache before running the engine.
+      const cacheKey = `nba:${companyId}`;
+      const cached = _nbaCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return res.json(cached.result);
+      }
+
+      // Run the engine — may throw; caught below.
+      const nba = await computeNextBestAction(companyId, user.organizationId, storage);
+
+      // Store result in cache.
+      _nbaCache.set(cacheKey, { result: nba, expiresAt: Date.now() + NBA_TTL_MS });
+
+      return res.json(nba);
+    } catch (error) {
+      console.error("Error computing next-best-action:", error);
+      // Graceful fallback — return a valid no-action shape so the UI never hard-errors.
+      return res.status(500).json({
+        error: "Failed to compute next best action",
+        fallback: {
+          ruleId: "R13",
+          urgency: "none",
+          headline: "No Action Required",
+          reason: "Unable to evaluate account signals at this time.",
+          ctaLabel: null,
+          ctaHint: "none",
+          owner: "rep",
+          signals: null,
+        },
+      });
     }
   });
 
