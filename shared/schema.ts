@@ -1062,6 +1062,7 @@ export const weeklyCommitments = pgTable("weekly_commitments", {
   status: text("status").notNull().default("pending"),
   completedAt: text("completed_at"),
   createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at"),
 });
 export const insertWeeklyCommitmentSchema = createInsertSchema(weeklyCommitments).omit({ id: true });
 export type InsertWeeklyCommitment = z.infer<typeof insertWeeklyCommitmentSchema>;

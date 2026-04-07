@@ -40,11 +40,13 @@ function formatWeekRange(weekStart: string): string {
 }
 
 const LEVER_COLOR: Record<string, string> = {
-  "Recovery":           "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
-  "Contact Mapping":    "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
-  "Lane ID":            "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-  "Spot-to-Contract":   "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-  "Referral":           "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  "Recovery":            "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
+  "Contact Mapping":     "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+  "Lane ID":             "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+  "Spot-to-Contract":    "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+  "Referral":            "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  "Pipeline":            "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300",
+  "QBR":                 "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
   "Relationship Advance":"bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
 };
 

@@ -2685,10 +2685,12 @@ export class DatabaseStorage implements IStorage {
 
   async updateWeeklyCommitmentStatus(id: string, userId: string, status: string): Promise<import('../shared/schema').WeeklyCommitment | undefined> {
     const { weeklyCommitments } = await import('../shared/schema');
-    const completedAt = status === "completed" ? new Date().toISOString() : undefined;
-    const setData: Partial<import('../shared/schema').WeeklyCommitment> = { status };
-    if (completedAt !== undefined) setData.completedAt = completedAt;
-    if (status === "pending") setData.completedAt = undefined;
+    const now = new Date().toISOString();
+    const setData: Record<string, string | null | undefined> = {
+      status,
+      updatedAt: now,
+      completedAt: status === "completed" ? now : status === "pending" ? undefined : null,
+    };
     const [row] = await db.update(weeklyCommitments)
       .set(setData as any)
       .where(and(eq(weeklyCommitments.id, id), eq(weeklyCommitments.userId, userId)))

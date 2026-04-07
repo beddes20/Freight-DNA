@@ -1,4 +1,4 @@
-/** Shared types and constants for the weekly commitment system. */
+/** Shared types and constants for the weekly freight commitment system. */
 
 export const LEVERS = [
   "Recovery",
@@ -6,6 +6,8 @@ export const LEVERS = [
   "Lane ID",
   "Spot-to-Contract",
   "Referral",
+  "Pipeline",
+  "QBR",
   "Relationship Advance",
 ] as const;
 

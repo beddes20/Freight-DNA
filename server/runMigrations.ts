@@ -996,11 +996,14 @@ export async function runMigrations() {
         due_date        text NOT NULL,
         status          text NOT NULL DEFAULT 'pending',
         completed_at    text,
-        created_at      text NOT NULL
+        created_at      text NOT NULL,
+        updated_at      text
       )
     `);
+    await clientWc.query(`ALTER TABLE weekly_commitments ADD COLUMN IF NOT EXISTS updated_at text`);
     await clientWc.query(`CREATE INDEX IF NOT EXISTS idx_wc_user_week ON weekly_commitments(user_id, week_start)`);
     await clientWc.query(`CREATE INDEX IF NOT EXISTS idx_wc_org_week ON weekly_commitments(org_id, week_start)`);
+    await clientWc.query(`CREATE INDEX IF NOT EXISTS idx_wc_org_status ON weekly_commitments(org_id, status)`);
     console.log("[migrations] weekly_commitments table ensured");
   } catch (err) {
     console.error("[migrations] weekly_commitments error:", err);

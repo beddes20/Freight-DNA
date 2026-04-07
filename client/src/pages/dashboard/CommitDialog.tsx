@@ -1,6 +1,7 @@
 /**
- * CommitDialog — lightweight commitment capture from any Phase 2 portlet row.
- * Pre-fills text, lever, and company context. User can adjust before saving.
+ * CommitDialog — lightweight freight growth commitment capture.
+ * Opens from a Phase 2 portlet recommendation row.
+ * Pre-fills account, contact, lever, and action text. Rep can refine before committing.
  */
 
 import { useState, useEffect } from "react";
@@ -47,7 +48,7 @@ export function CommitDialog({ payload, onClose }: Props) {
       handleClose();
     },
     onError: () => {
-      toast({ title: "Failed to save commitment", variant: "destructive" });
+      toast({ title: "Could not save commitment", variant: "destructive" });
     },
   });
 
@@ -78,7 +79,7 @@ export function CommitDialog({ payload, onClose }: Props) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <Zap className="h-4 w-4 text-amber-500" />
-            Commit to this week
+            This week's growth commitment
           </DialogTitle>
         </DialogHeader>
 
@@ -95,18 +96,23 @@ export function CommitDialog({ payload, onClose }: Props) {
           </div>
         )}
 
-        <Textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="What will you do this week?"
-          rows={3}
-          className="resize-none text-sm"
-          data-testid="input-commit-text"
-          autoFocus
-        />
+        <div className="flex flex-col gap-1">
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={`e.g. Pitch DAL→ATL contract at ${payload?.companyName ?? "this account"} by Thursday`}
+            rows={3}
+            className="resize-none text-sm"
+            data-testid="input-commit-text"
+            autoFocus
+          />
+          <p className="text-[10px] text-muted-foreground leading-snug">
+            Make it specific — account, action, and deadline. Avoid generic follow-ups.
+          </p>
+        </div>
 
         <div className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground font-medium">Category / Lever</span>
+          <span className="text-xs text-muted-foreground font-medium">Growth lever</span>
           <Select value={lever} onValueChange={(v) => setLever(v as Lever)}>
             <SelectTrigger className="h-8 text-sm" data-testid="select-commit-lever">
               <SelectValue />
@@ -120,7 +126,7 @@ export function CommitDialog({ payload, onClose }: Props) {
         </div>
 
         <p className="text-[10px] text-muted-foreground -mt-1">
-          Due: end of this week (Friday). Mark it complete from your Commitments panel above.
+          By when? End of this week (Friday). Mark it done from your Commitments panel.
         </p>
 
         <DialogFooter>
@@ -134,7 +140,7 @@ export function CommitDialog({ payload, onClose }: Props) {
             data-testid="button-commit-save"
             className="bg-amber-500 hover:bg-amber-600 text-white"
           >
-            {mutation.isPending ? "Saving…" : "Commit this week"}
+            {mutation.isPending ? "Saving…" : "Commit"}
           </Button>
         </DialogFooter>
       </DialogContent>
