@@ -1,0 +1,52 @@
+I approve the Pre-Call Planner redesign direction.
+
+Please implement it as a call-prep workflow, not a mini dashboard.
+
+Core principle:
+A rep should be able to understand the account in under 90 seconds by answering:
+1. What matters right now?
+2. What do I need to know before I call?
+3. Who should I talk to?
+4. What should I do immediately after?
+
+Implementation plan:
+
+PR 1 — Layout and workflow cleanup
+- Reorder the planner into these zones:
+  1. Header / current state
+  2. Account Quirks & Process
+  3. Key Contacts
+  4. Conversation Context
+  5. Open Tasks / urgent work
+  6. Collapsed reference sections
+- Compact the financial snapshot into one inline line in the header
+- Sort contacts by relationship priority:
+  HR → 3rd → 2nd → 1st → none/unset
+  then by most recent touchpoint within each tier
+- Keep AI Conversation Summary as the primary conversation view
+- Demote raw touchpoints into a collapsed “View Notes” / “Last 3 Touchpoints” reference area
+- Remove health factor bars from the main flow
+- Keep the 2-sentence health narrative, but inline it in the conversation/reference area
+- Add a sticky footer with:
+  Log Call | Log Email | Create Task | Print
+
+PR 2 — Missing signals
+- Fetch and render NBA in the planner as a compact inline strip near the top
+- Fetch and show Growth Score in the header next to Health
+- Add an amber urgency banner for active RFPs due within 14 days
+- In the RFP area, show active first and older/closed items collapsed
+- Move AI Talking Points into a lower-priority, on-demand reference section labeled “Generate Talking Points”
+
+Additional UX rules:
+- Account Quirks & Process should be highly visible near the top
+- Contact phone/email actions should always be visible, not hover-only
+- If a contact has no base level, show muted styling and an explanatory tooltip
+- The planner should feel action-oriented and practical for freight reps, not analytical
+
+Do not expand scope beyond this file set unless required.
+Please make the smallest clean implementation that achieves this structure.
+After coding, summarize:
+A. files changed
+B. data sources added
+C. behavioral changes
+D. any follow-up cleanup you recommend but did not include
