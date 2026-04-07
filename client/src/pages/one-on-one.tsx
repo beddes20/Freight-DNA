@@ -1722,6 +1722,313 @@ function ArchivedSessionCard({ session, allUsers }: {
   );
 }
 
+// ─── Director View Tab ────────────────────────────────────────────────────────
+
+interface TeamSessionRecord {
+  session: Omit<OneOnOneSession, "moraleScore"> & { moraleScore?: never };
+  namUser: { id: string; name: string; role: string };
+  amUser: { id: string; name: string; role: string };
+  topics: Array<OneOnOneTopic & { replies: OneOnOneTopicReply[] }>;
+}
+
+function DirectorPairingCard({ record }: { record: TeamSessionRecord }) {
+  const [expanded, setExpanded] = useState(false);
+  const { session, namUser, amUser, topics } = record;
+
+  const pendingCount = topics.filter(t => t.status === "pending").length;
+  const discussedCount = topics.filter(t => t.status === "discussed").length;
+  const actionItems = topics.filter(t => t.tag === "action_item");
+
+  return (
+    <div className="border rounded-xl overflow-hidden bg-card" data-testid={`director-pairing-card-${session.id}`}>
+      <button
+        className="w-full flex items-center gap-4 px-5 py-4 hover:bg-muted/40 transition-colors text-left"
+        onClick={() => setExpanded(e => !e)}
+        data-testid={`btn-expand-pairing-${session.id}`}
+      >
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <div className="flex -space-x-2">
+            <div className={`h-9 w-9 rounded-full flex items-center justify-center text-white text-xs font-semibold ring-2 ring-background shrink-0 ${avatarColor(namUser.name)}`}>
+              {initials(namUser.name)}
+            </div>
+            <div className={`h-9 w-9 rounded-full flex items-center justify-center text-white text-xs font-semibold ring-2 ring-background shrink-0 ${avatarColor(amUser.name)}`}>
+              {initials(amUser.name)}
+            </div>
+          </div>
+          <div className="min-w-0">
+            <p className="font-medium text-sm" data-testid={`text-pairing-names-${session.id}`}>
+              {namUser.name} &amp; {amUser.name}
+            </p>
+            <p className="text-xs text-muted-foreground truncate">
+              {namUser.role.replace(/_/g, " ")} · {amUser.role.replace(/_/g, " ")}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0">
+          {session.meetingDate && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid={`text-meeting-date-${session.id}`}>
+              <CalendarDays className="h-3 w-3" />
+              {formatDate(session.meetingDate)}
+            </span>
+          )}
+          <Badge variant={session.status === "active" ? "default" : "secondary"} className="text-xs" data-testid={`badge-session-status-${session.id}`}>
+            {session.status === "active" ? "Active" : "Archived"}
+          </Badge>
+          {pendingCount > 0 && (
+            <span className="flex items-center gap-1 text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 px-1.5 py-0.5 rounded font-medium" data-testid={`text-pending-count-${session.id}`}>
+              <AlertCircle className="h-3 w-3" />
+              {pendingCount} open
+            </span>
+          )}
+          {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t px-5 py-4 space-y-4" data-testid={`director-pairing-detail-${session.id}`}>
+          {/* Session metadata */}
+          <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <CalendarDays className="h-3.5 w-3.5" />
+              Session started {formatDate(session.startDate)}
+            </span>
+            {session.closedAt && (
+              <span className="flex items-center gap-1">
+                <Archive className="h-3.5 w-3.5" />
+                Closed {formatDate(session.closedAt)}
+              </span>
+            )}
+            <span className="flex items-center gap-1">
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+              {discussedCount} discussed
+            </span>
+            {actionItems.length > 0 && (
+              <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400">
+                <ClipboardList className="h-3.5 w-3.5" />
+                {actionItems.filter(t => t.status === "pending").length} action items open
+              </span>
+            )}
+          </div>
+
+          {/* Session notes */}
+          {session.notes && session.notes.trim() && (
+            <div className="bg-muted/40 rounded-lg p-3 space-y-1" data-testid={`director-session-notes-${session.id}`}>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                <StickyNote className="h-3.5 w-3.5" />
+                Session Notes
+              </p>
+              <p className="text-sm whitespace-pre-wrap">{session.notes}</p>
+            </div>
+          )}
+
+          {/* Session summary */}
+          {session.sessionSummary && session.sessionSummary.trim() && (
+            <div className="bg-indigo-50 dark:bg-indigo-950/30 rounded-lg p-3 space-y-1">
+              <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wide flex items-center gap-1">
+                <ClipboardCheck className="h-3.5 w-3.5" />
+                Session Summary
+              </p>
+              <p className="text-sm whitespace-pre-wrap text-indigo-900 dark:text-indigo-200">{session.sessionSummary}</p>
+            </div>
+          )}
+
+          {/* Topics list */}
+          {topics.length > 0 ? (
+            <div className="space-y-1.5">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <MessageSquare className="h-3.5 w-3.5" />
+                Topics ({topics.length})
+              </p>
+              <div className="space-y-1">
+                {topics.map(topic => {
+                  const tag = TAG_CONFIG[topic.tag ?? "fyi"] || TAG_CONFIG.fyi;
+                  const isDiscussed = topic.status === "discussed";
+                  return (
+                    <div
+                      key={topic.id}
+                      className={`rounded-lg border bg-background p-3 space-y-2 ${isDiscussed ? "opacity-60" : ""}`}
+                      data-testid={`director-topic-${topic.id}`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        {isDiscussed
+                          ? <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                          : <Circle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />}
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm ${isDiscussed ? "line-through text-muted-foreground" : ""}`} data-testid={`text-director-topic-${topic.id}`}>
+                            {topic.text}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                            {topic.tag && (
+                              <span className={`inline-flex items-center px-1.5 py-px rounded text-xs font-medium ${tag.color}`} data-testid={`badge-director-tag-${topic.id}`}>
+                                {tag.label}
+                              </span>
+                            )}
+                            <span className="text-xs text-muted-foreground">
+                              {new Date(topic.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Replies (read-only) */}
+                      {topic.replies.length > 0 && (
+                        <div className="ml-6 border-l-2 border-indigo-200 dark:border-indigo-800 pl-3 space-y-1.5" data-testid={`director-replies-${topic.id}`}>
+                          {topic.replies.map(reply => {
+                            const replyAuthor = reply.authorId === namUser.id ? namUser : reply.authorId === amUser.id ? amUser : null;
+                            const replyName = replyAuthor?.name ?? "Unknown";
+                            return (
+                              <div key={reply.id} className="flex items-start gap-1.5" data-testid={`director-reply-${reply.id}`}>
+                                <div className="flex-1 min-w-0">
+                                  <span className="text-xs font-medium">{replyName}</span>
+                                  <span className="text-[10px] text-muted-foreground ml-1.5">
+                                    {new Date(reply.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                                  </span>
+                                  <p className="text-xs text-foreground mt-0.5 break-words">{reply.text}</p>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-6 text-muted-foreground">
+              <MessageSquare className="h-6 w-6 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No topics in this session</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DirectorViewTab() {
+  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "archived">("active");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const { data: teamSessions = [], isLoading } = useQuery<TeamSessionRecord[]>({
+    queryKey: ["/api/1on1/team-sessions"],
+    queryFn: async () => {
+      const res = await fetch("/api/1on1/team-sessions", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch team sessions");
+      return res.json();
+    },
+    staleTime: 60000,
+  });
+
+  // Group sessions by pairing key (namId::amId)
+  const pairingMap = new Map<string, TeamSessionRecord[]>();
+  for (const record of teamSessions) {
+    const key = `${record.session.namId}::${record.session.amId}`;
+    const arr = pairingMap.get(key) ?? [];
+    arr.push(record);
+    pairingMap.set(key, arr);
+  }
+
+  // For each pairing, decide which records to show based on filter
+  type PairingGroup = { key: string; namUser: TeamSessionRecord["namUser"]; amUser: TeamSessionRecord["amUser"]; records: TeamSessionRecord[] };
+  const pairingGroups: PairingGroup[] = [];
+  for (const [key, records] of pairingMap) {
+    const filtered = records.filter(r => {
+      if (filterStatus === "active") return r.session.status === "active";
+      if (filterStatus === "archived") return r.session.status === "archived";
+      return true;
+    });
+    if (filtered.length > 0) {
+      pairingGroups.push({ key, namUser: records[0].namUser, amUser: records[0].amUser, records: filtered });
+    }
+  }
+
+  // Apply search filter
+  const query = searchQuery.trim().toLowerCase();
+  const filteredGroups = query
+    ? pairingGroups.filter(g =>
+        g.namUser.name.toLowerCase().includes(query) ||
+        g.amUser.name.toLowerCase().includes(query)
+      )
+    : pairingGroups;
+
+  // Sort pairings: active first, then by namUser name
+  filteredGroups.sort((a, b) => a.namUser.name.localeCompare(b.namUser.name));
+
+  if (isLoading) {
+    return (
+      <div className="flex-1 overflow-y-auto p-6 space-y-3">
+        {[1, 2, 3].map(i => <Skeleton key={i} className="h-20 w-full" />)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto p-6 space-y-5" data-testid="director-view-tab">
+      {/* Filters / Search */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-1 p-1 rounded-lg bg-muted">
+          {(["active", "archived", "all"] as const).map(status => (
+            <button
+              key={status}
+              onClick={() => setFilterStatus(status)}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors capitalize ${filterStatus === status ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              data-testid={`btn-filter-${status}`}
+            >
+              {status === "all" ? "All" : status.charAt(0).toUpperCase() + status.slice(1)}
+            </button>
+          ))}
+        </div>
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search by name…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full pl-8 pr-7 py-1.5 text-sm rounded-md border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            data-testid="input-director-search"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              data-testid="btn-clear-director-search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+        <span className="text-xs text-muted-foreground shrink-0" data-testid="text-pairing-count">
+          {filteredGroups.length} pairing{filteredGroups.length !== 1 ? "s" : ""}
+        </span>
+      </div>
+
+      {filteredGroups.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground text-center">
+          <Users className="h-10 w-10 mb-3 opacity-30" />
+          <p className="text-base font-medium">No sessions found</p>
+          <p className="text-sm mt-1">
+            {searchQuery ? "Try a different search term" : "No 1:1 sessions exist for your team yet"}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredGroups.map(group => (
+            <div key={group.key} className="space-y-2">
+              {group.records.map(record => (
+                <DirectorPairingCard key={record.session.id} record={record} />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Pairing List sidebar ─────────────────────────────────────────────────────
 
 interface Pairing {
@@ -1938,6 +2245,7 @@ export default function OneOnOnePage() {
   const { user } = useAuth();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [prepOpen, setPrepOpen] = useState(false);
+  const [pageTab, setPageTab] = useState<"my-sessions" | "team-view">("my-sessions");
 
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
@@ -2018,6 +2326,8 @@ export default function OneOnOnePage() {
     );
   }
 
+  const isDirectorOrAdmin = user.role === "director" || user.role === "sales_director" || user.role === "admin";
+
   return (
     <div className="flex flex-col h-full">
       {/* Page header */}
@@ -2029,10 +2339,34 @@ export default function OneOnOnePage() {
           <h1 className="text-lg font-semibold" data-testid="text-page-title">1:1 Meetings</h1>
           <p className="text-xs text-muted-foreground">Track topics, action items, and session history</p>
         </div>
+        {/* Director page-level tab switcher */}
+        {isDirectorOrAdmin && (
+          <div className="ml-auto flex items-center gap-1 p-1 rounded-lg bg-muted">
+            <button
+              onClick={() => setPageTab("my-sessions")}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${pageTab === "my-sessions" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              data-testid="btn-page-tab-my-sessions"
+            >
+              My Sessions
+            </button>
+            <button
+              onClick={() => setPageTab("team-view")}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${pageTab === "team-view" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              data-testid="btn-page-tab-team-view"
+            >
+              Team 1:1s
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Body */}
-      <div className="flex flex-1 overflow-hidden">
+      {/* Director View Tab */}
+      {isDirectorOrAdmin && pageTab === "team-view" && (
+        <DirectorViewTab />
+      )}
+
+      {/* Body — shown when on my-sessions tab */}
+      {pageTab === "my-sessions" && <div className="flex flex-1 overflow-hidden">
         {/* Sidebar: pairing list for managers/admins */}
         {!isAM && pairings.length > 1 && (
           <PairingList
@@ -2099,7 +2433,7 @@ export default function OneOnOnePage() {
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* Prep Summary Modal */}
       <Dialog open={prepOpen} onOpenChange={setPrepOpen}>

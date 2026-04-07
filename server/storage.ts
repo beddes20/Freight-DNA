@@ -253,6 +253,12 @@ export interface IStorage {
   getActiveSession(namId: string, amId: string): Promise<OneOnOneSession | undefined>;
   getActiveSessionsForManager(namId: string): Promise<OneOnOneSession[]>;
   getOrCreateActiveSession(namId: string, amId: string): Promise<OneOnOneSession>;
+  getSessionsForSubordinates(subordinateIds: string[], orgId: string): Promise<Array<{
+    session: OneOnOneSession;
+    namUser: { id: string; name: string; role: string };
+    amUser: { id: string; name: string; role: string };
+    topics: Array<OneOnOneTopic & { replies: OneOnOneTopicReply[] }>;
+  }>>;
   getSession(id: string): Promise<OneOnOneSession | undefined>;
   getSessionsByUser(userId: string): Promise<OneOnOneSession[]>;
   getAllSessions(): Promise<OneOnOneSession[]>;
@@ -1054,6 +1060,65 @@ export class DatabaseStorage implements IStorage {
       createdAt: new Date().toISOString(),
     });
     return { action: "added" };
+  }
+
+  async getSessionsForSubordinates(subordinateIds: string[], orgId: string): Promise<Array<{
+    session: OneOnOneSession;
+    namUser: { id: string; name: string; role: string };
+    amUser: { id: string; name: string; role: string };
+    topics: Array<OneOnOneTopic & { replies: OneOnOneTopicReply[] }>;
+  }>> {
+    if (subordinateIds.length === 0) return [];
+
+    // Get all org users for name/role lookup
+    const orgUsers = await db.select({ id: users.id, name: users.name, role: users.role })
+      .from(users)
+      .where(eq(users.organizationId, orgId));
+    const userMap = new Map(orgUsers.map(u => [u.id, u]));
+
+    // Get sessions where nam or am is in the subordinate list
+    const sessions = await db.select().from(oneOnOneSessions).where(
+      or(
+        inArray(oneOnOneSessions.namId, subordinateIds),
+        inArray(oneOnOneSessions.amId, subordinateIds)
+      )
+    ).orderBy(desc(oneOnOneSessions.startDate));
+
+    if (sessions.length === 0) return [];
+
+    // Get topics for all sessions
+    const sessionIds = sessions.map(s => s.id);
+    const allTopics = await db.select().from(oneOnOneTopics)
+      .where(inArray(oneOnOneTopics.sessionId, sessionIds))
+      .orderBy(desc(oneOnOneTopics.createdAt));
+
+    const topicIds = allTopics.map(t => t.id);
+    const allReplies = topicIds.length > 0
+      ? await db.select().from(oneOnOneTopicReplies)
+          .where(inArray(oneOnOneTopicReplies.topicId, topicIds))
+          .orderBy(oneOnOneTopicReplies.createdAt)
+      : [];
+
+    const repliesByTopic = new Map<string, OneOnOneTopicReply[]>();
+    for (const reply of allReplies) {
+      const arr = repliesByTopic.get(reply.topicId) ?? [];
+      arr.push(reply);
+      repliesByTopic.set(reply.topicId, arr);
+    }
+
+    const topicsBySession = new Map<string, Array<OneOnOneTopic & { replies: OneOnOneTopicReply[] }>>();
+    for (const topic of allTopics) {
+      const arr = topicsBySession.get(topic.sessionId) ?? [];
+      arr.push({ ...topic, replies: repliesByTopic.get(topic.id) ?? [] });
+      topicsBySession.set(topic.sessionId, arr);
+    }
+
+    return sessions.map(session => ({
+      session,
+      namUser: userMap.get(session.namId) ?? { id: session.namId, name: "Unknown", role: "" },
+      amUser: userMap.get(session.amId) ?? { id: session.amId, name: "Unknown", role: "" },
+      topics: topicsBySession.get(session.id) ?? [],
+    }));
   }
 
   async getActiveSession(namId: string, amId: string): Promise<OneOnOneSession | undefined> {

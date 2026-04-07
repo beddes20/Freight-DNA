@@ -510,4 +510,38 @@ export function registerCoachingRoutes(app: Express) {
       res.status(500).json({ error: "Failed to save milestones" });
     }
   });
+
+  // ── Director / Team 1:1s ──────────────────────────────────────────────────
+
+  app.get("/api/1on1/team-sessions", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const allowedRoles = ["director", "sales_director", "admin"];
+      if (!allowedRoles.includes(user.role)) {
+        return res.status(403).json({ error: "Access denied — director or admin role required" });
+      }
+
+      const subordinateIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+      // Exclude the director themselves from the subordinate list
+      const filteredIds = subordinateIds.filter(id => id !== user.id);
+
+      const results = await storage.getSessionsForSubordinates(filteredIds, user.organizationId);
+
+      // Strip morale scores from the response (private between NAM and AM)
+      const sanitized = results.map(r => ({
+        ...r,
+        session: {
+          ...r.session,
+          moraleScore: undefined,
+        },
+      }));
+
+      res.json(sanitized);
+    } catch (error) {
+      console.error("[1on1/team-sessions]", error);
+      res.status(500).json({ error: "Failed to get team sessions" });
+    }
+  });
 }
