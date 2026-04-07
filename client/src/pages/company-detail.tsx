@@ -102,9 +102,7 @@ import { ContactList } from "@/components/contact-list";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { fmtMoney } from "@/lib/rep-utils";
-import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { TaskDialog } from "@/components/task-dialog";
 import { CalloutDialog } from "@/components/callout-dialog";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
@@ -130,9 +128,7 @@ import { ImportContactsDialog } from "./company-detail/components/ImportContacts
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 import { GrowthScoreBadge } from "@/components/account-growth-portlet";
 import type {
-  ResearchTask, Facility, FacilityCoverage, TouchLogEntry, MonthBucket,
-  HealthFactor, HealthScore, TrendMonth, TrendDest, TrendCorridor,
-  TrendsData, SharedRepEntry, TaskWithCount, AccountPerf,
+  TouchLogEntry, MonthBucket, HealthScore, SharedRepEntry, TaskWithCount, AccountPerf,
 } from "./company-detail/types";
 
 export default function CompanyDetail() {
