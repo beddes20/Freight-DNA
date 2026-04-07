@@ -18,7 +18,7 @@ import {
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
   Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search, MoreHorizontal,
-  Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell, Pencil, ArrowUpRight, ArrowDownRight,
+  Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell, Pencil, ArrowUpRight, ArrowDownRight, ArrowRight,
   Activity, UserPlus, Repeat2, Trophy, Settings2,
   Truck, Route,
 } from "lucide-react";
@@ -94,7 +94,7 @@ export default function Dashboard() {
   const [activePortlet, setActivePortlet] = useState<{ type: PortletType; personal: boolean; title: string } | null>(null);
   const [feedAuthorFilter, setFeedAuthorFilter] = useState("all");
   const [ptoBannerDismissed, setPtoBannerDismissed] = useState(false);
-  const [touchpointsTodayCollapsed, setTouchpointsTodayCollapsed] = useState(() => localStorage.getItem("dash_touchpoints_today_collapsed") === "true");
+  const [touchpointsTodayCollapsed, setTouchpointsTodayCollapsed] = useState(() => localStorage.getItem("dash_touchpoints_today_collapsed") !== "false");
   const toggleTouchpointsToday = () => {
     setTouchpointsTodayCollapsed(prev => {
       const next = !prev;
@@ -103,9 +103,10 @@ export default function Dashboard() {
     });
   };
   const [nbaBriefingCollapsed, setNbaBriefingCollapsed] = useState(() => localStorage.getItem("dash_nba_briefing_collapsed") === "true");
-  const [accountGrowthCollapsed, setAccountGrowthCollapsed] = useState(() => localStorage.getItem("dash_account_growth_collapsed") === "true");
+  const [accountGrowthCollapsed, setAccountGrowthCollapsed] = useState(() => localStorage.getItem("dash_account_growth_collapsed") !== "false");
+  const [personalMetricsCollapsed, setPersonalMetricsCollapsed] = useState(() => localStorage.getItem("dash_personal_metrics_collapsed") !== "false");
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
-  const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") === "true");
+  const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") !== "false");
   const [lmCheckInsGroupCollapsed, setLmCheckInsGroupCollapsed] = useState(() => localStorage.getItem("dash_lm_checkins_group_collapsed") === "true");
   const toggleLmCheckInsGroup = () => {
     setLmCheckInsGroupCollapsed(prev => {
@@ -231,15 +232,15 @@ export default function Dashboard() {
   const [amMarginCollapsed, setAmMarginCollapsed] = useState(false);
   const [namTrendingUpCollapsed, setNamTrendingUpCollapsed] = useState(false);
   const [namTrendingDownCollapsed, setNamTrendingDownCollapsed] = useState(false);
-  const [amTrendingUpCollapsed, setAmTrendingUpCollapsed] = useState(false);
-  const [amTrendingDownCollapsed, setAmTrendingDownCollapsed] = useState(false);
+  const [amTrendingUpCollapsed, setAmTrendingUpCollapsed] = useState(() => localStorage.getItem("dash_am_trending_up_collapsed") !== "false");
+  const [amTrendingDownCollapsed, setAmTrendingDownCollapsed] = useState(() => localStorage.getItem("dash_am_trending_down_collapsed") !== "false");
 
   // Collapsible state for list portlets — initialized after user loads (role-based defaults)
   const [recentWinsCollapsed, setRecentWinsCollapsed] = useState(false);
   const [coldContactsCollapsed, setColdContactsCollapsed] = useState(false);
   const [meaningfulOverdueCollapsed, setMeaningfulOverdueCollapsed] = useState(false);
   const [topOppsCollapsed, setTopOppsCollapsed] = useState(false);
-  const [churnRiskCollapsed, setChurnRiskCollapsed] = useState(false);
+  const [churnRiskCollapsed, setChurnRiskCollapsed] = useState(() => localStorage.getItem("dash_churn_risk_collapsed") !== "false");
   const [rfpDeadlineCollapsed, setRfpDeadlineCollapsed] = useState(false);
   const [goalsNudgeCollapsed, setGoalsNudgeCollapsed] = useState(false);
   const [goalsAlertCollapsed, setGoalsAlertCollapsed] = useState(false);
@@ -269,7 +270,6 @@ export default function Dashboard() {
     lp("dash_cold_contacts_collapsed", setColdContactsCollapsed);
     lp("dash_meaningful_overdue_collapsed", setMeaningfulOverdueCollapsed);
     lp("dash_top_opps_collapsed", setTopOppsCollapsed);
-    lp("dash_churn_risk_collapsed", setChurnRiskCollapsed);
     lp("dash_rfp_deadline_collapsed", setRfpDeadlineCollapsed);
     lp("dash_goals_nudge_collapsed", setGoalsNudgeCollapsed);
     lp("dash_goals_alert_collapsed", setGoalsAlertCollapsed);
@@ -641,6 +641,17 @@ export default function Dashboard() {
   const completedCount = myTasks.filter(t => t.status === "completed").length;
   const displayTasks = openTasks.slice(0, 10);
 
+  // AM NOW zone: RFPs due within 7 days (compact strip)
+  const rfp7Days = urgentRfps.filter((rfp: any) => {
+    if (!rfp.dueDate) return false;
+    const due = new Date(rfp.dueDate + "T00:00:00");
+    const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
+    return diffDays >= 0 && diffDays <= 7;
+  });
+
+  // AM NOW zone: tasks due today or overdue (compact strip)
+  const tasksDueToday = openTasks.filter(t => t.dueDate && t.dueDate <= todayStr);
+
   // Split open tasks into "incoming" (assigned by others, not yet acknowledged) and regular
   const incomingTasks = displayTasks.filter(t => t.assignedBy !== currentUser?.id && taskAssignedNotifMap.has(t.id));
   const regularTasks = displayTasks.filter(t => !incomingTasks.includes(t));
@@ -894,15 +905,7 @@ export default function Dashboard() {
         onOpenLayoutPanel={() => setLayoutPanelOpen(true)}
       />
 
-      {/* ── Outbound Touchpoints Today ──────────────────────────────────────── */}
-      <PortletErrorBoundary label="Touchpoints Today">
-        <TouchpointsTodayPortlet
-          collapsed={touchpointsTodayCollapsed}
-          onToggle={toggleTouchpointsToday}
-        />
-      </PortletErrorBoundary>
-
-      {/* ── Priority Actions Today (NBA) ────────────────────────────────────── */}
+      {/* ── "Do This First" — NBA priority actions (top of dashboard) ─────── */}
       {!isLmRole && (
         <PortletErrorBoundary label="Priority Actions">
           <NextBestActionsPortlet
@@ -915,6 +918,101 @@ export default function Dashboard() {
           />
         </PortletErrorBoundary>
       )}
+
+      {/* ── AM NOW zone: Today's Priority Accounts ──────────────────────────── */}
+      {isAm && (
+        <PortletErrorBoundary label="Today's Priority Accounts">
+          <Card data-testid="card-todays-priority-accounts">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Target className="h-4 w-4 text-blue-500" />
+                Today's Priority Accounts
+                {!todaysFiveLoading && todaysFive.length > 0 && (
+                  <Badge className="ml-auto text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border-0">
+                    {todaysFive.length} account{todaysFive.length !== 1 ? "s" : ""}
+                  </Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {todaysFiveLoading ? (
+                <div className="space-y-2">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
+              ) : todaysFive.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-2">No accounts prioritized today. Upload financial data to unlock AI prioritization.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {todaysFive.map((acct, idx) => (
+                    <Link key={acct.id ?? idx} href={`/companies/${acct.id}`} data-testid={`priority-account-${acct.id ?? idx}`}>
+                      <div className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50 transition-colors cursor-pointer">
+                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold truncate">{acct.name}</p>
+                          {acct.reasons.length > 0 && (
+                            <p className="text-xs text-muted-foreground truncate mt-0.5">{acct.reasons[0]}</p>
+                          )}
+                        </div>
+                        <span className="shrink-0 text-xs font-medium px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                          {acct.score}
+                        </span>
+                        <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── AM NOW zone: RFPs due in ≤7 days (compact strip) ────────────────── */}
+      {isAm && rfp7Days.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 dark:border-red-800 bg-red-50/60 dark:bg-red-950/20 px-4 py-2.5" data-testid="strip-rfp-deadlines-now">
+          <span className="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5 shrink-0">
+            <Calendar className="h-3.5 w-3.5" />
+            RFPs due this week:
+          </span>
+          {rfp7Days.map((rfp: any) => {
+            const due = new Date(rfp.dueDate + "T00:00:00");
+            const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
+            return (
+              <Link key={rfp.id} href={rfp.companyId ? `/companies/${rfp.companyId}` : `/rfp-calendar`} data-testid={`rfp-strip-${rfp.id}`}>
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 whitespace-nowrap hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors cursor-pointer">
+                  {rfp.title ?? rfp.companyName ?? "RFP"} · {diffDays === 0 ? "today" : `${diffDays}d`}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── AM NOW zone: Tasks due today / overdue (compact strip) ───────────── */}
+      {isAm && tasksDueToday.length > 0 && (
+        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-2.5" data-testid="strip-tasks-due-today">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5 shrink-0">
+              <ListTodo className="h-3.5 w-3.5" />
+              {tasksDueToday.length} task{tasksDueToday.length !== 1 ? "s" : ""} due today:
+            </span>
+            {tasksDueToday.slice(0, 5).map((task) => (
+              <span key={task.id} className="text-xs text-amber-700 dark:text-amber-400 truncate max-w-[180px]" data-testid={`task-strip-${task.id}`}>
+                · {task.title}
+              </span>
+            ))}
+            {tasksDueToday.length > 5 && (
+              <span className="text-xs text-amber-600 dark:text-amber-500">+{tasksDueToday.length - 5} more</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Outbound Touchpoints Today (collapsed by default, running context) ── */}
+      <PortletErrorBoundary label="Touchpoints Today">
+        <TouchpointsTodayPortlet
+          collapsed={touchpointsTodayCollapsed}
+          onToggle={toggleTouchpointsToday}
+        />
+      </PortletErrorBoundary>
 
       {/* ── Account Growth Score ─────────────────────────────────────────────── */}
       {!isLmRole && companies && companies.length > 0 && (
@@ -1012,22 +1110,65 @@ export default function Dashboard() {
         </PortletErrorBoundary>
       )}
 
-      {/* ── AM Dashboard Portlets ────────────────────────────────────────────── */}
+      {/* ── AM: Stale Accounts (This Week zone) ─────────────────────────────── */}
+      {isAm && staleAccounts.length > 0 && (
+        <PortletErrorBoundary label="Stale Accounts">
+          <Card data-testid="card-stale-accounts-am">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Clock className="h-4 w-4 text-orange-500" />
+                Accounts Needing Attention
+                <Badge className="ml-auto text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 border-0">
+                  {staleAccounts.length}
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                {staleAccounts.map((acct, idx) => (
+                  <Link key={acct.id ?? idx} href={`/companies/${acct.id}`} data-testid={`stale-account-${acct.id ?? idx}`}>
+                    <div className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50 transition-colors cursor-pointer">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold truncate">{acct.name}</p>
+                        {acct.daysSince != null && (
+                          <p className="text-xs text-muted-foreground mt-0.5">{acct.daysSince}d since last touch</p>
+                        )}
+                      </div>
+                      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── AM Dashboard Portlets (Trending + Activity — running context) ──── */}
       {isAm && (
         <PortletErrorBoundary label="AM Portlets">
           <AmPortlets
-            todaysFive={todaysFive}
-            todaysFiveLoading={todaysFiveLoading}
-            staleAccounts={staleAccounts}
             setLocation={setLocation}
             amTrendingAccounts={amTrendingAccounts}
             amTrendingLoading={amTrendingLoading}
             amTrendingUpCollapsed={amTrendingUpCollapsed}
-            setAmTrendingUpCollapsed={setAmTrendingUpCollapsed}
+            setAmTrendingUpCollapsed={(v) => {
+              setAmTrendingUpCollapsed(v);
+              localStorage.setItem("dash_am_trending_up_collapsed", String(v));
+            }}
             amTrendingDownCollapsed={amTrendingDownCollapsed}
-            setAmTrendingDownCollapsed={setAmTrendingDownCollapsed}
+            setAmTrendingDownCollapsed={(v) => {
+              setAmTrendingDownCollapsed(v);
+              localStorage.setItem("dash_am_trending_down_collapsed", String(v));
+            }}
             personalMetrics={personalMetrics}
             personalMetricsLoading={personalMetricsLoading}
+            personalMetricsCollapsed={personalMetricsCollapsed}
+            onTogglePersonalMetrics={() => {
+              const next = !personalMetricsCollapsed;
+              setPersonalMetricsCollapsed(next);
+              localStorage.setItem("dash_personal_metrics_collapsed", String(next));
+            }}
             myGoals={myGoals}
             todayStr={todayStr}
             setActivePortlet={setActivePortlet}
