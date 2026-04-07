@@ -8809,12 +8809,25 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
   // ─── NBA Phase 1 Persistent Card Routes ──────────────────────────────────────
 
+  // GET /api/nba/company/:companyId/card — single persistent Phase 1 card for Account 360
+  app.get("/api/nba/company/:companyId/card", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const card = await storage.getNbaCardForCompany(req.params.companyId);
+      res.json(card ?? null);
+    } catch (err: any) {
+      console.error("[nba/company/card GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to fetch company NBA card" });
+    }
+  });
+
   // GET /api/nba/cards — fetch visible cards for the current user
   app.get("/api/nba/cards", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const limit = Math.min(Number(req.query.limit ?? 10), 50);
+      const limit = Math.min(Number(req.query.limit ?? 5), 5);
       const cards = await storage.getVisibleNbaCards(currentUser.id, limit);
       res.json(cards);
     } catch (err: any) {
@@ -8928,14 +8941,12 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       for (const { userId, result } of results) {
         if (!result.winner) { skipped++; continue; }
 
-        // Dedup: skip if a visible card for this company + rule already exists in last 7 days
-        const existing = result.winner.ruleType
-          ? await storage.getRecentNbaCardByType(result.companyId, result.winner.ruleType, 7)
-          : undefined;
+        // Dedup: skip if a card for same company + same rule already exists in last 14 days
+        const existing = await storage.getRecentNbaCardByType(result.companyId, result.winner.ruleType, 14);
         if (existing) { skipped++; continue; }
 
-        // Mark superseded cards (generated but not yet visible) for this company
-        await storage.supersedePreviousNbaCards(result.companyId, "pending");
+        // Supersede any prior visible/generated card for this company with a DIFFERENT rule type
+        await storage.supersedePreviousNbaCards(result.companyId, result.winner.ruleType);
 
         const card = await storage.createNbaCard({
           orgId: organizationId,

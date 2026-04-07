@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { BarChart3, Trophy, TrendingUp, DollarSign } from "lucide-react";
 import { RelationshipFreightCompanyPortlet } from "@/components/relationship-freight-portlet";
 import { NextBestActionCard } from "@/components/next-best-action-card";
+import { NbaCompanyCard } from "@/components/NbaCompanyCard";
 import { fmtMoney } from "@/lib/rep-utils";
 import type { Rfp } from "@shared/schema";
 import type { AccountPerf, MonthBucket } from "../types";
@@ -85,6 +86,9 @@ export function OverviewTab({
 
   return (
     <>
+      {/* Phase 1 persistent NBA card — shown above the stateless action card */}
+      <NbaCompanyCard companyId={companyId} />
+
       <NextBestActionCard
         companyId={companyId}
         onLogTouch={onNbaLogTouch}

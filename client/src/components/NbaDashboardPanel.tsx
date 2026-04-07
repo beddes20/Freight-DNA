@@ -3,31 +3,12 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { NbaCard } from "./NbaCard";
+import type { NbaCardData } from "./NbaCard";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Brain, RefreshCw, ChevronRight } from "lucide-react";
+import { Brain, RefreshCw } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-
-interface NbaCardData {
-  id: string;
-  companyId: string | null;
-  companyName: string | null;
-  contactId: string | null;
-  ruleType: string;
-  outcomeType: string;
-  confidence: string;
-  signalCount: number;
-  signalSummary: string[];
-  whyThisNow: string;
-  suggestedAction: string;
-  expectedOutcome: string;
-  growthLever: string | null;
-  relationshipMove: string | null;
-  accountTier: string | null;
-  urgencyScore: number;
-  status: string;
-}
 
 interface NbaDashboardPanelProps {
   userRole: string;
@@ -38,9 +19,9 @@ interface NbaDashboardPanelProps {
 
 export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps) {
   const { toast } = useToast();
+  // Local sets for instant optimistic removal — avoids waiting for query refetch
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [actioned, setActioned] = useState<Set<string>>(new Set());
-  const [showAll, setShowAll] = useState(false);
 
   const { data: cards = [], isLoading, refetch } = useQuery<NbaCardData[]>({
     queryKey: ["/api/nba/cards"],
@@ -59,22 +40,20 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
     onError: () => toast({ title: "Engine run failed", variant: "destructive" }),
   });
 
-  // Filter out resolved cards in local state for instant feedback
-  const visible = cards.filter(c => !dismissed.has(c.id) && !actioned.has(c.id));
-  const displayCards = showAll ? visible : visible.slice(0, 3);
-  const hasMore = visible.length > 3;
+  // Hard cap at 5 — server enforces this, but double-check client-side too
+  const visible = cards
+    .filter(c => !dismissed.has(c.id) && !actioned.has(c.id))
+    .slice(0, 5);
 
   if (isLoading) {
     return (
       <div className="rounded-2xl border border-white/8 bg-white/3 p-5 flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Brain className="w-4 h-4 text-amber-400" />
-            <span className="text-sm font-semibold text-white">Today's Priorities</span>
-          </div>
+        <div className="flex items-center gap-2">
+          <Brain className="w-4 h-4 text-amber-400" />
+          <span className="text-sm font-semibold text-white">Today's Priorities</span>
         </div>
-        {[1, 2, 3].map(i => (
-          <Skeleton key={i} className="h-32 rounded-xl bg-white/5" />
+        {[1, 2].map(i => (
+          <Skeleton key={i} className="rounded-xl bg-white/5" style={{ minHeight: 128 }} />
         ))}
       </div>
     );
@@ -122,7 +101,7 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
       </div>
 
       {/* Empty state */}
-      {visible.length === 0 && !isLoading && (
+      {visible.length === 0 && (
         <div className="flex flex-col items-center justify-center py-8 gap-2 text-center">
           <Brain className="w-8 h-8 text-white/15" />
           <p className="text-sm text-white/40">No priority recommendations right now.</p>
@@ -130,37 +109,21 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
         </div>
       )}
 
-      {/* Cards */}
-      <div className="flex flex-col gap-3">
-        {displayCards.map(card => (
-          <NbaCard
-            key={card.id}
-            card={card}
-            onDismissed={(id) => setDismissed(prev => new Set([...prev, id]))}
-            onActioned={(id) => setActioned(prev => new Set([...prev, id]))}
-          />
-        ))}
-      </div>
-
-      {/* Show more / less toggle */}
-      {hasMore && (
-        <button
-          onClick={() => setShowAll(v => !v)}
-          className="flex items-center justify-center gap-1.5 text-xs text-white/35 hover:text-white/60 transition-colors py-1"
-          data-testid="nba-panel-show-more"
-        >
-          {showAll ? (
-            "Show fewer"
-          ) : (
-            <>
-              Show {visible.length - 3} more
-              <ChevronRight className="w-3.5 h-3.5" />
-            </>
-          )}
-        </button>
+      {/* Cards — fixed-height list, no show-more */}
+      {visible.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {visible.map(card => (
+            <NbaCard
+              key={card.id}
+              card={card}
+              onDismissed={(id) => setDismissed(prev => new Set([...prev, id]))}
+              onActioned={(id) => setActioned(prev => new Set([...prev, id]))}
+            />
+          ))}
+        </div>
       )}
 
-      {/* Footer hint */}
+      {/* Footer */}
       {visible.length > 0 && (
         <p className="text-[10px] text-white/20 text-center -mt-1">
           Powered by NBA Phase 1 · updates nightly

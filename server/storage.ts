@@ -460,7 +460,8 @@ export interface IStorage {
   getVisibleNbaCards(userId: string, limit?: number): Promise<NbaCard[]>;
   getRecentNbaCardByType(companyId: string, ruleType: string, dayLimit: number): Promise<NbaCard | undefined>;
   resolveNbaCard(id: string, userId: string, data: Record<string, unknown>): Promise<NbaCard | undefined>;
-  supersedePreviousNbaCards(companyId: string, winnerCardId: string): Promise<void>;
+  supersedePreviousNbaCards(companyId: string, winningRuleType: string): Promise<void>;
+  getNbaCardForCompany(companyId: string): Promise<NbaCard | undefined>;
   processExpiredNbaCards(orgId: string, touchpointCompanyId?: string): Promise<void>;
   getNbaManagerSummary(orgId: string, weekStart: string): Promise<Array<{
     userId: string; userName: string; shown: number; actioned: number; dismissed: number; ignored: number;
@@ -2738,7 +2739,7 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async getVisibleNbaCards(userId: string, limit = 10): Promise<NbaCard[]> {
+  async getVisibleNbaCards(userId: string, limit = 5): Promise<NbaCard[]> {
     const today = new Date().toISOString().split("T")[0];
     const rows = await db.select()
       .from(nbaCards)
@@ -2780,15 +2781,36 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async supersedePreviousNbaCards(companyId: string, winnerCardId: string): Promise<void> {
+  async supersedePreviousNbaCards(companyId: string, winningRuleType: string): Promise<void> {
+    // Mark any visible or generated card for this company with a DIFFERENT rule type as superseded.
+    // Same rule type within the dedup window is blocked upstream; only cross-rule cards are superseded here.
     await db.update(nbaCards)
       .set({ status: "superseded" } as any)
       .where(
         and(
           eq(nbaCards.companyId, companyId),
-          eq(nbaCards.status, "generated"),
+          sql`${nbaCards.status} IN ('visible', 'generated')`,
+          sql`${nbaCards.ruleType} != ${winningRuleType}`,
         )
       );
+  }
+
+  async getNbaCardForCompany(companyId: string): Promise<NbaCard | undefined> {
+    const today = new Date().toISOString().split("T")[0];
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(
+        and(
+          eq(nbaCards.companyId, companyId),
+          eq(nbaCards.status, "visible"),
+        )
+      )
+      .orderBy(desc(nbaCards.urgencyScore), desc(nbaCards.createdAt))
+      .limit(1);
+    const card = rows[0];
+    if (!card) return undefined;
+    if (card.snoozeUntil && card.snoozeUntil > today) return undefined;
+    return card;
   }
 
   async processExpiredNbaCards(orgId: string, touchpointCompanyId?: string): Promise<void> {

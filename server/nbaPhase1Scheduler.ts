@@ -47,12 +47,12 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
         for (const { userId, result } of results) {
           if (!result.winner) { totalSkipped++; continue; }
 
-          // Dedup: skip if a card for this company + rule already exists in the last 7 days
-          const existing = await storage.getRecentNbaCardByType(result.companyId, result.winner.ruleType, 7);
+          // Dedup: skip if same company + same rule already has a card in last 14 days
+          const existing = await storage.getRecentNbaCardByType(result.companyId, result.winner.ruleType, 14);
           if (existing) { totalSkipped++; continue; }
 
-          // Supersede any old generated cards for this company
-          await storage.supersedePreviousNbaCards(result.companyId, "pending");
+          // Supersede any prior visible/generated card for this company with a DIFFERENT rule type
+          await storage.supersedePreviousNbaCards(result.companyId, result.winner.ruleType);
 
           await storage.createNbaCard({
             orgId: org.id,
