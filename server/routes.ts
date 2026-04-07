@@ -4176,14 +4176,12 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
             });
             cacheInvalidatePrefix(`cold-contacts:${currentUser.id}`);
             if (contact.companyId) {
-              (async () => {
-                try {
-                  const gs = await computeGrowthScore(contact.companyId!, currentUser.organizationId, storage);
-                  await storage.upsertGrowthScore({ companyId: contact.companyId!, organizationId: currentUser.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-                } catch (gsErr) {
-                  console.error("[outlook] background growth score refresh failed:", gsErr);
-                }
-              })();
+              try {
+                const gs = await computeGrowthScore(contact.companyId!, currentUser.organizationId, storage);
+                await storage.upsertGrowthScore({ companyId: contact.companyId!, organizationId: currentUser.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+              } catch (gsErr) {
+                console.error("[outlook] growth score refresh failed:", gsErr);
+              }
             }
           }
         } catch (tpErr) {
@@ -4234,14 +4232,12 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
                 createdAt: now.toISOString(),
               });
               cacheInvalidatePrefix(`cold-contacts:${currentUser.id}`);
-              (async () => {
-                try {
-                  const gs = await computeGrowthScore(match.id, currentUser.organizationId, storage);
-                  await storage.upsertGrowthScore({ companyId: match.id, organizationId: currentUser.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-                } catch (gsErr) {
-                  console.error("[outlook] background growth score refresh (auto-link) failed:", gsErr);
-                }
-              })();
+              try {
+                const gs = await computeGrowthScore(match.id, currentUser.organizationId, storage);
+                await storage.upsertGrowthScore({ companyId: match.id, organizationId: currentUser.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+              } catch (gsErr) {
+                console.error("[outlook] growth score refresh (auto-link) failed:", gsErr);
+              }
             }
           }
         } catch (autoErr) {
@@ -4933,14 +4929,22 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         bandColor: BAND_COLORS[s.band] ?? "amber",
       }));
 
-      // Background: compute scores for visible companies with no cached score yet
-      // (up to 20, so the portlet eventually shows all accounts without requiring
-      //  the user to visit each company page first)
+      // Background: recompute growth scores for:
+      //   (a) visible companies with NO cached score yet (newly visible accounts)
+      //   (b) visible companies with a STALE cached score (older than 6 hours)
+      // This ensures stale "No touchpoints on record" scores are corrected
+      // without requiring a rep to visit each company page individually.
+      const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+      const staleCutoff = new Date(Date.now() - SIX_HOURS_MS).toISOString();
       const cachedIds = new Set(cached.map(s => s.companyId));
-      const unscored = visibleIds.filter(id => !cachedIds.has(id)).slice(0, 20);
-      if (unscored.length > 0) {
+      const unscoredIds = visibleIds.filter(id => !cachedIds.has(id));
+      const staleIds = cached
+        .filter(s => !s.calculatedAt || s.calculatedAt < staleCutoff)
+        .map(s => s.companyId);
+      const toRecompute = [...new Set([...unscoredIds, ...staleIds])].slice(0, 20);
+      if (toRecompute.length > 0) {
         (async () => {
-          for (const cid of unscored) {
+          for (const cid of toRecompute) {
             try {
               const gs = await computeGrowthScore(cid, user.organizationId, storage);
               await storage.upsertGrowthScore({ companyId: cid, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
