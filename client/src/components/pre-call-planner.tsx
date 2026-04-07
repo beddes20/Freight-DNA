@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useMemo, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -156,10 +156,12 @@ const NBA_URGENCY_CFG: Record<string, { border: string; badge: string; icon: str
 function NbaStrip({
   companyId,
   onLogTouch,
+  onComposeEmail,
   onCreateTask,
 }: {
   companyId: string;
   onLogTouch: () => void;
+  onComposeEmail: () => void;
   onCreateTask: () => void;
 }) {
   const { data, isLoading } = useQuery<any>({
@@ -174,8 +176,10 @@ function NbaStrip({
   if (!data || data.urgency === "none") return null;
   const cfg = NBA_URGENCY_CFG[data.urgency] ?? NBA_URGENCY_CFG.low;
   const handleCta = () => {
-    if (data.cta === "log_touch" || data.cta === "compose_email") onLogTouch();
-    else if (data.cta === "create_task" || data.cta === "schedule_meeting") onCreateTask();
+    if (data.cta === "log_touch")       { onLogTouch();     return; }
+    if (data.cta === "compose_email")   { onComposeEmail(); return; }
+    if (data.cta === "create_task" || data.cta === "schedule_meeting") { onCreateTask(); return; }
+    // "none" or unknown CTA — no-op
   };
   return (
     <div className={`flex items-start gap-3 rounded-lg border px-3 py-2 ${cfg.border}`} data-testid="precall-nba-strip">
@@ -237,16 +241,20 @@ export function PreCallPlanner({
     if (open) setNarrativeEnabled(true);
   }, [open]);
 
-  // Pre-set first contact when dialog opens
-  useEffect(() => {
-    if (open && contacts.length > 0 && !logContactId) {
-      setLogContactId(contacts[0].id);
+  // ── Precomputed touchpoint map (O(n) build, avoids repeated filter+sort per contact) ──
+
+  const lastTouchByContactId = useMemo<Map<string, Touchpoint>>(() => {
+    const map = new Map<string, Touchpoint>();
+    for (const tp of touchpoints) {
+      const existing = map.get(tp.contactId);
+      if (!existing || tp.date > existing.date) map.set(tp.contactId, tp);
     }
-  }, [open, contacts]);
+    return map;
+  }, [touchpoints]);
 
   // ── Data fetches ─────────────────────────────────────────────────────────────
 
-  const touchpointsWithNotes = touchpoints.filter(t => t.notes?.trim());
+  const touchpointsWithNotes = useMemo(() => touchpoints.filter(t => t.notes?.trim()), [touchpoints]);
 
   const { data: relFreightData } = useQuery<{ contacts: any[]; companyId: string }>({
     queryKey: ["/api/companies", company.id, "relationship-freight-summary"],
@@ -327,39 +335,60 @@ export function PreCallPlanner({
 
   // ── Derived data ──────────────────────────────────────────────────────────────
 
-  const companyRfps = rfps.filter(r => r.companyId === company.id);
-  const companyAwards = awards.filter(a => a.companyId === company.id);
-  const activeRfps = companyRfps.filter(r => r.status === "open" || r.status === "pending");
-  const inactiveRfps = companyRfps.filter(r => r.status !== "open" && r.status !== "pending");
-  const openTasks = tasks.filter(t => t.status !== "complete" && t.status !== "completed");
+  const companyRfps   = useMemo(() => rfps.filter(r => r.companyId === company.id), [rfps, company.id]);
+  const companyAwards = useMemo(() => awards.filter(a => a.companyId === company.id), [awards, company.id]);
+  const activeRfps    = useMemo(() => companyRfps.filter(r => r.status === "open" || r.status === "pending"), [companyRfps]);
+  const inactiveRfps  = useMemo(() => companyRfps.filter(r => r.status !== "open" && r.status !== "pending"), [companyRfps]);
+  const openTasks     = useMemo(() => tasks.filter(t => t.status !== "complete" && t.status !== "completed"), [tasks]);
 
-  const urgentRfps = activeRfps.filter(r => {
+  const urgentRfps = useMemo(() => activeRfps.filter(r => {
     if (!r.dueDate) return false;
     const days = Math.ceil((new Date(r.dueDate).getTime() - Date.now()) / 86400000);
     return days >= 0 && days <= 14;
-  });
+  }), [activeRfps]);
 
-  const sortedContacts = [...contacts].sort((a, b) => {
+  // Sorted contacts: uses lastTouchByContactId map — no per-pair filter/sort
+  const sortedContacts = useMemo(() => [...contacts].sort((a, b) => {
     const pa = contactBasePriority((a as any).relationshipBase);
     const pb = contactBasePriority((b as any).relationshipBase);
     if (pa !== pb) return pa - pb;
-    const la = touchpoints.filter(t => t.contactId === a.id).sort((x, y) => y.date.localeCompare(x.date))[0]?.date ?? "";
-    const lb = touchpoints.filter(t => t.contactId === b.id).sort((x, y) => y.date.localeCompare(x.date))[0]?.date ?? "";
+    const la = lastTouchByContactId.get(a.id)?.date ?? "";
+    const lb = lastTouchByContactId.get(b.id)?.date ?? "";
     return lb.localeCompare(la);
-  });
+  }), [contacts, lastTouchByContactId]);
 
-  const lastMeaningful = [...touchpoints]
-    .filter(t => (t as any).isMeaningful)
-    .sort((a, b) => b.date.localeCompare(a.date))[0];
+  const lastMeaningful = useMemo(() =>
+    touchpoints
+      .filter(t => (t as any).isMeaningful)
+      .sort((a, b) => b.date.localeCompare(a.date))[0] ?? null,
+  [touchpoints]);
 
-  const last3Touchpoints = [...touchpoints]
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, 3);
+  const last3Touchpoints = useMemo(() =>
+    [...touchpoints].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3),
+  [touchpoints]);
 
   const hasAccountIntel = !!(
     company.accountQuirks || company.spotProcess ||
     company.tenderStyle  || company.dlEmail      || company.processNotes
   );
+
+  // ── Best contact preselection for footer actions ──────────────────────────────
+  // Priority: 1) highest relationship base  2) most recently touched  3) first in list
+  const pickBestContact = useCallback((): string => {
+    if (contacts.length === 0) return "";
+    const withBase = contacts.filter(c => normalizeBase((c as any).relationshipBase) !== null);
+    if (withBase.length > 0) {
+      return withBase.reduce((best, c) =>
+        contactBasePriority((c as any).relationshipBase) < contactBasePriority((best as any).relationshipBase) ? c : best
+      ).id;
+    }
+    const mostRecent = contacts.reduce((best, c) => {
+      const la = lastTouchByContactId.get(best.id)?.date ?? "";
+      const lb = lastTouchByContactId.get(c.id)?.date ?? "";
+      return lb > la ? c : best;
+    });
+    return mostRecent.id;
+  }, [contacts, lastTouchByContactId]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────────
 
@@ -413,11 +442,11 @@ export function PreCallPlanner({
     win.print();
   };
 
-  const openLogTouch = (type: string) => {
+  const openLogTouch = useCallback((type: string) => {
     setLogType(type);
-    if (contacts.length > 0) setLogContactId(contacts[0].id);
+    setLogContactId(pickBestContact());
     setLogOpen(true);
-  };
+  }, [pickBestContact]);
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -520,6 +549,11 @@ export function PreCallPlanner({
               <NbaStrip
                 companyId={company.id}
                 onLogTouch={() => openLogTouch("call")}
+                onComposeEmail={() => {
+                  // Open Outlook compose toward the best contact available
+                  const best = sortedContacts.find(c => c.email) ?? null;
+                  setComposeTarget(best);
+                }}
                 onCreateTask={() => setTaskOpen(true)}
               />
             </section>
@@ -560,9 +594,7 @@ export function PreCallPlanner({
               ) : (
                 <div className="space-y-2">
                   {sortedContacts.slice(0, 6).map(c => {
-                    const lastTp = touchpoints
-                      .filter(t => t.contactId === c.id)
-                      .sort((a, b) => b.date.localeCompare(a.date))[0];
+                    const lastTp = lastTouchByContactId.get(c.id) ?? null;
                     const relContact = relFreightData?.contacts?.find((rc: any) => rc.id === c.id);
                     const bKey = normalizeBase((c as any).relationshipBase);
                     const hasNoBase = !bKey;
