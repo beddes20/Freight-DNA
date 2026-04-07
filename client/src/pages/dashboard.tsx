@@ -969,6 +969,13 @@ export default function Dashboard() {
         </PortletErrorBoundary>
       )}
 
+      {/* ── NBA Phase 1 Persistent Cards — Today's Priorities ───────────────── */}
+      {(isAm || isNam) && (
+        <PortletErrorBoundary label="NBA Today's Priorities">
+          <NbaDashboardPanel userRole={currentUser?.role ?? ""} isAdmin={isAdmin} />
+        </PortletErrorBoundary>
+      )}
+
       {/* ── "Do This First" — NBA priority actions (top of dashboard) ─────── */}
       {!isLmRole && (
         <PortletErrorBoundary label="Priority Actions">
@@ -1186,13 +1193,6 @@ export default function Dashboard() {
               localStorage.setItem("dash_weekly_commitments_collapsed", String(next));
             }}
           />
-        </PortletErrorBoundary>
-      )}
-
-      {/* ── NBA Phase 1 Persistent Cards — Today's Priorities ───────────────── */}
-      {(isAm || isNam) && (
-        <PortletErrorBoundary label="NBA Today's Priorities">
-          <NbaDashboardPanel userRole={currentUser?.role ?? ""} isAdmin={isAdmin} />
         </PortletErrorBoundary>
       )}
 
