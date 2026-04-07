@@ -170,8 +170,17 @@ interface TouchpointsTodayPortletProps {
 }
 
 export function TouchpointsTodayPortlet({ collapsed, onToggle }: TouchpointsTodayPortletProps) {
+  // Compute the user's local date (YYYY-MM-DD) once per render so the query
+  // key and URL always reflect the caller's timezone — not the server's UTC clock.
+  const localDate = new Date().toLocaleDateString("en-CA"); // reliable YYYY-MM-DD
+
   const { data: touchpoints = [], isLoading, isError } = useQuery<TodayTouchpoint[]>({
-    queryKey: ["/api/touchpoints/today"],
+    queryKey: ["/api/touchpoints/today", localDate],
+    queryFn: async () => {
+      const res = await fetch(`/api/touchpoints/today?date=${localDate}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch today's touchpoints");
+      return res.json();
+    },
     refetchInterval: 120000,
   });
 

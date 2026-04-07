@@ -5287,7 +5287,12 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const todayStr = new Date().toISOString().slice(0, 10);
+      // Use client-supplied local date so the window stays correct all day for
+      // users in any timezone (e.g. Mountain Time flips past midnight UTC at 5 pm,
+      // which previously zeroed out the list for the rest of the evening).
+      const todayStr = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date
+        : new Date().toISOString().slice(0, 10);
 
       const [allTodayTps, allOrgUsers, allOrgCompanies] = await Promise.all([
         storage.getTouchpointsSince(todayStr),
