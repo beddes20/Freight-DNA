@@ -42,6 +42,7 @@ import { LmCareerPanel } from "@/components/lm-career-panel";
 import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
 import { AccountGrowthPortlet } from "@/components/account-growth-portlet";
+import { NextBestActionsPortlet } from "@/components/next-best-actions-portlet";
 import { DashboardActivitySheet, type PortletType } from "@/components/dashboard-activity-sheet";
 import { RelationshipDashboardSection } from "@/components/relationship-freight-portlet";
 import { useDashboardLayout } from "@/hooks/use-dashboard-layout";
@@ -100,6 +101,7 @@ export default function Dashboard() {
       return next;
     });
   };
+  const [nbaBriefingCollapsed, setNbaBriefingCollapsed] = useState(() => localStorage.getItem("dash_nba_briefing_collapsed") === "true");
   const [accountGrowthCollapsed, setAccountGrowthCollapsed] = useState(() => localStorage.getItem("dash_account_growth_collapsed") === "true");
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
   const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") === "true");
@@ -904,6 +906,20 @@ export default function Dashboard() {
         collapsed={touchpointsTodayCollapsed}
         onToggle={toggleTouchpointsToday}
       />
+
+      {/* ── Priority Actions Today (NBA) ────────────────────────────────────── */}
+      {!isLmRole && (
+        <PortletErrorBoundary label="Priority Actions">
+          <NextBestActionsPortlet
+            collapsed={nbaBriefingCollapsed}
+            onToggle={() => {
+              const next = !nbaBriefingCollapsed;
+              setNbaBriefingCollapsed(next);
+              localStorage.setItem("dash_nba_briefing_collapsed", String(next));
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
 
       {/* ── Account Growth Score ─────────────────────────────────────────────── */}
       {!isLmRole && companies && companies.length > 0 && (

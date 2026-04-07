@@ -4996,8 +4996,13 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
+      // Fetch all org companies once — used for both name lookup and admin visibility.
+      const allCompanies = await storage.getCompanies(user.organizationId);
+      const nameMap = new Map(allCompanies.map(c => [c.id, c.name]));
+
+      // null means admin / all-access; otherwise filter to RBAC-visible IDs.
       const rawIds = await getVisibleCompanyIds(user);
-      const visibleIds: string[] = rawIds ?? [];
+      const visibleIds: string[] = rawIds ?? allCompanies.map(c => c.id);
       if (visibleIds.length === 0) return res.json({ items: [], totalEvaluated: 0 });
 
       // Pull cached growth scores to order evaluations (at_risk first).
@@ -5009,10 +5014,6 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         const rb = BAND_RANK[scoreMap.get(b) ?? ""] ?? 4;
         return ra - rb;
       }).slice(0, MAX_BATCH);
-
-      // Build company name map for enrichment (single query).
-      const allCompanies = await storage.getCompanies(user.organizationId);
-      const nameMap = new Map(allCompanies.map(c => [c.id, c.name]));
 
       // Run engine for each company — use cache when available.
       const now = Date.now();
