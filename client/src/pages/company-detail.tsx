@@ -1343,6 +1343,17 @@ export default function CompanyDetail() {
             totalAwardValue={totalAwardValue}
             companyId={companyId}
             companyName={company!.name}
+            onNbaLogTouch={() => setQuickTouchOpen(true)}
+            onNbaCreateTask={() => setTaskDialogOpen(true)}
+            onNbaViewRfp={() => {
+              setDetailTab("rfp");
+              localStorage.setItem("cd_tab", "rfp");
+              setTimeout(() => {
+                document
+                  .querySelector('[data-testid="tab-detail-rfp"]')
+                  ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              }, 50);
+            }}
           />
         </TabsContent>
 

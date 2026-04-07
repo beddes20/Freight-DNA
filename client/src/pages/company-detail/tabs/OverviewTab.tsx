@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BarChart3, Trophy, TrendingUp, DollarSign } from "lucide-react";
 import { RelationshipFreightCompanyPortlet } from "@/components/relationship-freight-portlet";
+import { NextBestActionCard } from "@/components/next-best-action-card";
 import { fmtMoney } from "@/lib/rep-utils";
 import type { Rfp } from "@shared/schema";
 import type { AccountPerf, MonthBucket } from "../types";
@@ -18,6 +19,9 @@ interface OverviewTabProps {
   totalAwardValue: number;
   companyId: string;
   companyName: string;
+  onNbaLogTouch?: () => void;
+  onNbaCreateTask?: () => void;
+  onNbaViewRfp?: () => void;
 }
 
 export function OverviewTab({
@@ -31,6 +35,9 @@ export function OverviewTab({
   totalAwardValue,
   companyId,
   companyName,
+  onNbaLogTouch,
+  onNbaCreateTask,
+  onNbaViewRfp,
 }: OverviewTabProps) {
   const fmtMonth = (key: string) => {
     const [y, mo] = key.split("-");
@@ -76,6 +83,13 @@ export function OverviewTab({
 
   return (
     <>
+      <NextBestActionCard
+        companyId={companyId}
+        onLogTouch={onNbaLogTouch}
+        onCreateTask={onNbaCreateTask}
+        onViewRfp={onNbaViewRfp}
+      />
+
       {accountPerf && (
         <Card data-testid="card-account-performance">
           <CardHeader className="pb-3">
