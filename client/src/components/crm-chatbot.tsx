@@ -367,15 +367,18 @@ export function CrmChatbot() {
           if (matchedContact) contactId = matchedContact.id;
         }
 
-        await apiRequest("POST", "/api/touchpoints", {
-          companyId: matchedCompany?.id || null,
+        if (!matchedCompany?.id) throw new Error("Company not found — cannot log touchpoint without a valid company");
+        await apiRequest("POST", "/api/touch-logs", {
+          companyId: matchedCompany.id,
           contactId,
           type: action.args.type || "call",
           notes: action.args.note || "",
           date: new Date().toISOString().slice(0, 10),
           isMeaningful: false,
         });
+        qc.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
         qc.invalidateQueries({ queryKey: ["/api/touchpoints"] });
+        qc.invalidateQueries({ queryKey: ["/api/growth-scores"] });
       } else if (action.tool === "create_task") {
         await apiRequest("POST", "/api/tasks", {
           title: action.args.title,

@@ -223,6 +223,8 @@ export default function Customers() {
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/growth-scores"] });
       toast({ title: "Touch logged!" });
       buildAiToasts(data?.aiInsights, data?.autoTask, toast);
       setQuickTouch(null);

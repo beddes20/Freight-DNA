@@ -669,6 +669,8 @@ export default function CompanyDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "touchpoints"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "touch-logs"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/growth-scores"] });
       toast({ title: "Touch logged!" });
       buildAiToasts(data?.aiInsights, data?.autoTask, toast);
       setQuickTouchOpen(false);
