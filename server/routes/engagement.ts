@@ -31,7 +31,7 @@ async function getVisibleFeedAuthorIds(user: UserSlim): Promise<string[]> {
 export function registerEngagementRoutes(app: Express) {
   // ── Callouts ─────────────────────────────────────────────────────────────
 
-  app.get("/api/callouts", async (req, res) => {
+  app.get("/api/callouts", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -51,7 +51,7 @@ export function registerEngagementRoutes(app: Express) {
     }
   });
 
-  app.get("/api/callouts/company/:companyId", async (req, res) => {
+  app.get("/api/callouts/company/:companyId", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -65,7 +65,7 @@ export function registerEngagementRoutes(app: Express) {
     }
   });
 
-  app.post("/api/callouts", async (req, res) => {
+  app.post("/api/callouts", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -126,7 +126,7 @@ export function registerEngagementRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/callouts/:id", async (req, res) => {
+  app.delete("/api/callouts/:id", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -249,7 +249,7 @@ export function registerEngagementRoutes(app: Express) {
 
   // ── Feed Posts (Trends / Growth / Ideas) ─────────────────────────────────
 
-  app.get("/api/feed-posts", async (req, res) => {
+  app.get("/api/feed-posts", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -268,7 +268,7 @@ export function registerEngagementRoutes(app: Express) {
     }
   });
 
-  app.post("/api/feed-posts", async (req, res) => {
+  app.post("/api/feed-posts", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -350,7 +350,7 @@ export function registerEngagementRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/feed-posts/:id", async (req, res) => {
+  app.delete("/api/feed-posts/:id", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -366,7 +366,7 @@ export function registerEngagementRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/feed-posts/:id/pin", async (req, res) => {
+  app.patch("/api/feed-posts/:id/pin", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -445,7 +445,7 @@ export function registerEngagementRoutes(app: Express) {
 
   // ── Callout Reactions ──────────────────────────────────────────────────────
 
-  app.get("/api/callouts/reactions", async (req, res) => {
+  app.get("/api/callouts/reactions", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -475,7 +475,7 @@ export function registerEngagementRoutes(app: Express) {
     }
   });
 
-  app.post("/api/callouts/:id/reactions", async (req, res) => {
+  app.post("/api/callouts/:id/reactions", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -498,7 +498,7 @@ export function registerEngagementRoutes(app: Express) {
 
   // ── Feed Post Reactions ─────────────────────────────────────────────────────
 
-  app.get("/api/feed/reactions", async (req, res) => {
+  app.get("/api/feed/reactions", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -520,7 +520,7 @@ export function registerEngagementRoutes(app: Express) {
     }
   });
 
-  app.post("/api/feed/:id/reactions", async (req, res) => {
+  app.post("/api/feed/:id/reactions", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });

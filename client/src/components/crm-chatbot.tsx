@@ -381,6 +381,8 @@ export function CrmChatbot() {
         qc.invalidateQueries({ queryKey: ["/api/growth-scores"] });
         qc.invalidateQueries({ queryKey: ["/api/next-best-actions"] });
         qc.invalidateQueries({ queryKey: ["/api/companies", matchedCompany.id, "next-best-action"] });
+        // Refresh company list so last-touch metrics update on customer cards
+        qc.invalidateQueries({ queryKey: ["/api/companies"] });
       } else if (action.tool === "create_task") {
         await apiRequest("POST", "/api/tasks", {
           title: action.args.title,

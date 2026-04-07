@@ -1,11 +1,11 @@
 import type { Express } from "express";
 import { storage } from "../storage";
-import { getCurrentUser, canAccessCompany } from "../auth";
+import { getCurrentUser, canAccessCompany, requireAuth } from "../auth";
 
 export function registerTaskRoutes(app: Express) {
   // ── Task Assignment ──────────────────────────────────────────────────────────
 
-  app.get("/api/tasks", async (req, res) => {
+  app.get("/api/tasks", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -26,7 +26,7 @@ export function registerTaskRoutes(app: Express) {
     }
   });
 
-  app.get("/api/tasks/company/:companyId", async (req, res) => {
+  app.get("/api/tasks/company/:companyId", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -41,7 +41,7 @@ export function registerTaskRoutes(app: Express) {
     }
   });
 
-  app.post("/api/tasks", async (req, res) => {
+  app.post("/api/tasks", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -112,7 +112,7 @@ export function registerTaskRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/tasks/:id", async (req, res) => {
+  app.patch("/api/tasks/:id", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -187,7 +187,7 @@ export function registerTaskRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/tasks/:id", async (req, res) => {
+  app.delete("/api/tasks/:id", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -205,7 +205,7 @@ export function registerTaskRoutes(app: Express) {
 
   // ── Task Comments ────────────────────────────────────────────────────────
 
-  app.get("/api/tasks/:id/comments", async (req, res) => {
+  app.get("/api/tasks/:id/comments", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -216,7 +216,7 @@ export function registerTaskRoutes(app: Express) {
     }
   });
 
-  app.post("/api/tasks/:id/comments", async (req, res) => {
+  app.post("/api/tasks/:id/comments", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -253,7 +253,7 @@ export function registerTaskRoutes(app: Express) {
     }
   });
 
-  app.post("/api/tasks/:id/bump", async (req, res) => {
+  app.post("/api/tasks/:id/bump", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -281,7 +281,7 @@ export function registerTaskRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/tasks/:taskId/comments/:commentId", async (req, res) => {
+  app.delete("/api/tasks/:taskId/comments/:commentId", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });

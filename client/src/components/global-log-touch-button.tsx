@@ -92,6 +92,8 @@ export function GlobalLogTouchButton() {
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
       queryClient.invalidateQueries({ queryKey: ["/api/growth-scores"] });
       queryClient.invalidateQueries({ queryKey: ["/api/next-best-actions"] });
+      // Refresh the customer list so last-touch metrics update on company cards
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
       toast({ title: "Touch logged successfully" });
       handleClose();
     },

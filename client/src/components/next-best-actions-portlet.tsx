@@ -7,6 +7,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { STALE_15MIN } from "@/lib/queryClient";
 import { useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -86,7 +87,7 @@ export function NextBestActionsPortlet({ collapsed, onToggle }: NextBestActionsP
 
   const { data, isLoading, isError } = useQuery<NbaBatchResponse>({
     queryKey: ["/api/next-best-actions"],
-    staleTime: 15 * 60 * 1000, // 15 min — server-side cache is 30 min
+    staleTime: STALE_15MIN, // server-side NBA cache is 30 min; client refreshes at 15 min
   });
 
   const items = data?.items ?? [];

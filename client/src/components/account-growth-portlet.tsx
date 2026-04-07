@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { STALE_1MIN } from "@/lib/queryClient";
 import { useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -127,7 +128,7 @@ export function AccountGrowthPortlet({ companies, collapsed, onToggle }: Account
 
   const { data: scores = [], isLoading } = useQuery<GrowthScoreEntry[]>({
     queryKey: ["/api/growth-scores"],
-    staleTime: 2 * 60 * 1000, // 2 min — ensures background-computed scores surface quickly
+    staleTime: STALE_1MIN, // scores are background-computed; keep fresh so new touches reflect quickly
     refetchOnWindowFocus: true,
   });
 

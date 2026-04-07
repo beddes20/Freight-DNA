@@ -1,5 +1,23 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+// ── Named stale-time constants ────────────────────────────────────────────────
+// Use these instead of inline millisecond literals so cache behaviour is
+// uniform and easy to reason about across the codebase.
+//
+//  STALE_REALTIME  –  30 s   touch-today, live alerts, anything updated by the
+//                             current user in the current session
+//  STALE_1MIN      –  1 min  notifications, NBA surfaces, growth scores
+//  STALE_5MIN      –  5 min  default – company list, contacts, tasks, RFPs
+//  STALE_15MIN     – 15 min  heavier computed data – corridors, historical,
+//                             carrier metrics (server cache is ~30 min)
+//  STALE_NEVER     –  ∞     truly static reference data (templates, zip DB)
+//
+export const STALE_REALTIME = 30_000;
+export const STALE_1MIN    = 60_000;
+export const STALE_5MIN    = 5 * 60_000;
+export const STALE_15MIN   = 15 * 60_000;
+export const STALE_NEVER   = Infinity;
+
 function redirectToLogin() {
   if (!window.location.pathname.startsWith("/login")) {
     window.location.href = "/login";
@@ -48,7 +66,7 @@ export const getQueryFn: <T>(options: {
       if (unauthorizedBehavior === "returnNull") return null;
       // Do NOT hard-redirect here — background polls getting a 401 should not
       // kick the user out of the app. Let the auth state manager (useAuth /
-      // App.tsx) handle session expiry gracefully on the next window focus.
+      // App.tsx) handle session expiry gracefully.
       throw new Error("Unauthorized");
     }
 
@@ -61,8 +79,15 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
+      // Refresh data when the user returns to the tab — this is the primary
+      // mechanism that keeps the dashboard/company detail fresh after a rep
+      // logs a touchpoint in another tab or window.
+      refetchOnWindowFocus: true,
+      // 5-minute global default. Queries that need fresher data override this
+      // individually using the named constants exported above.
+      // Previously Infinity — changed to prevent reps from seeing stale
+      // company, task, and touchpoint data throughout a session.
+      staleTime: STALE_5MIN,
       retry: false,
     },
     mutations: {

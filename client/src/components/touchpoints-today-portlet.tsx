@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { STALE_REALTIME } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -181,6 +182,7 @@ export function TouchpointsTodayPortlet({ collapsed, onToggle }: TouchpointsToda
       if (!res.ok) throw new Error("Failed to fetch today's touchpoints");
       return res.json();
     },
+    staleTime: STALE_REALTIME,   // 30 s — shows newly logged touches quickly
     refetchInterval: 120000,
   });
 

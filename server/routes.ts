@@ -579,6 +579,9 @@ RULES FOR YOUR RESPONSES:
 - Never be defensive or argue. If they have a criticism, acknowledge it and pivot to what the platform does well.
 - You can sign off messages as "Dana" occasionally but don't overdo it.`;
 
+  // PUBLIC — no requireAuth. This endpoint is called from the marketing landing
+  // page by unauthenticated visitors. It only accesses the AI model, never any
+  // org data. Rate limiting via OpenAI token cap (max_tokens: 400).
   app.post("/api/marketing-chat", async (req, res) => {
     try {
       const { messages } = req.body as { messages: { role: string; content: string }[] };
@@ -613,7 +616,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/search", async (req, res) => {
+  app.get("/api/search", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -652,7 +655,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/users", async (req, res) => {
+  app.get("/api/users", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -682,7 +685,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/users", async (req, res) => {
+  app.post("/api/users", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -721,7 +724,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/users/bulk-import", upload.single("file"), async (req, res) => {
+  app.post("/api/users/bulk-import", requireAuth, upload.single("file"), async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -776,7 +779,7 @@ RULES FOR YOUR RESPONSES:
   });
 
   // ── Import templates download ────────────────────────────────────────────
-  app.get("/api/import-templates/:type", async (req, res) => {
+  app.get("/api/import-templates/:type", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -825,7 +828,7 @@ RULES FOR YOUR RESPONSES:
   });
 
   // ── Companies bulk import ────────────────────────────────────────────────
-  app.post("/api/companies/bulk-import", upload.single("file"), async (req, res) => {
+  app.post("/api/companies/bulk-import", requireAuth, upload.single("file"), async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -889,7 +892,7 @@ RULES FOR YOUR RESPONSES:
   });
 
   // ── Contacts global bulk import ──────────────────────────────────────────
-  app.post("/api/contacts/bulk-import", upload.single("file"), async (req, res) => {
+  app.post("/api/contacts/bulk-import", requireAuth, upload.single("file"), async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -941,7 +944,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.patch("/api/users/:id", async (req, res) => {
+  app.patch("/api/users/:id", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -992,7 +995,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.delete("/api/users/:id", async (req, res) => {
+  app.delete("/api/users/:id", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1016,7 +1019,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/companies", async (req, res) => {
+  app.get("/api/companies", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1037,7 +1040,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/companies/:id", async (req, res) => {
+  app.get("/api/companies/:id", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1120,7 +1123,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/team-members", async (req, res) => {
+  app.get("/api/team-members", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1187,7 +1190,7 @@ RULES FOR YOUR RESPONSES:
     }
   }
 
-  app.post("/api/companies", async (req, res) => {
+  app.post("/api/companies", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1227,7 +1230,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.patch("/api/companies/:id", async (req, res) => {
+  app.patch("/api/companies/:id", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1285,7 +1288,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.patch("/api/companies/:id/reassign", async (req, res) => {
+  app.patch("/api/companies/:id/reassign", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1325,7 +1328,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.delete("/api/companies/:id", async (req, res) => {
+  app.delete("/api/companies/:id", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1343,7 +1346,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/companies/:id/archive", async (req, res) => {
+  app.post("/api/companies/:id/archive", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1358,7 +1361,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/companies/:id/unarchive", async (req, res) => {
+  app.post("/api/companies/:id/unarchive", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1373,7 +1376,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/contacts", async (req, res) => {
+  app.get("/api/contacts", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1392,7 +1395,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/companies/:companyId/contacts", async (req, res) => {
+  app.get("/api/companies/:companyId/contacts", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1407,7 +1410,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/companies/:companyId/contacts", async (req, res) => {
+  app.post("/api/companies/:companyId/contacts", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1444,7 +1447,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/companies/:companyId/contacts/bulk-import", async (req, res) => {
+  app.post("/api/companies/:companyId/contacts/bulk-import", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1476,7 +1479,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.patch("/api/contacts/:id", async (req, res) => {
+  app.patch("/api/contacts/:id", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1530,7 +1533,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.delete("/api/contacts/:id", async (req, res) => {
+  app.delete("/api/contacts/:id", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1564,7 +1567,7 @@ RULES FOR YOUR RESPONSES:
   });
 
   // Cross-RFP lane search: search origin/destination across all uploaded RFP lane data
-  app.get("/api/rfps/lane-search", async (req, res) => {
+  app.get("/api/rfps/lane-search", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1693,7 +1696,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/rfps", async (req, res) => {
+  app.get("/api/rfps", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1712,7 +1715,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/rfps", async (req, res) => {
+  app.post("/api/rfps", requireAuth, async (req, res) => {
     try {
       const parsed = insertRfpSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -1726,7 +1729,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/rfps/preview-headers", upload.single("file"), async (req, res) => {
+  app.post("/api/rfps/preview-headers", requireAuth, upload.single("file"), async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) {
@@ -1944,7 +1947,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/rfps/upload", upload.single("file"), async (req, res) => {
+  app.post("/api/rfps/upload", requireAuth, upload.single("file"), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -2115,7 +2118,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/rfps/upload-pdf", async (req, res) => {
+  app.post("/api/rfps/upload-pdf", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -2165,7 +2168,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/rfps/:id", async (req, res) => {
+  app.patch("/api/rfps/:id", requireAuth, async (req, res) => {
     try {
       const existing = await storage.getRfp((req.params.id as string));
       if (!existing) {
@@ -2183,7 +2186,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/rfps/:id/lanes/:laneIndex/status", async (req, res) => {
+  app.patch("/api/rfps/:id/lanes/:laneIndex/status", requireAuth, async (req, res) => {
     try {
       const rfp = await storage.getRfp((req.params.id as string));
       if (!rfp) {
@@ -2218,7 +2221,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/research-tasks", async (req, res) => {
+  app.get("/api/research-tasks", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -2263,7 +2266,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/companies/:id/lane-patterns", async (req, res) => {
+  app.get("/api/companies/:id/lane-patterns", requireAuth, async (req, res) => {
     try {
       const companyId = (req.params.id as string);
       const allRfps = await storage.getRfps();
@@ -2405,7 +2408,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/companies/:id/facility-coverage", async (req, res) => {
+  app.get("/api/companies/:id/facility-coverage", requireAuth, async (req, res) => {
     try {
       const companyId = (req.params.id as string);
       const allRfps = await storage.getRfps();
@@ -2520,7 +2523,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/rfps/:id", async (req, res) => {
+  app.delete("/api/rfps/:id", requireAuth, async (req, res) => {
     try {
       const deleted = await storage.deleteRfp((req.params.id as string));
       if (!deleted) {
@@ -2533,7 +2536,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/awards", async (req, res) => {
+  app.get("/api/awards", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -2552,7 +2555,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/awards", async (req, res) => {
+  app.post("/api/awards", requireAuth, async (req, res) => {
     try {
       const parsed = insertAwardSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -2566,7 +2569,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/awards/:id", async (req, res) => {
+  app.patch("/api/awards/:id", requireAuth, async (req, res) => {
     try {
       const existing = await storage.getAward((req.params.id as string));
       if (!existing) {
@@ -2584,7 +2587,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/awards/:id", async (req, res) => {
+  app.delete("/api/awards/:id", requireAuth, async (req, res) => {
     try {
       const deleted = await storage.deleteAward((req.params.id as string));
       if (!deleted) {
@@ -2599,7 +2602,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   // ── Market Share ──────────────────────────────────────────────────────────
 
-  app.get("/api/companies/:id/market-share", async (req, res) => {
+  app.get("/api/companies/:id/market-share", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -2612,7 +2615,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   // Auto-calculate monthly load counts from financial data for a given company
-  app.get("/api/companies/:id/market-share/auto-calc", async (req, res) => {
+  app.get("/api/companies/:id/market-share/auto-calc", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -2668,7 +2671,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/companies/:id/market-share", async (req, res) => {
+  app.post("/api/companies/:id/market-share", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -2685,7 +2688,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/companies/:id/market-share/upload", upload.single("file"), async (req, res) => {
+  app.post("/api/companies/:id/market-share/upload", requireAuth, upload.single("file"), async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -2749,7 +2752,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/market-share/:id", async (req, res) => {
+  app.patch("/api/market-share/:id", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -2762,7 +2765,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/market-share/:id", async (req, res) => {
+  app.delete("/api/market-share/:id", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -2776,7 +2779,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   // Market share summary: all companies visible to user, with latest % + trend
-  app.get("/api/market-share/summary", async (req, res) => {
+  app.get("/api/market-share/summary", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -3329,7 +3332,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/one-on-one/session", async (req, res) => {
+  app.get("/api/one-on-one/session", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3346,7 +3349,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/one-on-one/pairings", async (req, res) => {
+  app.get("/api/one-on-one/pairings", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3402,7 +3405,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/one-on-one/topics", async (req, res) => {
+  app.post("/api/one-on-one/topics", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3445,7 +3448,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/one-on-one/topics/:id/toggle", async (req, res) => {
+  app.patch("/api/one-on-one/topics/:id/toggle", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3462,7 +3465,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/one-on-one/topics/:id", async (req, res) => {
+  app.delete("/api/one-on-one/topics/:id", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3480,7 +3483,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   // Topic replies — threaded dialogue within a 1:1 topic
-  app.get("/api/one-on-one/topics/:id/replies", async (req, res) => {
+  app.get("/api/one-on-one/topics/:id/replies", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3493,7 +3496,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/one-on-one/topics/:id/replies", async (req, res) => {
+  app.post("/api/one-on-one/topics/:id/replies", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3529,7 +3532,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/one-on-one/topic-replies/:id", async (req, res) => {
+  app.delete("/api/one-on-one/topic-replies/:id", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3541,7 +3544,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/one-on-one/sessions/:id/close", async (req, res) => {
+  app.post("/api/one-on-one/sessions/:id/close", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3573,7 +3576,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/one-on-one/sessions/:id/generate-summary", async (req, res) => {
+  app.post("/api/one-on-one/sessions/:id/generate-summary", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3620,7 +3623,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
-  app.get("/api/one-on-one/archived", async (req, res) => {
+  app.get("/api/one-on-one/archived", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -5720,7 +5723,7 @@ Respond with valid JSON only:
     }
   });
 
-  app.get("/api/companies/:id/vendor-routed", async (req, res) => {
+  app.get("/api/companies/:id/vendor-routed", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -5735,7 +5738,7 @@ Respond with valid JSON only:
     }
   });
 
-  app.post("/api/companies/:id/vendor-routed/toggle", async (req, res) => {
+  app.post("/api/companies/:id/vendor-routed/toggle", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -6458,6 +6461,8 @@ Respond with valid JSON only:
     }
   });
 
+  // PUBLIC — no requireAuth. Contact/demo request form on the landing page;
+  // submitted by unauthenticated prospects.
   app.post("/api/demo-requests", async (req, res) => {
     try {
       const { insertDemoRequestSchema } = await import("@shared/schema");
