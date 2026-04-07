@@ -7307,8 +7307,10 @@ Respond with valid JSON only:
         contactFreightMap.set(contact.id, { loads, margin, contractedLoads, spotLoads, sharedLane });
       }
 
-      // seenForCompany tracks every row index claimed by any contact (for unattributed + total calc)
-      const seenForCompany = new Set<number>();
+      // seenForCompany tracks every row index claimed by any contact (for unattributed + total calc).
+      // claimedByHigher already accumulates all matched indices across all contacts by the end of
+      // the second pass — alias it here so the unattributed/total calc below can use it directly.
+      const seenForCompany = claimedByHigher;
 
       const contactResults = sortedContacts
         .map(contact => {
@@ -7502,7 +7504,8 @@ Respond with valid JSON only:
             grouped[base].spotLoads += m.spotLoads;
             m.matchedIndices.forEach(idx => seenForCompany.add(idx));
           } else {
-            // Phase 2: exclude broad state-only lane strings from dashboard rollup
+            // Phase 2: broad state-only lane strings are INCLUDED when they are the contact's sole
+            // attribution method; they are excluded only when more specific matchers also exist.
             const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || [], seenForCompany);
             grouped[base].loads += m.loads;
             grouped[base].margin += m.margin;

@@ -1353,6 +1353,10 @@ export default function CompanyDetail() {
                   ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
               }, 50);
             }}
+            onOpenContact={(contactId) => {
+              const contact = contacts?.find(c => c.id === contactId);
+              if (contact) setViewContact(contact);
+            }}
           />
         </TabsContent>
 

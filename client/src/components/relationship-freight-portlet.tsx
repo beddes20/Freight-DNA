@@ -158,9 +158,10 @@ interface CompanyContact {
 interface CompanyPortletProps {
   companyId: string;
   companyName?: string;
+  onOpenContact?: (contactId: string) => void;
 }
 
-export function RelationshipFreightCompanyPortlet({ companyId, companyName }: CompanyPortletProps) {
+export function RelationshipFreightCompanyPortlet({ companyId, companyName, onOpenContact }: CompanyPortletProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [addOpen, setAddOpen] = useState<string | null>(null); // contactId being edited
   const { toast } = useToast();
@@ -248,21 +249,74 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
                   </div>
                 );
               })}
-              {unattributedLoads > 0 && (
-                <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-muted/50 border border-dashed border-muted-foreground/30 text-xs text-muted-foreground" data-testid="callout-unattributed-loads">
-                  <div className="flex items-center gap-2">
-                    <Package className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span><strong>Unattributed Lanes:</strong> {unattributedLoads.toLocaleString()} load{unattributedLoads !== 1 ? "s" : ""} not claimed by any contact{unattributedMargin > 0 ? ` · ${fmt$(unattributedMargin)} margin` : ""}</span>
+              {unattributedLoads > 0 && (() => {
+                // Prefer a contact that already has attributions; fall back to any contact so reps
+                // can always start attributing — even if no contact has lanes yet.
+                const firstEligible = contacts.find(c => !c.hasNoAttribution) ?? contacts[0] ?? null;
+                return (
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-muted/50 border border-dashed border-muted-foreground/30 text-xs text-muted-foreground" data-testid="callout-unattributed-loads">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Package className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span><strong>Unattributed Lanes:</strong> {unattributedLoads.toLocaleString()} load{unattributedLoads !== 1 ? "s" : ""} not claimed by any contact{unattributedMargin > 0 ? ` · ${fmt$(unattributedMargin)} margin` : ""}</span>
+                    </div>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-[10px] text-amber-500 hover:text-amber-600 whitespace-nowrap shrink-0 disabled:opacity-40"
+                              disabled={!firstEligible}
+                              onClick={() => { if (firstEligible) setAddOpen(firstEligible.contactId); }}
+                              data-testid="button-add-lane-attribution"
+                            >
+                              <Plus className="w-3 h-3 mr-1" /> Add Lane Attribution
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        {!firstEligible && (
+                          <TooltipContent side="top" className="text-xs max-w-xs">
+                            No contacts found on this account. Add a contact first, then assign lane attributions.
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
-                  <span className="text-[10px] text-amber-500 whitespace-nowrap shrink-0">Add a Lane Attribution</span>
-                </div>
-              )}
-              {contacts.filter(c => c.relationshipBase === "unknown" && !c.hasNoAttribution).length > 0 && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-700 dark:text-amber-400" data-testid="callout-unassigned-contacts">
-                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span><strong>Unassigned Contacts:</strong> {contacts.filter(c => c.relationshipBase === "unknown" && !c.hasNoAttribution).length} contact{contacts.filter(c => c.relationshipBase === "unknown" && !c.hasNoAttribution).length !== 1 ? "s" : ""} have lanes but no relationship base — set their base to attribute freight correctly</span>
-                </div>
-              )}
+                );
+              })()}
+              {(() => {
+                const unassigned = contacts.filter(c => c.relationshipBase === "unknown" && !c.hasNoAttribution);
+                if (unassigned.length === 0) return null;
+                return (
+                  <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-700 dark:text-amber-400" data-testid="callout-unassigned-contacts">
+                    <div className="flex items-center gap-2 px-3 py-2">
+                      <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                      <strong>Unassigned Contacts:</strong>
+                      <span>{unassigned.length} contact{unassigned.length !== 1 ? "s" : ""} have lanes but no relationship base set</span>
+                    </div>
+                    <div className="border-t border-amber-200 dark:border-amber-800/40 divide-y divide-amber-200/60 dark:divide-amber-800/30">
+                      {unassigned.map(c => (
+                        <div key={c.contactId} className="flex items-center justify-between px-3 py-1.5" data-testid={`row-unassigned-contact-${c.contactId}`}>
+                          <div className="min-w-0">
+                            <p className="font-medium text-amber-800 dark:text-amber-300 truncate">{c.contactName}</p>
+                            {c.contactTitle && <p className="text-[10px] text-amber-600/70 dark:text-amber-400/70 truncate">{c.contactTitle}</p>}
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-[10px] text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 shrink-0 ml-2"
+                            onClick={() => onOpenContact?.(c.contactId)}
+                            data-testid={`button-set-base-${c.contactId}`}
+                          >
+                            Set Base
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 

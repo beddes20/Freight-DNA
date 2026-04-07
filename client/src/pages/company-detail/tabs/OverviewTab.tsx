@@ -22,6 +22,7 @@ interface OverviewTabProps {
   onNbaLogTouch?: () => void;
   onNbaCreateTask?: () => void;
   onNbaViewRfp?: () => void;
+  onOpenContact?: (contactId: string) => void;
 }
 
 export function OverviewTab({
@@ -38,6 +39,7 @@ export function OverviewTab({
   onNbaLogTouch,
   onNbaCreateTask,
   onNbaViewRfp,
+  onOpenContact,
 }: OverviewTabProps) {
   const fmtMonth = (key: string) => {
     const [y, mo] = key.split("-");
@@ -168,7 +170,7 @@ export function OverviewTab({
         </Card>
       )}
 
-      <RelationshipFreightCompanyPortlet companyId={companyId} companyName={companyName} />
+      <RelationshipFreightCompanyPortlet companyId={companyId} companyName={companyName} onOpenContact={onOpenContact} />
     </>
   );
 }
