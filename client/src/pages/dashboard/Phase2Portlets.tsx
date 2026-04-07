@@ -49,6 +49,8 @@ const LEVER_COLOR: Record<string, string> = {
   "Lane ID":              "bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300",
   "Spot-to-Contract":     "bg-green-100 text-green-600 dark:bg-green-900/40 dark:text-green-300",
   "Referral":             "bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300",
+  "Pipeline":             "bg-cyan-100 text-cyan-600 dark:bg-cyan-900/40 dark:text-cyan-300",
+  "QBR":                  "bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300",
   "Relationship Advance": "bg-violet-100 text-violet-600 dark:bg-violet-900/40 dark:text-violet-300",
 };
 

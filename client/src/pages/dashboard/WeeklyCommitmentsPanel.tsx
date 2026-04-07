@@ -245,9 +245,12 @@ export function WeeklyCommitmentsPanel({ collapsed, onToggle }: WeeklyCommitment
           {isLoading ? (
             <p className="text-sm text-muted-foreground py-3">Loading…</p>
           ) : total === 0 ? (
-            <p className="text-sm text-muted-foreground py-3">
-              No commitments yet this week. Hit "Commit to this" on any account, contact, or growth call below to lock in your moves.
-            </p>
+            <div className="py-3">
+              <p className="text-sm text-muted-foreground">No growth commitments yet this week.</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Pick one account below — one specific action, one lever, one deadline. That's it.
+              </p>
+            </div>
           ) : (
             <div className="divide-y" data-testid="commitments-list">
               {overdue.map(c => (
@@ -344,35 +347,49 @@ export function TeamCommitmentsPortlet({ collapsed, onToggle }: TeamCommitmentsP
 
       {!collapsed && (
         <CardContent className="pt-0 px-4 pb-4">
-          {/* Week toggle */}
-          <div className="flex items-center gap-1 mb-3">
-            <Button
-              variant={viewingWeek === "last" ? "secondary" : "ghost"}
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => setViewingWeek("last")}
-              data-testid="button-team-commitments-last-week"
-            >
-              Last week
-            </Button>
-            <Button
-              variant={viewingWeek === "current" ? "secondary" : "ghost"}
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => setViewingWeek("current")}
-              data-testid="button-team-commitments-this-week"
-            >
-              This week
-            </Button>
-            <span className="text-xs text-muted-foreground ml-1">{formatWeekRange(weekStart)}</span>
+          {/* Week toggle + coaching cue */}
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1">
+              <Button
+                variant={viewingWeek === "last" ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setViewingWeek("last")}
+                data-testid="button-team-commitments-last-week"
+              >
+                Last week
+              </Button>
+              <Button
+                variant={viewingWeek === "current" ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setViewingWeek("current")}
+                data-testid="button-team-commitments-this-week"
+              >
+                This week
+              </Button>
+              <span className="text-xs text-muted-foreground ml-1">{formatWeekRange(weekStart)}</span>
+            </div>
+            <span className="text-[10px] text-muted-foreground italic">
+              {viewingWeek === "last" ? "What happened?" : "What's left?"}
+            </span>
           </div>
 
           {isLoading ? (
             <p className="text-sm text-muted-foreground py-3">Loading…</p>
           ) : totalItems === 0 ? (
-            <p className="text-sm text-muted-foreground py-3">
-              No commitments logged for this week. AMs can commit to actions from the "Accounts Drifting," "Relationship Advancement," and "Top Growth Calls" portlets on their dashboard.
-            </p>
+            <div className="py-3">
+              <p className="text-sm text-muted-foreground">
+                {viewingWeek === "last"
+                  ? "No commitments were logged last week."
+                  : "No commitments logged yet this week."}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {viewingWeek === "last"
+                  ? "Encourage reps to commit to one specific growth action each week — tied to an account, a lever, and a deadline."
+                  : "Reps commit from the Accounts Drifting, Relationship Advancement, and Top Growth Calls portlets on their dashboard."}
+              </p>
+            </div>
           ) : (
             <div className="flex flex-col gap-4" data-testid="team-commitments-list">
               {userEntries.map(([userId, items]) => {
