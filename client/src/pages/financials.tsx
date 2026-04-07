@@ -781,20 +781,20 @@ export default function Financials() {
               ) : (
                 <>
                   <p className="text-xs text-muted-foreground">
-                    Enter a Microsoft Graph API URL or relative path for your Excel file. The app uses the configured Azure credentials to fetch it — no public sharing required. Syncs automatically on the first business day of each month, or trigger it manually below.
+                    Paste a OneDrive share link or a Microsoft Graph API URL for your Excel file. The app uses the configured Azure credentials to fetch it automatically. Syncs on the first business day of each month, or trigger it manually below.
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Accepted formats: <span className="font-mono">https://graph.microsoft.com/v1.0/drives/&#123;driveId&#125;/items/&#123;itemId&#125;/content</span> or a relative path like <span className="font-mono">drives/&#123;driveId&#125;/items/&#123;itemId&#125;</span>. A bare item ID alone is not sufficient — a driveId is always required.
+                    Accepted formats: <span className="font-mono text-blue-600 dark:text-blue-400">https://1drv.ms/x/...</span> (OneDrive "Share" link), <span className="font-mono">https://graph.microsoft.com/v1.0/drives/&#123;driveId&#125;/items/&#123;itemId&#125;/content</span>, or a relative path like <span className="font-mono">drives/&#123;driveId&#125;/items/&#123;itemId&#125;</span>.
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    The Azure app must have the <span className="font-mono font-medium">Files.Read.All</span> application permission granted in Azure Portal.
+                    The Azure app must have the <span className="font-mono font-medium">Files.Read.All</span> application permission granted in Azure Portal. Share links also require that the file is shared with <span className="font-medium">"Anyone with the link"</span> or that the Azure app has tenant-wide Files.Read.All access.
                   </p>
                   {editingUrl ? (
                     <div className="flex items-center gap-2">
                       <Input
                         value={oneDriveUrlInput}
                         onChange={e => setOneDriveUrlInput(e.target.value)}
-                        placeholder="https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}/content"
+                        placeholder="https://1drv.ms/x/... or Graph API URL"
                         className="text-sm flex-1"
                         data-testid="input-onedrive-url"
                       />

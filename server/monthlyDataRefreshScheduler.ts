@@ -137,13 +137,19 @@ export async function performOneDriveSync(uploadedBy: string): Promise<{ id: str
 
   // Determine the Graph API content URL from the configured value.
   // Supported formats:
-  //   1. Full Graph API URL: https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}/content
-  //   2. Drive item URL without /content suffix (append it automatically)
-  //   3. Relative path like /drives/{driveId}/items/{itemId} or drives/{driveId}/items/{itemId}
+  //   1. OneDrive share link: https://1drv.ms/... or https://onedrive.live.com/...
+  //   2. Full Graph API URL: https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}/content
+  //   3. Drive item URL without /content suffix (append it automatically)
+  //   4. Relative path like /drives/{driveId}/items/{itemId} or drives/{driveId}/items/{itemId}
   let contentUrl: string;
   const trimmed = filePath.trim();
 
-  if (trimmed.startsWith("https://graph.microsoft.com/")) {
+  if (trimmed.startsWith("https://1drv.ms/") || trimmed.startsWith("https://onedrive.live.com/") || trimmed.startsWith("https://sharepoint.com/") || trimmed.includes("sharepoint.com/")) {
+    // OneDrive/SharePoint share link — convert to Graph shares URL
+    // Encoding: "u!" + base64url(url) with no padding
+    const encoded = "u!" + Buffer.from(trimmed).toString("base64").replace(/=/g, "").replace(/\//g, "_").replace(/\+/g, "-");
+    contentUrl = `https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem/content`;
+  } else if (trimmed.startsWith("https://graph.microsoft.com/")) {
     // Already a full Graph URL — use as-is, but ensure it ends with /content
     contentUrl = trimmed.endsWith("/content") ? trimmed : `${trimmed}/content`;
   } else if (trimmed.startsWith("/") || trimmed.startsWith("drives/") || trimmed.startsWith("users/") || trimmed.startsWith("me/")) {
@@ -155,11 +161,12 @@ export async function performOneDriveSync(uploadedBy: string): Promise<{ id: str
     // Unrecognized format — surface a clear, actionable error
     throw new Error(
       `Unrecognized OneDrive path format. Please use one of these formats:\n` +
+      `  • Share link:   https://1drv.ms/x/... (paste the link from OneDrive "Share" dialog)\n` +
       `  • Full URL:     https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}/content\n` +
       `  • Relative:     drives/{driveId}/items/{itemId}\n` +
       `  • User path:    users/{userId}/drive/root:/{path-to-file}\n` +
-      `A standalone item ID is not supported — a driveId is required. ` +
-      `You can find both IDs in the Graph Explorer or by calling GET /me/drive/root/children.`
+      `Note: Share links require the Azure app to have Files.Read.All application permission. ` +
+      `A standalone item ID is not supported — a driveId is required.`
     );
   }
 
