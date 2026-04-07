@@ -379,6 +379,8 @@ export function CrmChatbot() {
         qc.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
         qc.invalidateQueries({ queryKey: ["/api/touchpoints"] });
         qc.invalidateQueries({ queryKey: ["/api/growth-scores"] });
+        qc.invalidateQueries({ queryKey: ["/api/next-best-actions"] });
+        qc.invalidateQueries({ queryKey: ["/api/companies", matchedCompany.id, "next-best-action"] });
       } else if (action.tool === "create_task") {
         await apiRequest("POST", "/api/tasks", {
           title: action.args.title,

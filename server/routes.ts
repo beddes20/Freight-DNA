@@ -478,6 +478,13 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // ── NBA in-process cache ────────────────────────────────────────────────────
+  // Declared here (top of registerRoutes) so all touchpoint POST routes can
+  // delete stale keys immediately after a new touchpoint is saved, rather than
+  // waiting up to 30 min for the TTL to expire naturally.
+  const _nbaCache = new Map<string, { result: unknown; expiresAt: number }>();
+  const NBA_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
   app.use("/api", (req, res, next) => {
     if (req.path.startsWith("/auth/")) return next();
     if (req.path === "/demo-requests" && req.method === "POST") return next();
@@ -4697,6 +4704,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       cacheInvalidatePrefix(`cold-contacts:${user.id}`);
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
       if (contact.companyId) {
+        _nbaCache.delete(`nba:${contact.companyId}`);
         (async () => {
           try {
             const gs = await computeGrowthScore(contact.companyId!, user.organizationId, storage);
@@ -4939,11 +4947,9 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
   // prioritised recommendation.  Results are cached in-process for 30 minutes
   // to avoid redundant recomputation on rapid page refreshes.
   //
-  // Cache key: `nba:<companyId>` — invalidated automatically after 30 min.
-  // No DB writes — this is a read-only compute endpoint.
-  const _nbaCache = new Map<string, { result: unknown; expiresAt: number }>();
-  const NBA_TTL_MS = 30 * 60 * 1000; // 30 minutes
-
+  // Cache key: `nba:<companyId>` — deleted immediately when a touchpoint is
+  // logged for that company (see all three touchpoint POST routes below),
+  // and expires automatically after NBA_TTL_MS regardless.
   app.get("/api/companies/:id/next-best-action", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
@@ -6369,6 +6375,7 @@ Respond with valid JSON only:
           console.error("Failed to create auto follow-up task for company touchpoint:", taskError);
         }
       }
+      _nbaCache.delete(`nba:${req.params.id}`);
       (async () => {
         try {
           const gs = await computeGrowthScore(req.params.id as string, user.organizationId, storage);
@@ -6421,6 +6428,7 @@ Respond with valid JSON only:
           console.error("Failed to create auto follow-up task for touch-log:", taskError);
         }
       }
+      _nbaCache.delete(`nba:${companyId}`);
       (async () => {
         try {
           const gs = await computeGrowthScore(companyId, user.organizationId, storage);

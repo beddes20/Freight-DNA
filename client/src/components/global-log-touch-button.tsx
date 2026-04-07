@@ -87,9 +87,11 @@ export function GlobalLogTouchButton() {
         queryClient.invalidateQueries({ queryKey: ["/api/companies", selectedContact.companyId, "touchpoints"] });
         queryClient.invalidateQueries({ queryKey: ["/api/companies", selectedContact.companyId, "touch-logs"] });
         queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/companies", selectedContact.companyId, "next-best-action"] });
       }
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
       queryClient.invalidateQueries({ queryKey: ["/api/growth-scores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/next-best-actions"] });
       toast({ title: "Touch logged successfully" });
       handleClose();
     },

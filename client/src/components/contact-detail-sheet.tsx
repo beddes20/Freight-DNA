@@ -151,6 +151,10 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit, onDeleted }
       queryClient.invalidateQueries({ queryKey: ["/api/attachments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
       queryClient.invalidateQueries({ queryKey: ["/api/growth-scores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/next-best-actions"] });
+      if (contact?.companyId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/companies", contact.companyId, "next-best-action"] });
+      }
       setLogNotes("");
       setLogMeaningful(false);
       setTpPendingFiles([]);
@@ -167,6 +171,10 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit, onDeleted }
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/cold-contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
       queryClient.invalidateQueries({ queryKey: ["/api/growth-scores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/next-best-actions"] });
+      if (contact?.companyId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/companies", contact.companyId, "next-best-action"] });
+      }
       setDeleteTarget(null);
       toast({ title: "Touchpoint deleted" });
     },
