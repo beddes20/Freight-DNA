@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -6,6 +8,8 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   FileSpreadsheet, Calendar, Trash2, Pencil, Trophy, Plus, Zap, ShieldAlert,
   ArrowRightLeft, ChevronDown, MapPin, Route, ShieldCheck, CheckCircle,
@@ -16,6 +20,9 @@ import { ContactList } from "@/components/contact-list";
 import { RfpDialog } from "@/components/rfp-dialog";
 import { AwardDialog } from "@/components/award-dialog";
 import { ConvertToAwardDialog } from "@/components/convert-to-award-dialog";
+import { ResearchLaneDialog } from "@/components/research-lane-dialog";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company, Contact, Rfp, Award, Touchpoint } from "@shared/schema";
 import type { FacilityCoverage, LanePatterns, LaneMatching, ResearchTask, TaskWithCount } from "../types";
 
@@ -24,48 +31,17 @@ interface RfpTabProps {
   companyId: string;
   companyRfps: Rfp[];
   companyAwards: Award[];
-  facilityCoverage: FacilityCoverage | undefined;
-  lanePatterns: LanePatterns | undefined;
-  laneMatching: LaneMatching | undefined;
-  vendorRoutedKeys: string[];
-  vendorRoutedToggle: { mutate: (key: string) => void; isPending: boolean };
-  laneGapInsights: Record<string, string>;
-  laneGapInsightsMutation: { mutate: (v: any) => void; isPending: boolean };
-  rfpIntelDefaultTab: string;
-  rfpIntelCollapsed: boolean;
-  setRfpIntelCollapsed: (updater: boolean | ((prev: boolean) => boolean)) => void;
-  researchTasks: ResearchTask[] | undefined;
-  canReassign: boolean;
-  setFindPlannerFacility: (f: any) => void;
-  setAssignExistingContactId: (v: string) => void;
-  handleAssignTask: (task: ResearchTask) => void;
-  markResearchedMutation: { mutate: (task: ResearchTask) => void; isPending: boolean };
-  lanesCollapsed: boolean;
-  setLanesCollapsed: (updater: boolean | ((prev: boolean) => boolean)) => void;
   contacts: Contact[] | undefined;
   companyTouchpoints: Touchpoint[];
   touchpointsThisMonth: number;
+  rfpIntelDefaultTab: string;
+  canReassign: boolean;
   handleEditContact: (c: Contact) => void;
   setViewContact: (v: Contact | null) => void;
   setTaskDialogOpen: (v: boolean) => void;
   setEditingTaskItem: (v: TaskWithCount | undefined) => void;
   setForceLanePrefill: (v: { title: string; notes?: string; attachedLaneData?: any[] } | undefined) => void;
-  cdRfpDialogOpen: boolean;
-  setCdRfpDialogOpen: (v: boolean) => void;
-  cdEditingRfp: Rfp | undefined;
-  setCdEditingRfp: (v: Rfp | undefined) => void;
-  cdAwardDialogOpen: boolean;
-  setCdAwardDialogOpen: (v: boolean) => void;
-  cdEditingAward: Award | undefined;
-  setCdEditingAward: (v: Award | undefined) => void;
-  cdConvertingRfp: Rfp | null;
-  setCdConvertingRfp: (v: Rfp | null) => void;
-  cdDeleteRfpTarget: Rfp | null;
-  setCdDeleteRfpTarget: (v: Rfp | null) => void;
-  cdDeleteAwardTarget: Award | null;
-  setCdDeleteAwardTarget: (v: Award | null) => void;
-  cdDeleteRfpMutation: { mutate: (id: string) => void; isPending: boolean };
-  cdDeleteAwardMutation: { mutate: (id: string) => void; isPending: boolean };
+  onCreateContactForFacility: (defaults: { lane?: string; region?: string }) => void;
 }
 
 export function RfpTab({
@@ -73,49 +49,153 @@ export function RfpTab({
   companyId,
   companyRfps,
   companyAwards,
-  facilityCoverage,
-  lanePatterns,
-  laneMatching,
-  vendorRoutedKeys,
-  vendorRoutedToggle,
-  laneGapInsights,
-  laneGapInsightsMutation,
-  rfpIntelDefaultTab,
-  rfpIntelCollapsed,
-  setRfpIntelCollapsed,
-  researchTasks,
-  canReassign,
-  setFindPlannerFacility,
-  setAssignExistingContactId,
-  handleAssignTask,
-  markResearchedMutation,
-  lanesCollapsed,
-  setLanesCollapsed,
   contacts,
   companyTouchpoints,
   touchpointsThisMonth,
+  rfpIntelDefaultTab,
+  canReassign,
   handleEditContact,
   setViewContact,
   setTaskDialogOpen,
   setEditingTaskItem,
   setForceLanePrefill,
-  cdRfpDialogOpen,
-  setCdRfpDialogOpen,
-  cdEditingRfp,
-  setCdEditingRfp,
-  cdAwardDialogOpen,
-  setCdAwardDialogOpen,
-  cdEditingAward,
-  setCdEditingAward,
-  cdConvertingRfp,
-  setCdConvertingRfp,
-  cdDeleteRfpTarget,
-  setCdDeleteRfpTarget,
-  cdDeleteAwardTarget,
-  setCdDeleteAwardTarget,
-  cdDeleteRfpMutation,
-  cdDeleteAwardMutation,
+  onCreateContactForFacility,
 }: RfpTabProps) {
+  const { toast } = useToast();
+
+  // ── Local UI state ────────────────────────────────────────────────────────
+  const [rfpIntelCollapsed, setRfpIntelCollapsed] = useState(true);
+  const [lanesCollapsed, setLanesCollapsed] = useState(true);
+  const [laneGapInsights, setLaneGapInsights] = useState<Record<string, string>>({});
+
+  // ── RFP / Award dialog state ──────────────────────────────────────────────
+  const [cdRfpDialogOpen, setCdRfpDialogOpen] = useState(false);
+  const [cdEditingRfp, setCdEditingRfp] = useState<Rfp | undefined>();
+  const [cdAwardDialogOpen, setCdAwardDialogOpen] = useState(false);
+  const [cdEditingAward, setCdEditingAward] = useState<Award | undefined>();
+  const [cdConvertingRfp, setCdConvertingRfp] = useState<Rfp | null>(null);
+  const [cdDeleteRfpTarget, setCdDeleteRfpTarget] = useState<Rfp | null>(null);
+  const [cdDeleteAwardTarget, setCdDeleteAwardTarget] = useState<Award | null>(null);
+
+  // ── Facility planner dialog state ─────────────────────────────────────────
+  const [findPlannerFacility, setFindPlannerFacility] = useState<any>(null);
+  const [assignExistingContactId, setAssignExistingContactId] = useState("");
+
+  // ── Research lane dialog state ────────────────────────────────────────────
+  const [selectedTask, setSelectedTask] = useState<ResearchTask | null>(null);
+  const [researchDialogOpen, setResearchDialogOpen] = useState(false);
+
+  // ── Queries ───────────────────────────────────────────────────────────────
+  const { data: researchTasks } = useQuery<ResearchTask[]>({
+    queryKey: ["/api/research-tasks", { companyId }],
+    queryFn: async () => {
+      const res = await fetch(`/api/research-tasks?companyId=${companyId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch research tasks");
+      return res.json();
+    },
+  });
+
+  const { data: facilityCoverage } = useQuery<FacilityCoverage>({
+    queryKey: ["/api/companies", companyId, "facility-coverage"],
+  });
+
+  const { data: lanePatterns } = useQuery<LanePatterns>({
+    queryKey: ["/api/companies", companyId, "lane-patterns"],
+  });
+
+  const { data: laneMatching } = useQuery<LaneMatching>({
+    queryKey: ["/api/companies", companyId, "lane-matching"],
+  });
+
+  const { data: vendorRoutedKeys = [] } = useQuery<string[]>({
+    queryKey: ["/api/companies", companyId, "vendor-routed"],
+  });
+
+  // ── Mutations ─────────────────────────────────────────────────────────────
+  const vendorRoutedToggle = useMutation({
+    mutationFn: async (rowKey: string) => {
+      const res = await apiRequest("POST", `/api/companies/${companyId}/vendor-routed/toggle`, { rowKey });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "vendor-routed"] });
+    },
+  });
+
+  const laneGapInsightsMutation = useMutation({
+    mutationFn: async (corridors: Array<{ lane: string; totalVolume: number; originState?: string; destinationState?: string }>) => {
+      const res = await apiRequest("POST", `/api/companies/${companyId}/lane-gap-insights`, { corridors });
+      return res.json() as Promise<{ insights: Array<{ lane: string; talkingPoint: string }> }>;
+    },
+    onSuccess: (data) => {
+      const map: Record<string, string> = {};
+      for (const item of data.insights) map[item.lane] = item.talkingPoint;
+      setLaneGapInsights(map);
+    },
+  });
+
+  const markResearchedMutation = useMutation({
+    mutationFn: async (task: ResearchTask) => {
+      await apiRequest("PATCH", `/api/rfps/${task.rfpId}/lanes/${task.laneIndex}/status`, { status: "researched" });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/research-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      toast({ title: "Lane marked as researched", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
+    },
+  });
+
+  const assignContactToFacilityMutation = useMutation({
+    mutationFn: async ({ contactId, laneToAdd }: { contactId: string; laneToAdd: string }) => {
+      const contact = contacts?.find(c => c.id === contactId);
+      if (!contact) throw new Error("Contact not found");
+      const existingLanes: string[] = contact.lanes || [];
+      if (!existingLanes.includes(laneToAdd)) {
+        await apiRequest("PATCH", `/api/contacts/${contactId}`, {
+          ...contact,
+          lanes: [...existingLanes, laneToAdd],
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
+      setFindPlannerFacility(null);
+      setAssignExistingContactId("");
+      toast({ title: "Contact assigned to facility", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error assigning contact", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const cdDeleteRfpMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/rfps/${id}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      toast({ title: "RFP deleted" });
+      setCdDeleteRfpTarget(null);
+    },
+    onError: (error: Error) => toast({ title: "Error deleting RFP", description: error.message, variant: "destructive" }),
+  });
+
+  const cdDeleteAwardMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/awards/${id}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/awards"] });
+      toast({ title: "Award deleted" });
+      setCdDeleteAwardTarget(null);
+    },
+    onError: (error: Error) => toast({ title: "Error deleting award", description: error.message, variant: "destructive" }),
+  });
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const handleAssignTask = (task: ResearchTask) => {
+    setSelectedTask(task);
+    setResearchDialogOpen(true);
+  };
+
   const validLoc = (s: string) => !!s && s.trim().toUpperCase() !== "N/A" && s.trim() !== "";
   const openTasks = researchTasks?.filter(t => t.status === "open") || [];
 
@@ -911,6 +991,93 @@ export function RfpTab({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── Research Lane Dialog ─────────────────────────────────────────── */}
+      {selectedTask && (
+        <ResearchLaneDialog
+          open={researchDialogOpen}
+          onOpenChange={setResearchDialogOpen}
+          lane={selectedTask}
+          laneIndex={selectedTask.laneIndex}
+          rfpId={selectedTask.rfpId}
+          companyId={companyId}
+        />
+      )}
+
+      {/* ── Find Planner / Assign Facility Dialog ────────────────────────── */}
+      <Dialog
+        open={!!findPlannerFacility}
+        onOpenChange={(open) => {
+          if (!open) { setFindPlannerFacility(null); setAssignExistingContactId(""); }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-red-500" />
+              {findPlannerFacility?.fullName}
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground pt-1">
+              Assign an existing contact or create a new one for this facility.
+            </p>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Select existing contact</p>
+              <Select value={assignExistingContactId} onValueChange={setAssignExistingContactId}>
+                <SelectTrigger data-testid="select-existing-contact">
+                  <SelectValue placeholder="Choose a contact…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(contacts || []).map(c => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}{c.title ? ` — ${c.title}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                className="w-full"
+                disabled={!assignExistingContactId || assignContactToFacilityMutation.isPending}
+                onClick={() => {
+                  if (findPlannerFacility && assignExistingContactId) {
+                    assignContactToFacilityMutation.mutate({
+                      contactId: assignExistingContactId,
+                      laneToAdd: findPlannerFacility.fullName,
+                    });
+                  }
+                }}
+                data-testid="button-assign-existing-contact"
+              >
+                {assignContactToFacilityMutation.isPending ? "Assigning…" : "Assign to This Facility"}
+              </Button>
+            </div>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-background px-2 text-muted-foreground">or</span>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                const defaults = {
+                  lane: findPlannerFacility?.fullName,
+                  region: findPlannerFacility?.state || undefined,
+                };
+                setFindPlannerFacility(null);
+                setAssignExistingContactId("");
+                onCreateContactForFacility(defaults);
+              }}
+              data-testid="button-create-new-contact-for-facility"
+            >
+              <UserPlus className="h-4 w-4 mr-2" />
+              Create New Contact
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

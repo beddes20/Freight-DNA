@@ -1,3 +1,5 @@
+import { useState, useEffect } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,146 +15,177 @@ import type { PendingFile } from "@/components/file-attachment";
 import { MarketShareCard } from "@/components/market-share-card";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { useToast } from "@/hooks/use-toast";
-import { queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company, Touchpoint, User, Rfp } from "@shared/schema";
-import type { AccountPerf, SharedRepEntry } from "../types";
+import type { AccountPerf, SharedRepEntry, TouchLogEntry } from "../types";
 
 interface IntelTabProps {
   company: Company;
   companyId: string;
-  portalEdit: boolean;
-  setPortalEdit: (v: boolean) => void;
-  portalUrl: string;
-  setPortalUrl: (v: string) => void;
-  portalUsername: string;
-  setPortalUsername: (v: string) => void;
-  portalPassword: string;
-  setPortalPassword: (v: string) => void;
-  showPortalPassword: boolean;
-  setShowPortalPassword: (updater: boolean | ((prev: boolean) => boolean)) => void;
-  financialAliasEdit: string;
-  setFinancialAliasEdit: (v: string) => void;
-  canEditSalesPerson: boolean;
-  salesUsers: Omit<User, "password">[];
-  salesPersonIdEdit: string;
-  setSalesPersonIdEdit: (v: string) => void;
-  tenderStyle: string;
-  setTenderStyle: (v: string) => void;
-  accountQuirks: string;
-  setAccountQuirks: (v: string) => void;
-  processNotes: string;
-  setProcessNotes: (v: string) => void;
-  spotProcess: string;
-  setSpotProcess: (v: string) => void;
-  dlEmail: string;
-  setDlEmail: (v: string) => void;
-  operatingHours: string;
-  setOperatingHours: (v: string) => void;
-  accountSummary: string;
-  setAccountSummary: (v: string) => void;
-  openPortalEdit: () => void;
-  savePortalMutation: { mutate: () => void; isPending: boolean };
-  transferOpen: boolean;
-  setTransferOpen: (v: boolean) => void;
-  transferTo: string;
-  setTransferTo: (v: string) => void;
-  assignableUsers: Omit<User, "password">[];
-  reassignMutation: { mutate: (v: string) => void; isPending: boolean };
-  scorecardPending: PendingFile[];
-  setScorecardPending: (updater: PendingFile[] | ((prev: PendingFile[]) => PendingFile[])) => void;
-  scorecardUploading: boolean;
-  setScorecardUploading: (v: boolean) => void;
-  walletSharePct: number;
-  setWalletSharePct: (v: number) => void;
-  avgMarginOverride: string;
-  setAvgMarginOverride: (v: string) => void;
+  currentUser: Omit<User, "password"> | null | undefined;
   teamMembers: Omit<User, "password">[];
-  sharedReps: SharedRepEntry[];
-  addSharedRepOpen: boolean;
-  setAddSharedRepOpen: (v: boolean) => void;
-  newSharedRepUserId: string;
-  setNewSharedRepUserId: (v: string) => void;
-  newSharedRepNote: string;
-  setNewSharedRepNote: (v: string) => void;
-  addSharedRepMutation: { mutate: (v: { userId: string; territoryNote: string }) => void; isPending: boolean };
-  removeSharedRepMutation: { mutate: (userId: string) => void; isPending: boolean };
-  canManageSharedReps: boolean;
-  allSalesUsers: Omit<User, "password">[];
-  allUsersForSales: Omit<User, "password">[];
-  accountPerf: AccountPerf;
   companyRfps: Rfp[];
-  selectedTouchpoint: (Touchpoint & { loggedByName: string; contactName: string | null }) | null;
-  setSelectedTouchpoint: (v: (Touchpoint & { loggedByName: string; contactName: string | null }) | null) => void;
+  accountPerf: AccountPerf;
+  selectedTouchpoint: TouchLogEntry | null;
+  setSelectedTouchpoint: (v: TouchLogEntry | null) => void;
 }
 
 export function IntelTab({
   company,
   companyId,
-  portalEdit,
-  setPortalEdit,
-  portalUrl,
-  setPortalUrl,
-  portalUsername,
-  setPortalUsername,
-  portalPassword,
-  setPortalPassword,
-  showPortalPassword,
-  setShowPortalPassword,
-  financialAliasEdit,
-  setFinancialAliasEdit,
-  canEditSalesPerson,
-  salesUsers,
-  salesPersonIdEdit,
-  setSalesPersonIdEdit,
-  tenderStyle,
-  setTenderStyle,
-  accountQuirks,
-  setAccountQuirks,
-  processNotes,
-  setProcessNotes,
-  spotProcess,
-  setSpotProcess,
-  dlEmail,
-  setDlEmail,
-  operatingHours,
-  setOperatingHours,
-  accountSummary,
-  setAccountSummary,
-  openPortalEdit,
-  savePortalMutation,
-  transferOpen,
-  setTransferOpen,
-  transferTo,
-  setTransferTo,
-  assignableUsers,
-  reassignMutation,
-  scorecardPending,
-  setScorecardPending,
-  scorecardUploading,
-  setScorecardUploading,
-  walletSharePct,
-  setWalletSharePct,
-  avgMarginOverride,
-  setAvgMarginOverride,
+  currentUser,
   teamMembers,
-  sharedReps,
-  addSharedRepOpen,
-  setAddSharedRepOpen,
-  newSharedRepUserId,
-  setNewSharedRepUserId,
-  newSharedRepNote,
-  setNewSharedRepNote,
-  addSharedRepMutation,
-  removeSharedRepMutation,
-  canManageSharedReps,
-  allSalesUsers,
-  allUsersForSales,
-  accountPerf,
   companyRfps,
+  accountPerf,
   selectedTouchpoint,
   setSelectedTouchpoint,
 }: IntelTabProps) {
   const { toast } = useToast();
+
+  // ── Role checks ────────────────────────────────────────────────────────────
+  const canEditSalesPerson = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales_director";
+  const canManageSharedReps = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
+  const canReassign = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
+
+  // ── Account Info form state ────────────────────────────────────────────────
+  const [portalEdit, setPortalEdit] = useState(false);
+  const [portalUrl, setPortalUrl] = useState("");
+  const [portalUsername, setPortalUsername] = useState("");
+  const [portalPassword, setPortalPassword] = useState("");
+  const [showPortalPassword, setShowPortalPassword] = useState(false);
+  const [financialAliasEdit, setFinancialAliasEdit] = useState("");
+  const [tenderStyle, setTenderStyle] = useState("");
+  const [accountQuirks, setAccountQuirks] = useState("");
+  const [processNotes, setProcessNotes] = useState("");
+  const [spotProcess, setSpotProcess] = useState("");
+  const [dlEmail, setDlEmail] = useState("");
+  const [operatingHours, setOperatingHours] = useState("");
+  const [accountSummary, setAccountSummary] = useState("");
+  const [salesPersonIdEdit, setSalesPersonIdEdit] = useState("");
+
+  // ── Shared Reps state ──────────────────────────────────────────────────────
+  const [addSharedRepOpen, setAddSharedRepOpen] = useState(false);
+  const [newSharedRepUserId, setNewSharedRepUserId] = useState("");
+  const [newSharedRepNote, setNewSharedRepNote] = useState("");
+
+  // ── Transfer state ─────────────────────────────────────────────────────────
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTo, setTransferTo] = useState("");
+
+  // ── Wallet share / margin override ────────────────────────────────────────
+  const [walletSharePct, setWalletSharePct] = useState(5);
+  const [avgMarginOverride, setAvgMarginOverride] = useState("");
+
+  // ── Scorecard upload state ────────────────────────────────────────────────
+  const [scorecardPending, setScorecardPending] = useState<PendingFile[]>([]);
+  const [scorecardUploading, setScorecardUploading] = useState(false);
+
+  // Reset margin override when switching companies
+  useEffect(() => { setAvgMarginOverride(""); }, [companyId]);
+
+  // ── Queries ───────────────────────────────────────────────────────────────
+  const { data: sharedReps = [] } = useQuery<SharedRepEntry[]>({
+    queryKey: ["/api/companies", companyId, "shared-reps"],
+  });
+  const { data: allSalesUsers = [] } = useQuery<Omit<User, "password">[]>({
+    queryKey: ["/api/users/sales"],
+  });
+  const { data: allUsersForSales = [] } = useQuery<Omit<User, "password">[]>({
+    queryKey: ["/api/users"],
+    enabled: canEditSalesPerson,
+  });
+  const { data: assignableUsers = [] } = useQuery<Omit<User, "password">[]>({
+    queryKey: ["/api/users"],
+    enabled: canReassign,
+  });
+  const salesUsers = allUsersForSales
+    .filter(u => u.role === "sales" || u.role === "sales_director")
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // ── Mutations ─────────────────────────────────────────────────────────────
+  const savePortalMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/companies/${companyId}`, {
+        name: company.name,
+        portalUrl: portalUrl || null,
+        portalUsername: portalUsername || null,
+        portalPassword: portalPassword || null,
+        financialAlias: financialAliasEdit.trim() || null,
+        tenderStyle: tenderStyle || null,
+        accountQuirks: accountQuirks || null,
+        processNotes: processNotes || null,
+        spotProcess: spotProcess || null,
+        dlEmail: dlEmail || null,
+        operatingHours: operatingHours || null,
+        accountSummary: accountSummary.trim() || null,
+        salesPersonId: salesPersonIdEdit || null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
+      setPortalEdit(false);
+      toast({ title: "Account info saved", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
+    },
+    onError: () => toast({ title: "Failed to save account info", variant: "destructive" }),
+  });
+
+  const addSharedRepMutation = useMutation({
+    mutationFn: async ({ userId, territoryNote }: { userId: string; territoryNote: string }) => {
+      const res = await apiRequest("POST", `/api/companies/${companyId}/shared-reps`, { userId, territoryNote });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "shared-reps"] });
+      setAddSharedRepOpen(false);
+      setNewSharedRepUserId("");
+      setNewSharedRepNote("");
+      toast({ title: "Shared rep added" });
+    },
+    onError: () => toast({ title: "Failed to add shared rep", variant: "destructive" }),
+  });
+
+  const removeSharedRepMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("DELETE", `/api/companies/${companyId}/shared-reps/${userId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "shared-reps"] });
+      toast({ title: "Shared rep removed" });
+    },
+    onError: () => toast({ title: "Failed to remove shared rep", variant: "destructive" }),
+  });
+
+  const reassignMutation = useMutation({
+    mutationFn: async (assignedTo: string) => {
+      await apiRequest("PATCH", `/api/companies/${companyId}/reassign`, { assignedTo });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      setTransferOpen(false);
+      setTransferTo("");
+      toast({ title: "Account transferred successfully", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
+    },
+    onError: (e: any) => toast({ title: "Failed to transfer account", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const openPortalEdit = () => {
+    setPortalUrl(company?.portalUrl || "");
+    setPortalUsername(company?.portalUsername || "");
+    setPortalPassword(company?.portalPassword || "");
+    setFinancialAliasEdit(company?.financialAlias || "");
+    setTenderStyle(company?.tenderStyle || "");
+    setAccountQuirks(company?.accountQuirks || "");
+    setProcessNotes(company?.processNotes || "");
+    setSpotProcess(company?.spotProcess || "");
+    setDlEmail(company?.dlEmail || "");
+    setOperatingHours((company as any)?.operatingHours || "");
+    setAccountSummary((company as any)?.accountSummary || "");
+    setSalesPersonIdEdit((company as any)?.salesPersonId || "");
+    setPortalEdit(true);
+  };
 
   return (
     <>

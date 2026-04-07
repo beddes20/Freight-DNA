@@ -103,7 +103,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CompanyDialog } from "@/components/company-dialog";
 import { ContactDialog } from "@/components/contact-dialog";
-import { ResearchLaneDialog } from "@/components/research-lane-dialog";
 import { OrgChart } from "@/components/org-chart";
 import { ContactList } from "@/components/contact-list";
 import { useToast } from "@/hooks/use-toast";
@@ -133,109 +132,11 @@ import { PeopleTab } from "./company-detail/tabs/PeopleTab";
 import { RfpTab } from "./company-detail/tabs/RfpTab";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 import { GrowthScoreBadge } from "@/components/account-growth-portlet";
-type TaskWithCount = Task & { commentCount?: number };
-
-interface ResearchTask {
-  rfpId: string;
-  rfpTitle: string;
-  companyId: string;
-  laneIndex: number;
-  lane: string;
-  laneId?: string;
-  origin: string;
-  destination: string;
-  originState: string;
-  destinationState: string;
-  volume: number;
-  rate: string;
-  equipment?: string;
-  status: string;
-  contactId: string | null;
-}
-
-interface Facility {
-  facility: string;
-  state: string;
-  type: "origin" | "destination";
-  totalVolume: number;
-  laneCount: number;
-  lanes: string[];
-  rfpTitles: string[];
-  fullName: string;
-  covered: boolean;
-  coveredBy: string | null;
-}
-
-interface FacilityCoverage {
-  facilities: Facility[];
-  summary: { total: number; gaps: number; covered: number };
-}
-
-interface Corridor {
-  origin: string;
-  originState: string;
-  destination: string;
-  destinationState: string;
-  totalVolume: number;
-  count: number;
-  rfpTitles: string[];
-  lane: string;
-  appearsInMultipleRfps: boolean;
-}
-
-interface Hub {
-  facility: string;
-  state: string;
-  inboundVolume: number;
-  outboundVolume: number;
-  inboundCount: number;
-  outboundCount: number;
-  fullName: string;
-  totalVolume: number;
-}
-
-interface StateCorridor {
-  originState: string;
-  destinationState: string;
-  totalVolume: number;
-  laneCount: number;
-  corridor: string;
-}
-
-interface LanePatterns {
-  topCorridors: Corridor[];
-  hubs: Hub[];
-  stateCorridors: StateCorridor[];
-}
-
-interface LaneMatch {
-  ourCity: string;
-  ourState: string;
-  ourWeeklyLoads: number;
-  ourTotalLoads: number;
-  customerCity: string;
-  customerState: string;
-  distance: number;
-  totalVolume: number;
-  matchingLanes: Array<{ rfpTitle: string; rfpId: string; lane: string; volume: number }>;
-}
-
-interface LaneMatching {
-  ourDeliveriesToTheirPickups: LaneMatch[];
-  theirDeliveriesToOurPickups: LaneMatch[];
-  hasHistoricalData: boolean;
-  hasRfpData: boolean;
-}
-
-type TouchLogEntry = Touchpoint & { loggedByName: string; contactName: string | null };
-type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number };
-type HealthFactor = { name: string; score: number; max: number; label: string };
-type HealthScore = { score: number; grade: string; color: string; momentum: "up" | "flat" | "down"; momentumLabel: string; factors: HealthFactor[] };
-type TrendMonth = { monthKey: string; totalLoads: number; spotLoads: number; totalMargin: number };
-type TrendDest = { city: string; state: string; count: number };
-type TrendCorridor = { origin: string; destination: string; loads: number };
-type TrendsData = { months: TrendMonth[]; topDestinations: TrendDest[]; topCorridors: TrendCorridor[]; totalLoads: number; spotLoads: number; totalMargin: number };
-type SharedRepEntry = { userId: string; territoryNote: string; name: string };
+import type {
+  ResearchTask, Facility, FacilityCoverage, TouchLogEntry, MonthBucket,
+  HealthFactor, HealthScore, TrendMonth, TrendDest, TrendCorridor,
+  TrendsData, SharedRepEntry, TaskWithCount, AccountPerf,
+} from "./company-detail/types";
 
 export default function CompanyDetail() {
   const params = useParams<{ id: string }>();
@@ -253,26 +154,6 @@ export default function CompanyDetail() {
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | undefined>();
   const [contactDefaults, setContactDefaults] = useState<{ lane?: string; region?: string } | undefined>();
-  const [researchDialogOpen, setResearchDialogOpen] = useState(false);
-  const [selectedTask, setSelectedTask] = useState<ResearchTask | null>(null);
-  const [findPlannerFacility, setFindPlannerFacility] = useState<Facility | null>(null);
-  const [assignExistingContactId, setAssignExistingContactId] = useState<string>("");
-  const [portalEdit, setPortalEdit] = useState(false);
-  const [portalUrl, setPortalUrl] = useState("");
-  const [portalUsername, setPortalUsername] = useState("");
-  const [portalPassword, setPortalPassword] = useState("");
-  const [salesPersonIdEdit, setSalesPersonIdEdit] = useState<string>("");
-  const [showPortalPassword, setShowPortalPassword] = useState(false);
-  const [tenderStyle, setTenderStyle] = useState("");
-  const [accountQuirks, setAccountQuirks] = useState("");
-  const [processNotes, setProcessNotes] = useState("");
-  const [spotProcess, setSpotProcess] = useState("");
-  const [dlEmail, setDlEmail] = useState("");
-  const [operatingHours, setOperatingHours] = useState("");
-  const [accountSummary, setAccountSummary] = useState("");
-  const [financialAliasEdit, setFinancialAliasEdit] = useState("");
-  const [transferOpen, setTransferOpen] = useState(false);
-  const [transferTo, setTransferTo] = useState("");
   const [viewContact, setViewContact] = useState<Contact | null>(null);
   const [intelContact, setIntelContact] = useState<Contact | null>(null);
   const [orgEmailContact, setOrgEmailContact] = useState<Contact | null>(null);
@@ -286,23 +167,10 @@ export default function CompanyDetail() {
   const [quickTouchNote, setQuickTouchNote] = useState("");
   const [quickTouchSentiment, setQuickTouchSentiment] = useState<string>("");
   const [quickTouchMeaningful, setQuickTouchMeaningful] = useState(false);
-  const [walletSharePct, setWalletSharePct] = useState(5);
-  const [avgMarginOverride, setAvgMarginOverride] = useState<string>("");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
   const [focusTaskComments, setFocusTaskComments] = useState(false);
   const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[] } | undefined>();
-  const [lanesCollapsed, setLanesCollapsed] = useState(true);
-  const [scorecardPending, setScorecardPending] = useState<PendingFile[]>([]);
-  const [scorecardUploading, setScorecardUploading] = useState(false);
-  const [rfpIntelCollapsed, setRfpIntelCollapsed] = useState(true);
-  const [cdRfpDialogOpen, setCdRfpDialogOpen] = useState(false);
-  const [cdAwardDialogOpen, setCdAwardDialogOpen] = useState(false);
-  const [cdEditingRfp, setCdEditingRfp] = useState<Rfp | undefined>();
-  const [cdEditingAward, setCdEditingAward] = useState<Award | undefined>();
-  const [cdConvertingRfp, setCdConvertingRfp] = useState<Rfp | null>(null);
-  const [cdDeleteRfpTarget, setCdDeleteRfpTarget] = useState<Rfp | null>(null);
-  const [cdDeleteAwardTarget, setCdDeleteAwardTarget] = useState<Award | null>(null);
   const [showTrends, setShowTrends] = useState(false);
   const [calloutDialogOpen, setCalloutDialogOpen] = useState(false);
   const [calloutReplyTo, setCalloutReplyTo] = useState<{ id: string; title: string } | undefined>();
@@ -313,8 +181,7 @@ export default function CompanyDetail() {
   const [preCallOpen, setPreCallOpen] = useState(false);
   const [oppLogOpen, setOppLogOpen] = useState(false);
   const [touchLogCollapsed, setTouchLogCollapsed] = useState(false);
-  const [selectedTouchpoint, setSelectedTouchpoint] = useState<(Touchpoint & { loggedByName: string; contactName: string | null }) | null>(null);
-  const [laneGapInsights, setLaneGapInsights] = useState<Record<string, string>>({});
+  const [selectedTouchpoint, setSelectedTouchpoint] = useState<TouchLogEntry | null>(null);
   const [importRows, setImportRows] = useState<any[]>([]);
   const [importFileName, setImportFileName] = useState("");
   const [detailTab, setDetailTab] = useState<string>(() => {
@@ -345,10 +212,6 @@ export default function CompanyDetail() {
     }
   }, [rfpIntelTab]);
 
-  useEffect(() => {
-    setAvgMarginOverride("");
-  }, [companyId]);
-
   const { data: company, isLoading: companyLoading, isError: companyError, refetch: refetchCompany } = useQuery<Company>({
     queryKey: ["/api/companies", companyId],
     refetchOnMount: "always",
@@ -377,58 +240,6 @@ export default function CompanyDetail() {
   const { data: touchLogEntries = [] } = useQuery<TouchLogEntry[]>({
     queryKey: ["/api/companies", companyId, "touch-logs"],
     enabled: detailTab === "activity",
-  });
-
-  const { data: researchTasks } = useQuery<ResearchTask[]>({
-    queryKey: ["/api/research-tasks", { companyId }],
-    queryFn: async () => {
-      const res = await fetch(`/api/research-tasks?companyId=${companyId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch research tasks");
-      return res.json();
-    },
-    enabled: detailTab === "rfp",
-  });
-
-  const { data: facilityCoverage } = useQuery<FacilityCoverage>({
-    queryKey: ["/api/companies", companyId, "facility-coverage"],
-    enabled: detailTab === "rfp",
-  });
-
-  const { data: lanePatterns } = useQuery<LanePatterns>({
-    queryKey: ["/api/companies", companyId, "lane-patterns"],
-    enabled: detailTab === "rfp",
-  });
-
-  const { data: laneMatching } = useQuery<LaneMatching>({
-    queryKey: ["/api/companies", companyId, "lane-matching"],
-    enabled: detailTab === "rfp",
-  });
-
-  const { data: vendorRoutedKeys = [] } = useQuery<string[]>({
-    queryKey: ["/api/companies", companyId, "vendor-routed"],
-    enabled: detailTab === "rfp",
-  });
-
-  const vendorRoutedToggle = useMutation({
-    mutationFn: async (rowKey: string) => {
-      const res = await apiRequest("POST", `/api/companies/${companyId}/vendor-routed/toggle`, { rowKey });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "vendor-routed"] });
-    },
-  });
-
-  const laneGapInsightsMutation = useMutation({
-    mutationFn: async (corridors: Array<{ lane: string; totalVolume: number; originState?: string; destinationState?: string }>) => {
-      const res = await apiRequest("POST", `/api/companies/${companyId}/lane-gap-insights`, { corridors });
-      return res.json() as Promise<{ insights: Array<{ lane: string; talkingPoint: string }> }>;
-    },
-    onSuccess: (data) => {
-      const map: Record<string, string> = {};
-      for (const item of data.insights) map[item.lane] = item.talkingPoint;
-      setLaneGapInsights(map);
-    },
   });
 
   const { data: companyTasks = [] } = useQuery<TaskWithCount[]>({
@@ -681,162 +492,6 @@ export default function CompanyDetail() {
   });
 
   const canReassign = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
-  const { data: assignableUsers = [] } = useQuery<Omit<User, "password">[]>({
-    queryKey: ["/api/users"],
-    enabled: canReassign,
-  });
-
-  const canManageSharedReps = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
-  const { data: sharedReps = [] } = useQuery<SharedRepEntry[]>({
-    queryKey: ["/api/companies", companyId, "shared-reps"],
-  });
-
-  const [addSharedRepOpen, setAddSharedRepOpen] = useState(false);
-  const [newSharedRepUserId, setNewSharedRepUserId] = useState("");
-  const [newSharedRepNote, setNewSharedRepNote] = useState("");
-
-  const addSharedRepMutation = useMutation({
-    mutationFn: async ({ userId, territoryNote }: { userId: string; territoryNote: string }) => {
-      const res = await apiRequest("POST", `/api/companies/${companyId}/shared-reps`, { userId, territoryNote });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "shared-reps"] });
-      setAddSharedRepOpen(false);
-      setNewSharedRepUserId("");
-      setNewSharedRepNote("");
-      toast({ title: "Shared rep added" });
-    },
-    onError: () => toast({ title: "Failed to add shared rep", variant: "destructive" }),
-  });
-
-  const removeSharedRepMutation = useMutation({
-    mutationFn: async (userId: string) => {
-      const res = await apiRequest("DELETE", `/api/companies/${companyId}/shared-reps/${userId}`);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "shared-reps"] });
-      toast({ title: "Shared rep removed" });
-    },
-    onError: () => toast({ title: "Failed to remove shared rep", variant: "destructive" }),
-  });
-
-  const canEditSalesPerson = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales_director";
-  const { data: allSalesUsers = [] } = useQuery<Omit<User, "password">[]>({
-    queryKey: ["/api/users/sales"],
-  });
-  const { data: allUsersForSales = [] } = useQuery<Omit<User, "password">[]>({
-    queryKey: ["/api/users"],
-    enabled: canEditSalesPerson,
-  });
-  const salesUsers = allUsersForSales.filter(u => u.role === "sales" || u.role === "sales_director").sort((a, b) => a.name.localeCompare(b.name));
-
-  const savePortalMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("PATCH", `/api/companies/${companyId}`, {
-        name: company!.name,
-        portalUrl: portalUrl || null,
-        portalUsername: portalUsername || null,
-        portalPassword: portalPassword || null,
-        financialAlias: financialAliasEdit.trim() || null,
-        tenderStyle: tenderStyle || null,
-        accountQuirks: accountQuirks || null,
-        processNotes: processNotes || null,
-        spotProcess: spotProcess || null,
-        dlEmail: dlEmail || null,
-        operatingHours: operatingHours || null,
-        accountSummary: accountSummary.trim() || null,
-        salesPersonId: salesPersonIdEdit || null,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
-      setPortalEdit(false);
-      toast({ title: "Account info saved", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
-    },
-    onError: () => toast({ title: "Failed to save account info", variant: "destructive" }),
-  });
-
-  const reassignMutation = useMutation({
-    mutationFn: async (assignedTo: string) => {
-      await apiRequest("PATCH", `/api/companies/${companyId}/reassign`, { assignedTo });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
-      setTransferOpen(false);
-      setTransferTo("");
-      toast({ title: "Account transferred successfully", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
-    },
-    onError: (e: any) => toast({ title: "Failed to transfer account", description: e.message, variant: "destructive" }),
-  });
-
-  const openPortalEdit = () => {
-    setPortalUrl(company?.portalUrl || "");
-    setPortalUsername(company?.portalUsername || "");
-    setPortalPassword(company?.portalPassword || "");
-    setFinancialAliasEdit(company?.financialAlias || "");
-    setTenderStyle(company?.tenderStyle || "");
-    setAccountQuirks(company?.accountQuirks || "");
-    setProcessNotes(company?.processNotes || "");
-    setSpotProcess(company?.spotProcess || "");
-    setDlEmail(company?.dlEmail || "");
-    setOperatingHours((company as any)?.operatingHours || "");
-    setAccountSummary((company as any)?.accountSummary || "");
-    setSalesPersonIdEdit((company as any)?.salesPersonId || "");
-    setPortalEdit(true);
-  };
-
-  const openTasks = researchTasks?.filter((t) => t.status === "open") || [];
-
-  const markResearchedMutation = useMutation({
-    mutationFn: async (task: ResearchTask) => {
-      await apiRequest("PATCH", `/api/rfps/${task.rfpId}/lanes/${task.laneIndex}/status`, {
-        status: "researched",
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/research-tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
-      toast({
-        title: "Lane marked as researched",
-        className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
-      });
-    },
-  });
-
-  const handleAssignTask = (task: ResearchTask) => {
-    setSelectedTask(task);
-    setResearchDialogOpen(true);
-  };
-
-  const assignContactToFacilityMutation = useMutation({
-    mutationFn: async ({ contactId, laneToAdd }: { contactId: string; laneToAdd: string }) => {
-      const contact = contacts?.find((c) => c.id === contactId);
-      if (!contact) throw new Error("Contact not found");
-      const existingLanes: string[] = contact.lanes || [];
-      if (!existingLanes.includes(laneToAdd)) {
-        await apiRequest("PATCH", `/api/contacts/${contactId}`, {
-          ...contact,
-          lanes: [...existingLanes, laneToAdd],
-        });
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
-      setFindPlannerFacility(null);
-      setAssignExistingContactId("");
-      toast({
-        title: "Contact assigned to facility",
-        className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
-      });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Error assigning contact", description: error.message, variant: "destructive" });
-    },
-  });
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
@@ -899,27 +554,6 @@ export default function CompanyDetail() {
     },
   });
 
-  const cdDeleteRfpMutation = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/rfps/${id}`); },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
-      toast({ title: "RFP deleted" });
-      setCdDeleteRfpTarget(null);
-    },
-    onError: (error: Error) => toast({ title: "Error deleting RFP", description: error.message, variant: "destructive" }),
-  });
-
-  const cdDeleteAwardMutation = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/awards/${id}`); },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/awards"] });
-      toast({ title: "Award deleted" });
-      setCdDeleteAwardTarget(null);
-    },
-    onError: (error: Error) => toast({ title: "Error deleting award", description: error.message, variant: "destructive" }),
-  });
-
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -974,31 +608,6 @@ export default function CompanyDetail() {
     if (!company || !contacts) return;
 
     const wb = XLSX.utils.book_new();
-
-    const highVolumeLanesData = (researchTasks || []).map((task) => {
-      const linkedContact = task.contactId && contacts
-        ? contacts.find((c) => c.id === task.contactId)
-        : null;
-      return {
-        "Lane": task.lane,
-        "Origin": task.origin || task.originState || "",
-        "Destination": task.destination || task.destinationState || "",
-        "Annual Shipments": task.volume,
-        "Rate": task.rate || "",
-        "Status": task.status === "open" ? "Open" : task.status === "contact_added" ? "Contact Added" : "Researched",
-        "Assigned Contact": linkedContact?.name || "",
-        "RFP": task.rfpTitle,
-      };
-    });
-
-    if (highVolumeLanesData.length > 0) {
-      const ws1 = XLSX.utils.json_to_sheet(highVolumeLanesData);
-      ws1["!cols"] = [
-        { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 18 },
-        { wch: 12 }, { wch: 16 }, { wch: 20 }, { wch: 25 },
-      ];
-      XLSX.utils.book_append_sheet(wb, ws1, "High-Volume Lanes");
-    }
 
     const contactsData = contacts.map((c) => ({
       "Name": c.name,
@@ -1267,15 +876,6 @@ export default function CompanyDetail() {
                   </a>
                 </DropdownMenuItem>
               )}
-              {canReassign && (
-                <DropdownMenuItem
-                  onClick={() => { setTransferTo(company.assignedTo || ""); setTransferOpen(true); }}
-                  data-testid="dropdown-item-transfer-account"
-                >
-                  <UserCheck className="h-4 w-4 mr-2" />
-                  Transfer Account
-                </DropdownMenuItem>
-              )}
               <DropdownMenuItem onClick={() => setEditCompanyOpen(true)} data-testid="dropdown-item-edit">
                 <Pencil className="h-4 w-4 mr-2" />
                 Edit
@@ -1401,67 +1001,10 @@ export default function CompanyDetail() {
           <IntelTab
             company={company!}
             companyId={companyId}
-            portalEdit={portalEdit}
-            setPortalEdit={setPortalEdit}
-            portalUrl={portalUrl}
-            setPortalUrl={setPortalUrl}
-            portalUsername={portalUsername}
-            setPortalUsername={setPortalUsername}
-            portalPassword={portalPassword}
-            setPortalPassword={setPortalPassword}
-            showPortalPassword={showPortalPassword}
-            setShowPortalPassword={setShowPortalPassword}
-            financialAliasEdit={financialAliasEdit}
-            setFinancialAliasEdit={setFinancialAliasEdit}
-            canEditSalesPerson={canEditSalesPerson}
-            salesUsers={salesUsers}
-            salesPersonIdEdit={salesPersonIdEdit}
-            setSalesPersonIdEdit={setSalesPersonIdEdit}
-            tenderStyle={tenderStyle}
-            setTenderStyle={setTenderStyle}
-            accountQuirks={accountQuirks}
-            setAccountQuirks={setAccountQuirks}
-            processNotes={processNotes}
-            setProcessNotes={setProcessNotes}
-            spotProcess={spotProcess}
-            setSpotProcess={setSpotProcess}
-            dlEmail={dlEmail}
-            setDlEmail={setDlEmail}
-            operatingHours={operatingHours}
-            setOperatingHours={setOperatingHours}
-            accountSummary={accountSummary}
-            setAccountSummary={setAccountSummary}
-            openPortalEdit={openPortalEdit}
-            savePortalMutation={savePortalMutation}
-            transferOpen={transferOpen}
-            setTransferOpen={setTransferOpen}
-            transferTo={transferTo}
-            setTransferTo={setTransferTo}
-            assignableUsers={assignableUsers}
-            reassignMutation={reassignMutation}
-            scorecardPending={scorecardPending}
-            setScorecardPending={setScorecardPending}
-            scorecardUploading={scorecardUploading}
-            setScorecardUploading={setScorecardUploading}
-            walletSharePct={walletSharePct}
-            setWalletSharePct={setWalletSharePct}
-            avgMarginOverride={avgMarginOverride}
-            setAvgMarginOverride={setAvgMarginOverride}
+            currentUser={currentUser}
             teamMembers={teamMembers}
-            sharedReps={sharedReps}
-            addSharedRepOpen={addSharedRepOpen}
-            setAddSharedRepOpen={setAddSharedRepOpen}
-            newSharedRepUserId={newSharedRepUserId}
-            setNewSharedRepUserId={setNewSharedRepUserId}
-            newSharedRepNote={newSharedRepNote}
-            setNewSharedRepNote={setNewSharedRepNote}
-            addSharedRepMutation={addSharedRepMutation}
-            removeSharedRepMutation={removeSharedRepMutation}
-            canManageSharedReps={canManageSharedReps}
-            allSalesUsers={allSalesUsers}
-            allUsersForSales={allUsersForSales}
-            accountPerf={accountPerf}
             companyRfps={companyRfps}
+            accountPerf={accountPerf}
             selectedTouchpoint={selectedTouchpoint}
             setSelectedTouchpoint={setSelectedTouchpoint}
           />
@@ -1495,48 +1038,21 @@ export default function CompanyDetail() {
             companyId={companyId}
             companyRfps={companyRfps}
             companyAwards={companyAwards}
-            facilityCoverage={facilityCoverage}
-            lanePatterns={lanePatterns}
-            laneMatching={laneMatching}
-            vendorRoutedKeys={vendorRoutedKeys}
-            vendorRoutedToggle={vendorRoutedToggle}
-            laneGapInsights={laneGapInsights}
-            laneGapInsightsMutation={laneGapInsightsMutation}
-            rfpIntelDefaultTab={rfpIntelTab}
-            rfpIntelCollapsed={rfpIntelCollapsed}
-            setRfpIntelCollapsed={setRfpIntelCollapsed}
-            researchTasks={researchTasks}
-            canReassign={canReassign}
-            setFindPlannerFacility={setFindPlannerFacility}
-            setAssignExistingContactId={setAssignExistingContactId}
-            handleAssignTask={handleAssignTask}
-            markResearchedMutation={markResearchedMutation}
-            lanesCollapsed={lanesCollapsed}
-            setLanesCollapsed={setLanesCollapsed}
             contacts={contacts}
             companyTouchpoints={companyTouchpoints}
             touchpointsThisMonth={touchpointsThisMonth}
+            rfpIntelDefaultTab={rfpIntelTab}
+            canReassign={canReassign}
             handleEditContact={handleEditContact}
             setViewContact={setViewContact}
             setTaskDialogOpen={setTaskDialogOpen}
             setEditingTaskItem={setEditingTaskItem}
             setForceLanePrefill={setForceLanePrefill}
-            cdRfpDialogOpen={cdRfpDialogOpen}
-            setCdRfpDialogOpen={setCdRfpDialogOpen}
-            cdEditingRfp={cdEditingRfp}
-            setCdEditingRfp={setCdEditingRfp}
-            cdAwardDialogOpen={cdAwardDialogOpen}
-            setCdAwardDialogOpen={setCdAwardDialogOpen}
-            cdEditingAward={cdEditingAward}
-            setCdEditingAward={setCdEditingAward}
-            cdConvertingRfp={cdConvertingRfp}
-            setCdConvertingRfp={setCdConvertingRfp}
-            cdDeleteRfpTarget={cdDeleteRfpTarget}
-            setCdDeleteRfpTarget={setCdDeleteRfpTarget}
-            cdDeleteAwardTarget={cdDeleteAwardTarget}
-            setCdDeleteAwardTarget={setCdDeleteAwardTarget}
-            cdDeleteRfpMutation={cdDeleteRfpMutation}
-            cdDeleteAwardMutation={cdDeleteAwardMutation}
+            onCreateContactForFacility={(defaults) => {
+              setContactDefaults(defaults);
+              setEditingContact(undefined);
+              setContactDialogOpen(true);
+            }}
           />
         </TabsContent>
       </Tabs>
@@ -1722,103 +1238,6 @@ export default function CompanyDetail() {
               {bulkImportMutation.isPending ? "Importing..." : `Import ${importRows.length > 0 ? importRows.length + " " : ""}Contact${importRows.length !== 1 ? "s" : ""}`}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {selectedTask && (
-        <ResearchLaneDialog
-          open={researchDialogOpen}
-          onOpenChange={setResearchDialogOpen}
-          lane={selectedTask}
-          laneIndex={selectedTask.laneIndex}
-          rfpId={selectedTask.rfpId}
-          companyId={companyId}
-        />
-      )}
-
-      <Dialog
-        open={!!findPlannerFacility}
-        onOpenChange={(open) => {
-          if (!open) {
-            setFindPlannerFacility(null);
-            setAssignExistingContactId("");
-          }
-        }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-red-500" />
-              {findPlannerFacility?.fullName}
-            </DialogTitle>
-            <p className="text-sm text-muted-foreground pt-1">
-              Assign an existing contact or create a new one for this facility.
-            </p>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <p className="text-sm font-medium">Select existing contact</p>
-              <Select
-                value={assignExistingContactId}
-                onValueChange={setAssignExistingContactId}
-              >
-                <SelectTrigger data-testid="select-existing-contact">
-                  <SelectValue placeholder="Choose a contact…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(contacts || []).map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}{c.title ? ` — ${c.title}` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                className="w-full"
-                disabled={!assignExistingContactId || assignContactToFacilityMutation.isPending}
-                onClick={() => {
-                  if (findPlannerFacility && assignExistingContactId) {
-                    assignContactToFacilityMutation.mutate({
-                      contactId: assignExistingContactId,
-                      laneToAdd: findPlannerFacility.fullName,
-                    });
-                  }
-                }}
-                data-testid="button-assign-existing-contact"
-              >
-                {assignContactToFacilityMutation.isPending ? "Assigning…" : "Assign to This Facility"}
-              </Button>
-            </div>
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">or</span>
-              </div>
-            </div>
-
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={() => {
-                setFindPlannerFacility(null);
-                setAssignExistingContactId("");
-                setContactDefaults({
-                  lane: findPlannerFacility?.fullName,
-                  region: findPlannerFacility?.state || undefined,
-                });
-                setEditingContact(undefined);
-                setContactDialogOpen(true);
-              }}
-              data-testid="button-create-new-contact-for-facility"
-            >
-              <UserPlus className="h-4 w-4 mr-2" />
-              Create New Contact
-            </Button>
-          </div>
         </DialogContent>
       </Dialog>
 
