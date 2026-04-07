@@ -186,6 +186,7 @@ export interface IStorage {
 
   getLaneAttributionsByContact(contactId: string): Promise<ContactLaneAttribution[]>;
   getLaneAttributionsByCompany(companyId: string): Promise<ContactLaneAttribution[]>;
+  getLaneAttributionsByCompanyIds(companyIds: string[]): Promise<ContactLaneAttribution[]>;
   createLaneAttribution(data: InsertContactLaneAttribution): Promise<ContactLaneAttribution>;
   deleteLaneAttribution(id: string): Promise<boolean>;
   
@@ -295,6 +296,8 @@ export interface IStorage {
   getTouchpointsByOrg(organizationId: string): Promise<Touchpoint[]>;
   createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint>;
   updateTouchpoint(id: string, data: { isMeaningful?: boolean; notes?: string }): Promise<Touchpoint>;
+  /** Re-attribute all touchpoints for a contact to a new company (used when a contact moves). */
+  updateTouchpointCompanyByContact(contactId: string, newCompanyId: string): Promise<number>;
   deleteTouchpoint(id: string): Promise<boolean>;
   getColdContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>>;
   getMeaningfulOverdueContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSinceLastMeaningful: number }>>;
@@ -1513,6 +1516,14 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async updateTouchpointCompanyByContact(contactId: string, newCompanyId: string): Promise<number> {
+    const result = await db
+      .update(touchpoints)
+      .set({ companyId: newCompanyId })
+      .where(eq(touchpoints.contactId, contactId));
+    return result.rowCount ?? 0;
+  }
+
   async deleteTouchpoint(id: string): Promise<boolean> {
     const result = await db.delete(touchpoints).where(eq(touchpoints.id, id));
     return (result.rowCount ?? 0) > 0;
@@ -2274,6 +2285,12 @@ export class DatabaseStorage implements IStorage {
   async getLaneAttributionsByCompany(companyId: string): Promise<ContactLaneAttribution[]> {
     return db.select().from(contactLaneAttributions)
       .where(eq(contactLaneAttributions.companyId, companyId));
+  }
+
+  async getLaneAttributionsByCompanyIds(companyIds: string[]): Promise<ContactLaneAttribution[]> {
+    if (companyIds.length === 0) return [];
+    return db.select().from(contactLaneAttributions)
+      .where(inArray(contactLaneAttributions.companyId, companyIds));
   }
 
   async createLaneAttribution(data: InsertContactLaneAttribution): Promise<ContactLaneAttribution> {

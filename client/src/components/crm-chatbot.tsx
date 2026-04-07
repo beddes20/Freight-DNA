@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
@@ -376,12 +377,7 @@ export function CrmChatbot() {
           date: new Date().toISOString().slice(0, 10),
           isMeaningful: false,
         });
-        qc.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
-        qc.invalidateQueries({ queryKey: ["/api/touchpoints"] });
-        qc.invalidateQueries({ queryKey: ["/api/growth-scores"] });
-        qc.invalidateQueries({ queryKey: ["/api/next-best-actions"] });
-        qc.invalidateQueries({ queryKey: ["/api/companies", matchedCompany.id, "next-best-action"] });
-        // Refresh company list so last-touch metrics update on customer cards
+        invalidateAfterTouchpoint(matchedCompany.id);
         qc.invalidateQueries({ queryKey: ["/api/companies"] });
       } else if (action.tool === "create_task") {
         await apiRequest("POST", "/api/tasks", {

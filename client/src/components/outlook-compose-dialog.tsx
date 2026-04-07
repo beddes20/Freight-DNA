@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Mail, Send, X, AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -129,11 +130,9 @@ export function OutlookComposeDialog({
         setSent(true);
         toast({ title: "Email sent!", description: `Your email to ${to} was sent from your Outlook.` });
         if (contactId) {
+          invalidateAfterTouchpoint(companyId);
           queryClient.invalidateQueries({ queryKey: ["/api/contacts", contactId, "touchpoints"] });
           queryClient.invalidateQueries({ queryKey: ["/api/dashboard/cold-contacts"] });
-          if (companyId) {
-            queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "touchpoints"] });
-          }
         }
       } else {
         toast({

@@ -48,6 +48,9 @@ interface DashboardSummaryData {
   totalMargin: number;
   unattributedLoads?: number;
   unattributedMargin?: number;
+  unworkedAccounts?: number;
+  unworkedLoads?: number;
+  unworkedMargin?: number;
 }
 
 // ── Dashboard-level portlet ───────────────────────────────────────────────────
@@ -102,12 +105,12 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
                   Contacts have base levels set but no matching financial data found. Make sure a financial upload is on file and company names match.
                 </div>
               )}
-              <SummaryTable rows={data.summary} />
+              <SummaryTable rows={data.summary} unworkedAccounts={data.unworkedAccounts} unworkedLoads={data.unworkedLoads} unworkedMargin={data.unworkedMargin} />
               <ProgressionCallout summary={data.summary} />
               {(data.unattributedLoads ?? 0) > 0 && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/50 border border-dashed border-muted-foreground/30 text-xs text-muted-foreground mt-2" data-testid="callout-dashboard-unattributed">
                   <Package className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span>{(data.unattributedLoads ?? 0).toLocaleString()} load{(data.unattributedLoads ?? 0) !== 1 ? "s" : ""} not yet attributed to any contact across all companies</span>
+                  <span>{(data.unattributedLoads ?? 0).toLocaleString()} load{(data.unattributedLoads ?? 0) !== 1 ? "s" : ""} on worked accounts not yet attributed to any contact lane</span>
                 </div>
               )}
             </div>
@@ -149,16 +152,16 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useQuery<{ contacts: CompanyContact[]; companyId: string; unattributedLoads: number; unattributedMargin: number }>({
+  const { data, isLoading } = useQuery<{ contacts: CompanyContact[]; companyId: string; unattributedLoads: number; unattributedMargin: number; totalLoads: number; totalMargin: number }>({
     queryKey: ["/api/companies", companyId, "relationship-freight-summary"],
     queryFn: () => fetch(`/api/companies/${companyId}/relationship-freight-summary`, { credentials: "include" }).then(r => r.json()),
   });
 
-  // Each contact shows their own lane-specific freight
+  // Use server-side deduplicated totals (prevents double-counting shared loads between contacts)
   const contacts = data?.contacts ?? [];
   const hasContacts = contacts.length > 0;
-  const totalLoads = contacts.reduce((s, c) => s + c.loads, 0);
-  const totalMargin = contacts.reduce((s, c) => s + c.margin, 0);
+  const totalLoads = data?.totalLoads ?? 0;
+  const totalMargin = data?.totalMargin ?? 0;
   const hasAnyAttributions = hasContacts && totalLoads > 0;
   const unattributedLoads = data?.unattributedLoads ?? 0;
   const unattributedMargin = data?.unattributedMargin ?? 0;
@@ -247,6 +250,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
               onSaved={() => {
                 queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "relationship-freight-summary"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/contacts", addOpen, "lane-attributions"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/relationship-freight-summary"] });
                 setAddOpen(null);
               }}
             />
@@ -298,10 +302,16 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
   );
 }
 
-function SummaryTable({ rows }: { rows: SummaryRow[] }) {
+function SummaryTable({ rows, unworkedAccounts, unworkedLoads, unworkedMargin }: {
+  rows: SummaryRow[];
+  unworkedAccounts?: number;
+  unworkedLoads?: number;
+  unworkedMargin?: number;
+}) {
   // Only show rows that have at least one contact with lanes assigned
   const activeRows = rows.filter(r => r.contacts > 0);
-  if (activeRows.length === 0) return null;
+  const hasUnworked = (unworkedAccounts ?? 0) > 0;
+  if (activeRows.length === 0 && !hasUnworked) return null;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
@@ -341,6 +351,24 @@ function SummaryTable({ rows }: { rows: SummaryRow[] }) {
               </tr>
             );
           })}
+          {hasUnworked && (
+            <tr className="border-t-2 border-dashed border-muted-foreground/20 hover:bg-muted/40" data-testid="row-relationship-unworked">
+              <td className="py-2">
+                <span className="font-semibold text-muted-foreground">⬜ Unworked Accounts</span>
+                <span className="text-[10px] text-muted-foreground ml-1">({unworkedAccounts} {unworkedAccounts === 1 ? "account" : "accounts"} — no base set)</span>
+              </td>
+              <td className="text-right py-2 px-2 text-muted-foreground">—</td>
+              <td className="text-right py-2 px-2 text-foreground font-mono">
+                {(unworkedLoads ?? 0) > 0 ? (unworkedLoads ?? 0).toLocaleString() : <span className="text-muted-foreground">—</span>}
+              </td>
+              <td className="text-right py-2 px-2 font-mono">
+                {(unworkedMargin ?? 0) > 0 ? <span className="text-muted-foreground">{fmt$(unworkedMargin ?? 0)}</span> : <span className="text-muted-foreground">—</span>}
+              </td>
+              <td className="text-right py-2 px-2 text-muted-foreground">—</td>
+              <td className="text-right py-2 px-2 text-muted-foreground">—</td>
+              <td className="text-right py-2 px-2 text-muted-foreground">—</td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>

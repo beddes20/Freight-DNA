@@ -158,6 +158,11 @@ export function AccountGrowthPortlet({ companies, collapsed, onToggle }: Account
           <Zap className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-semibold">Account Growth</span>
           {!isLoading && (
+            <span className="text-xs text-muted-foreground font-normal hidden sm:inline" data-testid="label-growth-scope">
+              (your book)
+            </span>
+          )}
+          {!isLoading && (
             <div className="flex items-center gap-1.5">
               {atRiskCount > 0 && (
                 <Badge variant="destructive" className="text-xs px-1.5" data-testid="badge-at-risk-count">

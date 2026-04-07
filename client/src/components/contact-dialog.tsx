@@ -141,6 +141,8 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "relationship-freight-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/relationship-freight-summary"] });
       toast({
         title: "🎉 Contact created!",
         description: "New contact added to your org chart",
@@ -166,6 +168,8 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "relationship-freight-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/relationship-freight-summary"] });
       toast({
         title: "✅ Contact updated!",
         description: "Changes saved successfully",

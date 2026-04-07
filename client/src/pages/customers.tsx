@@ -36,6 +36,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { CompanyDialog } from "@/components/company-dialog";
 import { GrowthScoreBadge } from "@/components/account-growth-portlet";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
@@ -221,14 +222,8 @@ export default function Customers() {
     mutationFn: ({ contactId, type, notes, sentiment, isMeaningful }: { contactId: string; type: string; notes: string; sentiment?: string; isMeaningful?: boolean }) =>
       apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false }).then(r => r.json()),
     onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
+      invalidateAfterTouchpoint(data?.companyId);
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/growth-scores"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/next-best-actions"] });
-      if (data?.companyId) {
-        queryClient.invalidateQueries({ queryKey: ["/api/companies", data.companyId, "next-best-action"] });
-      }
       toast({ title: "Touch logged!" });
       buildAiToasts(data?.aiInsights, data?.autoTask, toast);
       setQuickTouch(null);

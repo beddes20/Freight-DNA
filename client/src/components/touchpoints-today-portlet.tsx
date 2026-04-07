@@ -201,6 +201,11 @@ export function TouchpointsTodayPortlet({ collapsed, onToggle }: TouchpointsToda
             Today's Touchpoints
           </span>
           {!isLoading && (
+            <span className="text-xs text-muted-foreground font-normal hidden sm:inline" data-testid="label-touchpoints-scope">
+              (your logged touches)
+            </span>
+          )}
+          {!isLoading && (
             <Badge variant="secondary" className="text-xs" data-testid="badge-touchpoints-today-count">
               {touchpoints.length}
             </Badge>

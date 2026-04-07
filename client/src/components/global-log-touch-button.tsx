@@ -11,6 +11,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { PhoneCall, Mail, MessageSquare, Building2, Search, Contact } from "lucide-react";
 
 const TOUCH_TYPES = [
@@ -83,15 +84,7 @@ export function GlobalLogTouchButton() {
       }).then(r => r.json());
     },
     onSuccess: () => {
-      if (selectedContact) {
-        queryClient.invalidateQueries({ queryKey: ["/api/companies", selectedContact.companyId, "touchpoints"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/companies", selectedContact.companyId, "touch-logs"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/companies", selectedContact.companyId, "next-best-action"] });
-      }
-      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/growth-scores"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/next-best-actions"] });
+      invalidateAfterTouchpoint(selectedContact?.companyId);
       // Refresh the customer list so last-touch metrics update on company cards
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
       toast({ title: "Touch logged successfully" });

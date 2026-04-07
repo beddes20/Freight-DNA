@@ -1490,9 +1490,19 @@ RULES FOR YOUR RESPONSES:
       if (!(await canAccessCompany(currentUser, existing.companyId))) {
         return res.status(403).json({ error: "Access denied" });
       }
+      // Allow companyId to change if provided; fall back to existing value
+      const newCompanyId = req.body.companyId && req.body.companyId !== existing.companyId
+        ? req.body.companyId
+        : existing.companyId;
+      // If company is changing, verify the user can also access the destination company
+      if (newCompanyId !== existing.companyId) {
+        if (!(await canAccessCompany(currentUser, newCompanyId))) {
+          return res.status(403).json({ error: "Access denied to destination company" });
+        }
+      }
       const contactData = {
         ...req.body,
-        companyId: existing.companyId,
+        companyId: newCompanyId,
       };
       const parsed = insertContactSchema.safeParse(contactData);
       if (!parsed.success) {
@@ -1526,6 +1536,27 @@ RULES FOR YOUR RESPONSES:
         ).catch(() => {});
       }
       const contact = await storage.updateContact((req.params.id as string), parsed.data);
+      // B3 fix: if company changed, re-attribute historical touchpoints then refresh growth scores
+      // Must await the cascade before recomputing so scores reflect the correct touchpoint set.
+      if (newCompanyId !== existing.companyId) {
+        try {
+          await storage.updateTouchpointCompanyByContact((req.params.id as string), newCompanyId);
+        } catch (err) {
+          console.error("[contact-update] touchpoint company cascade failed:", err);
+        }
+        // After cascade completes, refresh growth scores for both companies (async, non-blocking)
+        const orgId = req.session.organizationId!;
+        Promise.all([
+          computeGrowthScore(existing.companyId, orgId, storage).then(gs =>
+            storage.upsertGrowthScore({ companyId: existing.companyId, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() })
+          ),
+          computeGrowthScore(newCompanyId, orgId, storage).then(gs =>
+            storage.upsertGrowthScore({ companyId: newCompanyId, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() })
+          ),
+        ]).catch(err => {
+          console.error("[contact-update] growth score refresh after company change failed:", err);
+        });
+      }
       res.json({ ...contact });
     } catch (error) {
       console.error("Error updating contact:", error);
@@ -4868,17 +4899,17 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
   });
 
   // ── Account Growth Score (per account) ─────────────────────────────────────
-  // Returns cached score if <6h old, otherwise recomputes and persists.
+  // Returns cached score if <30min old, otherwise recomputes and persists.
   app.get("/api/companies/:id/growth-score", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const companyId = req.params.id as string;
-      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 16);
+      const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString().slice(0, 16);
 
       const cached = await storage.getGrowthScore(companyId);
-      if (cached && cached.calculatedAt >= sixHoursAgo) {
+      if (cached && cached.calculatedAt >= thirtyMinAgo) {
         return res.json(cached);
       }
 
@@ -4934,12 +4965,11 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
 
       // Background: recompute growth scores for:
       //   (a) visible companies with NO cached score yet (newly visible accounts)
-      //   (b) visible companies with a STALE cached score (older than 2 hours)
-      // 2-hour threshold (down from 6h) means a score that failed to refresh
-      // inline (e.g. transient DB error after a touch) gets corrected quickly on
-      // the next dashboard load rather than sitting stale for hours.
-      const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
-      const staleCutoff = new Date(Date.now() - TWO_HOURS_MS).toISOString();
+      //   (b) visible companies with a STALE cached score (older than 30 minutes)
+      // This ensures stale "No touchpoints on record" scores are corrected
+      // without requiring a rep to visit each company page individually.
+      const THIRTY_MIN_MS = 30 * 60 * 1000;
+      const staleCutoff = new Date(Date.now() - THIRTY_MIN_MS).toISOString();
       const cachedIds = new Set(cached.map(s => s.companyId));
       const unscoredIds = visibleIds.filter(id => !cachedIds.has(id));
       const staleIds = cached
@@ -7133,6 +7163,17 @@ Respond with valid JSON only:
     return { loads, margin, contractedLoads, spotLoads, allIndices };
   }
 
+  // ── Shared normBase utility used by all relationship-freight endpoints ─────
+  function normRelationshipBase(raw: string | null | undefined): string {
+    if (!raw) return "unknown";
+    const v = raw.trim().toLowerCase();
+    if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
+    if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
+    if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
+    if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
+    return "unknown";
+  }
+
   // ── Relationship Freight Summary — company-level ─────────────────────────
   app.get("/api/companies/:id/relationship-freight-summary", requireAuth, async (req, res) => {
     try {
@@ -7152,16 +7193,6 @@ Respond with valid JSON only:
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
 
       const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
-
-      function normalizeBase(raw: string | null | undefined): string {
-        if (!raw) return "unknown";
-        const v = raw.trim().toLowerCase();
-        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
-        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
-        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
-        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
-        return "unknown";
-      }
 
       // Build contact results — include ALL contacts, even those with no relationship base or no attribution.
       // Contacts with no base are grouped under "unknown" (Unassigned).
@@ -7196,7 +7227,7 @@ Respond with valid JSON only:
             }
           }
 
-          const base = normalizeBase(contact.relationshipBase);
+          const base = normRelationshipBase(contact.relationshipBase);
           const marginPerLoad = freight.loads > 0 ? Math.round((freight.margin / freight.loads) * 100) / 100 : null;
           const contractedPct = freight.loads > 0 ? Math.round(freight.contractedLoads / freight.loads * 1000) / 10 : null;
           const spotPct = freight.loads > 0 ? Math.round(freight.spotLoads / freight.loads * 1000) / 10 : null;
@@ -7218,9 +7249,11 @@ Respond with valid JSON only:
         })
         .filter(Boolean);
 
-      // Compute unattributed loads: all financial rows for this company minus those matched by any contact
+      // Compute deduplicated totals + unattributed loads (company rows not matched by any contact)
       let unattributedLoads = 0;
       let unattributedMargin = 0;
+      let totalLoads = 0;
+      let totalMargin = 0;
       if (rawRows.length > 0) {
         const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
         const marginK = cols.marginDollar ?? "Margin $";
@@ -7230,9 +7263,15 @@ Respond with valid JSON only:
             unattributedMargin += parseFloat(String(rawRows[idx][marginK] || 0).replace(/[$,]/g, "")) || 0;
           }
         }
+        // Deduplicated total: only rows that were actually matched by at least one contact
+        for (const idx of allContactsMatchedIndices) {
+          const marginK2 = cols.marginDollar ?? "Margin $";
+          totalLoads++;
+          totalMargin += parseFloat(String(rawRows[idx][marginK2] || 0).replace(/[$,]/g, "")) || 0;
+        }
       }
 
-      res.json({ contacts: contactResults, companyId: company.id, unattributedLoads, unattributedMargin });
+      res.json({ contacts: contactResults, companyId: company.id, unattributedLoads, unattributedMargin, totalLoads, totalMargin });
     } catch (e: any) {
       console.error("[relationship-freight-summary/company]", e);
       res.status(500).json({ error: e.message });
@@ -7278,48 +7317,47 @@ Respond with valid JSON only:
         companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
       }
 
-      // Load contacts + lane attributions for all visible companies (bulk queries)
+      // Bulk load contacts + lane attributions (single queries, no N+1)
       const allContacts = await storage.getContactsByCompanyIds(visibleCompanyIds);
-      const allAttributionsList = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
+      const allAttributionsList = await storage.getLaneAttributionsByCompanyIds(visibleCompanyIds);
 
       const rawRows: any[] = upload?.rows ?? [];
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
+      const marginK = cols.marginDollar ?? "Margin $";
 
-      const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "home": "Home Run" };
+      const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
       const BASE_ORDER = ["1st", "2nd", "3rd", "hr"];
 
-      // Group by relationship base
+      // ── Classify companies as "worked" vs "unworked" ────────────────────────
+      // A company is "worked" if at least one of its contacts has a relationship base set.
+      // "Unworked" companies have freight but no mapped relationship base at all.
+      const workedCompanyIds = new Set<string>(
+        allContacts.filter(c => c.relationshipBase && c.relationshipBase.trim()).map(c => c.companyId)
+      );
+      const unworkedCompanyIds = visibleCompanyIds.filter(id => !workedCompanyIds.has(id));
+
+      // ── Group by relationship base (worked companies only) ───────────────────
       const grouped: Record<string, { contacts: number; loads: number; margin: number; contractedLoads: number; spotLoads: number }> = {};
       for (const base of BASE_ORDER) grouped[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
       grouped["unknown"] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
-      function normBase(raw: string | null | undefined): string {
-        if (!raw) return "unknown";
-        const v = raw.trim().toLowerCase();
-        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
-        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
-        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
-        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
-        return "unknown";
-      }
-
       // Per-company deduplication set: tracks row indices already counted for each company's aggregate
       const companySeenIndices: Record<string, Set<number>> = {};
 
-      // First pass: count all contacts including those with no attribution (base assigned but no lanes)
+      // Worked companies: attribute freight to each contact's relationship base
       for (const contact of allContacts) {
+        if (!workedCompanyIds.has(contact.companyId)) continue; // skip unworked company contacts
+
         const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
         const hasAttribs = contactAttribs.length > 0;
         const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
 
-        const base = normBase(contact.relationshipBase);
+        const base = normRelationshipBase(contact.relationshipBase);
         grouped[base].contacts++;
 
         if (rawRows.length > 0 && (hasAttribs || hasLaneStrings)) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
-          if (!companySeenIndices[contact.companyId]) {
-            companySeenIndices[contact.companyId] = new Set<number>();
-          }
+          if (!companySeenIndices[contact.companyId]) companySeenIndices[contact.companyId] = new Set<number>();
           const seenForCompany = companySeenIndices[contact.companyId];
 
           // PRIORITY RULE: explicit attributions take precedence; lane strings are only a fallback
@@ -7331,7 +7369,6 @@ Respond with valid JSON only:
             grouped[base].spotLoads += m.spotLoads;
             m.matchedIndices.forEach(idx => seenForCompany.add(idx));
           } else {
-            // Fallback: lane strings only when no explicit attributions exist
             const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || [], seenForCompany);
             grouped[base].loads += m.loads;
             grouped[base].margin += m.margin;
@@ -7342,12 +7379,29 @@ Respond with valid JSON only:
         }
       }
 
-      // Compute total unattributed loads across all visible companies
+      // ── Unworked Accounts freight ────────────────────────────────────────────
+      // Compute ALL freight for unworked companies (no lane filtering needed — entire company is uncovered)
+      let unworkedLoads = 0;
+      let unworkedMargin = 0;
+      const unworkedCompanyCount = unworkedCompanyIds.length;
+      if (rawRows.length > 0) {
+        for (const companyId of unworkedCompanyIds) {
+          const companyNames = companyNameMap[companyId] ?? [];
+          if (companyNames.length === 0) continue;
+          const total = computeCompanyFreightTotal(rawRows, cols, companyNames);
+          unworkedLoads += total.loads;
+          for (const idx of total.allIndices) {
+            unworkedMargin += parseFloat(String(rawRows[idx][marginK] || 0).replace(/[$,]/g, "")) || 0;
+          }
+        }
+      }
+
+      // ── Unattributed loads (worked companies, lanes not covered by any contact) ──
       let totalUnattributedLoads = 0;
       let totalUnattributedMargin = 0;
       if (rawRows.length > 0) {
-        const marginK = cols.marginDollar ?? "Margin $";
         for (const companyId of visibleCompanyIds) {
+          if (!workedCompanyIds.has(companyId)) continue; // unworked companies are handled separately
           const companyNames = companyNameMap[companyId] ?? [];
           if (companyNames.length === 0) continue;
           const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
@@ -7361,7 +7415,9 @@ Respond with valid JSON only:
         }
       }
 
-      const summary = [...BASE_ORDER, ...(grouped["unknown"].contacts > 0 ? ["unknown"] : [])].map(base => ({
+      // ── Build summary rows ───────────────────────────────────────────────────
+      const summaryBases = [...BASE_ORDER, ...(grouped["unknown"].contacts > 0 ? ["unknown"] : [])];
+      const summary = summaryBases.map(base => ({
         base,
         label: BASE_LABELS[base] || "Unassigned",
         ...grouped[base],
@@ -7380,7 +7436,17 @@ Respond with valid JSON only:
       const totalMargin = summary.reduce((s, r) => s + r.margin, 0);
       const totalContacts = summary.reduce((s, r) => s + r.contacts, 0);
 
-      res.json({ summary, totalContacts, totalLoads, totalMargin, unattributedLoads: totalUnattributedLoads, unattributedMargin: totalUnattributedMargin });
+      res.json({
+        summary,
+        totalContacts,
+        totalLoads,
+        totalMargin,
+        unattributedLoads: totalUnattributedLoads,
+        unattributedMargin: totalUnattributedMargin,
+        unworkedAccounts: unworkedCompanyCount,
+        unworkedLoads,
+        unworkedMargin,
+      });
     } catch (e: any) {
       console.error("[relationship-freight-summary]", e);
       res.status(500).json({ error: e.message });
@@ -7430,16 +7496,6 @@ Respond with valid JSON only:
       const greenfieldCompanyIds = visibleCompanyIds.filter(id => !companiesWithAttributedContacts.has(id));
       const greenfieldCount = greenfieldCompanyIds.length;
 
-      function normB(raw: string | null | undefined): string {
-        if (!raw) return "unknown";
-        const v = raw.trim().toLowerCase();
-        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
-        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
-        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
-        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
-        return "unknown";
-      }
-
       const BASE_ORDER = ["hr", "3rd", "2nd", "1st", "unknown"];
       const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "unknown": "Unassigned" };
 
@@ -7459,7 +7515,7 @@ Respond with valid JSON only:
       }
 
       for (const contact of allContacts) {
-        const base = normB(contact.relationshipBase);
+        const base = normRelationshipBase(contact.relationshipBase);
         companiesPerLevel[base].add(contact.companyId);
         const recentlyAdvanced = !!(contact.baseAdvancedAt && contact.baseAdvancedAt >= cutoffStr);
         if (recentlyAdvanced) advancesPerLevel[base]++;
