@@ -127,7 +127,8 @@ export function AccountGrowthPortlet({ companies, collapsed, onToggle }: Account
 
   const { data: scores = [], isLoading } = useQuery<GrowthScoreEntry[]>({
     queryKey: ["/api/growth-scores"],
-    staleTime: 10 * 60 * 1000, // 10 min — scores recalc server-side every 6h
+    staleTime: 2 * 60 * 1000, // 2 min — ensures background-computed scores surface quickly
+    refetchOnWindowFocus: true,
   });
 
   const companyMap = new Map(companies.map(c => [c.id, c.name]));

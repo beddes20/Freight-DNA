@@ -4705,14 +4705,12 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
       if (contact.companyId) {
         _nbaCache.delete(`nba:${contact.companyId}`);
-        (async () => {
-          try {
-            const gs = await computeGrowthScore(contact.companyId!, user.organizationId, storage);
-            await storage.upsertGrowthScore({ companyId: contact.companyId!, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-          } catch (gsErr) {
-            console.error("[contact-touchpoint] background growth score refresh failed:", gsErr);
-          }
-        })();
+        try {
+          const gs = await computeGrowthScore(contact.companyId!, user.organizationId, storage);
+          await storage.upsertGrowthScore({ companyId: contact.companyId!, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+        } catch (gsErr) {
+          console.error("[contact-touchpoint] growth score refresh failed:", gsErr);
+        }
       }
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
@@ -4934,6 +4932,22 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         bandLabel: BAND_LABELS[s.band] ?? s.band,
         bandColor: BAND_COLORS[s.band] ?? "amber",
       }));
+
+      // Background: compute scores for visible companies with no cached score yet
+      // (up to 20, so the portlet eventually shows all accounts without requiring
+      //  the user to visit each company page first)
+      const cachedIds = new Set(cached.map(s => s.companyId));
+      const unscored = visibleIds.filter(id => !cachedIds.has(id)).slice(0, 20);
+      if (unscored.length > 0) {
+        (async () => {
+          for (const cid of unscored) {
+            try {
+              const gs = await computeGrowthScore(cid, user.organizationId, storage);
+              await storage.upsertGrowthScore({ companyId: cid, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+            } catch (_) { /* skip individual failures */ }
+          }
+        })();
+      }
 
       res.json(enriched);
     } catch (error) {
@@ -6376,14 +6390,12 @@ Respond with valid JSON only:
         }
       }
       _nbaCache.delete(`nba:${req.params.id}`);
-      (async () => {
-        try {
-          const gs = await computeGrowthScore(req.params.id as string, user.organizationId, storage);
-          await storage.upsertGrowthScore({ companyId: req.params.id as string, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-        } catch (gsErr) {
-          console.error("[company-touchpoint] background growth score refresh failed:", gsErr);
-        }
-      })();
+      try {
+        const gs = await computeGrowthScore(req.params.id as string, user.organizationId, storage);
+        await storage.upsertGrowthScore({ companyId: req.params.id as string, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+      } catch (gsErr) {
+        console.error("[company-touchpoint] growth score refresh failed:", gsErr);
+      }
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touchpoint (company route):", error);
@@ -6429,14 +6441,12 @@ Respond with valid JSON only:
         }
       }
       _nbaCache.delete(`nba:${companyId}`);
-      (async () => {
-        try {
-          const gs = await computeGrowthScore(companyId, user.organizationId, storage);
-          await storage.upsertGrowthScore({ companyId, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-        } catch (gsErr) {
-          console.error("[touch-logs] background growth score refresh failed:", gsErr);
-        }
-      })();
+      try {
+        const gs = await computeGrowthScore(companyId, user.organizationId, storage);
+        await storage.upsertGrowthScore({ companyId, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+      } catch (gsErr) {
+        console.error("[touch-logs] growth score refresh failed:", gsErr);
+      }
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touch:", error);
