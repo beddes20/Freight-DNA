@@ -1226,4 +1226,115 @@ export function registerDashboardRoutes(app: Express): void {
     }
   });
 
+  // ─── Dashboard Summary ────────────────────────────────────────────────────
+  // Consolidates 5 small independent calls into 1 parallel-fetched response:
+  //   urgentRfps, syncAlert (admin), missingMonthlyGoals (managers),
+  //   oneOnOnePending (count), streak (current user)
+  app.get("/api/dashboard/summary", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const orgId = req.session.organizationId!;
+      const isAdmin = user.role === "admin";
+      const isManagerRole = !["account_manager", "logistics_manager", "logistics_coordinator"].includes(user.role);
+
+      const [urgentRfpsResult, syncAlertResult, missingGoalsResult, streakResult, pendingCountResult] = await Promise.all([
+        // --- 1. Urgent RFPs (due within 14 days, excluding closed statuses) ---
+        (async () => {
+          const allRfps = await storage.getRfps();
+          const orgCompanies = await storage.getCompanies(orgId);
+          const orgCompanyIds = new Set(orgCompanies.map((c: any) => c.id));
+          const visibleIds = await getVisibleCompanyIds(user);
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const cutoff = 14 * 24 * 60 * 60 * 1000;
+          const closedStatuses = new Set(["awarded", "partially_awarded", "lost", "declined"]);
+          return allRfps
+            .filter(r => {
+              if (!r.dueDate || closedStatuses.has(r.status ?? "")) return false;
+              if (!orgCompanyIds.has(r.companyId)) return false;
+              if (visibleIds !== null && !visibleIds.includes(r.companyId)) return false;
+              const due = new Date(r.dueDate + "T00:00:00");
+              return due.getTime() - today.getTime() <= cutoff;
+            })
+            .sort((a, b) => a.dueDate!.localeCompare(b.dueDate!))
+            .map(r => ({ id: r.id, title: r.title, companyId: r.companyId, dueDate: r.dueDate }));
+        })(),
+
+        // --- 2. Sync alert (admin only) ---
+        (async () => {
+          if (!isAdmin) return { failed: false };
+          const failedMonth = await storage.getSetting("monthly_sync_failed");
+          if (!failedMonth) return { failed: false };
+          const errorMessage = await storage.getSetting("monthly_sync_failed_error") || "Unknown error";
+          return { failed: true, month: failedMonth, error: errorMessage };
+        })(),
+
+        // --- 3. Missing monthly goals (managers only) ---
+        (async () => {
+          if (!isManagerRole) return [];
+          const namId = isAdmin ? undefined : user.id;
+          return storage.getAmsMissingMonthlyGoals(orgId, namId);
+        })(),
+
+        // --- 4. Streak (current user's touchpoint streak) ---
+        (async () => {
+          const goalSetting = await storage.getSetting("streak_goal");
+          const goal = parseInt(goalSetting || "5");
+          const since = new Date(); since.setDate(since.getDate() - 60);
+          const tps = await storage.getTouchpointsByUser(user.id, since.toISOString().slice(0, 10));
+          const byDate: Record<string, number> = {};
+          for (const tp of tps) byDate[tp.date] = (byDate[tp.date] || 0) + 1;
+          const today = new Date().toISOString().slice(0, 10);
+          const todayCount = byDate[today] || 0;
+          let streak = 0;
+          const cur = new Date();
+          for (let i = 0; i < 60; i++) {
+            const d = cur.toISOString().slice(0, 10);
+            const count = byDate[d] || 0;
+            if (i === 0 && count < goal) { cur.setDate(cur.getDate() - 1); continue; }
+            if (count >= goal) { streak++; cur.setDate(cur.getDate() - 1); }
+            else break;
+          }
+          return { streak, goal, todayCount };
+        })(),
+
+        // --- 5. Pending 1:1 topics count ---
+        (async () => {
+          const allUsers = await storage.getUsers(orgId);
+          const amLikeRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+          let pairs: Array<{ namId: string; amId: string }> = [];
+          if (amLikeRoles.includes(user.role)) {
+            if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
+          } else if (isAdmin) {
+            const allReports = allUsers.filter((u: any) => u.managerId && u.role !== "admin");
+            for (const report of allReports) pairs.push({ namId: report.managerId!, amId: report.id });
+          } else {
+            const reports = allUsers.filter((u: any) => u.managerId === user.id);
+            for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
+            if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
+          }
+          const counts = await Promise.all(pairs.map(async ({ namId, amId }) => {
+            const session = await storage.getOrCreateActiveSession(namId, amId);
+            const topics = await storage.getTopicsBySession(session.id);
+            return topics.filter((t: any) => t.status === "pending").length;
+          }));
+          return { count: counts.reduce((s, c) => s + c, 0) };
+        })(),
+      ]);
+
+      res.json({
+        urgentRfps: urgentRfpsResult,
+        syncAlert: syncAlertResult,
+        missingMonthlyGoals: missingGoalsResult,
+        streak: streakResult,
+        oneOnOnePending: pendingCountResult,
+      });
+    } catch (err) {
+      console.error("Dashboard summary error:", err);
+      res.status(500).json({ error: "Failed to load dashboard summary" });
+    }
+  });
+
 }

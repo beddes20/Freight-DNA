@@ -150,11 +150,7 @@ export default function Dashboard() {
 
   const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
 
-  const { data: missingMonthlyGoals = [] } = useQuery<Array<{ amId: string; amName: string }>>({
-    queryKey: ["/api/goals/monthly-check"],
-    enabled: canSeeTeam,
-    refetchOnWindowFocus: false,
-  });
+  // Replaced by /api/dashboard/summary below — aliased for backward-compat
 
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/users"],
@@ -179,10 +175,23 @@ export default function Dashboard() {
     queryKey: ["/api/pto-passoffs"],
   });
 
-  const { data: syncAlert } = useQuery<{ failed: boolean; month?: string; error?: string }>({
-    queryKey: ["/api/sync-alert"],
-    enabled: currentUser?.role === "admin",
+  // ── Dashboard summary — replaces 5 separate small requests ──────────────
+  const { data: dashSummary } = useQuery<{
+    urgentRfps: Array<{ id: string; title: string; companyId: string; dueDate: string | null }>;
+    syncAlert: { failed: boolean; month?: string; error?: string };
+    missingMonthlyGoals: Array<{ amId: string; amName: string }>;
+    streak: { streak: number; goal: number; todayCount: number };
+    oneOnOnePending: { count: number };
+  }>({
+    queryKey: ["/api/dashboard/summary"],
+    staleTime: 60_000,
+    refetchInterval: 120_000,
   });
+  // Aliases preserve existing variable names — no downstream JSX changes needed
+  const syncAlert = dashSummary?.syncAlert;
+  const missingMonthlyGoals = dashSummary?.missingMonthlyGoals ?? [];
+  const urgentRfps = dashSummary?.urgentRfps ?? [];
+  const oneOnOnePendingData = dashSummary?.oneOnOnePending;
 
   const { data: billingInfo } = useQuery<{ billingStatus: string | null; planName: string | null } | null>({
     queryKey: ["/api/admin/billing"],
@@ -193,15 +202,6 @@ export default function Dashboard() {
   const showBillingBanner = !billingBannerDismissed &&
     currentUser?.role === "admin" &&
     (billingInfo?.billingStatus === "trialing" || billingInfo?.billingStatus === "past_due");
-
-  const { data: allRfps = [] } = useQuery<any[]>({
-    queryKey: ["/api/rfps"],
-  });
-
-  const { data: oneOnOnePendingData } = useQuery<{ count: number }>({
-    queryKey: ["/api/one-on-one/pending-count"],
-    refetchInterval: 90000,
-  });
 
   const { data: actionItems = [] } = useQuery<ActionItem[]>({
     queryKey: ["/api/one-on-one/action-items"],
@@ -396,10 +396,8 @@ export default function Dashboard() {
     return localStorage.getItem("briefing_dismissed") === today;
   });
 
-  const { data: streakData } = useQuery<{ streak: number; goal: number; todayCount: number }>({
-    queryKey: ["/api/users/streak"],
-    refetchInterval: 300000,
-  });
+  // streakData now comes from dashSummary (no separate request needed)
+  const streakData = dashSummary?.streak;
 
   const { data: briefingData } = useQuery<{
     skip?: boolean;
@@ -588,15 +586,9 @@ export default function Dashboard() {
 
   const isLoading = companiesLoading || contactsLoading;
 
-  // T004: RFP deadline warnings — within 14 days or overdue
+  // urgentRfps comes from dashSummary alias declared above (replaces allRfps filter)
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const urgentRfps = allRfps.filter((r: any) => {
-    if (!r.dueDate || r.status === "awarded" || r.status === "partially_awarded" || r.status === "lost" || r.status === "declined") return false;
-    const due = new Date(r.dueDate + "T00:00:00");
-    const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
-    return diffDays <= 14;
-  }).sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
 
   // T005: Goals mid-month nudge — after 15th, flag active goals < 50% progress
   const dayOfMonth = new Date().getDate();
@@ -903,10 +895,12 @@ export default function Dashboard() {
       />
 
       {/* ── Outbound Touchpoints Today ──────────────────────────────────────── */}
-      <TouchpointsTodayPortlet
-        collapsed={touchpointsTodayCollapsed}
-        onToggle={toggleTouchpointsToday}
-      />
+      <PortletErrorBoundary label="Touchpoints Today">
+        <TouchpointsTodayPortlet
+          collapsed={touchpointsTodayCollapsed}
+          onToggle={toggleTouchpointsToday}
+        />
+      </PortletErrorBoundary>
 
       {/* ── Priority Actions Today (NBA) ────────────────────────────────────── */}
       {!isLmRole && (
@@ -986,6 +980,7 @@ export default function Dashboard() {
 
       {/* ── NAM Dashboard Portlets ──────────────────────────────────────────── */}
       {isNam && (
+        <PortletErrorBoundary label="NAM Portlets">
         <NamPortlets
           namRelationshipsMoved={namRelationshipsMoved}
           namRelationshipsMovedLoading={namRelationshipsMovedLoading}
@@ -1014,27 +1009,30 @@ export default function Dashboard() {
           myGoals={myGoals}
           todayStr={todayStr}
         />
+        </PortletErrorBoundary>
       )}
 
       {/* ── AM Dashboard Portlets ────────────────────────────────────────────── */}
       {isAm && (
-        <AmPortlets
-          todaysFive={todaysFive}
-          todaysFiveLoading={todaysFiveLoading}
-          staleAccounts={staleAccounts}
-          setLocation={setLocation}
-          amTrendingAccounts={amTrendingAccounts}
-          amTrendingLoading={amTrendingLoading}
-          amTrendingUpCollapsed={amTrendingUpCollapsed}
-          setAmTrendingUpCollapsed={setAmTrendingUpCollapsed}
-          amTrendingDownCollapsed={amTrendingDownCollapsed}
-          setAmTrendingDownCollapsed={setAmTrendingDownCollapsed}
-          personalMetrics={personalMetrics}
-          personalMetricsLoading={personalMetricsLoading}
-          myGoals={myGoals}
-          todayStr={todayStr}
-          setActivePortlet={setActivePortlet}
-        />
+        <PortletErrorBoundary label="AM Portlets">
+          <AmPortlets
+            todaysFive={todaysFive}
+            todaysFiveLoading={todaysFiveLoading}
+            staleAccounts={staleAccounts}
+            setLocation={setLocation}
+            amTrendingAccounts={amTrendingAccounts}
+            amTrendingLoading={amTrendingLoading}
+            amTrendingUpCollapsed={amTrendingUpCollapsed}
+            setAmTrendingUpCollapsed={setAmTrendingUpCollapsed}
+            amTrendingDownCollapsed={amTrendingDownCollapsed}
+            setAmTrendingDownCollapsed={setAmTrendingDownCollapsed}
+            personalMetrics={personalMetrics}
+            personalMetricsLoading={personalMetricsLoading}
+            myGoals={myGoals}
+            todayStr={todayStr}
+            setActivePortlet={setActivePortlet}
+          />
+        </PortletErrorBoundary>
       )}
 
       {/* LM Career Panel — operational stats + path-to-AM progress */}
@@ -1050,7 +1048,9 @@ export default function Dashboard() {
 
       {/* LM Daily Check-In Portlets — read-only history for LMs themselves */}
       {currentUser?.role === "logistics_manager" && currentUser.id && (
-        <LmDailyCheckInPortlets lmUserId={currentUser.id} canEdit={false} />
+        <PortletErrorBoundary label="LM Check-In History">
+          <LmDailyCheckInPortlets lmUserId={currentUser.id} canEdit={false} />
+        </PortletErrorBoundary>
       )}
 
       {/* LM Daily Check-In Portlets for managers — read-only history view */}
@@ -1208,30 +1208,32 @@ export default function Dashboard() {
         );
       })}
 
-      <TasksSection
-        isVisible={isVisible}
-        getOrder={getOrder}
-        tasksCollapsed={tasksCollapsed}
-        setTasksCollapsed={setTasksCollapsed}
-        tasksLoading={tasksLoading}
-        openTasks={openTasks}
-        unreadTasks={unread.tasks}
-        incomingTasks={incomingTasks}
-        regularTasks={regularTasks}
-        displayTasks={displayTasks}
-        completedCount={completedCount}
-        actionItems={actionItems}
-        getCompanyName={getCompanyName}
-        getUserName={getUserName}
-        taskCommentNotifIds={taskCommentNotifIds}
-        taskAssignedNotifMap={taskAssignedNotifMap}
-        markNotifRead={(notifId) => markNotifReadMutation.mutate(notifId)}
-        toggleStatus={(id, status) => toggleStatusMutation.mutate({ id, status })}
-        deleteTask={(id) => deleteMutation.mutate(id)}
-        currentUser={currentUser as SafeUser}
-        onEditTask={(task) => setEditingTask(task)}
-        onOpenTaskDialog={() => setTaskDialogOpen(true)}
-      />
+      <PortletErrorBoundary label="Tasks">
+        <TasksSection
+          isVisible={isVisible}
+          getOrder={getOrder}
+          tasksCollapsed={tasksCollapsed}
+          setTasksCollapsed={setTasksCollapsed}
+          tasksLoading={tasksLoading}
+          openTasks={openTasks}
+          unreadTasks={unread.tasks}
+          incomingTasks={incomingTasks}
+          regularTasks={regularTasks}
+          displayTasks={displayTasks}
+          completedCount={completedCount}
+          actionItems={actionItems}
+          getCompanyName={getCompanyName}
+          getUserName={getUserName}
+          taskCommentNotifIds={taskCommentNotifIds}
+          taskAssignedNotifMap={taskAssignedNotifMap}
+          markNotifRead={(notifId) => markNotifReadMutation.mutate(notifId)}
+          toggleStatus={(id, status) => toggleStatusMutation.mutate({ id, status })}
+          deleteTask={(id) => deleteMutation.mutate(id)}
+          currentUser={currentUser as SafeUser}
+          onEditTask={(task) => setEditingTask(task)}
+          onOpenTaskDialog={() => setTaskDialogOpen(true)}
+        />
+      </PortletErrorBoundary>
 
       <div style={{ order: getOrder("cold-contacts") }} className={!isVisible("cold-contacts") ? "hidden" : ""} data-tour="tour-contacts-attention">
       {coldContacts.length > 0 && (

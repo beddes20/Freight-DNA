@@ -1,6 +1,7 @@
 import { eq, inArray, ilike, or, and, asc, desc, isNull, isNotNull, gte, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
+import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
 import {
   users,
   companies,
@@ -538,7 +539,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCompanies(organizationId: string): Promise<Company[]> {
-    return db.select().from(companies).where(eq(companies.organizationId, organizationId));
+    const key = `companies:${organizationId}`;
+    const cached = cacheGet<Company[]>(key);
+    if (cached) return cached;
+    const result = await db.select().from(companies).where(eq(companies.organizationId, organizationId));
+    cacheSet(key, result, 30_000);
+    return result;
   }
 
   async getCompaniesByIds(ids: string[], organizationId: string): Promise<Company[]> {
@@ -558,12 +564,15 @@ export class DatabaseStorage implements IStorage {
 
   async createCompany(company: InsertCompany): Promise<Company> {
     const [created] = await db.insert(companies).values(company).returning();
+    cacheInvalidatePrefix("companies:");
     return created;
   }
 
   async bulkCreateCompanies(companiesList: InsertCompany[]): Promise<Company[]> {
     if (companiesList.length === 0) return [];
-    return db.insert(companies).values(companiesList).returning();
+    const created = await db.insert(companies).values(companiesList).returning();
+    cacheInvalidatePrefix("companies:");
+    return created;
   }
 
   async updateCompany(id: string, organizationId: string, company: Partial<InsertCompany>): Promise<Company | undefined> {
@@ -572,11 +581,13 @@ export class DatabaseStorage implements IStorage {
       .set(company)
       .where(and(eq(companies.id, id), eq(companies.organizationId, organizationId)))
       .returning();
+    cacheInvalidatePrefix("companies:");
     return updated;
   }
 
   async deleteCompany(id: string, organizationId: string): Promise<boolean> {
     const result = await db.delete(companies).where(and(eq(companies.id, id), eq(companies.organizationId, organizationId))).returning();
+    cacheInvalidatePrefix("companies:");
     return result.length > 0;
   }
 
@@ -586,6 +597,7 @@ export class DatabaseStorage implements IStorage {
       .set({ archivedAt: new Date().toISOString() })
       .where(and(eq(companies.id, id), eq(companies.organizationId, organizationId)))
       .returning();
+    cacheInvalidatePrefix("companies:");
     return updated;
   }
 
@@ -595,6 +607,7 @@ export class DatabaseStorage implements IStorage {
       .set({ archivedAt: null })
       .where(and(eq(companies.id, id), eq(companies.organizationId, organizationId)))
       .returning();
+    cacheInvalidatePrefix("companies:");
     return updated;
   }
 
