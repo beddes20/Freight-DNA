@@ -375,7 +375,7 @@ export default function CompanyDetail() {
 
   const { data: touchLogEntries = [] } = useQuery<TouchLogEntry[]>({
     queryKey: ["/api/companies", companyId, "touch-logs"],
-    enabled: !!companyId,
+    enabled: !!companyId && detailTab === "activity",
   });
 
   const { data: researchTasks } = useQuery<ResearchTask[]>({
@@ -385,22 +385,27 @@ export default function CompanyDetail() {
       if (!res.ok) throw new Error("Failed to fetch research tasks");
       return res.json();
     },
+    enabled: detailTab === "rfp",
   });
 
   const { data: facilityCoverage } = useQuery<FacilityCoverage>({
     queryKey: ["/api/companies", companyId, "facility-coverage"],
+    enabled: detailTab === "rfp",
   });
 
   const { data: lanePatterns } = useQuery<LanePatterns>({
     queryKey: ["/api/companies", companyId, "lane-patterns"],
+    enabled: detailTab === "rfp",
   });
 
   const { data: laneMatching } = useQuery<LaneMatching>({
     queryKey: ["/api/companies", companyId, "lane-matching"],
+    enabled: detailTab === "rfp",
   });
 
   const { data: vendorRoutedKeys = [] } = useQuery<string[]>({
     queryKey: ["/api/companies", companyId, "vendor-routed"],
+    enabled: detailTab === "rfp",
   });
 
   const vendorRoutedToggle = useMutation({
