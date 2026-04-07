@@ -7,6 +7,7 @@
  * Renders nothing if no card is available for the company.
  */
 
+import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { NbaCard } from "./NbaCard";
 import type { NbaCardData } from "./NbaCard";
@@ -15,14 +16,26 @@ import { Brain } from "lucide-react";
 
 interface NbaCompanyCardProps {
   companyId: string;
+  onHasCard?: (hasCard: boolean) => void;
 }
 
-export function NbaCompanyCard({ companyId }: NbaCompanyCardProps) {
+export function NbaCompanyCard({ companyId, onHasCard }: NbaCompanyCardProps) {
   const { data: card, isLoading } = useQuery<NbaCardData | null>({
     queryKey: ["/api/nba/company", companyId, "card"],
     staleTime: 60_000,
     enabled: !!companyId,
   });
+
+  // Notify parent once we know whether a Phase 1 card exists
+  const prevHasCard = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (isLoading || !onHasCard) return;
+    const hasCard = !!card;
+    if (hasCard !== prevHasCard.current) {
+      prevHasCard.current = hasCard;
+      onHasCard(hasCard);
+    }
+  }, [isLoading, card, onHasCard]);
 
   if (isLoading) {
     return <Skeleton className="w-full rounded-xl" style={{ minHeight: 128 }} />;

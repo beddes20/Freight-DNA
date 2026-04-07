@@ -47,6 +47,7 @@ export function OverviewTab({
   isLeadership,
 }: OverviewTabProps) {
   const [ffDialogOpen, setFfDialogOpen] = useState(false);
+  const [hasPhase1Card, setHasPhase1Card] = useState(false);
   const fmtMonth = (key: string) => {
     const [y, mo] = key.split("-");
     return new Date(parseInt(y), parseInt(mo) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -91,16 +92,18 @@ export function OverviewTab({
 
   return (
     <>
-      {/* Phase 1 persistent NBA card — shown above the stateless action card */}
-      <NbaCompanyCard companyId={companyId} />
+      {/* Phase 1 persistent NBA card — takes precedence; falls back to legacy when absent */}
+      <NbaCompanyCard companyId={companyId} onHasCard={setHasPhase1Card} />
 
-      <NextBestActionCard
-        companyId={companyId}
-        onLogTouch={onNbaLogTouch}
-        onCreateTask={onNbaCreateTask}
-        onViewRfp={onNbaViewRfp}
-        onAssignForcedFocus={isLeadership ? () => setFfDialogOpen(true) : undefined}
-      />
+      {!hasPhase1Card && (
+        <NextBestActionCard
+          companyId={companyId}
+          onLogTouch={onNbaLogTouch}
+          onCreateTask={onNbaCreateTask}
+          onViewRfp={onNbaViewRfp}
+          onAssignForcedFocus={isLeadership ? () => setFfDialogOpen(true) : undefined}
+        />
+      )}
 
       {accountPerf && (
         <Card data-testid="card-account-performance">
