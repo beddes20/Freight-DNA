@@ -2,10 +2,7 @@ import type { Express } from "express";
 import { storage } from "../storage";
 import { getCurrentUser, requireAuth } from "../auth";
 
-export function registerCoachingRoutes(
-  app: Express,
-  tryClaimEasterEgg: (type: string, userId: string) => Promise<any>
-) {
+export function registerCoachingRoutes(app: Express) {
   // ── 1-on-1 Sessions ────────────────────────────────────────────────────────
 
   app.get("/api/1on1/session", requireAuth, async (req, res) => {
@@ -98,8 +95,7 @@ export function registerCoachingRoutes(
           console.error("[1on1] summary email error:", emailErr);
         }
       }
-      const easterEgg = await tryClaimEasterEgg("first_1on1_close", user.id);
-      res.json({ ...newSession, easterEgg });
+      res.json({ ...newSession });
     } catch (error) {
       res.status(500).json({ error: "Failed to close session" });
     }

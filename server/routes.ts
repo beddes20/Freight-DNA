@@ -1155,106 +1155,6 @@ RULES FOR YOUR RESPONSES:
     return 0;
   }
 
-  // ─── Easter Egg System ──────────────────────────────────────────────────────
-  const EGG_CONFIGS: Record<string, { title: string; message: string }> = {
-    first_meaningful_2: {
-      title: "🥚 Easter Egg Unlocked — First Meaningful!",
-      message: "LFG! You're the first rep EVER to rack up 2 meaningful conversations. The bar has officially been set. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
-    },
-    first_nominator: {
-      title: "🥚 Easter Egg Unlocked — First Nominator!",
-      message: "LFG! You're the first person EVER to nominate a teammate. Leadership is lifting others up. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
-    },
-    first_1on1_close: {
-      title: "🥚 Easter Egg Unlocked — First 1:1 Finisher!",
-      message: "LFG! You're the first person EVER to close out a full 1:1 session. You just set the standard. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
-    },
-    first_relationship_mover: {
-      title: "🥚 Easter Egg Unlocked — First Relationship Mover!",
-      message: "LFG! You're the first rep EVER to move two contacts up the relationship ladder. Down, not across. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
-    },
-    first_opportunity_4: {
-      title: "🥚 Easter Egg Unlocked — First Opportunity Logger!",
-      message: "LFG! You're the first rep EVER to log 4 opportunities. Hunters find the bag. 📸 Take a screenshot, drop it in the $ales group, and find Ben for $100 cash 💵\n\nYou found a Freight DNA easter egg. There are more hidden in the platform — keep digging.",
-    },
-  };
-
-  async function tryClaimEasterEgg(type: string, userId: string): Promise<{ type: string; title: string; message: string } | null> {
-    const config = EGG_CONFIGS[type];
-    if (!config) return null;
-    // "all-time" means each egg type can only ever be won once globally — no monthly resets
-    const claimed = await storage.checkAndClaimEasterEgg(type, "all-time", userId);
-    if (!claimed) return null;
-    return { type, ...config };
-  }
-
-  // ─── Pending eggs (for missed celebrations) ──────────────────────────────────
-  app.get("/api/me/pending-eggs", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const eggs = await storage.getUncelebratedEggs(user.id);
-      const enriched = eggs.map(e => {
-        const config = EGG_CONFIGS[e.type] ?? { title: "🥚 Easter Egg!", message: "You found an easter egg!" };
-        return { ...e, ...config };
-      });
-      res.json(enriched);
-    } catch {
-      res.json([]);
-    }
-  });
-
-  app.post("/api/me/pending-eggs/:id/celebrate", requireAuth, async (req, res) => {
-    try {
-      await storage.markEggCelebrated(parseInt(req.params.id, 10));
-      res.json({ ok: true });
-    } catch {
-      res.json({ ok: false });
-    }
-  });
-
-  app.get("/api/admin/easter-egg-winners", requireAuth, async (req, res) => {
-    try {
-      const admin = await getCurrentUser(req);
-      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admins only" });
-      const rows = await pool.query<{ id: number; type: string; month: string; winner_id: string; won_at: string; winner_name: string }>(`
-        SELECT e.id, e.type, e.month, e.winner_id, e.won_at,
-               u.name AS winner_name
-        FROM easter_egg_winners e
-        LEFT JOIN users u ON u.id = e.winner_id
-        ORDER BY e.won_at DESC
-      `);
-      res.json(rows.rows);
-    } catch {
-      res.status(500).json({ error: "Server error" });
-    }
-  });
-
-  app.post("/api/admin/award-easter-egg", requireAuth, async (req, res) => {
-    try {
-      const admin = await getCurrentUser(req);
-      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admins only" });
-      const { type, winnerId } = req.body;
-      if (!type || !winnerId) return res.status(400).json({ error: "type and winnerId required" });
-      const id = await storage.adminAwardEasterEgg(type, "all-time", winnerId);
-      if (!id) return res.status(500).json({ error: "Failed to award egg" });
-      res.json({ ok: true, id });
-    } catch {
-      res.status(500).json({ error: "Server error" });
-    }
-  });
-
-  app.delete("/api/admin/easter-egg-winners/:id", requireAuth, async (req, res) => {
-    try {
-      const admin = await getCurrentUser(req);
-      if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admins only" });
-      await pool.query(`DELETE FROM easter_egg_winners WHERE id = $1`, [req.params.id]);
-      res.json({ ok: true });
-    } catch {
-      res.status(500).json({ error: "Server error" });
-    }
-  });
-
   async function fanOutCelebration(type: "new_account" | "new_contact" | "base_advanced", title: string, body: string, link: string, relatedId: string, actorId: string, organizationId: string) {
     try {
       const allUsers = await storage.getUsers(organizationId);
@@ -1615,14 +1515,7 @@ RULES FOR YOUR RESPONSES:
         ).catch(() => {});
       }
       const contact = await storage.updateContact((req.params.id as string), parsed.data);
-      let easterEgg = null;
-      if (newRank > oldRank && newRank > 0) {
-        const now2 = new Date();
-        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
-        const moved = await storage.countRelationshipsMovedThisMonth(currentUser.id, monthStart);
-        if (moved >= 2) easterEgg = await tryClaimEasterEgg("first_relationship_mover", currentUser.id);
-      }
-      res.json({ ...contact, easterEgg });
+      res.json({ ...contact });
     } catch (error) {
       console.error("Error updating contact:", error);
       res.status(500).json({ error: "Failed to update contact" });
@@ -2946,8 +2839,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   registerTaskRoutes(app);
-  registerEngagementRoutes(app, tryClaimEasterEgg);
-  registerCoachingRoutes(app, tryClaimEasterEgg);
+  registerEngagementRoutes(app);
+  registerCoachingRoutes(app);
   registerProspectRoutes(app);
 
   registerFinancialRoutes(app);
@@ -3666,8 +3559,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         }
       }
       const topics = await storage.getTopicsBySession(newSession.id);
-      const easterEgg = await tryClaimEasterEgg("first_1on1_close", currentUser.id);
-      res.json({ session: newSession, topics, easterEgg });
+      res.json({ session: newSession, topics });
     } catch (error) {
       res.status(500).json({ error: "Failed to close session" });
     }
@@ -4349,11 +4241,6 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (req.body.isMeaningful !== undefined) updates.isMeaningful = req.body.isMeaningful === true;
       if (req.body.notes !== undefined) updates.notes = req.body.notes;
       const updated = await storage.updateTouchpoint(tp.id, updates);
-      if (updated.isMeaningful) {
-        const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
-        const count = await storage.countMeaningfulThisMonth(user.id, monthStart);
-        if (count >= 2) await tryClaimEasterEgg("first_meaningful_2", user.id);
-      }
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
       res.json(updated);
     } catch (error) {
@@ -4790,14 +4677,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
       cacheInvalidatePrefix(`cold-contacts:${user.id}`);
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
-      let easterEgg = null;
-      if (tp.isMeaningful) {
-        const now2 = new Date();
-        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
-        const count = await storage.countMeaningfulThisMonth(user.id, monthStart);
-        if (count >= 2) easterEgg = await tryClaimEasterEgg("first_meaningful_2", user.id);
-      }
-      res.json({ ...tp, aiInsights, autoTask, easterEgg });
+      res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to create touchpoint:", error);
       res.status(500).json({ error: "Failed to create touchpoint" });
@@ -6185,8 +6065,7 @@ Respond with valid JSON only:
         }
       })();
 
-      const easterEgg = await tryClaimEasterEgg("first_nominator", user.id);
-      res.json({ ...nomination, easterEgg });
+      res.json({ ...nomination });
     } catch (err) {
       res.status(500).json({ error: "Failed to create nomination" });
     }
@@ -6312,14 +6191,7 @@ Respond with valid JSON only:
           console.error("Failed to create auto follow-up task for company touchpoint:", taskError);
         }
       }
-      let easterEgg = null;
-      if (tp.isMeaningful) {
-        const now2 = new Date();
-        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
-        const count = await storage.countMeaningfulThisMonth(user.id, monthStart);
-        if (count >= 2) easterEgg = await tryClaimEasterEgg("first_meaningful_2", user.id);
-      }
-      res.json({ ...tp, aiInsights, autoTask, easterEgg });
+      res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touchpoint (company route):", error);
       res.status(500).json({ error: "Failed to log touchpoint" });
@@ -6363,14 +6235,7 @@ Respond with valid JSON only:
           console.error("Failed to create auto follow-up task for touch-log:", taskError);
         }
       }
-      let easterEgg = null;
-      if (tp.isMeaningful) {
-        const now2 = new Date();
-        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
-        const count = await storage.countMeaningfulThisMonth(user.id, monthStart);
-        if (count >= 2) easterEgg = await tryClaimEasterEgg("first_meaningful_2", user.id);
-      }
-      res.json({ ...tp, aiInsights, autoTask, easterEgg });
+      res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touch:", error);
       res.status(500).json({ error: "Failed to log touch" });

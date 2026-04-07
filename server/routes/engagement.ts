@@ -6,7 +6,6 @@ import { db } from "../storage";
 import { eq } from "drizzle-orm";
 
 type UserSlim = { id: string; role: string; managerId: string | null; organizationId: string };
-type TryClaimEgg = (type: string, userId: string) => Promise<{ type: string; title: string; message: string } | null>;
 
 async function getVisibleFeedAuthorIds(user: UserSlim): Promise<string[]> {
   if (user.role === "admin") {
@@ -29,7 +28,7 @@ async function getVisibleFeedAuthorIds(user: UserSlim): Promise<string[]> {
   return Array.from(ids);
 }
 
-export function registerEngagementRoutes(app: Express, tryClaimEasterEgg: TryClaimEgg) {
+export function registerEngagementRoutes(app: Express) {
   // ── Callouts ─────────────────────────────────────────────────────────────
 
   app.get("/api/callouts", async (req, res) => {
@@ -227,14 +226,7 @@ export function registerEngagementRoutes(app: Express, tryClaimEasterEgg: TryCla
         });
       }
 
-      let easterEgg = null;
-      {
-        const now2 = new Date();
-        const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
-        const count = await storage.countOpportunityLogsThisMonth(user.id, monthStart);
-        if (count >= 4) easterEgg = await tryClaimEasterEgg("first_opportunity_4", user.id);
-      }
-      res.status(201).json({ ...log, easterEgg });
+      res.status(201).json({ ...log });
     } catch (error) {
       res.status(500).json({ error: "Failed to create opportunity log" });
     }

@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink, Building2, Contact, RefreshCw, Database, Egg } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink, Building2, Contact, RefreshCw, Database } from "lucide-react";
 import type { User } from "@shared/schema";
 
 interface PromotionCriteria {
@@ -917,129 +917,6 @@ function BulkImportContactsDialog() {
   );
 }
 
-// ─── Easter Egg Admin Panel ───────────────────────────────────────────────────
-
-const EGG_TYPE_LABELS: Record<string, string> = {
-  first_meaningful_2: "First Meaningful (2 conversations)",
-  first_nominator: "First Nominator",
-  first_1on1_close: "First 1:1 Finisher",
-  first_relationship_mover: "First Relationship Mover",
-  first_opportunity_4: "First Opportunity Logger (4 logs)",
-};
-
-function EasterEggPanel({ users }: { users: { id: string; name: string }[] }) {
-  const { toast } = useToast();
-  const [awardType, setAwardType] = useState("");
-  const [awardUserId, setAwardUserId] = useState("");
-
-  const { data: winners = [], refetch } = useQuery<{ id: number; type: string; winner_id: string; winner_name: string; won_at: string }[]>({
-    queryKey: ["/api/admin/easter-egg-winners"],
-  });
-
-  const awardMutation = useMutation({
-    mutationFn: () =>
-      apiRequest("POST", "/api/admin/award-easter-egg", { type: awardType, winnerId: awardUserId }).then(r => r.json()),
-    onSuccess: () => {
-      toast({ title: "Egg awarded!", description: `${EGG_TYPE_LABELS[awardType] ?? awardType} → ${users.find(u => u.id === awardUserId)?.name}` });
-      setAwardType("");
-      setAwardUserId("");
-      refetch();
-    },
-    onError: () => toast({ title: "Failed to award egg", variant: "destructive" }),
-  });
-
-  const removeMutation = useMutation({
-    mutationFn: (id: number) =>
-      apiRequest("DELETE", `/api/admin/easter-egg-winners/${id}`).then(r => r.json()),
-    onSuccess: () => {
-      toast({ title: "Egg removed" });
-      refetch();
-    },
-    onError: () => toast({ title: "Failed to remove egg", variant: "destructive" }),
-  });
-
-  const allTypes = Object.keys(EGG_TYPE_LABELS);
-
-  return (
-    <div className="rounded-xl border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/30 p-5 space-y-4" data-testid="section-easter-eggs">
-      <div>
-        <p className="font-semibold text-sm flex items-center gap-1.5 text-purple-800 dark:text-purple-300 mb-1">
-          <Egg className="w-4 h-4" /> Easter Egg Management
-        </p>
-        <p className="text-xs text-purple-700 dark:text-purple-400">
-          Eggs are permanent — each person can win each egg type once, forever. Multiple people can find the same egg.
-        </p>
-      </div>
-
-      {/* Current winners */}
-      <div className="space-y-1.5">
-        <p className="text-xs font-medium text-purple-800 dark:text-purple-300">Current Winners</p>
-        {winners.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">No eggs awarded yet.</p>
-        ) : (
-          <div className="space-y-1">
-            {winners.map(w => (
-              <div key={w.id} className="flex items-center justify-between bg-white dark:bg-purple-900/20 rounded-lg px-3 py-2 text-xs border border-purple-100 dark:border-purple-800" data-testid={`easter-egg-winner-${w.id}`}>
-                <div>
-                  <span className="font-medium">{EGG_TYPE_LABELS[w.type] ?? w.type}</span>
-                  <span className="text-muted-foreground"> → {w.winner_name ?? w.winner_id}</span>
-                  <span className="text-muted-foreground ml-1">({new Date(w.won_at).toLocaleDateString()})</span>
-                </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2 text-destructive hover:text-destructive"
-                  onClick={() => removeMutation.mutate(w.id)}
-                  disabled={removeMutation.isPending}
-                  data-testid={`btn-remove-egg-${w.id}`}
-                >
-                  <XCircle className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Award new egg */}
-      <div className="space-y-2">
-        <p className="text-xs font-medium text-purple-800 dark:text-purple-300">Award an Egg</p>
-        <div className="flex gap-2 flex-wrap">
-            <Select value={awardType} onValueChange={setAwardType}>
-              <SelectTrigger className="h-8 text-xs w-56" data-testid="select-egg-type">
-                <SelectValue placeholder="Egg type…" />
-              </SelectTrigger>
-              <SelectContent>
-                {allTypes.map(t => (
-                  <SelectItem key={t} value={t}>{EGG_TYPE_LABELS[t]}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={awardUserId} onValueChange={setAwardUserId}>
-              <SelectTrigger className="h-8 text-xs w-48" data-testid="select-egg-user">
-                <SelectValue placeholder="User…" />
-              </SelectTrigger>
-              <SelectContent>
-                {users.map(u => (
-                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              size="sm"
-              className="h-8 text-xs bg-purple-700 hover:bg-purple-800 text-white"
-              disabled={!awardType || !awardUserId || awardMutation.isPending}
-              onClick={() => awardMutation.mutate()}
-              data-testid="btn-award-egg"
-            >
-              {awardMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Award Egg"}
-            </Button>
-          </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── ZoomInfo Mapping Panel ───────────────────────────────────────────────────
 
 const ZOOMINFO_CRM_FIELDS = [
@@ -1667,10 +1544,6 @@ export default function AdminUsers() {
           </div>
           <BillingPanel />
         </div>
-      )}
-
-      {currentUser?.role === "admin" && (
-        <EasterEggPanel users={(users ?? []).map(u => ({ id: u.id, name: u.name }))} />
       )}
 
       {currentUser?.role === "admin" && (

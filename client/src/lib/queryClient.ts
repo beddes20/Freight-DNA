@@ -1,5 +1,4 @@
-import { QueryClient, QueryFunction, MutationCache } from "@tanstack/react-query";
-import { dispatchEasterEgg } from "@/components/easter-egg-modal";
+import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 function redirectToLogin() {
   if (!window.location.pathname.startsWith("/login")) {
@@ -58,13 +57,6 @@ export const getQueryFn: <T>(options: {
   };
 
 export const queryClient = new QueryClient({
-  mutationCache: new MutationCache({
-    onSuccess: (data) => {
-      if (data && typeof data === "object" && "easterEgg" in data && data.easterEgg) {
-        dispatchEasterEgg(data.easterEgg as { type: string; title: string; message: string });
-      }
-    },
-  }),
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
