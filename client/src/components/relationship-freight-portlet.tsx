@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ChevronDown, ChevronUp, TrendingUp, Users, Package, DollarSign, Truck, Plus, Info, Loader2, ArrowUpCircle, Building2 } from "lucide-react";
+import { ChevronDown, ChevronUp, TrendingUp, Users, Package, DollarSign, Truck, Plus, Info, Loader2, ArrowUpCircle, Building2, AlertTriangle } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -108,9 +108,13 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
               <SummaryTable rows={data.summary} unworkedAccounts={data.unworkedAccounts} unworkedLoads={data.unworkedLoads} unworkedMargin={data.unworkedMargin} />
               <ProgressionCallout summary={data.summary} />
               {(data.unattributedLoads ?? 0) > 0 && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/50 border border-dashed border-muted-foreground/30 text-xs text-muted-foreground mt-2" data-testid="callout-dashboard-unattributed">
-                  <Package className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span>{(data.unattributedLoads ?? 0).toLocaleString()} load{(data.unattributedLoads ?? 0) !== 1 ? "s" : ""} on worked accounts not yet attributed to any contact lane</span>
+                <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-700 dark:text-amber-400 mt-2" data-testid="callout-dashboard-unattributed">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span>
+                    <span className="font-medium">{(data.unattributedLoads ?? 0).toLocaleString()} load{(data.unattributedLoads ?? 0) !== 1 ? "s" : ""} unattributed</span>
+                    {" — on worked accounts with no matching contact lane. "}
+                    <span className="underline decoration-dashed cursor-help" title="Open a contact on that account, then click '+ Add Lane' to assign the corridor they own.">Add lanes to contacts to claim them.</span>
+                  </span>
                 </div>
               )}
             </div>
@@ -139,6 +143,8 @@ interface CompanyContact {
   attributions: any[];
   coverageLaneCount: number;
   hasNoAttribution?: boolean;
+  /** "explicit" = contact has explicit lane attributions; "estimate" = falling back to coverage strings; "none" = no attribution data */
+  attributionSource?: "explicit" | "estimate" | "none";
 }
 
 interface CompanyPortletProps {
@@ -188,7 +194,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
                   <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Shows freight attributed to each contact based on their assigned lanes and coverage assignments. Contacts appear if they have a relationship base set and either explicit lane attributions or facility coverage assignments (from the RFP Coverage tab). Add explicit lanes with the + button for more precise attribution.
+                  Shows claimed loads per contact in relationship priority order (Home Run → 3rd → 2nd → 1st). When lanes overlap, the highest-level contact claims the load — so per-contact loads sum exactly to the company total. "Explicit" contacts have specific origin/destination lanes assigned. "Estimate" contacts fall back to broader coverage regions.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -235,9 +241,13 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
                 );
               })}
               {unattributedLoads > 0 && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/50 border border-dashed border-muted-foreground/30 text-xs text-muted-foreground" data-testid="callout-unattributed-loads">
-                  <Package className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span>{unattributedLoads.toLocaleString()} load{unattributedLoads !== 1 ? "s" : ""} not yet attributed to any contact{unattributedMargin > 0 ? ` · ${fmt$(unattributedMargin)} margin` : ""}</span>
+                <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-700 dark:text-amber-400" data-testid="callout-unattributed-loads">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <span>
+                    <span className="font-medium">{unattributedLoads.toLocaleString()} load{unattributedLoads !== 1 ? "s" : ""} unattributed</span>
+                    {unattributedMargin > 0 ? ` · ${fmt$(unattributedMargin)} margin` : ""}
+                    {" — no contact lane matches these corridors. Hover a contact row and click + to assign a lane."}
+                  </span>
                 </div>
               )}
             </div>
@@ -263,10 +273,18 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName }: Co
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
+const ATTRIB_SOURCE_CONFIG = {
+  explicit: { label: "Explicit", className: "bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800/40", title: "Freight matched to specific origin/destination lanes assigned to this contact." },
+  estimate: { label: "Estimate", className: "bg-yellow-50 dark:bg-yellow-950/30 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800/40", title: "Freight matched using broad coverage region strings (e.g. state abbreviations). Add specific lanes for more precise attribution." },
+  none: { label: "", className: "", title: "" },
+};
+
 function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; onAddLane: () => void }) {
   const cfg = BASE_CONFIG[contact.relationshipBase] ?? BASE_CONFIG["unknown"];
   const hasLoads = contact.loads > 0;
   const noAttribution = contact.hasNoAttribution === true;
+  const srcKey = (contact.attributionSource ?? "none") as keyof typeof ATTRIB_SOURCE_CONFIG;
+  const srcCfg = ATTRIB_SOURCE_CONFIG[srcKey];
 
   return (
     <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-muted/50 group" data-testid={`row-contact-freight-${contact.contactId}`}>
@@ -277,11 +295,20 @@ function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; on
           {contact.contactTitle && <p className="text-[10px] text-muted-foreground truncate">{contact.contactTitle}</p>}
         </div>
       </div>
-      <div className="flex items-center gap-3 flex-shrink-0 ml-2">
+      <div className="flex items-center gap-2 flex-shrink-0 ml-2">
         {noAttribution && contact.relationshipBase !== "unknown" ? (
           <span className="text-[10px] text-amber-600 dark:text-amber-400 italic bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800/40" data-testid={`badge-no-lanes-${contact.contactId}`}>No lanes set — freight not tracked</span>
         ) : hasLoads ? (
           <>
+            {srcCfg.label && (
+              <span
+                className={`text-[9px] font-medium px-1 py-0.5 rounded border ${srcCfg.className}`}
+                title={srcCfg.title}
+                data-testid={`badge-attrib-source-${contact.contactId}`}
+              >
+                {srcCfg.label}
+              </span>
+            )}
             <span className="text-xs text-foreground font-mono">{contact.loads.toLocaleString()} loads</span>
             <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono">{fmt$(contact.margin)}</span>
             {contact.marginPerLoad != null && (

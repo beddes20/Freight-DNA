@@ -7197,33 +7197,48 @@ Respond with valid JSON only:
       // Build contact results — include ALL contacts, even those with no relationship base or no attribution.
       // Contacts with no base are grouped under "unknown" (Unassigned).
       // Contacts with a base but no attribution appear with 0 loads (not silently hidden).
-      const allContactsMatchedIndices = new Set<number>();
+      //
+      // FIX: Process contacts in relationship priority order (HR → 3rd → 2nd → 1st → unknown) and
+      // pass a shared seenForCompany set so each load row is claimed by the highest-level contact
+      // that matches it.  Per-contact loads now reflect "claimed" loads (no double-counting).
+      const BASE_PRIORITY_COMPANY: Record<string, number> = { hr: 0, "3rd": 1, "2nd": 2, "1st": 3, unknown: 4 };
+      const sortedContacts = [...contacts].sort((a, b) => {
+        const pa = BASE_PRIORITY_COMPANY[normRelationshipBase(a.relationshipBase)] ?? 4;
+        const pb = BASE_PRIORITY_COMPANY[normRelationshipBase(b.relationshipBase)] ?? 4;
+        return pa - pb;
+      });
 
-      const contactResults = contacts
+      // seenForCompany tracks every row index claimed by any contact (for unattributed + total calc)
+      const seenForCompany = new Set<number>();
+
+      const contactResults = sortedContacts
         .map(contact => {
           const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
           const hasAttribs = contactAttribs.length > 0;
           const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
           const hasNoAttribution = !hasAttribs && !hasLaneStrings;
+          const attributionSource: "explicit" | "estimate" | "none" =
+            hasAttribs ? "explicit" : hasLaneStrings ? "estimate" : "none";
 
           let freight = { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
           if (rawRows.length > 0 && !hasNoAttribution) {
-            // PRIORITY RULE: explicit attributions take precedence over lane strings (not additive)
+            // PRIORITY RULE: explicit attributions take precedence over lane strings (not additive).
+            // seenForCompany is passed so already-claimed rows are skipped (claimed loads only).
             if (hasAttribs) {
-              const f1 = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+              const f1 = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs, seenForCompany);
               freight.loads = f1.loads;
               freight.margin = f1.margin;
               freight.contractedLoads = f1.contractedLoads;
               freight.spotLoads = f1.spotLoads;
-              f1.matchedIndices.forEach(idx => allContactsMatchedIndices.add(idx));
+              f1.matchedIndices.forEach(idx => seenForCompany.add(idx));
             } else {
               // Fallback: use lane strings only when no explicit attributions exist
-              const f2 = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
+              const f2 = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || [], seenForCompany);
               freight.loads = f2.loads;
               freight.margin = f2.margin;
               freight.contractedLoads = f2.contractedLoads;
               freight.spotLoads = f2.spotLoads;
-              f2.matchedIndices.forEach(idx => allContactsMatchedIndices.add(idx));
+              f2.matchedIndices.forEach(idx => seenForCompany.add(idx));
             }
           }
 
@@ -7240,6 +7255,7 @@ Respond with valid JSON only:
             attributionCount: contactAttribs.length,
             coverageLaneCount: (contact.lanes?.length || 0) + (contact.regions?.length || 0),
             hasNoAttribution,
+            attributionSource,
             attributions: contactAttribs,
             ...freight,
             marginPerLoad,
@@ -7249,7 +7265,9 @@ Respond with valid JSON only:
         })
         .filter(Boolean);
 
-      // Compute deduplicated totals + unattributed loads (company rows not matched by any contact)
+      // Compute deduplicated totals + unattributed loads (company rows not matched by any contact).
+      // seenForCompany now tracks exactly which rows were claimed (priority-ordered), so the
+      // sum of per-contact claimed loads equals totalLoads and unattributed is accurate.
       let unattributedLoads = 0;
       let unattributedMargin = 0;
       let totalLoads = 0;
@@ -7258,13 +7276,13 @@ Respond with valid JSON only:
         const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
         const marginK = cols.marginDollar ?? "Margin $";
         for (const idx of companyTotal.allIndices) {
-          if (!allContactsMatchedIndices.has(idx)) {
+          if (!seenForCompany.has(idx)) {
             unattributedLoads++;
             unattributedMargin += parseFloat(String(rawRows[idx][marginK] || 0).replace(/[$,]/g, "")) || 0;
           }
         }
-        // Deduplicated total: only rows that were actually matched by at least one contact
-        for (const idx of allContactsMatchedIndices) {
+        // Deduplicated total: rows claimed by at least one contact
+        for (const idx of seenForCompany) {
           const marginK2 = cols.marginDollar ?? "Margin $";
           totalLoads++;
           totalMargin += parseFloat(String(rawRows[idx][marginK2] || 0).replace(/[$,]/g, "")) || 0;
@@ -7344,8 +7362,19 @@ Respond with valid JSON only:
       // Per-company deduplication set: tracks row indices already counted for each company's aggregate
       const companySeenIndices: Record<string, Set<number>> = {};
 
+      // FIX: Sort contacts by relationship base priority (HR → 3rd → 2nd → 1st → unknown) before
+      // the attribution loop so that the highest-value contact claims a shared load row first.
+      // Contacts for different companies are interleaved but per-company deduplication (companySeenIndices)
+      // is unaffected — the sort only matters within each company's contact group.
+      const BASE_PRIORITY_DASH: Record<string, number> = { hr: 0, "3rd": 1, "2nd": 2, "1st": 3, unknown: 4 };
+      const sortedAllContacts = [...allContacts].sort((a, b) => {
+        const pa = BASE_PRIORITY_DASH[normRelationshipBase(a.relationshipBase)] ?? 4;
+        const pb = BASE_PRIORITY_DASH[normRelationshipBase(b.relationshipBase)] ?? 4;
+        return pa - pb;
+      });
+
       // Worked companies: attribute freight to each contact's relationship base
-      for (const contact of allContacts) {
+      for (const contact of sortedAllContacts) {
         if (!workedCompanyIds.has(contact.companyId)) continue; // skip unworked company contacts
 
         const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
@@ -7653,10 +7682,20 @@ Respond with valid JSON only:
       for (const base of BASE_ORDER_S) groupedS[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
       groupedS["unknown"] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
-      // Load lane attributions for visible companies
-      const allAttributionsListS = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
+      // FIX 6: Replace N+1 per-company queries with a single bulk fetch
+      const allAttributionsListS = await storage.getLaneAttributionsByCompanyIds(visibleCompanyIds);
 
-      for (const contact of allContacts) {
+      // FIX 2 & 3: Add per-company deduplication (seenIndices) and sort contacts by base priority
+      // so the highest-value relationship claims a shared load row first.
+      const BASE_PRIORITY_DS: Record<string, number> = { hr: 0, "3rd": 1, "2nd": 2, "1st": 3, unknown: 4 };
+      const companySeenIndicesDS: Record<string, Set<number>> = {};
+      const sortedAllContactsDS = [...allContacts].sort((a, b) => {
+        const pa = BASE_PRIORITY_DS[normBaseS(a.relationshipBase)] ?? 4;
+        const pb = BASE_PRIORITY_DS[normBaseS(b.relationshipBase)] ?? 4;
+        return pa - pb;
+      });
+
+      for (const contact of sortedAllContactsDS) {
         if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
         const contactAttribs = allAttributionsListS.filter(a => a.contactId === contact.id);
         const hasAttribsS = contactAttribs.length > 0;
@@ -7665,21 +7704,28 @@ Respond with valid JSON only:
 
         const base = normBaseS(contact.relationshipBase);
         groupedS[base].contacts++;
+
         if (rawRows.length > 0) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
+          if (!companySeenIndicesDS[contact.companyId]) companySeenIndicesDS[contact.companyId] = new Set<number>();
+          const seenDS = companySeenIndicesDS[contact.companyId];
+
+          // FIX 1: Priority rule — explicit attributions take precedence; lane strings are a fallback
+          // (previously both branches ran additively — now strictly one or the other)
           if (hasAttribsS) {
-            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs, seenDS);
             groupedS[base].loads += m.loads;
             groupedS[base].margin += m.margin;
             groupedS[base].contractedLoads += m.contractedLoads;
             groupedS[base].spotLoads += m.spotLoads;
-          }
-          if (hasLaneStringsS) {
-            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
+            m.matchedIndices.forEach(idx => seenDS.add(idx));
+          } else {
+            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || [], seenDS);
             groupedS[base].loads += m.loads;
             groupedS[base].margin += m.margin;
             groupedS[base].contractedLoads += m.contractedLoads;
             groupedS[base].spotLoads += m.spotLoads;
+            m.matchedIndices.forEach(idx => seenDS.add(idx));
           }
         }
       }
