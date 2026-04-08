@@ -1,0 +1,88 @@
+I need to change Lane Work Queue visibility so it follows our org chart hierarchy, not just broad role access.
+
+Current problem:
+Right now, access appears to be role-based, but I need team-based visibility tied to reporting structure and ownership.
+
+Business requirement:
+- Every user should have visibility to the lane work queue for their respective team’s freight
+- Visibility should follow the org chart hierarchy
+- A user should only see lanes that belong to their scope in the hierarchy, unless they are admin
+
+Target visibility model:
+1) AM / LM
+- can see lanes assigned to themselves
+- optionally can see unassigned lanes for their own team only if that is already consistent with current workflow; if not, leave that out for now
+
+2) Team manager
+- can see all recurring lanes assigned to direct reports
+- can also see lanes assigned to indirect reports under their team tree
+- can see unassigned lanes that belong to their team scope
+
+3) Director / NAM
+- can see all recurring lanes for teams beneath them in the org hierarchy
+- can assign/reassign within that hierarchy scope
+
+4) Admin
+- can see all recurring lanes in the org
+
+What I need from you:
+Please inspect the current user/org/team hierarchy model and implement the lowest-risk way to scope Lane Work Queue visibility by reporting hierarchy.
+
+Specifically:
+1) Identify the source of truth for org chart / manager relationships
+- user.managerId
+- overseer/owner relationships
+- team tables
+- branch or pod mapping
+- or whatever currently exists in the code/schema
+
+2) Define hierarchy-scoped lane visibility
+For each user hitting the work queue:
+- resolve the set of visible user IDs in their reporting tree
+- show lanes where:
+  - assignedOwnerId is in that visible scope
+  - OR lane is unassigned but belongs to accounts/freight owned by that visible scope, if that ownership mapping already exists reliably
+- keep everything org-scoped
+
+3) Update the backend, not just the frontend
+- visibility filtering must happen in the API / storage layer
+- do not rely on client-side hiding
+
+4) Keep assignment rules aligned
+- users can only assign lanes within their hierarchy scope
+- non-managers still cannot assign to another user
+- managers/directors can assign only within their visible hierarchy scope
+- admins can assign anywhere in-org
+
+5) UI expectations
+- Lane Work Queue should still work as the manager-facing page
+- add a small scope indicator near the top like:
+  - “Showing: My lanes”
+  - “Showing: My team lanes”
+  - “Showing: Team hierarchy”
+  - “Showing: All org lanes”
+- do not redesign the page
+
+6) Tests
+Add targeted tests for:
+- AM sees only own lanes
+- manager sees direct + indirect report lanes
+- director sees lower hierarchy lanes
+- admin sees all org lanes
+- cross-team / same-org but outside hierarchy is not visible
+- assignment outside hierarchy scope fails
+- queue bucket counts reflect scoped visibility correctly
+
+Output format:
+1. CURRENT HIERARCHY MODEL FOUND
+2. CHANGES MADE
+3. ACCESS RULES AFTER CHANGE
+4. TESTS ADDED
+5. REMAINING GAPS
+
+Guardrails:
+- low-risk only
+- no major redesign
+- no breaking org scoping
+- prefer existing hierarchy relationships over inventing a new team system
+- if unassigned lane ownership cannot be reliably tied to a hierarchy yet, say so clearly and keep unassigned visibility limited to admins/directors until a trustworthy mapping exists

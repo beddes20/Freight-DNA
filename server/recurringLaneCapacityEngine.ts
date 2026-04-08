@@ -87,7 +87,10 @@ export interface LaneSummary {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function getWeekKey(dateStr: string): string {
-  const d = new Date(dateStr + "T12:00:00Z");
+  // Handle both "YYYY-MM-DD" and full ISO datetimes like "2025-10-02T00:00:00.000Z"
+  // by extracting just the date part before appending the noon UTC anchor
+  const datePart = String(dateStr).trim().slice(0, 10);
+  const d = new Date(datePart + "T12:00:00Z");
   if (isNaN(d.getTime())) return "";
   const year = d.getUTCFullYear();
   const jan1 = new Date(Date.UTC(year, 0, 1));
@@ -95,11 +98,11 @@ function getWeekKey(dateStr: string): string {
   return `${year}-${String(weekNum).padStart(2, "0")}`;
 }
 
-function getWeekKeys(weeksBack: number): string[] {
+function getWeekKeys(weeksBack: number, anchorDate?: Date): string[] {
   const keys: string[] = [];
-  const now = new Date();
+  const anchor = anchorDate ?? new Date();
   for (let i = 0; i < weeksBack; i++) {
-    const d = new Date(now);
+    const d = new Date(anchor);
     d.setDate(d.getDate() - i * 7);
     const key = getWeekKey(d.toISOString().split("T")[0]);
     if (key && !keys.includes(key)) keys.push(key);
@@ -131,9 +134,6 @@ export async function identifyRecurringLanes(
   const companies = await storage.getCompanies(orgId);
   const companyMap = new Map(companies.map(c => [normCompanyName(c.name), c]));
 
-  const targetWeeks = getWeekKeys(LANE_CONFIG.lookbackWeeks);
-  if (targetWeeks.length === 0) return [];
-
   // Sort uploads newest first
   const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   const latestUpload = sorted[0];
@@ -145,6 +145,32 @@ export async function identifyRecurringLanes(
     const rows = (sorted[i].rows as any[]) ?? [];
     if (rows.length > 0) rowSources.push(rows);
   }
+
+  // Determine the lookback anchor: use the latest ship date found in the data rather
+  // than "today". This ensures the engine produces consistent results even when the
+  // most recent upload is several weeks old — otherwise stale data causes a gap where
+  // the most-recent target weeks have zero loads and most lanes fail to qualify.
+  let latestDataDate: Date | null = null;
+  for (const rows of rowSources) {
+    for (const row of rows) {
+      const dateStr = row["Delivery date"] ?? row.shipDate ?? row.ship_date ??
+        row.pickupDate ?? row.pickup_date ?? row.date ?? "";
+      if (!dateStr) continue;
+      const datePart = String(dateStr).trim().slice(0, 10);
+      const d = new Date(datePart + "T12:00:00Z");
+      if (!isNaN(d.getTime()) && (latestDataDate === null || d > latestDataDate)) {
+        latestDataDate = d;
+      }
+    }
+  }
+  // Fall back to today if no dates found; cap drift at 60 days
+  const anchor = latestDataDate ?? new Date();
+  const sixtyDaysAgo = new Date();
+  sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+  const effectiveAnchor = anchor < sixtyDaysAgo ? new Date() : anchor;
+
+  const targetWeeks = getWeekKeys(LANE_CONFIG.lookbackWeeks, effectiveAnchor);
+  if (targetWeeks.length === 0) return [];
 
   // Lane aggregation: key = "origin|destination|equipment|companyNorm"
   const laneWeekly = new Map<string, {
@@ -163,16 +189,36 @@ export async function identifyRecurringLanes(
 
   for (const rows of rowSources) {
     for (const row of rows) {
-      // Extract fields from the TMS financial row
-      const origin = normStr(row.shipperCity ?? row.originCity ?? row.origin ?? row.shipper_city ?? "");
-      const originState = normStr(row.shipperState ?? row.originState ?? row.origin_state ?? "");
-      const destination = normStr(row.consigneeCity ?? row.destinationCity ?? row.destination ?? row.consignee_city ?? "");
-      const destinationState = normStr(row.consigneeState ?? row.destinationState ?? row.destination_state ?? "");
-      const equipment = normStr(row.equipmentType ?? row.equipment_type ?? row.mode ?? row.trailer ?? "");
-      const customerRaw = normStr(row.customerName ?? row.customer_name ?? row.customer ?? row.account ?? "");
-      const shipDate = row.shipDate ?? row.ship_date ?? row.pickupDate ?? row.pickup_date ?? row.date ?? "";
-      // Optional load ID for stable dedup (load number, order ID, etc.)
-      const loadId = normStr(row.loadId ?? row.load_id ?? row.orderId ?? row.order_id ?? row.loadNumber ?? row.load_number ?? "");
+      // Extract fields from the TMS financial row.
+      // Try multiple naming conventions: camelCase (generic TMS), snake_case, and
+      // the Pascal-Case-with-spaces format used by Value Truck's TMS export
+      // ("Origin", "Destination", "Delivery date", "Customer", "Trailer type", etc.)
+      const origin = normStr(
+        row.Origin ?? row.shipperCity ?? row.originCity ?? row.origin ?? row.shipper_city ?? ""
+      );
+      const originState = normStr(
+        row["Origin state"] ?? row.shipperState ?? row.originState ?? row.origin_state ?? ""
+      );
+      const destination = normStr(
+        row.Destination ?? row.consigneeCity ?? row.destinationCity ?? row.destination ?? row.consignee_city ?? ""
+      );
+      const destinationState = normStr(
+        row["Destination state"] ?? row.consigneeState ?? row.destinationState ?? row.destination_state ?? ""
+      );
+      const equipment = normStr(
+        row["Trailer type"] ?? row.equipmentType ?? row.equipment_type ?? row.mode ?? row.trailer ?? ""
+      );
+      const customerRaw = normStr(
+        row.Customer ?? row.customerName ?? row.customer_name ?? row.customer ?? row.account ?? ""
+      );
+      const shipDate =
+        row["Delivery date"] ?? row.shipDate ?? row.ship_date ??
+        row.pickupDate ?? row.pickup_date ?? row.date ?? "";
+      // Optional load ID for stable dedup (Order number, load number, etc.)
+      const loadId = normStr(
+        row.Order ?? row.loadId ?? row.load_id ?? row.orderId ?? row.order_id ??
+        row.loadNumber ?? row.load_number ?? ""
+      );
 
       if (!origin || !destination || !shipDate || !customerRaw) continue;
 
@@ -184,10 +230,11 @@ export async function identifyRecurringLanes(
 
       const laneKey = `${origin}|${destination}|${equipment}|${customerRaw}`;
 
-      // Dedup: use loadId when available; otherwise fall back to lane+date fingerprint
+      // Dedup: use loadId when available; otherwise fall back to lane+date+carrier fingerprint
+      const rawCarrierForDedup = normStr(row.Carrier ?? row.carrier ?? row.carrierName ?? "");
       const loadFingerprint = loadId
         ? `${laneKey}|${loadId}`
-        : `${laneKey}|${String(shipDate).trim()}|${normStr(row.carrier ?? row.carrierName ?? "")}`;
+        : `${laneKey}|${String(shipDate).trim()}|${rawCarrierForDedup}`;
       if (seenLoadKeys.has(loadFingerprint)) continue;
       seenLoadKeys.add(loadFingerprint);
 
@@ -207,9 +254,19 @@ export async function identifyRecurringLanes(
       entry.weeks.set(weekKey, (entry.weeks.get(weekKey) ?? 0) + 1);
       if (shipDate) entry.shipDates.push(String(shipDate));
 
-      // V1.5: Track which carriers ran this lane
-      const payeeCode = normStr(row.payeeCode ?? row.payee_code ?? row.payee ?? "");
-      const carrierName = normStr(row.carrier ?? row.carrierName ?? row.carrier_name ?? row.payeeName ?? row.payee_name ?? "");
+      // V1.5: Track which carriers ran this lane.
+      // Value Truck's TMS "Carrier" field is "PAYEECODE - CARRIER NAME" (e.g. "JACOINSC - JACOBS TRANS LLC").
+      // Extract the payee code prefix when present so we can match against the carrier catalog.
+      const rawCarrierField = normStr(row.Carrier ?? row.carrier ?? row.carrierName ?? row.carrier_name ?? "");
+      const dashIdx = rawCarrierField.indexOf(" - ");
+      const payeeCode = normStr(
+        row.payeeCode ?? row.payee_code ?? row.payee ??
+        (dashIdx > 0 ? rawCarrierField.slice(0, dashIdx) : "")
+      );
+      const carrierName = normStr(
+        row.carrier ?? row.carrierName ?? row.carrier_name ?? row.payeeName ?? row.payee_name ??
+        (dashIdx > 0 ? rawCarrierField.slice(dashIdx + 3) : rawCarrierField)
+      );
       if (payeeCode) entry.payeeCodes.add(payeeCode);
       else if (carrierName) entry.carrierNames.add(carrierName);
     }

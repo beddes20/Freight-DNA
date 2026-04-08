@@ -1,0 +1,68 @@
+Good — the workflow is verified and broadly ready. But in my actual org, I still see zero lanes in the Lane Work Queue.
+
+I need you to stop working at the code-quality level and now diagnose the live org/data state for MY org specifically.
+
+We already know:
+- route logic is correct
+- queue bucket logic is correct
+- auth/org safety is correct
+- tests are passing
+- feature flag must be manually enabled per org
+
+Now answer one question only:
+Why does my org still have no recurring lanes showing?
+
+Please check in this exact order:
+
+1) Org-level feature enablement
+- Is lane_carrier_outreach_v1 enabled for my org right now?
+- If not, enable it and confirm it is enabled
+- Tell me exactly where that flag is stored and what value it had before/after
+
+2) Recurring lanes in database
+- Query the recurring lanes table for my org
+- Return:
+  - total recurring lanes
+  - active recurring lanes
+  - assigned recurring lanes
+  - recurring lanes with bench entries
+- If count is zero, say that clearly
+
+3) Engine execution state
+- Has the recurring lane engine ever run for my org?
+- If yes, when was the last run and what did it produce?
+- If no, run it now for my org
+- After running it, tell me:
+  - how many lanes were generated
+  - how many qualified as recurring
+  - how many were attached to bench
+  - how many were filtered out and why
+
+4) Qualification threshold
+- What is the exact current recurring lane threshold?
+- Does a lane that runs 2+ times per week qualify today?
+- If not, tell me what threshold is currently blocking those lanes
+
+5) Work queue visibility
+- After confirming flag + engine + DB state, verify whether GET /api/recurring-lanes/work-queue returns lanes for my org
+- If it still returns empty, identify the exact reason with evidence
+
+6) Final answer
+I want a direct answer in this format:
+
+CURRENT ORG STATE:
+- feature flag enabled: yes/no
+- recurring lanes in DB: #
+- active lanes in DB: #
+- work queue lanes returned: #
+
+ROOT CAUSE:
+- one sentence
+
+FIXES MADE:
+- bullet list
+
+NEXT CLICK PATH:
+- exact path I should use in the UI once fixed
+
+If there are still zero recurring lanes after the engine runs, explain exactly why my freight data is not qualifying and give the lowest-risk fix to make 2+/week lanes appear.
