@@ -1,0 +1,206 @@
+I want to build a new EXECUTE/GROW workflow in Freight-DNA for lanes where we already have recurring freight and need to line up consistent carrier capacity.
+
+High-level goal:
+For NAMs, AMs, LMs, Directors, and Admins, surface lanes where we’re already moving 2+ loads per week and let them:
+- see an NBA card on those lanes (“lock in capacity”), and
+- use AI + our carrier data to generate outreach emails to carriers
+so we can secure consistent coverage on those lanes.
+
+Important constraints:
+- We already have a carrier list in an Excel sheet uploaded into the platform (names, MC/DOT, regions, equipment, etc.), but it generally does NOT include email addresses.
+- Treat that Excel sheet as a one-time seed to populate a proper Carriers table in Freight-DNA.
+- From that point on, Freight-DNA’s Carriers table is the source of truth. Do NOT try to keep the original Excel updated.
+
+Phase 1 scope (v1):
+1) Data model
+2) NBA rule + card
+3) Carrier match + outreach panel
+4) Ownership and oversight
+5) Logging
+
+You do NOT have to make the AI actually send emails yet if that’s too much; wiring up the data model, UI, and logging is the priority. We already have an AI integration pattern you can plug into when drafting emails.
+
+--------------------
+1) Data model
+--------------------
+
+Create or extend a Carriers table in Freight-DNA:
+
+- Carriers
+  - carrierId
+  - name
+  - mcDot (nullable)
+  - regions (e.g., list or tags)
+  - equipmentTypes (e.g., dry van, reefer)
+  - tags (free-form tags like “TX reefer”, “Midwest dry”)
+  - primaryEmail (nullable)
+  - backupEmail (nullable)
+  - lastEmailValidatedAt (nullable timestamp)
+  - createdAt / updatedAt
+
+Seed the Carriers table from the existing uploaded carrier Excel file:
+
+- One-time import from the Excel that already exists in the platform.
+- Map columns from that sheet into the fields above as cleanly as possible (name, MC/DOT, region, equipment).
+- No need to write back to Excel; after seeding, all ongoing edits happen only in the Carriers table.
+
+--------------------
+2) Lane eligibility + NBA rule
+--------------------
+
+We already have lane and load data in Freight-DNA. Use those to identify “in-house recurring lanes”:
+
+Lane eligibility rule:
+- Look over a rolling window (e.g., last 4 full weeks).
+- For a given lane (origin, destination, equipment, account):
+  - If we’ve run >= 2 loads per week in at least 3 of the last 4 weeks, mark it eligible.
+  - Exclude any lane that already has a “preferred / locked” carrier program attached (if we already track that; otherwise add a simple boolean flag on the lane record: hasPreferredCarrierProgram).
+
+NBA rule:
+- Add a new NBA rule in the EXECUTE/GROW category (NOT DEFEND).
+- Trigger for NAMs, AMs, and LMs on lanes they own when:
+  - The lane meets the >=2 loads/week recurring rule, and
+  - hasPreferredCarrierProgram is false.
+- Card behavior:
+  - Title: “Lock In Capacity on [Origin → Destination]”
+  - Reason text (can be hard-coded for now): 
+    - “You’re moving 2+ loads per week on this lane with ad-hoc coverage. Lock in 1–3 core carriers to stabilize service and margin.”
+  - CTA button: “Generate Carrier Outreach”
+  - Outcome type: EXECUTE/GROW
+- Priority:
+  - Ensure this card never outranks DEFEND / critical churn-risk cards.
+  - It should rank above purely speculative growth cards.
+
+Rendering:
+- Card appears in NbaDashboardPanel for NAMs/AMs/NAMs who own the account/lane.
+- Directors/Admins should also be able to see these cards across their portfolio (see ownership section below).
+
+--------------------
+3) Carrier match + outreach panel
+--------------------
+
+When the user clicks “Generate Carrier Outreach” on the card:
+
+Open a side panel/modal in Freight-DNA with:
+
+A. Lane context (read-only):
+- Origin, destination
+- Account
+- Equipment type
+- Average weekly loads (aggregated from last N weeks)
+- Typical pickup/delivery pattern (if we track it)
+- Optional: average rate band or margin band if that’s easily available
+
+B. Carrier suggestions
+Combine two sources:
+- Source A: Our own history
+  - Carriers who have:
+    - Run this exact lane before; and/or
+    - Run similar lanes (same region and length-of-haul, same equipment) recently.
+  - Rank by:
+    - Exact-lane match vs similar-lane match
+    - Recency of last move
+    - On-time %
+    - Margin contribution (if available)
+- Source B: Carrier catalog (seeded from Excel)
+  - Carriers from the Carriers table whose regions/equipmentTypes/tags match the lane but may not have history with us.
+
+UI:
+- Show a combined, de-duplicated list:
+  - Carrier name
+  - Region/equipment tags
+  - Whether they have lane history with us (badge like “History” vs “New prospect”)
+  - Email status:
+    - If primaryEmail exists, show it.
+    - If not, show an inline “Add email” field.
+
+Filters:
+- Toggle: “Active in last 90 days only” (for history-based carriers)
+- Toggle: “Exclude carriers with service flags” (if we already have a service flags concept; if not, stub the filter out for now)
+
+C. Email drafting (v1 shape)
+For the carriers the user selects:
+
+- Generate an AI-written email draft per carrier with:
+  - Lane: [Origin → Destination]
+  - Volume: “We’re consistently running about [X] loads per week.”
+  - Basic expectations: on-time, communication, consistency.
+  - For carriers with history:
+    - Optionally mention “We’ve worked together on similar freight before” (if we have that signal).
+  - For carriers with no history:
+    - Introduce Value Truck briefly and the opportunity on this lane.
+- Our tone should mirror the Value Truck AM playbook: fast, solution-first, friendly, and confident.
+
+UI behaviors:
+- Let the user:
+  - Edit the email template once before sending to all selected carriers, OR
+  - Expand a specific carrier row to tweak that carrier’s email individually.
+- When they send:
+  - Create one email per carrier (no BCC blasts).
+  - For now, it’s fine if sending uses our existing email integration / pattern; if send integration is too much for v1, at least generate the text and wire up the UI/events so the send step can be plugged in next.
+
+--------------------
+4) Ownership and oversight (roles)
+--------------------
+
+We have four key roles in this workflow: NAM, AM, LM, Director/Admin.
+
+We need lane-level ownership plus oversight:
+
+- Each eligible lane should track:
+  - ownerUserId (NAM/AM/LM)
+  - overseerUserId (Director/Admin, optional)
+
+Behavior:
+
+- NAMs / AMs / LMs:
+  - See the card on lanes they own.
+  - Can open the outreach panel and run carrier outreach.
+
+- Directors / Admins:
+  - Can see all such cards across the accounts/lanes they oversee.
+  - Card UI for Director/Admin should show:
+    - “Owner: [Rep Name]”
+    - “Overseer: [Director/Admin Name]” (if set)
+  - Can:
+    - Reassign ownerUserId to a different NAM/AM/LM (with an audit trail).
+    - Trigger the outreach flow themselves on behalf of the owner.
+
+Permissions:
+- Only Directors/Admins should be able to change ownerUserId and overseerUserId.
+- When a Director/Admin sends outreach, we still attribute the lane to the ownerUserId for long-term ownership, but log the actorUserId as the Director/Admin.
+
+--------------------
+5) Logging and completion logic
+--------------------
+
+Every outreach action should log:
+
+- laneId
+- accountId
+- list of carrierIds contacted
+- actorUserId (who clicked send)
+- ownerUserId (at the time of action)
+- overseerUserId (if present)
+- timestamp
+
+NBA completion/snooze:
+
+- Mark the NBA card as “Completed” when:
+  - At least N carriers (configurable, default = 3) have been emailed for that lane; OR
+  - A preferred/locked carrier program is attached to that lane (hasPreferredCarrierProgram = true).
+- After completion:
+  - Snooze the card for ~30 days for that lane/user, then re-evaluate lane eligibility.
+  - If lane still satisfies the recurring freight rule AND hasPreferredCarrierProgram is still false, re-issue the card.
+
+--------------------
+Implementation notes
+--------------------
+
+- Please:
+  - Identify the specific files/modules you’ll touch (NBA rule config, NbaDashboardPanel card rendering, outreach modal component, Carriers model/repo/service, etc.).
+  - Implement everything behind a feature flag (e.g., “lane_carrier_outreach_v1”) so we can test internally first.
+  - After you’re done, give me a short summary:
+    - The exact lane eligibility rule and lookback window you ended up using.
+    - How the new EXECUTE/GROW card is prioritized relative to existing DEFEND and GROW cards.
+    - How we can change thresholds later (loads/week, number of weeks, N carriers to mark complete).
