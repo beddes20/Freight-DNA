@@ -45,6 +45,7 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
     .filter(c => !dismissed.has(c.id) && !actioned.has(c.id))
     .slice(0, 5);
 
+  // During initial load show a skeleton so the panel doesn't flash in/out.
   if (isLoading) {
     return (
       <div className="rounded-2xl border border-white/8 bg-white/3 p-5 flex flex-col gap-3">
@@ -59,6 +60,9 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
     );
   }
 
+  // No cards — return nothing so the panel doesn't occupy space on the dashboard.
+  if (visible.length === 0) return null;
+
   return (
     <div
       className="rounded-2xl border border-white/8 bg-white/3 p-5 flex flex-col gap-4"
@@ -69,11 +73,9 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
         <div className="flex items-center gap-2">
           <Brain className="w-4 h-4 text-amber-400" />
           <span className="text-sm font-semibold text-white">Today's Priorities</span>
-          {visible.length > 0 && (
-            <span className="text-[11px] font-semibold bg-amber-500/20 text-amber-400 rounded-full px-2 py-0.5">
-              {visible.length}
-            </span>
-          )}
+          <span className="text-[11px] font-semibold bg-amber-500/20 text-amber-400 rounded-full px-2 py-0.5">
+            {visible.length}
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -100,35 +102,22 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
         </div>
       </div>
 
-      {/* Empty state */}
-      {visible.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-8 gap-2 text-center">
-          <Brain className="w-8 h-8 text-white/15" />
-          <p className="text-sm text-white/40">No priority recommendations right now.</p>
-          <p className="text-xs text-white/25">Check back tomorrow — the engine runs nightly.</p>
-        </div>
-      )}
-
       {/* Cards — fixed-height list, no show-more */}
-      {visible.length > 0 && (
-        <div className="flex flex-col gap-3">
-          {visible.map(card => (
-            <NbaCard
-              key={card.id}
-              card={card}
-              onDismissed={(id) => setDismissed(prev => new Set([...prev, id]))}
-              onActioned={(id) => setActioned(prev => new Set([...prev, id]))}
-            />
-          ))}
-        </div>
-      )}
+      <div className="flex flex-col gap-3">
+        {visible.map(card => (
+          <NbaCard
+            key={card.id}
+            card={card}
+            onDismissed={(id) => setDismissed(prev => new Set([...prev, id]))}
+            onActioned={(id) => setActioned(prev => new Set([...prev, id]))}
+          />
+        ))}
+      </div>
 
       {/* Footer */}
-      {visible.length > 0 && (
-        <p className="text-[10px] text-white/20 text-center -mt-1">
-          Powered by NBA Phase 1 · updates nightly
-        </p>
-      )}
+      <p className="text-[10px] text-white/20 text-center -mt-1">
+        Powered by NBA Phase 1 · updates nightly
+      </p>
     </div>
   );
 }
