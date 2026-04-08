@@ -3,6 +3,7 @@ import multer from "multer";
 import XLSX from "xlsx";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds } from "../auth";
+import { runRecurringLaneEngineForOrg } from "../recurringLaneCapacityEngine";
 import {
   resolveColumns,
   getRepFromRow,
@@ -536,6 +537,16 @@ export function registerFinancialRoutes(app: Express): void {
       cacheInvalidatePrefix(`account-summary:`);
       cacheInvalidatePrefix(`dispatcher-summary:`);
       res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
+
+      // Auto-run lane capacity engine after each financial upload (fire-and-forget)
+      const orgId = req.session.organizationId;
+      if (orgId) {
+        runRecurringLaneEngineForOrg(orgId).then(result => {
+          console.log(`[lane-engine] auto-run after upload for org=${orgId}: ${result.upserted} upserted, ${result.total} total`);
+        }).catch(err => {
+          console.error(`[lane-engine] auto-run error for org=${orgId}:`, err);
+        });
+      }
     } catch (error) {
       console.error("Error uploading financials:", error);
       const message = error instanceof Error ? error.message : "Failed to upload financials";

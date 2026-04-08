@@ -37,6 +37,7 @@ import {
   Zap,
   Eye,
   ChevronDown,
+  Play,
 } from "lucide-react";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -481,11 +482,25 @@ function BucketSection({
 
 export default function LaneWorkQueuePage() {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [openLaneId, setOpenLaneId] = useState<string | null>(null);
   const [highFreqOnly, setHighFreqOnly] = useState(false);
 
   const managerRoles = ["admin", "director", "national_account_manager", "logistics_manager"];
   const isManager = managerRoles.includes(user?.role ?? "");
+
+  const runEngineMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/recurring-lanes/run-engine", {}).then(r => r.json()),
+    onSuccess: (data: { upserted?: number; total?: number; message?: string }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+      toast({
+        title: `Engine complete — ${data.upserted ?? data.total ?? 0} lane${(data.upserted ?? data.total ?? 0) !== 1 ? "s" : ""} scored`,
+        description: data.message ?? "Work queue refreshed.",
+      });
+    },
+    onError: () => toast({ title: "Engine run failed", variant: "destructive" }),
+  });
 
   const { data: queue, isLoading, refetch } = useQuery<WorkQueue>({
     queryKey: ["/api/recurring-lanes/work-queue"],
@@ -576,6 +591,22 @@ export default function LaneWorkQueuePage() {
             <Zap className="w-3.5 h-3.5" />
             2+/week{highFreqCount > 0 && ` (${highFreqCount})`}
           </Button>
+          {/* Admin-only: manually trigger the lane capacity engine */}
+          {user?.role === "admin" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+              onClick={() => runEngineMutation.mutate()}
+              disabled={runEngineMutation.isPending}
+              data-testid="btn-run-engine"
+            >
+              {runEngineMutation.isPending
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <Play className="w-3.5 h-3.5" />}
+              Run Engine
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -698,9 +729,34 @@ export default function LaneWorkQueuePage() {
 
             {!isLoading && totalLanes === 0 && (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                <CheckCircle2 className="w-10 h-10 text-emerald-400 mb-3" />
-                <p className="text-sm font-semibold text-foreground">All caught up!</p>
-                <p className="text-xs text-muted-foreground mt-1">No eligible lanes need attention right now.</p>
+                {user?.role === "admin" ? (
+                  <>
+                    <Play className="w-10 h-10 text-emerald-400 mb-3" />
+                    <p className="text-sm font-semibold text-foreground">No lanes scored yet</p>
+                    <p className="text-xs text-muted-foreground mt-1 max-w-xs">
+                      The lane capacity engine hasn't run against your TMS upload data in this environment.
+                      Click <strong>Run Engine</strong> in the header to score lanes from your financial uploads.
+                    </p>
+                    <Button
+                      size="sm"
+                      className="mt-4 gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                      onClick={() => runEngineMutation.mutate()}
+                      disabled={runEngineMutation.isPending}
+                      data-testid="btn-run-engine-empty"
+                    >
+                      {runEngineMutation.isPending
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <Play className="w-3.5 h-3.5" />}
+                      {runEngineMutation.isPending ? "Running…" : "Run Engine Now"}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-10 h-10 text-emerald-400 mb-3" />
+                    <p className="text-sm font-semibold text-foreground">All caught up!</p>
+                    <p className="text-xs text-muted-foreground mt-1">No eligible lanes need attention right now.</p>
+                  </>
+                )}
               </div>
             )}
 
