@@ -16,6 +16,13 @@ import { useAuth } from "@/hooks/use-auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Truck,
   AlertCircle,
   CheckCircle2,
@@ -27,6 +34,7 @@ import {
   Loader2,
   RefreshCw,
   ListFilter,
+  Zap,
 } from "lucide-react";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -86,6 +94,52 @@ function confidenceColor(c: string) {
   return "border-slate-500/40 text-slate-400";
 }
 
+/** Returns the numeric loads/week value (or null). */
+function parseLoadsPerWeek(val: string | null | undefined): number | null {
+  if (!val) return null;
+  const n = parseFloat(val);
+  return isNaN(n) ? null : n;
+}
+
+/** Color-coded frequency badge for the loads/week metric. */
+function FrequencyBadge({ val }: { val: string | null | undefined }) {
+  const n = parseLoadsPerWeek(val);
+  if (n === null) return null;
+  if (n >= 3) {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] py-0 px-1.5 border-emerald-500/50 text-emerald-400 bg-emerald-500/10 gap-0.5"
+        data-testid="freq-badge-high"
+      >
+        <Zap className="w-2.5 h-2.5" />
+        {n.toFixed(1)}/wk
+      </Badge>
+    );
+  }
+  if (n >= 2) {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] py-0 px-1.5 border-amber-500/50 text-amber-400 bg-amber-500/10 gap-0.5"
+        data-testid="freq-badge-medium"
+      >
+        <Zap className="w-2.5 h-2.5" />
+        {n.toFixed(1)}/wk
+      </Badge>
+    );
+  }
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] py-0 px-1.5 border-slate-500/30 text-muted-foreground"
+      data-testid="freq-badge-low"
+    >
+      {n.toFixed(1)}/wk
+    </Badge>
+  );
+}
+
 // ── Lane Row ──────────────────────────────────────────────────────────────────
 
 function LaneRow({
@@ -94,12 +148,14 @@ function LaneRow({
   onOpen,
   bucket,
   teamMembers,
+  isManagerRole,
 }: {
   item: LaneItem;
   completionThreshold: number;
   onOpen: (laneId: string) => void;
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
+  isManagerRole: boolean;
 }) {
   const { toast } = useToast();
   const { user: currentUser } = useAuth();
@@ -117,6 +173,13 @@ function LaneRow({
   const contacted = item.lane.carriersContactedCount ?? 0;
   const progressPct = Math.min(100, (contacted / completionThreshold) * 100);
 
+  // Team members eligible for assignment (non-admin, non-director roles are the "doers")
+  const assignableMembers = teamMembers.filter(m =>
+    ["account_manager", "logistics_manager", "logistics_coordinator", "national_account_manager"].includes(m.role)
+  );
+  // Fall back to all team members if no matching operational roles found
+  const dropdownMembers = assignableMembers.length > 0 ? assignableMembers : teamMembers;
+
   return (
     <div
       className="bg-card border border-border rounded-lg p-4 hover:border-amber-500/30 transition-colors cursor-pointer group"
@@ -125,9 +188,11 @@ function LaneRow({
     >
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          {/* Lane label + company */}
+          {/* Lane label + badges */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-foreground">{laneLabel(item.lane)}</span>
+            {/* Frequency badge — prominent, always first */}
+            <FrequencyBadge val={item.lane.avgLoadsPerWeek} />
             <Badge variant="outline" className="text-[10px] py-0 px-1.5">
               {item.lane.equipmentType ?? "Any"}
             </Badge>
@@ -141,9 +206,6 @@ function LaneRow({
 
           {/* Metrics row */}
           <div className="flex items-center gap-4 mt-2 flex-wrap">
-            <span className="text-[11px] text-muted-foreground">
-              <span className="text-foreground font-medium">{item.lane.avgLoadsPerWeek ?? "—"}</span> loads/wk
-            </span>
             <span className="text-[11px] text-muted-foreground">
               Score: <span className="text-foreground font-medium">{item.lane.laneScore ?? "—"}</span>
             </span>
@@ -210,18 +272,52 @@ function LaneRow({
                 <span className="text-orange-400">Unassigned</span>
               </div>
             )}
-            {/* Quick-assign to self */}
-            {!item.lane.ownerUserId && currentUser && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-6 text-[10px] px-2 border-blue-400/30 text-blue-400 hover:bg-blue-500/10"
-                onClick={e => { e.stopPropagation(); assignMutation.mutate(currentUser.id); }}
-                disabled={assignMutation.isPending}
-                data-testid={`btn-assign-self-${item.lane.id}`}
-              >
-                {assignMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Assign to me"}
-              </Button>
+
+            {/* Assign-to dropdown — managers can pick any team member; non-managers get "Assign to me" */}
+            {!item.lane.ownerUserId && (
+              <>
+                {isManagerRole && dropdownMembers.length > 0 ? (
+                  <Select
+                    onValueChange={(val) => assignMutation.mutate(val)}
+                    disabled={assignMutation.isPending}
+                  >
+                    <SelectTrigger
+                      className="h-6 text-[10px] w-auto min-w-[110px] px-2 border-blue-400/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+                      data-testid={`select-assign-${item.lane.id}`}
+                    >
+                      <SelectValue placeholder="Assign to…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {dropdownMembers.map(m => (
+                        <SelectItem key={m.id} value={m.id} className="text-xs">
+                          {m.name}
+                          <span className="text-muted-foreground ml-1">
+                            ({m.role.replace(/_/g, " ")})
+                          </span>
+                        </SelectItem>
+                      ))}
+                      {currentUser && !dropdownMembers.find(m => m.id === currentUser.id) && (
+                        <SelectItem key="self" value={currentUser.id} className="text-xs">
+                          Me ({currentUser.name})
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  currentUser && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 text-[10px] px-2 border-blue-400/30 text-blue-400 hover:bg-blue-500/10"
+                      onClick={() => assignMutation.mutate(currentUser.id)}
+                      disabled={assignMutation.isPending}
+                      data-testid={`btn-assign-self-${item.lane.id}`}
+                    >
+                      {assignMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Assign to me"}
+                    </Button>
+                  )
+                )}
+              </>
             )}
           </div>
         </div>
@@ -245,6 +341,8 @@ function BucketSection({
   onOpen,
   bucket,
   teamMembers,
+  isManagerRole,
+  filterHighFreq,
 }: {
   title: string;
   description: string;
@@ -255,8 +353,14 @@ function BucketSection({
   onOpen: (laneId: string) => void;
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
+  isManagerRole: boolean;
+  filterHighFreq?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+
+  const displayItems = filterHighFreq
+    ? items.filter(item => (parseLoadsPerWeek(item.lane.avgLoadsPerWeek) ?? 0) >= 2)
+    : items;
 
   return (
     <section className="mb-6" data-testid={`bucket-${bucket}`}>
@@ -270,7 +374,9 @@ function BucketSection({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-            <Badge variant="secondary" className="text-[10px] h-5 px-1.5">{items.length}</Badge>
+            <Badge variant="secondary" className="text-[10px] h-5 px-1.5">
+              {filterHighFreq ? `${displayItems.length} of ${items.length}` : items.length}
+            </Badge>
           </div>
           <p className="text-[11px] text-muted-foreground">{description}</p>
         </div>
@@ -279,10 +385,12 @@ function BucketSection({
 
       {!collapsed && (
         <div className="flex flex-col gap-2">
-          {items.length === 0 ? (
-            <p className="text-xs text-muted-foreground italic py-2 pl-10">No lanes in this bucket.</p>
+          {displayItems.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic py-2 pl-10">
+              {filterHighFreq && items.length > 0 ? "No 2+/wk lanes in this bucket." : "No lanes in this bucket."}
+            </p>
           ) : (
-            items.map(item => (
+            displayItems.map(item => (
               <LaneRow
                 key={item.lane.id}
                 item={item}
@@ -290,6 +398,7 @@ function BucketSection({
                 onOpen={onOpen}
                 bucket={bucket}
                 teamMembers={teamMembers}
+                isManagerRole={isManagerRole}
               />
             ))
           )}
@@ -304,6 +413,7 @@ function BucketSection({
 export default function LaneWorkQueuePage() {
   const { user } = useAuth();
   const [openLaneId, setOpenLaneId] = useState<string | null>(null);
+  const [filterHighFreq, setFilterHighFreq] = useState(false);
 
   const managerRoles = ["admin", "director", "national_account_manager", "logistics_manager"];
   const isManager = managerRoles.includes(user?.role ?? "");
@@ -342,6 +452,18 @@ export default function LaneWorkQueuePage() {
     (queue?.assignedUntouched.length ?? 0) +
     (queue?.inProgress.length ?? 0);
 
+  // Sort unassigned by avgLoadsPerWeek descending so highest-frequency lanes appear first
+  const sortedUnassigned = [...(queue?.unassigned ?? [])].sort((a, b) => {
+    const aVal = parseLoadsPerWeek(a.lane.avgLoadsPerWeek) ?? 0;
+    const bVal = parseLoadsPerWeek(b.lane.avgLoadsPerWeek) ?? 0;
+    return bVal - aVal;
+  });
+
+  // Count 2+/wk lanes in unassigned bucket for the filter pill label
+  const highFreqUnassignedCount = sortedUnassigned.filter(
+    item => (parseLoadsPerWeek(item.lane.avgLoadsPerWeek) ?? 0) >= 2
+  ).length;
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -357,16 +479,31 @@ export default function LaneWorkQueuePage() {
             </p>
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 text-xs gap-1.5"
-          onClick={() => refetch()}
-          data-testid="btn-refresh-work-queue"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* 2+/wk filter pill */}
+          {!isLoading && highFreqUnassignedCount > 0 && (
+            <Button
+              variant={filterHighFreq ? "default" : "outline"}
+              size="sm"
+              className={`h-8 text-xs gap-1.5 ${filterHighFreq ? "bg-amber-500 hover:bg-amber-600 text-white border-amber-500" : "border-amber-500/40 text-amber-400 hover:bg-amber-500/10"}`}
+              onClick={() => setFilterHighFreq(v => !v)}
+              data-testid="btn-filter-high-freq"
+            >
+              <Zap className="w-3.5 h-3.5" />
+              2+/wk {filterHighFreq ? "✕" : `(${highFreqUnassignedCount})`}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs gap-1.5"
+            onClick={() => refetch()}
+            data-testid="btn-refresh-work-queue"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Body */}
@@ -397,6 +534,12 @@ export default function LaneWorkQueuePage() {
                   <p className="text-lg font-bold text-amber-400">{queue.inProgress.length}</p>
                   <p className="text-[10px] text-amber-400/70">In Progress</p>
                 </div>
+                {highFreqUnassignedCount > 0 && (
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]">
+                    <p className="text-lg font-bold text-emerald-400">{highFreqUnassignedCount}</p>
+                    <p className="text-[10px] text-emerald-400/70">2+/wk Unassigned</p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -405,14 +548,20 @@ export default function LaneWorkQueuePage() {
               <>
                 <BucketSection
                   title="Unassigned"
-                  description="These lanes have no owner — assign one to get outreach started."
+                  description={
+                    filterHighFreq
+                      ? "Showing 2+/wk lanes only — highest procurement priority."
+                      : "These lanes have no owner — assign one to get outreach started. Sorted highest frequency first."
+                  }
                   icon={UserX}
                   iconColor="bg-orange-500/10 text-orange-400"
-                  items={queue.unassigned}
+                  items={sortedUnassigned}
                   completionThreshold={completionThreshold}
                   onOpen={setOpenLaneId}
                   bucket="unassigned"
                   teamMembers={teamMembers}
+                  isManagerRole={isManager}
+                  filterHighFreq={filterHighFreq}
                 />
                 <BucketSection
                   title="No Contactable Carriers"
@@ -424,6 +573,7 @@ export default function LaneWorkQueuePage() {
                   onOpen={setOpenLaneId}
                   bucket="noContactable"
                   teamMembers={teamMembers}
+                  isManagerRole={isManager}
                 />
                 <BucketSection
                   title="Assigned — Untouched"
@@ -435,6 +585,7 @@ export default function LaneWorkQueuePage() {
                   onOpen={setOpenLaneId}
                   bucket="assignedUntouched"
                   teamMembers={teamMembers}
+                  isManagerRole={isManager}
                 />
                 <BucketSection
                   title="In Progress"
@@ -446,6 +597,7 @@ export default function LaneWorkQueuePage() {
                   onOpen={setOpenLaneId}
                   bucket="inProgress"
                   teamMembers={teamMembers}
+                  isManagerRole={isManager}
                 />
               </>
             )}
@@ -474,6 +626,7 @@ export default function LaneWorkQueuePage() {
                           {queue[bucket].map(item => (
                             <li key={item.lane.id} className="text-muted-foreground">
                               {item.lane.id.slice(0, 8)}… {item.lane.origin}→{item.lane.destination}
+                              {" | "}{item.lane.avgLoadsPerWeek ?? "?"}loads/wk
                               {" | "}owner={item.lane.ownerName ?? "none"}
                               {" | "}contacted={item.lane.carriersContactedCount ?? 0}
                               {" | "}bench={item.totalBenchCount}
