@@ -269,7 +269,7 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
           </Button>
           {card.companyId && card.ruleType === "overdue_next_action" ? (
             <a
-              href={`/companies/${card.companyId}`}
+              href={`/companies/${card.companyId}?tab=activity`}
               data-testid={`nba-card-open-account-${card.id}`}
             >
               <Button

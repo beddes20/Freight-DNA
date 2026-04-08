@@ -115,6 +115,8 @@ export default function CompanyDetail() {
   const [detailTab, setDetailTab] = useState<string>(() => {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get("rfpTab") && urlParams.get("rfpTab") !== "coverage") return "rfp";
+    const tabParam = urlParams.get("tab");
+    if (tabParam) return tabParam;
     return localStorage.getItem("cd_tab") || "overview";
   });
 
