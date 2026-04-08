@@ -421,21 +421,24 @@ async function main(): Promise<void> {
     assert(status === 403, `Expected 403 when AM tries to take director's lane, got ${status}`);
   });
 
-  // ── 10. Manager can assign in-org ─────────────────────────────────────────
+  // ── 10. Manager can assign in-org (within hierarchy) ─────────────────────
 
-  await runTest("Director can assign any in-org lane to any in-org user (200)", async () => {
+  await runTest("Director can assign any in-org lane to a direct report (200)", async () => {
+    // Set am's managerId to director so they are within director's hierarchy
+    await q(`UPDATE users SET manager_id = $1 WHERE id = $2`, [director.id, am.id]);
     const cookie = await loginAs(director.username, director.password);
     const { status } = await apiPost(
       `/api/recurring-lanes/${unassignedLane}/assign`,
       cookie,
       { ownerUserId: am.id }
     );
-    assert(status === 200, `Expected 200 for director assigning to AM, got ${status}`);
+    assert(status === 200, `Expected 200 for director assigning to AM (direct report), got ${status}`);
     // Confirm ownerUserId was written
     const row = await q(`SELECT owner_user_id FROM recurring_lanes WHERE id = $1`, [unassignedLane]);
     assert(row.rows[0].owner_user_id === am.id, "owner_user_id should be set to AM's id");
     // Reset
     await q(`UPDATE recurring_lanes SET owner_user_id = NULL, assigned_at = NULL WHERE id = $1`, [unassignedLane]);
+    await q(`UPDATE users SET manager_id = NULL WHERE id = $1`, [am.id]);
   });
 
   // ── 11. Cross-org assignment blocked ─────────────────────────────────────
@@ -465,6 +468,8 @@ async function main(): Promise<void> {
   // ── 13. Assign returns updated lane shape ─────────────────────────────────
 
   await runTest("Successful assign response contains assignedAt and ownerUserId", async () => {
+    // Set lm's managerId to director so they are in the director's hierarchy
+    await q(`UPDATE users SET manager_id = $1 WHERE id = $2`, [director.id, lm.id]);
     const cookie = await loginAs(director.username, director.password);
     const { status, json } = await apiPost(
       `/api/recurring-lanes/${unassignedLane}/assign`,
@@ -478,6 +483,181 @@ async function main(): Promise<void> {
     assert(typeof lane.assignedByUserId === "string" && lane.assignedByUserId.length > 0, "assignedByUserId should be set");
     // Reset
     await q(`UPDATE recurring_lanes SET owner_user_id = NULL, assigned_at = NULL, assigned_by_user_id = NULL WHERE id = $1`, [unassignedLane]);
+    await q(`UPDATE users SET manager_id = NULL WHERE id = $1`, [lm.id]);
+  });
+
+  // ── 14–20. Hierarchy-Scoped Visibility (Task #150) ───────────────────────
+
+  await runTest("Response includes scopeLabel field for all manager roles", async () => {
+    const cookie = await loginAs(director.username, director.password);
+    const { status, json } = await apiGet("/api/recurring-lanes/work-queue", cookie);
+    assert(status === 200, `Expected 200, got ${status}`);
+    const q2 = json as Record<string, unknown>;
+    assert("scopeLabel" in q2, "Response should include 'scopeLabel' field");
+    assert(typeof q2.scopeLabel === "string" && (q2.scopeLabel as string).length > 0, "scopeLabel should be a non-empty string");
+  });
+
+  await runTest("Director scope label is 'Team hierarchy'", async () => {
+    const cookie = await loginAs(director.username, director.password);
+    const { json } = await apiGet("/api/recurring-lanes/work-queue", cookie);
+    const q2 = json as { scopeLabel: string };
+    assert(q2.scopeLabel === "Team hierarchy", `Expected 'Team hierarchy', got '${q2.scopeLabel}'`);
+  });
+
+  await runTest("logistics_manager scope label is 'My team lanes'", async () => {
+    const cookie = await loginAs(lm.username, lm.password);
+    const { json } = await apiGet("/api/recurring-lanes/work-queue", cookie);
+    const q2 = json as { scopeLabel: string };
+    assert(q2.scopeLabel === "My team lanes", `Expected 'My team lanes', got '${q2.scopeLabel}'`);
+  });
+
+  await runTest("AM sees only own assigned lane (hierarchy scope)", async () => {
+    // Create an AM user with a lane assigned to them
+    const amUser = await createUser(orgId, "account_manager");
+    // Create another AM (not related) and a lane assigned to that other AM
+    const otherAm = await createUser(orgId, "account_manager");
+    const amLane = await createLane(orgId, amUser.id, 1);
+    const otherAmLane = await createLane(orgId, otherAm.id, 1);
+
+    // Promote amUser to logistics_manager so they can access the work queue
+    await q(`UPDATE users SET role = 'logistics_manager' WHERE id = $1`, [amUser.id]);
+
+    const cookie = await loginAs(amUser.username, amUser.password);
+    const { json } = await apiGet("/api/recurring-lanes/work-queue", cookie);
+    const q2 = json as {
+      assignedUntouched: Array<{ lane: { id: string } }>;
+      inProgress: Array<{ lane: { id: string } }>;
+      noContactable: Array<{ lane: { id: string } }>;
+      unassigned: Array<{ lane: { id: string } }>;
+    };
+    const allIds = [
+      ...q2.assignedUntouched,
+      ...q2.inProgress,
+      ...q2.noContactable,
+      ...q2.unassigned,
+    ].map(i => i.lane.id);
+
+    // The LM (amUser) has no direct reports — only sees self-assigned lanes
+    assert(allIds.includes(amLane), `LM should see their own lane ${amLane}`);
+    assert(!allIds.includes(otherAmLane), `LM should NOT see lane ${otherAmLane} assigned to unrelated AM`);
+  });
+
+  await runTest("NAM sees direct report lanes in work queue", async () => {
+    // Create a NAM and a direct report AM
+    const nam = await createUser(orgId, "national_account_manager");
+    const directReport = await createUser(orgId, "account_manager");
+    const unrelatedAm = await createUser(orgId, "account_manager");
+    // Set directReport's managerId to nam
+    await q(`UPDATE users SET manager_id = $1 WHERE id = $2`, [nam.id, directReport.id]);
+
+    const reportLane = await createLane(orgId, directReport.id, 1);
+    const unrelatedLane = await createLane(orgId, unrelatedAm.id, 1);
+
+    const cookie = await loginAs(nam.username, nam.password);
+    const { json } = await apiGet("/api/recurring-lanes/work-queue", cookie);
+    const q2 = json as {
+      assignedUntouched: Array<{ lane: { id: string } }>;
+      inProgress: Array<{ lane: { id: string } }>;
+      noContactable: Array<{ lane: { id: string } }>;
+      unassigned: Array<{ lane: { id: string } }>;
+    };
+    const allIds = [
+      ...q2.assignedUntouched,
+      ...q2.inProgress,
+      ...q2.noContactable,
+      ...q2.unassigned,
+    ].map(i => i.lane.id);
+
+    assert(allIds.includes(reportLane), `NAM should see direct report's lane ${reportLane}`);
+    assert(!allIds.includes(unrelatedLane), `NAM should NOT see unrelated AM's lane ${unrelatedLane}`);
+  });
+
+  await runTest("Director sees all lanes in hierarchy (including indirect reports)", async () => {
+    // Create dir → nam → am chain
+    const dir = await createUser(orgId, "director");
+    const nam2 = await createUser(orgId, "national_account_manager");
+    const am2 = await createUser(orgId, "account_manager");
+    await q(`UPDATE users SET manager_id = $1 WHERE id = $2`, [dir.id, nam2.id]);
+    await q(`UPDATE users SET manager_id = $1 WHERE id = $2`, [nam2.id, am2.id]);
+
+    const indirectLane = await createLane(orgId, am2.id, 0);
+
+    const cookie = await loginAs(dir.username, dir.password);
+    const { json } = await apiGet("/api/recurring-lanes/work-queue", cookie);
+    const q2 = json as {
+      assignedUntouched: Array<{ lane: { id: string } }>;
+      inProgress: Array<{ lane: { id: string } }>;
+      noContactable: Array<{ lane: { id: string } }>;
+      unassigned: Array<{ lane: { id: string } }>;
+    };
+    const allIds = [
+      ...q2.assignedUntouched,
+      ...q2.inProgress,
+      ...q2.noContactable,
+      ...q2.unassigned,
+    ].map(i => i.lane.id);
+
+    assert(allIds.includes(indirectLane), `Director should see indirect report's lane ${indirectLane}`);
+  });
+
+  await runTest("NAM cannot assign lane to user outside their hierarchy (403)", async () => {
+    // Create a NAM with one direct report and an unrelated AM
+    const nam3 = await createUser(orgId, "national_account_manager");
+    const unrelatedUser = await createUser(orgId, "account_manager");
+    const testLane = await createLane(orgId, null);
+
+    const cookie = await loginAs(nam3.username, nam3.password);
+    const { status, json } = await apiPost(
+      `/api/recurring-lanes/${testLane}/assign`,
+      cookie,
+      { ownerUserId: unrelatedUser.id }
+    );
+    assert(status === 403, `Expected 403 for out-of-scope assignment, got ${status}: ${JSON.stringify(json)}`);
+  });
+
+  await runTest("Admin can assign lane to any org user (no hierarchy restriction)", async () => {
+    const admin = await createUser(orgId, "admin");
+    const anyUser = await createUser(orgId, "account_manager");
+    const testLane2 = await createLane(orgId, null);
+
+    const cookie = await loginAs(admin.username, admin.password);
+    const { status } = await apiPost(
+      `/api/recurring-lanes/${testLane2}/assign`,
+      cookie,
+      { ownerUserId: anyUser.id }
+    );
+    assert(status === 200, `Admin should be able to assign to any user, got ${status}`);
+  });
+
+  await runTest("Unassigned lanes not shown to NAM (canSeeUnassigned=false)", async () => {
+    const nam4 = await createUser(orgId, "national_account_manager");
+    const newUnassignedLane = await createLane(orgId, null);
+
+    const cookie = await loginAs(nam4.username, nam4.password);
+    const { json } = await apiGet("/api/recurring-lanes/work-queue", cookie);
+    const q2 = json as { unassigned: Array<{ lane: { id: string } }> };
+    const unassignedIds = q2.unassigned.map(i => i.lane.id);
+
+    assert(
+      !unassignedIds.includes(newUnassignedLane),
+      `NAM should NOT see unassigned lane ${newUnassignedLane} (canSeeUnassigned=false)`
+    );
+  });
+
+  await runTest("Unassigned lanes ARE shown to director (canSeeUnassigned=true)", async () => {
+    // Use the director from the top of main() and the unassigned lane we created
+    // Reset it to ensure it's unassigned
+    await q(`UPDATE recurring_lanes SET owner_user_id = NULL, assigned_at = NULL WHERE id = $1`, [unassignedLane]);
+
+    const cookie = await loginAs(director.username, director.password);
+    const { json } = await apiGet("/api/recurring-lanes/work-queue", cookie);
+    const q2 = json as { unassigned: Array<{ lane: { id: string } }> };
+    const unassignedIds = q2.unassigned.map(i => i.lane.id);
+
+    assert(
+      unassignedIds.includes(unassignedLane),
+      `Director should see unassigned lane ${unassignedLane}`
+    );
   });
 
   // ── Summary ───────────────────────────────────────────────────────────────

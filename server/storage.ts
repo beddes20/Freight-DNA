@@ -553,7 +553,16 @@ export interface IStorage {
 
   // Lane Carrier Outreach v1.5 — Assignment + Work Queue
   assignLaneOwner(laneId: string, orgId: string, ownerUserId: string | null, assignedByUserId: string): Promise<RecurringLane | undefined>;
-  getLaneWorkQueue(orgId: string, completionThreshold: number, scopedUserIds?: string[]): Promise<LaneWorkQueueResult>;
+  /**
+   * Returns the set of user IDs whose lanes should be visible to the requesting user,
+   * plus a human-readable scope label and whether the user can see unassigned lanes.
+   */
+  resolveVisibleUserIds(requestingUserId: string, orgId: string, role: string): Promise<{
+    visibleUserIds: string[];
+    canSeeUnassigned: boolean;
+    scopeLabel: string;
+  }>;
+  getLaneWorkQueue(orgId: string, completionThreshold: number, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<LaneWorkQueueResult>;
 }
 
 const pool = new Pool({
@@ -3463,7 +3472,44 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async getLaneWorkQueue(orgId: string, completionThreshold: number, scopedUserIds?: string[]): Promise<LaneWorkQueueResult> {
+  async resolveVisibleUserIds(requestingUserId: string, orgId: string, role: string): Promise<{
+    visibleUserIds: string[];
+    canSeeUnassigned: boolean;
+    scopeLabel: string;
+  }> {
+    if (role === "admin") {
+      const allOrgUsers = await db.select({ id: users.id }).from(users).where(eq(users.organizationId, orgId));
+      return {
+        visibleUserIds: allOrgUsers.map(u => u.id),
+        canSeeUnassigned: true,
+        scopeLabel: "All org lanes",
+      };
+    }
+    if (role === "director") {
+      const teamIds = await this.getTeamMemberIds(requestingUserId, orgId);
+      return {
+        visibleUserIds: teamIds,
+        canSeeUnassigned: true,
+        scopeLabel: "Team hierarchy",
+      };
+    }
+    if (role === "national_account_manager" || role === "logistics_manager") {
+      const teamIds = await this.getTeamMemberIds(requestingUserId, orgId);
+      return {
+        visibleUserIds: teamIds,
+        canSeeUnassigned: false,
+        scopeLabel: "My team lanes",
+      };
+    }
+    // AM / LM / sales and any other role: self only
+    return {
+      visibleUserIds: [requestingUserId],
+      canSeeUnassigned: false,
+      scopeLabel: "My lanes",
+    };
+  }
+
+  async getLaneWorkQueue(orgId: string, completionThreshold: number, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<LaneWorkQueueResult> {
     // Fetch all eligible, non-snoozed, non-preferred lanes for the org
     const today = new Date().toISOString().split("T")[0];
     const eligibleLanesAll = await db.select().from(recurringLanes).where(
@@ -3476,12 +3522,9 @@ export class DatabaseStorage implements IStorage {
       )
     ).orderBy(desc(recurringLanes.laneScore));
 
-    // Hierarchy scoping: admins/directors pass no scopedUserIds and see everything.
-    // NAMs and LMs pass their team hierarchy IDs; they see unassigned lanes (any
-    // manager can claim or assign those) plus lanes owned by someone in their tree.
-    const eligibleLanes = scopedUserIds && scopedUserIds.length > 0
-      ? eligibleLanesAll.filter(l => !l.ownerUserId || scopedUserIds.includes(l.ownerUserId))
-      : eligibleLanesAll;
+    // Hierarchy scoping is applied per-lane in the main loop below using
+    // visibleUserIds and canSeeUnassigned. No pre-filtering needed here.
+    const eligibleLanes = eligibleLanesAll;
 
     if (eligibleLanes.length === 0) {
       return { unassigned: [], noContactable: [], assignedUntouched: [], inProgress: [] };
@@ -3511,9 +3554,19 @@ export class DatabaseStorage implements IStorage {
       benchByLane.get(entry.laneId)!.push(entry);
     }
 
+    const visibleSet = new Set(visibleUserIds);
     const result: LaneWorkQueueResult = { unassigned: [], noContactable: [], assignedUntouched: [], inProgress: [] };
 
     for (const lane of eligibleLanes) {
+      // Hierarchy-scoped visibility:
+      // - Unassigned lanes: only shown when canSeeUnassigned is true (admin + director)
+      // - Assigned lanes: only shown if the owner is in the requesting user's visible set
+      if (!lane.ownerUserId) {
+        if (!canSeeUnassigned) continue;
+      } else {
+        if (!visibleSet.has(lane.ownerUserId)) continue;
+      }
+
       const bench = benchByLane.get(lane.id) ?? [];
       const historicalBench = bench.filter(b => b.sourceType === "historical");
       const contactableCount = bench.filter(b => b.carrierId && carrierContactMap.get(b.carrierId)?.hasContact).length;

@@ -496,13 +496,12 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       return res.status(403).json({ error: "Manager role required" });
     }
     try {
-      // Hierarchy scoping: admins + directors see all org lanes; NAMs and LMs see
-      // only their team subtree's owned lanes (plus all unassigned lanes).
-      let scopedUserIds: string[] | undefined = undefined;
-      if (!ADMIN_ROLES.includes(user.role)) {
-        scopedUserIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-      }
-      const queue = await storage.getLaneWorkQueue(user.organizationId, LANE_CONFIG.completionCarriersContacted, scopedUserIds);
+      const { visibleUserIds, canSeeUnassigned, scopeLabel } = await storage.resolveVisibleUserIds(
+        user.id, user.organizationId, user.role
+      );
+      const queue = await storage.getLaneWorkQueue(
+        user.organizationId, LANE_CONFIG.completionCarriersContacted, visibleUserIds, canSeeUnassigned
+      );
       // Debug summary log — helps verify bucket distribution in dev/staging without digging into code
       const totals = {
         unassigned: queue.unassigned.length,
@@ -511,8 +510,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         inProgress: queue.inProgress.length,
         total: queue.unassigned.length + queue.noContactable.length + queue.assignedUntouched.length + queue.inProgress.length,
       };
-      console.log(`[work-queue] org=${user.organizationId} buckets=${JSON.stringify(totals)} requestedBy=${user.id}(${user.role}) scoped=${scopedUserIds ? scopedUserIds.length + " users" : "all"}`);
-      res.json(queue);
+      console.log(`[work-queue] org=${user.organizationId} scope=${scopeLabel} buckets=${JSON.stringify(totals)} requestedBy=${user.id}(${user.role})`);
+      res.json({ ...queue, scopeLabel });
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Failed to load work queue" });
     }
@@ -629,6 +628,14 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const newOwner = await storage.getUser(ownerUserId);
       if (!newOwner || newOwner.organizationId !== user.organizationId) {
         return res.status(400).json({ error: "User not found in your organization" });
+      }
+
+      // Hierarchy scope check: non-admins may only assign within their visible user set
+      if (user.role !== "admin") {
+        const { visibleUserIds } = await storage.resolveVisibleUserIds(user.id, user.organizationId, user.role);
+        if (!visibleUserIds.includes(ownerUserId)) {
+          return res.status(403).json({ error: "Cannot assign lane to a user outside your hierarchy scope" });
+        }
       }
     }
 
