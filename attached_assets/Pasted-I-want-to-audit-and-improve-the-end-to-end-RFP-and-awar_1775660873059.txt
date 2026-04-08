@@ -1,0 +1,74 @@
+I want to audit and improve the end-to-end RFP and award workflow in Freight-DNA.
+
+Context:
+Our goal is to capture a customer’s network-wide RFP / awarded freight footprint — sites, lanes, incumbent coverage, awarded lanes, and known gaps — and turn that into proactive account-growth actions.
+The strategic intent is:
+- show the majority of the customer’s network/sites/lanes
+- reveal what we do NOT know
+- identify missing contacts and weak relationship coverage
+- create tasks and workflows that help AMs uncover contacts, build relationships, provide more value, and win more freight
+
+I need you to show me the CURRENT process and thought process in the codebase before we redesign anything.
+
+Please do the following:
+
+1. Identify every file involved in the RFP / award / lane-discovery workflow, including:
+- UI screens
+- components
+- hooks
+- services
+- API routes
+- DB models / schema
+- task generation logic
+- any automations, cron jobs, workers, or background processors
+- any account-growth or contact-creation logic that depends on RFP/award data
+
+2. Trace the full end-to-end workflow and explain it in order:
+- how an RFP or award enters the system
+- where sites / lanes / customer network data are stored
+- how awarded lanes are represented
+- how unknown lanes / unknown sites / gaps are identified
+- how tasks are generated from that data
+- how those tasks surface to AMs
+- how contacts / relationship mapping are connected, if at all
+- where the workflow stops short today
+
+3. For each step, tell me:
+- file name
+- function / component / route name
+- what it does
+- inputs
+- outputs
+- what downstream logic depends on it
+
+4. Then produce a gap analysis with these sections:
+- What the current workflow does well
+- Where the current workflow is too manual
+- Where the current workflow loses strategic value
+- Where network-wide visibility breaks down
+- Where task generation is weak / generic / not tied tightly enough to growth
+- Where contact / relationship expansion should be more tightly linked to RFP lane and site discoveries
+
+5. Then recommend a better future-state workflow optimized for AM growth:
+- ingest / normalize RFP + awarded lane data
+- map customer network by site and lane
+- detect uncovered sites, uncovered lanes, low-contact sites, and low-relationship areas
+- create specific task types for discovery, intro requests, site mapping, lane validation, relationship expansion, and spot-to-contract / awarded-lane follow-up
+- define what should happen automatically vs manually
+- explain what the AM sees, what the manager sees, and what gets measured
+
+6. Important output format:
+Give me:
+A. a file inventory
+B. a numbered current-state workflow
+C. a gap analysis
+D. a proposed future-state workflow
+E. a prioritized implementation plan:
+   - Phase 1: highest leverage / lowest complexity
+   - Phase 2: deeper workflow improvements
+   - Phase 3: intelligence / automation improvements
+
+Do not change code yet.
+Do not give me a generic product brainstorm.
+Ground everything in the actual codebase and actual current behavior.
+Quote or summarize the key logic from the relevant files so I can review the real implementation.
