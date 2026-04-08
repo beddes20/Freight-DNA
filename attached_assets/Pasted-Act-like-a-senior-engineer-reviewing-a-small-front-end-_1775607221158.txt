@@ -1,0 +1,40 @@
+Act like a senior engineer reviewing a small front-end PR for a React + TypeScript app. I’ll paste my change summary below. Turn it into a concise PR description and reviewer context.
+Goals:
+•	Keep the current wording where it’s already clear and correct.
+•	Tighten any phrasing that’s awkward or redundant.
+•	Preserve all technical details: files, params, URL shapes, and click path.
+•	Make it scannable for reviewers in under 30 seconds.
+Here is the raw note to rewrite:
+Both edits in parallel — no dependencies between them:
+Both edits look correct. Run typecheck:
+Zero errors on either changed file. Still 107 pre-existing baseline — no regression.
+Here’s what changed and the new click path:
+company-detail.tsx — tab initializer (one line added):
+The detailTab initializer now checks URL parameters in this priority order:
+?rfpTab= — existing behavior, unchanged and still highest priority
+?tab= — new: any valid tab name passed via URL opens that tab directly
+localStorage.getItem(“cd_tab”) — existing persistence, still honored when no URL param
+“overview” — existing default
+The ?tab= check is intentionally below ?rfpTab= so the existing RFP deep-link behavior (used elsewhere in the app) is completely unaffected.
+NbaCard.tsx — “Open Account” href (one character change):
+The overdue_next_action link now points to /companies/${card.companyId}?tab=activity instead of /companies/${card.companyId}.
+New click path — overdue_next_action card → task visible:
+Rep sees NBA card: “Overdue Action — Acme Inc — Complete ‘Follow up on proposal’”
+↓
+Clicks “Open Account”  (1 click)
+↓
+Navigates to /companies/:id?tab=activity
+↓
+detailTab initializer reads ?tab=activity → opens Activity tab directly
+↓
+Activity tab loads: unified timeline at top, then “Account Tasks” card below
+↓
+Overdue task visible with red “Nd overdue” badge
+↓
+Rep clicks status toggle to mark in_progress/complete  (1 click)
+OR clicks “Edit” to update the task  (1 click)
+Total: 2 clicks from NBA card to task actioned. Previously: 4–5 clicks including a manual tab switch.
+Return:
+•	A one-paragraph ‘What & Why’ summary.
+•	A short bullet list under ‘Details’ capturing the file-level behavior changes.
+•	A short bullet list under ‘Impact’ capturing the new click path and reduced clicks.”
