@@ -1051,7 +1051,7 @@ export default function Dashboard() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 <Target className="h-4 w-4 text-blue-500" />
-                Today's Priority Accounts
+                Accounts Needing Attention
                 {!todaysFiveLoading && todaysFive.length > 0 && (
                   <Badge className="ml-auto text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border-0">
                     {todaysFive.length} account{todaysFive.length !== 1 ? "s" : ""}
