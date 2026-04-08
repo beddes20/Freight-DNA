@@ -38,6 +38,9 @@ import {
   Eye,
   ChevronDown,
   Play,
+  Building2,
+  Filter,
+  Database,
 } from "lucide-react";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -76,6 +79,15 @@ interface WorkQueue {
   assignedUntouched: LaneItem[];
   inProgress: LaneItem[];
   scopeLabel?: string;
+  customers?: string[];  // distinct customer names from all visible lanes (for filter dropdown)
+}
+
+interface EngineRunMeta {
+  source: "financial_uploads";
+  uploadIds: string[];
+  latestUploadDate: string;
+  rowsScanned: number;
+  lanesGenerated: number;
 }
 
 interface TeamMember {
@@ -279,6 +291,19 @@ function LaneRow({
     >
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
+          {/* Customer name — always shown first, prominent */}
+          {item.lane.companyName && (
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <Building2 className="w-3 h-3 text-blue-400 shrink-0" />
+              <span className="text-xs font-semibold text-blue-300">{item.lane.companyName}</span>
+              {/* CRM match indicator: show 'CRM' badge if companyId resolved, otherwise 'customer name' fallback */}
+              {item.lane.companyId ? (
+                <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 bg-blue-500/10">CRM</Badge>
+              ) : (
+                <Badge variant="outline" className="text-[9px] py-0 px-1 border-slate-500/30 text-muted-foreground" title="Customer name from TMS — not yet matched to a CRM account">TMS name</Badge>
+              )}
+            </div>
+          )}
           {/* Lane label + badges */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-foreground">{laneLabel(item.lane)}</span>
@@ -291,9 +316,6 @@ function LaneRow({
               {item.lane.eligibilityConfidence}
             </Badge>
           </div>
-          {item.lane.companyName && (
-            <p className="text-xs text-muted-foreground mt-0.5">{item.lane.companyName}</p>
-          )}
 
           {/* Metrics row */}
           <div className="flex items-center gap-4 mt-2 flex-wrap">
@@ -485,6 +507,7 @@ export default function LaneWorkQueuePage() {
   const { toast } = useToast();
   const [openLaneId, setOpenLaneId] = useState<string | null>(null);
   const [highFreqOnly, setHighFreqOnly] = useState(false);
+  const [customerFilter, setCustomerFilter] = useState<string>("__all__");
 
   const managerRoles = ["admin", "director", "national_account_manager", "logistics_manager"];
   const isManager = managerRoles.includes(user?.role ?? "");
@@ -520,6 +543,38 @@ export default function LaneWorkQueuePage() {
     queryFn: () => fetch("/api/team-members").then(r => r.json()),
   });
 
+  const isAdminOrDirector = ["admin", "director"].includes(user?.role ?? "");
+
+  const { data: engineStatus } = useQuery<{ meta: EngineRunMeta | null }>({
+    queryKey: ["/api/recurring-lanes/engine-status"],
+    queryFn: () => fetch("/api/recurring-lanes/engine-status").then(r => r.json()),
+    enabled: isAdminOrDirector,
+    staleTime: 60_000,
+  });
+
+  // Helper to apply customer + high-freq filters to a bucket
+  const filterBucket = (items: LaneItem[]) => {
+    let out = items;
+    if (customerFilter !== "__all__") {
+      out = out.filter(i => i.lane.companyName === customerFilter);
+    }
+    if (highFreqOnly) {
+      out = out.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD);
+    }
+    return out;
+  };
+
+  // Filtered queue used by BucketSection renders
+  const filteredQueue = useMemo(() => {
+    if (!queue) return null;
+    return {
+      unassigned: filterBucket(queue.unassigned),
+      noContactable: filterBucket(queue.noContactable),
+      assignedUntouched: filterBucket(queue.assignedUntouched),
+      inProgress: filterBucket(queue.inProgress),
+    };
+  }, [queue, customerFilter, highFreqOnly]);
+
   // Count high-frequency lanes across all buckets for the filter chip label
   const highFreqCount = useMemo(() => {
     if (!queue) return 0;
@@ -548,7 +603,7 @@ export default function LaneWorkQueuePage() {
     (queue?.inProgress.length ?? 0);
 
   // Sort unassigned by avgLoadsPerWeek descending so highest-frequency lanes appear first
-  const sortedUnassigned = [...(queue?.unassigned ?? [])].sort((a, b) => {
+  const sortedUnassigned = [...(filteredQueue?.unassigned ?? [])].sort((a, b) => {
     const aVal = parseLoadsPerWeek(a.lane.avgLoadsPerWeek) ?? 0;
     const bVal = parseLoadsPerWeek(b.lane.avgLoadsPerWeek) ?? 0;
     return bVal - aVal;
@@ -579,7 +634,26 @@ export default function LaneWorkQueuePage() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Customer filter dropdown */}
+          {(queue?.customers?.length ?? 0) > 0 && (
+            <Select
+              value={customerFilter}
+              onValueChange={setCustomerFilter}
+              data-testid="select-customer-filter"
+            >
+              <SelectTrigger className="h-8 text-xs w-44 gap-1">
+                <Filter className="w-3 h-3 shrink-0 text-muted-foreground" />
+                <SelectValue placeholder="All customers" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All customers</SelectItem>
+                {(queue?.customers ?? []).map(name => (
+                  <SelectItem key={name} value={name}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           {/* 2+/week filter toggle */}
           <Button
             variant={highFreqOnly ? "default" : "outline"}
@@ -629,23 +703,23 @@ export default function LaneWorkQueuePage() {
           </div>
         ) : (
           <>
-            {/* Summary stat chips */}
-            {queue && (
+            {/* Summary stat chips — reflect filtered counts */}
+            {filteredQueue && (
               <div className="flex gap-3 flex-wrap mb-6">
                 <div className="bg-orange-500/10 border border-orange-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]">
-                  <p className="text-lg font-bold text-orange-400">{queue.unassigned.length}</p>
+                  <p className="text-lg font-bold text-orange-400">{filteredQueue.unassigned.length}</p>
                   <p className="text-[10px] text-orange-400/70">Unassigned</p>
                 </div>
                 <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]">
-                  <p className="text-lg font-bold text-red-400">{queue.noContactable.length}</p>
+                  <p className="text-lg font-bold text-red-400">{filteredQueue.noContactable.length}</p>
                   <p className="text-[10px] text-red-400/70">No Contact Info</p>
                 </div>
                 <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]">
-                  <p className="text-lg font-bold text-blue-400">{queue.assignedUntouched.length}</p>
+                  <p className="text-lg font-bold text-blue-400">{filteredQueue.assignedUntouched.length}</p>
                   <p className="text-[10px] text-blue-400/70">Untouched</p>
                 </div>
                 <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]">
-                  <p className="text-lg font-bold text-amber-400">{queue.inProgress.length}</p>
+                  <p className="text-lg font-bold text-amber-400">{filteredQueue.inProgress.length}</p>
                   <p className="text-[10px] text-amber-400/70">In Progress</p>
                 </div>
                 {/* High-frequency summary chip */}
@@ -669,8 +743,37 @@ export default function LaneWorkQueuePage() {
               </div>
             )}
 
-            {/* Buckets */}
-            {queue && (
+            {/* Admin engine metadata debug panel */}
+            {isAdminOrDirector && engineStatus?.meta && (
+              <div className="mb-5 rounded-lg border border-slate-700/40 bg-slate-800/30 px-4 py-3 flex flex-wrap gap-4 items-center" data-testid="engine-debug-panel">
+                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Database className="w-3.5 h-3.5 text-slate-400" />
+                  <span className="font-medium text-slate-300">Last Engine Run</span>
+                </div>
+                <span className="text-[11px] text-muted-foreground">
+                  Source: <span className="text-slate-200">{engineStatus.meta.source}</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  Uploads used: <span className="text-slate-200">{engineStatus.meta.uploadIds.length}</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  Rows scanned: <span className="text-slate-200">{engineStatus.meta.rowsScanned.toLocaleString()}</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  Lanes generated: <span className="text-slate-200">{engineStatus.meta.lanesGenerated}</span>
+                </span>
+                {engineStatus.meta.latestUploadDate && (
+                  <span className="text-[11px] text-muted-foreground">
+                    Upload date: <span className="text-slate-200">
+                      {new Date(engineStatus.meta.latestUploadDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    </span>
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Buckets — use filteredQueue */}
+            {filteredQueue && (
               <>
                 <BucketSection
                   title="Unassigned"
@@ -693,7 +796,7 @@ export default function LaneWorkQueuePage() {
                   description="Assigned but carriers have no phone or email — update the carrier catalog."
                   icon={AlertCircle}
                   iconColor="bg-red-500/10 text-red-400"
-                  items={queue.noContactable}
+                  items={filteredQueue.noContactable}
                   completionThreshold={completionThreshold}
                   onOpen={setOpenLaneId}
                   bucket="noContactable"
@@ -705,7 +808,7 @@ export default function LaneWorkQueuePage() {
                   description="Owner assigned and carriers are contactable — no outreach logged yet."
                   icon={Truck}
                   iconColor="bg-blue-500/10 text-blue-400"
-                  items={queue.assignedUntouched}
+                  items={filteredQueue.assignedUntouched}
                   completionThreshold={completionThreshold}
                   onOpen={setOpenLaneId}
                   bucket="assignedUntouched"
@@ -717,7 +820,7 @@ export default function LaneWorkQueuePage() {
                   description="Outreach started — keep going to hit the target."
                   icon={CheckCircle2}
                   iconColor="bg-amber-500/10 text-amber-400"
-                  items={queue.inProgress}
+                  items={filteredQueue.inProgress}
                   completionThreshold={completionThreshold}
                   onOpen={setOpenLaneId}
                   bucket="inProgress"

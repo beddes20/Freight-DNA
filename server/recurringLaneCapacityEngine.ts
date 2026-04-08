@@ -66,6 +66,19 @@ export const LANE_CONFIG = {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+/**
+ * Metadata about a single engine run — which uploads were used, how many rows
+ * were scanned, and whether each lane was resolved via CRM company match or
+ * purely via the raw customer name from the TMS export.
+ */
+export interface EngineRunMeta {
+  source: "financial_uploads";         // always "financial_uploads" (ReplitDailyUpload)
+  uploadIds: string[];                  // IDs of the financial_uploads rows consumed
+  latestUploadDate: string;            // uploadedAt of the newest upload used
+  rowsScanned: number;                  // total rows processed (across all consumed uploads)
+  lanesGenerated: number;               // eligible lanes found this run
+}
+
 export interface LaneSummary {
   origin: string;
   originState: string;
@@ -122,14 +135,23 @@ function normCompanyName(s: string): string {
 
 /**
  * Analyzes financial upload rows to identify recurring lanes.
- * Returns one LaneSummary per eligible origin→destination→equipment→company corridor.
+ * Source: financial_uploads table (ReplitDailyUpload from Financials / Lane Analytics tab).
+ * Returns one LaneSummary per eligible origin→destination→equipment→company corridor,
+ * plus run metadata showing exactly which uploads were consumed.
  */
 export async function identifyRecurringLanes(
   orgId: string,
   storage: IStorage,
-): Promise<LaneSummary[]> {
+): Promise<{ lanes: LaneSummary[]; meta: EngineRunMeta }> {
   const uploads = await storage.getFinancialUploadsForOrg(orgId);
-  if (uploads.length === 0) return [];
+  const emptyMeta: EngineRunMeta = {
+    source: "financial_uploads",
+    uploadIds: [],
+    latestUploadDate: "",
+    rowsScanned: 0,
+    lanesGenerated: 0,
+  };
+  if (uploads.length === 0) return { lanes: [], meta: emptyMeta };
 
   const companies = await storage.getCompanies(orgId);
   const companyMap = new Map(companies.map(c => [normCompanyName(c.name), c]));
@@ -137,14 +159,25 @@ export async function identifyRecurringLanes(
   // Sort uploads newest first
   const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   const latestUpload = sorted[0];
-  if (!latestUpload) return [];
+  if (!latestUpload) return { lanes: [], meta: emptyMeta };
 
   // Use rows from the most recent upload (or merge last 2 uploads for coverage)
   const rowSources: any[][] = [];
+  const consumedUploads: typeof sorted = [];
   for (let i = 0; i < Math.min(2, sorted.length); i++) {
     const rows = (sorted[i].rows as any[]) ?? [];
-    if (rows.length > 0) rowSources.push(rows);
+    if (rows.length > 0) {
+      rowSources.push(rows);
+      consumedUploads.push(sorted[i]);
+    }
   }
+  const runMeta: EngineRunMeta = {
+    source: "financial_uploads",
+    uploadIds: consumedUploads.map(u => u.id),
+    latestUploadDate: consumedUploads[0]?.uploadedAt ?? "",
+    rowsScanned: rowSources.reduce((sum, r) => sum + r.length, 0),
+    lanesGenerated: 0, // filled in below
+  };
 
   // Determine the lookback anchor: use the latest ship date found in the data rather
   // than "today". This ensures the engine produces consistent results even when the
@@ -321,7 +354,8 @@ export async function identifyRecurringLanes(
   // Deduplicate: prefer higher avgLoadsPerWeek for same lane key
   eligible.sort((a, b) => b.avgLoadsPerWeek - a.avgLoadsPerWeek);
 
-  return eligible;
+  runMeta.lanesGenerated = eligible.length;
+  return { lanes: eligible, meta: runMeta };
 }
 
 /**
@@ -332,8 +366,8 @@ export async function identifyRecurringLanes(
 export async function runRecurringLaneEngineForOrg(
   orgId: string,
   storage: IStorage,
-): Promise<{ upserted: number; total: number; historicalCarriersAttached: number }> {
-  const lanes = await identifyRecurringLanes(orgId, storage);
+): Promise<{ upserted: number; total: number; historicalCarriersAttached: number; meta: EngineRunMeta }> {
+  const { lanes, meta } = await identifyRecurringLanes(orgId, storage);
 
   // Pre-load carrier catalog indexed by payee code for O(1) lookups
   const allCarriers = await storage.getCarriers(orgId);
@@ -412,5 +446,5 @@ export async function runRecurringLaneEngineForOrg(
   // Retract eligibility for lanes that no longer meet criteria in this run
   await storage.retractIneligibleLanes(orgId, eligibleIds);
 
-  return { upserted, total: lanes.length, historicalCarriersAttached };
+  return { upserted, total: lanes.length, historicalCarriersAttached, meta };
 }

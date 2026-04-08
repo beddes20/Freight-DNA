@@ -1,0 +1,59 @@
+Yes — I want lane assignments to appear in the Tasks tab too, but only as a lightweight action item that points back to the Lane Work Queue.
+
+Important design rule:
+The Lane Work Queue remains the system of record for lane procurement work.
+The Tasks tab should act as the reminder/accountability layer, not a second workflow.
+
+Please implement the lowest-risk version of this.
+
+Requirements:
+
+1) Create a task when a lane is assigned
+- When a lane is assigned to a user, automatically create a task for that same user
+- Task title should be something like:
+  - Work assigned lane: [Customer] — [Origin → Destination]
+- Include useful context:
+  - loads/week
+  - equipment if available
+  - assigned by
+- Add a direct link to the exact lane in the Lane Work Queue using a laneId deep link
+
+2) Self-assign should also create the task
+- If I assign a lane to myself, I should still get the task
+- This is important because self-assign is exactly when I need a reliable place to find it again
+
+3) Task behavior
+- Due date: today / immediate
+- Status: open
+- Category/type: lane procurement / assigned lane / recurring lane work (use existing task model if possible)
+- Clicking the task should take me to:
+  /lanes/work-queue?laneId=...
+
+4) Auto-complete / resolve behavior
+- If the lane is resolved/completed, automatically complete or archive the task
+- If outreach starts, optionally keep task open until resolution, unless existing task patterns suggest a better status
+- Do not create duplicate open tasks for the same lane/user combination
+
+5) Keep notifications too
+- Keep the current notification bell / toast behavior
+- Tasks is additive, not a replacement
+
+6) Queue remains source of truth
+- Do not duplicate bench management or outreach logging inside Tasks
+- Task should simply point the user back to the queue
+
+7) Tests
+Add tests for:
+- assign to another user creates task
+- self-assign creates task
+- duplicate assignment does not create duplicate open task
+- task deep-links to the exact lane
+- resolving/completing a lane closes the task
+- notification behavior still works
+
+Output format:
+1. CURRENT ASSIGNMENT FLOW
+2. CHANGES MADE
+3. HOW TASKS + LANE WORK QUEUE INTERACT
+4. TESTS ADDED
+5. ANY LIMITATIONS STILL REMAINING

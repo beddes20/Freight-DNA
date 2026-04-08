@@ -236,6 +236,25 @@ async function createLane(
   return id;
 }
 
+/** Same as createLane but with a customer company_name — used for customer filter tests. */
+async function createLaneWithCustomer(
+  orgId: string,
+  ownerUserId: string | null,
+  companyName: string
+): Promise<string> {
+  const id = uid();
+  const now = new Date().toISOString();
+  await q(
+    `INSERT INTO recurring_lanes
+       (id, org_id, origin, destination, is_eligible, has_preferred_carrier_program,
+        owner_user_id, carriers_contacted_count, eligibility_confidence, company_name, created_at, updated_at)
+     VALUES ($1, $2, 'chicago', 'dallas', true, false, $3, 0, 'medium', $4, $5, $5)`,
+    [id, orgId, ownerUserId, companyName, now]
+  );
+  track("recurring_lanes", id);
+  return id;
+}
+
 // ── Cleanup ────────────────────────────────────────────────────────────────────
 
 async function cleanup(): Promise<void> {
@@ -658,6 +677,51 @@ async function main(): Promise<void> {
       unassignedIds.includes(unassignedLane),
       `Director should see unassigned lane ${unassignedLane}`
     );
+  });
+
+  await runTest("Work queue includes 'customers' array with distinct company names", async () => {
+    // Create two lanes with different company names and ensure they appear in the customers list
+    const laneA = await createLaneWithCustomer(orgId, null, "Acme Corp");
+    const laneB = await createLaneWithCustomer(orgId, null, "Globex Inc");
+    const laneC = await createLaneWithCustomer(orgId, null, "Acme Corp"); // duplicate — should deduplicate
+
+    const cookie = await loginAs(director.username, director.password);
+    const { json } = await apiGet("/api/recurring-lanes/work-queue", cookie);
+    const q2 = json as { customers?: string[] };
+
+    assert(Array.isArray(q2.customers), `Expected 'customers' array in work queue response`);
+    assert(q2.customers!.includes("Acme Corp"), `Expected 'Acme Corp' in customers list`);
+    assert(q2.customers!.includes("Globex Inc"), `Expected 'Globex Inc' in customers list`);
+    const acmeCount = q2.customers!.filter(n => n === "Acme Corp").length;
+    assert(acmeCount === 1, `Expected 'Acme Corp' to appear exactly once, got ${acmeCount}`);
+
+    // Cleanup extra test lanes
+    await q(`DELETE FROM recurring_lanes WHERE id IN ($1, $2, $3)`, [laneA, laneB, laneC]).catch(() => {});
+  });
+
+  await runTest("Engine-status endpoint returns null meta when engine has never run for a fresh test org", async () => {
+    // Create a fresh org and admin who has never run the engine
+    const freshOrgId = uid();
+    const freshSlug = `testorg-${freshOrgId.slice(0, 8)}`;
+    await q(`INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)`, [freshOrgId, `FreshOrg_${freshOrgId.slice(0, 8)}`, freshSlug]);
+    track("organizations", freshOrgId);
+    await enableFeatureFlag(freshOrgId);
+
+    const freshAdmin = await createUser(freshOrgId, "admin");
+    const cookie = await loginAs(freshAdmin.username, freshAdmin.password);
+
+    const { status, json } = await apiGet("/api/recurring-lanes/engine-status", cookie);
+    const typed = json as { meta: unknown };
+
+    assert(status === 200, `Expected 200 from engine-status, got ${status}`);
+    assert(typed.meta === null, `Expected null meta for org that has never run engine, got ${JSON.stringify(typed.meta)}`);
+  });
+
+  await runTest("Engine-status returns 403 for non-admin/director roles", async () => {
+    // LM role should be blocked from engine-status
+    const cookie = await loginAs(lm.username, lm.password);
+    const { status } = await apiGet("/api/recurring-lanes/engine-status", cookie);
+    assert(status === 403, `Expected 403 for LM on engine-status, got ${status}`);
   });
 
   // ── Summary ───────────────────────────────────────────────────────────────

@@ -510,10 +510,38 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         inProgress: queue.inProgress.length,
         total: queue.unassigned.length + queue.noContactable.length + queue.assignedUntouched.length + queue.inProgress.length,
       };
+      // Collect distinct customer names from all visible lanes for the filter dropdown
+      const allVisibleLanes = [
+        ...queue.unassigned,
+        ...queue.noContactable,
+        ...queue.assignedUntouched,
+        ...queue.inProgress,
+      ];
+      const customers = [...new Set(
+        allVisibleLanes
+          .map(i => i.lane.companyName)
+          .filter((n): n is string => !!n && n.trim() !== "")
+      )].sort((a, b) => a.localeCompare(b));
+
       console.log(`[work-queue] org=${user.organizationId} scope=${scopeLabel} buckets=${JSON.stringify(totals)} requestedBy=${user.id}(${user.role})`);
-      res.json({ ...queue, scopeLabel });
+      res.json({ ...queue, scopeLabel, customers });
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Failed to load work queue" });
+    }
+  });
+
+  /** Read-only: returns the metadata from the last engine run for admin debug panel. */
+  app.get("/api/recurring-lanes/engine-status", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
+    try {
+      const raw = await storage.getSetting(`lane_engine_last_run:${user.organizationId}`);
+      const meta = raw ? JSON.parse(raw) : null;
+      res.json({ meta });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error)?.message ?? "Failed to load engine status" });
     }
   });
 
@@ -692,6 +720,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const result = await runRecurringLaneEngineForOrg(user.organizationId, storage);
       await scoreAllEligibleLanes(user.organizationId, storage);
       res.json({ ...result, message: "Engine + scoring complete" });
+      // Persist last-run meta so the work queue debug panel can show it without re-running
+      await storage.setSetting(`lane_engine_last_run:${user.organizationId}`, JSON.stringify(result.meta));
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Engine error" });
     }
