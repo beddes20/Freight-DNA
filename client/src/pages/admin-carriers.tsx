@@ -335,7 +335,7 @@ export default function AdminCarriers() {
   const selectedCount = selected.size;
 
   return (
-    <div className="min-h-screen bg-[hsl(var(--background))] text-[hsl(var(--foreground))] p-6">
+    <div className="min-h-screen bg-background text-foreground p-6">
 
       {/* Header */}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -397,8 +397,8 @@ export default function AdminCarriers() {
         </div>
 
         {selectedCount > 0 && (
-          <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-1.5">
-            <span className="text-xs text-red-600 font-medium">
+          <div className="flex items-center gap-2 bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-1.5">
+            <span className="text-xs text-destructive font-medium">
               {selectedCount} selected
             </span>
             <Button
@@ -406,7 +406,7 @@ export default function AdminCarriers() {
               variant="ghost"
               onClick={() => setShowBulkConfirm(true)}
               disabled={bulkDeleteMutation.isPending}
-              className="h-6 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-500/10"
+              className="h-6 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
               data-testid="btn-bulk-delete"
             >
               {bulkDeleteMutation.isPending
@@ -433,7 +433,7 @@ export default function AdminCarriers() {
           {search ? "No carriers match your search" : "No carriers yet — import your freight file or add one manually"}
         </div>
       ) : (
-        <div className="rounded-xl border border-border overflow-hidden">
+        <div className="rounded-xl border border-border overflow-hidden bg-card">
           <table className="w-full text-sm">
             <thead className="bg-muted border-b border-border">
               <tr>
@@ -461,16 +461,16 @@ export default function AdminCarriers() {
                 const isChecked = selected.has(c.id);
                 const hasContact = c.primaryEmail || c.phone;
                 return (
-                  <tr key={c.id} className={`border-b border-border transition-colors ${isChecked ? "bg-amber-500/5" : "hover:bg-muted/50"}`} data-testid={`carrier-row-${c.id}`}>
+                  <tr key={c.id} className={`border-b border-border transition-colors bg-card ${isChecked ? "bg-amber-500/10" : "hover:bg-muted/40"}`} data-testid={`carrier-row-${c.id}`}>
                     <td className="px-4 py-3">
                       <Checkbox checked={isChecked} onCheckedChange={() => toggleOne(c.id)} className="border-border" data-testid={`checkbox-carrier-${c.id}`} />
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-foreground">{c.name}</div>
                       <div className="flex items-center gap-2 mt-0.5">
-                        {c.payeeCode && <span className="text-[10px] text-amber-400/70">Payee: {c.payeeCode}</span>}
+                        {c.payeeCode && <span className="text-[10px] text-amber-600 dark:text-amber-400">Payee: {c.payeeCode}</span>}
                         {c.mcDot && <span className="text-[10px] text-muted-foreground">MC: {c.mcDot}</span>}
-                        {!hasContact && <span className="text-[10px] text-red-400/70">No contact</span>}
+                        {!hasContact && <span className="text-[10px] text-destructive">No contact</span>}
                       </div>
                     </td>
                     <td className="px-4 py-3 hidden sm:table-cell">
@@ -512,7 +512,7 @@ export default function AdminCarriers() {
                         >
                           <Pencil className="w-3 h-3" />
                         </button>
-                        <button onClick={() => setDeleteTarget(c)} className="p-1.5 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors" data-testid={`btn-delete-carrier-${c.id}`}>
+                        <button onClick={() => setDeleteTarget(c)} className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors" data-testid={`btn-delete-carrier-${c.id}`}>
                           <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
