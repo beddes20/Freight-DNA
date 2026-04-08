@@ -936,7 +936,7 @@ export function CarrierOutreachPanel({
                                 {SOURCE_LABELS[c.sourceChannel]}
                               </Badge>
                             )}
-                            {!c.primaryEmail && !capturedEmails[c.carrierId ?? c.carrierName] && (
+                            {!c.primaryEmail && !c.backupEmail && !capturedEmails[key] && (
                               <Badge variant="outline" className="text-[9px] py-0 px-1 border-orange-500/40 text-orange-400 flex items-center gap-0.5">
                                 <Mail className="w-2.5 h-2.5" />
                                 No email on file
@@ -944,6 +944,11 @@ export function CarrierOutreachPanel({
                             )}
                           </div>
                           <p className="text-[10px] text-white/50 mt-0.5 line-clamp-2">{c.fitReason}</p>
+                          {(capturedEmails[key] || c.primaryEmail || c.backupEmail) && (
+                            <p className="text-[10px] text-white/30 mt-0.5 truncate">
+                              {capturedEmails[key] || c.primaryEmail || c.backupEmail}
+                            </p>
+                          )}
                           {(c.regions.length > 0 || c.equipmentTypes.length > 0) && (
                             <p className="text-[10px] text-white/30 mt-0.5">
                               {[...c.regions, ...c.equipmentTypes].slice(0, 4).join(" · ")}
