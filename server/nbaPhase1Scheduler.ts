@@ -44,14 +44,19 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
         await storage.processExpiredNbaCards(org.id);
 
         // Refresh recurring lane data and scores before card generation
-        try {
-          const { upserted } = await runRecurringLaneEngineForOrg(org.id, storage);
-          if (upserted > 0) {
-            await scoreAllEligibleLanes(org.id, storage);
-            log(`Org ${org.id}: lane engine upserted ${upserted} lanes, scored eligible`);
+        // Only runs when the feature flag is on for this org — avoids unnecessary
+        // financial-row scans for orgs that haven't enabled lane carrier outreach.
+        const laneOutreachEnabled = await storage.getFeatureFlag(org.id, "lane_carrier_outreach_v1").catch(() => false);
+        if (laneOutreachEnabled) {
+          try {
+            const { upserted } = await runRecurringLaneEngineForOrg(org.id, storage);
+            if (upserted > 0) {
+              await scoreAllEligibleLanes(org.id, storage);
+              log(`Org ${org.id}: lane engine upserted ${upserted} lanes, scored eligible`);
+            }
+          } catch (laneErr: any) {
+            log(`Org ${org.id}: lane engine warning (non-fatal): ${laneErr?.message ?? laneErr}`);
           }
-        } catch (laneErr: any) {
-          log(`Org ${org.id}: lane engine warning (non-fatal): ${laneErr?.message ?? laneErr}`);
         }
 
         const engineOutput = await runPhase1EngineForOrg(org.id, storage);

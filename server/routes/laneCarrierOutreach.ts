@@ -229,7 +229,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       res.json({ seeded, skipped, total: rows.length });
     } catch (err) {
       console.error("[carrier-seed]", err);
-      res.status(500).json({ error: "Failed to parse Excel file", details: err?.message });
+      res.status(500).json({ error: "Failed to parse Excel file", details: (err as Error)?.message });
     }
   });
 
@@ -346,7 +346,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       await scoreAllEligibleLanes(user.organizationId, storage);
       res.json({ ...result, message: "Engine + scoring complete" });
     } catch (err) {
-      res.status(500).json({ error: err?.message ?? "Engine error" });
+      res.status(500).json({ error: (err as Error)?.message ?? "Engine error" });
     }
   });
 
@@ -364,7 +364,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const ranked = await rankCarriersForLane(lane, storage);
       res.json({ carriers: ranked });
     } catch (err) {
-      res.status(500).json({ error: err?.message });
+      res.status(500).json({ error: (err as Error)?.message ?? "Failed to rank carriers" });
     }
   });
 
@@ -470,7 +470,7 @@ Guidelines:
 
       res.json({ emails });
     } catch (err) {
-      res.status(500).json({ error: err?.message ?? "Email drafting failed" });
+      res.status(500).json({ error: (err as Error)?.message ?? "Email drafting failed" });
     }
   });
 
@@ -734,6 +734,11 @@ Rules for suggestions:
     const { carrierIds, carrierNames, outreachMode, emailDrafts, ownerUserId, overseerUserId, capturedEmails } = req.body;
     if (!Array.isArray(carrierNames) || carrierNames.length === 0) {
       return res.status(400).json({ error: "carrierNames required" });
+    }
+    // Guard: if carrierIds is provided, it must be a parallel array of the same length.
+    // Mismatched lengths would silently associate wrong carrier IDs with carrier names.
+    if (Array.isArray(carrierIds) && carrierIds.length > 0 && carrierIds.length !== carrierNames.length) {
+      return res.status(400).json({ error: "carrierIds and carrierNames must be the same length" });
     }
 
     // Persist ad-hoc captured emails back to carrier catalog (org-scoped)

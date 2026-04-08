@@ -698,6 +698,9 @@ export function generateLaneCapacityCards(
   const companyMap = new Map(allCompanies.map(c => [c.id, c]));
   const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
   const eligible = recurringLanes.filter(l => {
+    // Belt-and-suspenders: caller should pass only isEligible=true lanes,
+    // but guard here in case a zombie lane slips through from a partial engine run.
+    if (l.isEligible === false) return false;
     // Permanently excluded if preferred program is set
     if (l.hasPreferredCarrierProgram) return false;
     // Eligible when not currently snoozed (resolvedAt is kept as historical marker only —
