@@ -485,6 +485,24 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     res.json(lanes);
   });
 
+  // ── Lane Work Queue (manager/admin view) — must be before /:id ─────────────
+
+  app.get("/api/recurring-lanes/work-queue", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const managerRoles = ["admin", "director", "national_account_manager", "logistics_manager"];
+    if (!managerRoles.includes(user.role)) {
+      return res.status(403).json({ error: "Manager role required" });
+    }
+    try {
+      const queue = await storage.getLaneWorkQueue(user.organizationId, LANE_CONFIG.completionCarriersContacted);
+      res.json(queue);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error)?.message ?? "Failed to load work queue" });
+    }
+  });
+
   app.get("/api/recurring-lanes/:id", async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
@@ -562,6 +580,56 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
 
     res.json(updated);
+  });
+
+  // ── Lane Assignment ────────────────────────────────────────────────────────
+
+  app.post("/api/recurring-lanes/:laneId/assign", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const lane = await storage.getRecurringLane(req.params.laneId);
+    if (!lane || lane.orgId !== user.organizationId) return res.status(404).json({ error: "Lane not found" });
+
+    // AMs can only reassign lanes they own; managers/admins can reassign any
+    const isManager = ["admin", "director", "national_account_manager", "logistics_manager"].includes(user.role);
+    if (!isManager && lane.ownerUserId !== user.id) {
+      return res.status(403).json({ error: "You can only reassign lanes you own" });
+    }
+
+    const { ownerUserId } = req.body as { ownerUserId: string | null };
+
+    // Validate the new owner belongs to this org
+    if (ownerUserId) {
+      const newOwner = await storage.getUser(ownerUserId);
+      if (!newOwner || newOwner.organizationId !== user.organizationId) {
+        return res.status(400).json({ error: "User not found in your organization" });
+      }
+    }
+
+    try {
+      const updated = await storage.assignLaneOwner(req.params.laneId, user.organizationId, ownerUserId ?? null, user.id);
+      if (!updated) return res.status(404).json({ error: "Lane not found" });
+
+      // Audit log
+      await storage.createCarrierOutreachLog({
+        orgId: user.organizationId,
+        laneId: req.params.laneId,
+        companyId: lane.companyId ?? null,
+        carrierIds: [],
+        carrierNames: [],
+        actorUserId: user.id,
+        ownerUserId: ownerUserId ?? null,
+        overseerUserId: lane.overseerUserId ?? null,
+        outreachMode: "assignment",
+        emailDrafts: [],
+      });
+
+      res.json(updated);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error)?.message ?? "Failed to assign lane" });
+    }
   });
 
   // Run the recurring lane engine + scoring on demand (admin/director)
@@ -713,7 +781,27 @@ Guidelines:
     const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
     if (!lane) return;
     const bench = await storage.getLaneCarrierBench(req.params.laneId);
-    res.json(bench);
+
+    // Enrich each bench item with contactability info from the carrier catalog
+    const carrierIds = bench.map(b => b.carrierId).filter(Boolean) as string[];
+    let contactMap: Map<string, { phone: string | null; primaryEmail: string | null }> = new Map();
+    if (carrierIds.length > 0) {
+      const carrierDetails = await storage.getCarriersByIds(carrierIds, user.organizationId);
+      for (const c of carrierDetails) {
+        contactMap.set(c.id, { phone: c.phone ?? null, primaryEmail: c.primaryEmail ?? null });
+      }
+    }
+
+    const enriched = bench.map(b => ({
+      ...b,
+      phone: b.carrierId ? (contactMap.get(b.carrierId)?.phone ?? null) : null,
+      primaryEmail: b.carrierId ? (contactMap.get(b.carrierId)?.primaryEmail ?? null) : null,
+      isContactable: b.carrierId
+        ? !!(contactMap.get(b.carrierId)?.phone || contactMap.get(b.carrierId)?.primaryEmail)
+        : false,
+    }));
+
+    res.json(enriched);
   });
 
   app.post("/api/lanes/:laneId/carrier-interest", async (req, res) => {

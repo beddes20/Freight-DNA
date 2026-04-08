@@ -1188,6 +1188,8 @@ export const recurringLanes = pgTable("recurring_lanes", {
   hasPreferredCarrierProgram: boolean("has_preferred_carrier_program").default(false),
   ownerUserId: varchar("owner_user_id").references(() => users.id, { onDelete: "set null" }),
   overseerUserId: varchar("overseer_user_id").references(() => users.id, { onDelete: "set null" }),
+  assignedAt: text("assigned_at"),
+  assignedByUserId: varchar("assigned_by_user_id").references(() => users.id, { onDelete: "set null" }),
   laneScore: integer("lane_score"),
   laneScoreFactors: jsonb("lane_score_factors"),
   eligibilityConfidence: text("eligibility_confidence").notNull().default("medium"), // "high" | "medium" | "borderline"
@@ -1221,6 +1223,8 @@ export const laneCarrierInterest = pgTable("lane_carrier_interest", {
   fitScore: integer("fit_score"),
   fitReason: text("fit_reason"),
   outreachSentAt: text("outreach_sent_at"),
+  sourceType: text("source_type").notNull().default("suggested"),
+  // historical | suggested | manually_added
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [

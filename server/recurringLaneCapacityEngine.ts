@@ -79,6 +79,9 @@ export interface LaneSummary {
   weeklyBreakdown: Record<string, number>; // "YYYY-WW" -> load count
   eligibilityConfidence: "high" | "medium" | "borderline";
   ownerUserId: string | null;
+  // V1.5: carrier info extracted from load rows
+  historicalPayeeCodes: string[];   // distinct payee codes seen on this lane
+  historicalCarrierNames: string[]; // raw carrier names (fallback when no payee code)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -151,6 +154,8 @@ export async function identifyRecurringLanes(
     companyNorm: string;
     weeks: Map<string, number>;
     shipDates: string[];
+    payeeCodes: Set<string>;   // V1.5: distinct payee codes seen on this lane
+    carrierNames: Set<string>; // V1.5: raw carrier names as fallback
   }>();
 
   // Dedup across overlapping uploads: track distinct load fingerprints already counted
@@ -194,11 +199,19 @@ export async function identifyRecurringLanes(
           companyNorm: customerRaw,
           weeks: new Map(),
           shipDates: [],
+          payeeCodes: new Set(),
+          carrierNames: new Set(),
         });
       }
       const entry = laneWeekly.get(laneKey)!;
       entry.weeks.set(weekKey, (entry.weeks.get(weekKey) ?? 0) + 1);
       if (shipDate) entry.shipDates.push(String(shipDate));
+
+      // V1.5: Track which carriers ran this lane
+      const payeeCode = normStr(row.payeeCode ?? row.payee_code ?? row.payee ?? "");
+      const carrierName = normStr(row.carrier ?? row.carrierName ?? row.carrier_name ?? row.payeeName ?? row.payee_name ?? "");
+      if (payeeCode) entry.payeeCodes.add(payeeCode);
+      else if (carrierName) entry.carrierNames.add(carrierName);
     }
   }
 
@@ -243,6 +256,8 @@ export async function identifyRecurringLanes(
       weeklyBreakdown: Object.fromEntries(lane.weeks),
       eligibilityConfidence,
       ownerUserId,
+      historicalPayeeCodes: Array.from(lane.payeeCodes),
+      historicalCarrierNames: Array.from(lane.carrierNames),
     });
   }
 
@@ -255,14 +270,25 @@ export async function identifyRecurringLanes(
 /**
  * Run the full recurring lane capacity engine for an org:
  * identifies eligible lanes and upserts them into recurring_lanes.
+ * V1.5: also auto-attaches historical carriers (from load rows) to each lane bench.
  */
 export async function runRecurringLaneEngineForOrg(
   orgId: string,
   storage: IStorage,
-): Promise<{ upserted: number; total: number }> {
+): Promise<{ upserted: number; total: number; historicalCarriersAttached: number }> {
   const lanes = await identifyRecurringLanes(orgId, storage);
 
+  // Pre-load carrier catalog indexed by payee code for O(1) lookups
+  const allCarriers = await storage.getCarriers(orgId);
+  const carrierByPayee = new Map(
+    allCarriers.filter(c => c.payeeCode).map(c => [c.payeeCode!.toLowerCase(), c])
+  );
+  const carrierByName = new Map(
+    allCarriers.map(c => [c.name.toLowerCase().trim(), c])
+  );
+
   let upserted = 0;
+  let historicalCarriersAttached = 0;
   const eligibleIds: string[] = [];
 
   for (const lane of lanes) {
@@ -285,10 +311,49 @@ export async function runRecurringLaneEngineForOrg(
     });
     eligibleIds.push(row.id);
     upserted++;
+
+    // V1.5: Auto-attach historical carriers from load rows
+    // Match by payee code first, then by name
+    const attachedCarrierIds = new Set<string>();
+
+    for (const payeeCode of lane.historicalPayeeCodes) {
+      const carrier = carrierByPayee.get(payeeCode.toLowerCase());
+      if (!carrier) continue;
+      if (attachedCarrierIds.has(carrier.id)) continue;
+      try {
+        await storage.upsertLaneCarrierInterest({
+          laneId: row.id,
+          carrierId: carrier.id,
+          carrierName: carrier.name,
+          interestStatus: "needs_follow_up",
+          sourceType: "historical",
+        });
+        attachedCarrierIds.add(carrier.id);
+        historicalCarriersAttached++;
+      } catch {
+        // Duplicate entries are safe to ignore (partial unique index)
+      }
+    }
+
+    for (const carrierName of lane.historicalCarrierNames) {
+      const carrier = carrierByName.get(carrierName.toLowerCase().trim());
+      const interestData: Parameters<IStorage["upsertLaneCarrierInterest"]>[0] = carrier
+        ? { laneId: row.id, carrierId: carrier.id, carrierName: carrier.name, interestStatus: "needs_follow_up", sourceType: "historical" }
+        : { laneId: row.id, carrierId: null, carrierName, interestStatus: "needs_follow_up", sourceType: "historical" };
+
+      if (carrier && attachedCarrierIds.has(carrier.id)) continue;
+      try {
+        await storage.upsertLaneCarrierInterest(interestData);
+        if (carrier) attachedCarrierIds.add(carrier.id);
+        historicalCarriersAttached++;
+      } catch {
+        // Duplicate entries are safe to ignore
+      }
+    }
   }
 
   // Retract eligibility for lanes that no longer meet criteria in this run
   await storage.retractIneligibleLanes(orgId, eligibleIds);
 
-  return { upserted, total: lanes.length };
+  return { upserted, total: lanes.length, historicalCarriersAttached };
 }

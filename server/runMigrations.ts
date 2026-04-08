@@ -1244,6 +1244,11 @@ export async function runMigrations() {
     await clientLCO.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS state text`);
     await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_carriers_payee ON carriers(org_id, payee_code) WHERE payee_code IS NOT NULL`);
 
+    // 7. V1.5 — lane assignment tracking + carrier source type
+    await clientLCO.query(`ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS assigned_at text`);
+    await clientLCO.query(`ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS assigned_by_user_id varchar REFERENCES users(id) ON DELETE SET NULL`);
+    await clientLCO.query(`ALTER TABLE lane_carrier_interest ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'suggested'`);
+
     console.log("[migrations] lane carrier outreach tables ensured");
   } catch (err) {
     console.error("[migrations] lane carrier outreach tables error:", err);

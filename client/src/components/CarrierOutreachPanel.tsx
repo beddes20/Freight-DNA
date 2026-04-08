@@ -115,6 +115,10 @@ interface CarrierInterest {
   outreachSentAt: string | null;
   lastReplySnippet: string | null;
   classifiedAt: string | null;
+  sourceType: string | null;        // 'historical' | 'suggested' | 'manually_added'
+  phone: string | null;
+  primaryEmail: string | null;
+  isContactable: boolean;
 }
 
 interface FollowupSuggestion {
@@ -193,6 +197,7 @@ export function CarrierOutreachPanel({
   const queryClient = useQueryClient();
   const { user: currentUser } = useAuth();
   const isDirectorOrAdmin = ["admin", "director"].includes(currentUser?.role ?? "");
+  const isManager = ["admin", "director", "national_account_manager", "logistics_manager"].includes(currentUser?.role ?? "");
 
   const [selectedCarriers, setSelectedCarriers] = useState<Set<string>>(new Set());
   const [outreachMode, setOutreachMode] = useState<"lane_building" | "immediate_plus_lane">("lane_building");
@@ -291,6 +296,18 @@ export function CarrierOutreachPanel({
       toast({ title: "Lane reassigned" });
     },
     onError: () => toast({ title: "Reassignment failed", variant: "destructive" }),
+  });
+
+  const assignLaneMutation = useMutation({
+    mutationFn: (ownerUserId: string | null) =>
+      apiRequest("POST", `/api/recurring-lanes/${laneId}/assign`, { ownerUserId }).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes", laneId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+      toast({ title: "Lane assigned" });
+    },
+    onError: () => toast({ title: "Assignment failed", variant: "destructive" }),
   });
 
   const setInterestStatusMutation = useMutation({
@@ -486,9 +503,49 @@ export function CarrierOutreachPanel({
             </div>
           )}
 
+          {/* Contactability warning — no carriers with phone/email */}
+          {lane && bench.length > 0 && bench.every(b => !b.isContactable) && (
+            <div className="mt-2 flex items-center gap-2 bg-orange-500/10 border border-orange-500/20 rounded-md px-3 py-2"
+              data-testid="no-contactable-carriers-warning">
+              <AlertCircle className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+              <p className="text-[11px] text-orange-300">
+                No carriers on this bench have a phone or email on file.
+                Add contact details in the Carriers catalog to enable outreach.
+              </p>
+            </div>
+          )}
+
           {/* Owner / Overseer chips */}
           {lane && (
             <div className="flex items-center gap-2 mt-2 flex-wrap">
+              {/* Unassigned state — show assign button for managers */}
+              {!lane.ownerUserId && isManager && (
+                <div className="flex items-center gap-1.5" data-testid="chip-lane-unassigned">
+                  <span className="text-[11px] text-white/30 italic">No owner assigned</span>
+                  {currentUser && (
+                    <button
+                      onClick={() => assignLaneMutation.mutate(currentUser.id)}
+                      disabled={assignLaneMutation.isPending}
+                      className="text-[10px] px-2 py-0.5 rounded-full border border-blue-400/30 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 transition-colors"
+                      data-testid="btn-assign-to-me"
+                    >
+                      {assignLaneMutation.isPending ? "Assigning…" : "Assign to me"}
+                    </button>
+                  )}
+                  {isDirectorOrAdmin && (
+                    <Select onValueChange={v => assignLaneMutation.mutate(v)}>
+                      <SelectTrigger className="h-6 w-auto text-[10px] bg-white/5 border-white/10 text-white/50" data-testid="btn-assign-select">
+                        <SelectValue placeholder="Assign to…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {teamMembers.map(m => (
+                          <SelectItem key={m.id} value={m.id}>{m.name} ({m.role})</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              )}
               {lane.ownerUserId && (() => {
                 const owner = teamMembers.find(m => m.id === lane.ownerUserId);
                 return (
@@ -786,6 +843,27 @@ export function CarrierOutreachPanel({
               </p>
             ) : (
               <div className="flex flex-col gap-2">
+                {/* Historical carrier callout */}
+                {(() => {
+                  const historicalMissingContact = bench.filter(b => b.sourceType === "historical" && !b.isContactable);
+                  if (historicalMissingContact.length === 0) return null;
+                  return (
+                    <div className="bg-blue-500/8 border border-blue-500/20 rounded-lg p-3 flex items-start gap-2 mb-1"
+                      data-testid="historical-carriers-callout">
+                      <Truck className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-[11px] font-semibold text-blue-300">
+                          {historicalMissingContact.length} historical carrier{historicalMissingContact.length > 1 ? "s" : ""} missing contact info
+                        </p>
+                        <p className="text-[10px] text-blue-300/60 mt-0.5">
+                          These carriers have hauled this lane before. Add their phone or email in the Carrier catalog to enable outreach.
+                        </p>
+                        <p className="text-[10px] text-white/40 mt-1">{historicalMissingContact.map(b => b.carrierName).join(", ")}</p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {bench.map(interest => {
                   const statusConfig = INTEREST_STATUS_LABELS[interest.interestStatus] ?? INTEREST_STATUS_LABELS.needs_follow_up;
                   const isExpanded = expandedReply === interest.id;
@@ -797,7 +875,20 @@ export function CarrierOutreachPanel({
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                           <p className="text-xs font-semibold text-white truncate">{interest.carrierName}</p>
+                          {interest.sourceType === "historical" && (
+                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400">
+                              Ran this lane
+                            </Badge>
+                          )}
+                          {!interest.isContactable && (
+                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-orange-500/30 text-orange-400 flex items-center gap-0.5">
+                              <Mail className="w-2.5 h-2.5" />
+                              No contact info
+                            </Badge>
+                          )}
+                          </div>
                           {interest.outreachSentAt && (
                             <p className="text-[10px] text-white/30 mt-0.5">
                               Contacted {new Date(interest.outreachSentAt).toLocaleDateString()}

@@ -154,6 +154,21 @@ export interface RepReportData {
   teamMembers: TeamMemberSummary[];
 }
 
+export interface LaneWorkQueueItem {
+  lane: RecurringLane & { ownerName: string | null };
+  contactableCount: number;   // carriers with phone or email in catalog
+  totalBenchCount: number;    // all bench entries
+  historicalCount: number;    // bench entries where sourceType = 'historical'
+  missingContactCount: number; // historical carriers with no phone/email
+}
+
+export interface LaneWorkQueueResult {
+  unassigned: LaneWorkQueueItem[];           // isEligible, ownerUserId IS NULL
+  noContactable: LaneWorkQueueItem[];        // isEligible, assigned, 0 contactable carriers
+  assignedUntouched: LaneWorkQueueItem[];    // isEligible, assigned, carriersContactedCount = 0
+  inProgress: LaneWorkQueueItem[];           // 0 < carriersContactedCount < threshold
+}
+
 export interface IStorage {
   getDefaultOrganization(): Promise<Organization | undefined>;
   getOrganizations(): Promise<Organization[]>;
@@ -503,6 +518,7 @@ export interface IStorage {
   // Lane Carrier Outreach v1 — Carrier Catalog
   getCarriers(orgId: string): Promise<Carrier[]>;
   getCarrier(id: string): Promise<Carrier | undefined>;
+  getCarriersByIds(ids: string[], orgId: string): Promise<Carrier[]>;
   createCarrier(data: InsertCarrier): Promise<Carrier>;
   updateCarrier(id: string, orgId: string, data: Partial<Omit<InsertCarrier, 'orgId'>>): Promise<Carrier | undefined>;
   deleteCarrier(id: string, orgId: string): Promise<boolean>;
@@ -534,6 +550,10 @@ export interface IStorage {
   // Lane Carrier Outreach v1 — Feature Flags
   getFeatureFlag(orgId: string, flagKey: string): Promise<boolean>;
   setFeatureFlag(orgId: string, flagKey: string, enabled: boolean, updatedById?: string): Promise<void>;
+
+  // Lane Carrier Outreach v1.5 — Assignment + Work Queue
+  assignLaneOwner(laneId: string, orgId: string, ownerUserId: string | null, assignedByUserId: string): Promise<RecurringLane | undefined>;
+  getLaneWorkQueue(orgId: string, completionThreshold: number): Promise<LaneWorkQueueResult>;
 }
 
 const pool = new Pool({
@@ -3167,6 +3187,11 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
+  async getCarriersByIds(ids: string[], orgId: string): Promise<Carrier[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(carriers).where(and(inArray(carriers.id, ids), eq(carriers.orgId, orgId)));
+  }
+
   async createCarrier(data: InsertCarrier): Promise<Carrier> {
     const [row] = await db.insert(carriers).values(data).returning();
     return row;
@@ -3421,6 +3446,94 @@ export class DatabaseStorage implements IStorage {
         target: [featureFlags.orgId, featureFlags.flagKey],
         set: { enabled, updatedAt: new Date(), updatedById: updatedById ?? null },
       });
+  }
+
+  // ── Lane Carrier Outreach v1.5 — Assignment + Work Queue ──────────────────
+
+  async assignLaneOwner(laneId: string, orgId: string, ownerUserId: string | null, assignedByUserId: string): Promise<RecurringLane | undefined> {
+    const [row] = await db.update(recurringLanes)
+      .set({
+        ownerUserId,
+        assignedAt: new Date().toISOString(),
+        assignedByUserId,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(recurringLanes.id, laneId), eq(recurringLanes.orgId, orgId)))
+      .returning();
+    return row;
+  }
+
+  async getLaneWorkQueue(orgId: string, completionThreshold: number): Promise<LaneWorkQueueResult> {
+    // Fetch all eligible, non-snoozed, non-preferred lanes for the org
+    const today = new Date().toISOString().split("T")[0];
+    const eligibleLanes = await db.select().from(recurringLanes).where(
+      and(
+        eq(recurringLanes.orgId, orgId),
+        eq(recurringLanes.isEligible, true),
+        eq(recurringLanes.hasPreferredCarrierProgram, false),
+        or(isNull(recurringLanes.snoozedUntil), sql`${recurringLanes.snoozedUntil} <= ${today}`),
+        isNull(recurringLanes.resolvedAt),
+      )
+    ).orderBy(desc(recurringLanes.laneScore));
+
+    if (eligibleLanes.length === 0) {
+      return { unassigned: [], noContactable: [], assignedUntouched: [], inProgress: [] };
+    }
+
+    // Load all users for name resolution
+    const allUsers = await db.select({ id: users.id, name: users.name }).from(users).where(eq(users.organizationId, orgId));
+    const userNameMap = new Map(allUsers.map(u => [u.id, u.name]));
+
+    // Load all bench entries for these lanes in one query
+    const laneIds = eligibleLanes.map(l => l.id);
+    const allBenchEntries = await db.select().from(laneCarrierInterest)
+      .where(inArray(laneCarrierInterest.laneId, laneIds));
+
+    // Load all carriers for this org to check contactability
+    const allCarriersForOrg = await db.select({
+      id: carriers.id,
+      primaryEmail: carriers.primaryEmail,
+      phone: carriers.phone,
+    }).from(carriers).where(eq(carriers.orgId, orgId));
+    const carrierContactMap = new Map(allCarriersForOrg.map(c => [c.id, { hasContact: !!(c.primaryEmail || c.phone) }]));
+
+    // Group bench entries by laneId
+    const benchByLane = new Map<string, typeof allBenchEntries>();
+    for (const entry of allBenchEntries) {
+      if (!benchByLane.has(entry.laneId)) benchByLane.set(entry.laneId, []);
+      benchByLane.get(entry.laneId)!.push(entry);
+    }
+
+    const result: LaneWorkQueueResult = { unassigned: [], noContactable: [], assignedUntouched: [], inProgress: [] };
+
+    for (const lane of eligibleLanes) {
+      const bench = benchByLane.get(lane.id) ?? [];
+      const historicalBench = bench.filter(b => b.sourceType === "historical");
+      const contactableCount = bench.filter(b => b.carrierId && carrierContactMap.get(b.carrierId)?.hasContact).length;
+      const missingContactCount = historicalBench.filter(b => !b.carrierId || !carrierContactMap.get(b.carrierId)?.hasContact).length;
+
+      const item: LaneWorkQueueItem = {
+        lane: { ...lane, ownerName: lane.ownerUserId ? (userNameMap.get(lane.ownerUserId) ?? null) : null },
+        contactableCount,
+        totalBenchCount: bench.length,
+        historicalCount: historicalBench.length,
+        missingContactCount,
+      };
+
+      const contacted = lane.carriersContactedCount ?? 0;
+
+      if (!lane.ownerUserId) {
+        result.unassigned.push(item);
+      } else if (contactableCount === 0) {
+        result.noContactable.push(item);
+      } else if (contacted === 0) {
+        result.assignedUntouched.push(item);
+      } else if (contacted < completionThreshold) {
+        result.inProgress.push(item);
+      }
+    }
+
+    return result;
   }
 }
 
