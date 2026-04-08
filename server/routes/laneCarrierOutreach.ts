@@ -13,7 +13,7 @@ import { requireAuth, getCurrentUser } from "../auth";
 import { rankCarriersForLane } from "../carrierRankingService";
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
-import { insertCarrierSchema, insertLaneCarrierInterestSchema } from "@shared/schema";
+import { insertCarrierSchema, insertLaneCarrierInterestSchema, type InsertCarrier } from "@shared/schema";
 import { z } from "zod";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -362,7 +362,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           }
 
           // Prefer non-empty rolodex value; never overwrite existing non-empty with blank
-          const patch: Record<string, string | null> = {};
+          const patch: Partial<Omit<InsertCarrier, 'orgId'>> = {};
           if (!existing.payeeCode && payeeCode)                   patch.payeeCode    = payeeCode;
           if (!existing.mcDot    && mcNumber && !conflicts.find(c => c.startsWith(existing!.name))) patch.mcDot = mcNumber;
           if (!existing.phone    && phone)                        patch.phone        = phone;
@@ -371,7 +371,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           if (!existing.state    && state)                        patch.state        = state;
 
           if (Object.keys(patch).length === 0) { upToDate++; continue; }
-          await storage.updateCarrier(existing.id, orgId, patch as any);
+          await storage.updateCarrier(existing.id, orgId, patch);
         }
 
         // ── Recurring-lane cross-reference ─────────────────────────────────────

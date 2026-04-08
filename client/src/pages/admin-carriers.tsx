@@ -352,12 +352,12 @@ export default function AdminCarriers() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Feature flag toggle */}
-          <div className="flex items-center gap-2 border border-white/10 rounded-lg px-3 py-1.5">
+          <div className="flex items-center gap-2 border border-border rounded-lg px-3 py-1.5">
             <span className="text-xs text-muted-foreground">Outreach Feature</span>
             <button
               onClick={() => flagMutation.mutate(!flagEnabled)}
               disabled={flagMutation.isPending}
-              className={`transition-colors ${flagEnabled ? "text-emerald-400" : "text-white/30"}`}
+              className={`transition-colors ${flagEnabled ? "text-emerald-500" : "text-muted-foreground/40"}`}
               data-testid="feature-flag-toggle"
             >
               {flagEnabled ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
@@ -381,7 +381,7 @@ export default function AdminCarriers() {
                 <Plus className="w-3 h-3 mr-1" />Add Carrier
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-slate-900 border-white/10 text-white max-w-lg">
+            <DialogContent className="max-w-lg">
               <DialogHeader><DialogTitle className="text-sm">Add Carrier</DialogTitle></DialogHeader>
               <CarrierForm form={form} onChange={setForm} onSubmit={() => createMutation.mutate(formToPayload(form))} isPending={createMutation.isPending} />
             </DialogContent>
@@ -398,12 +398,29 @@ export default function AdminCarriers() {
 
         {selectedCount > 0 && (
           <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-1.5">
-            <span className="text-xs text-red-300 font-medium">{selectedCount} selected</span>
-            <Button size="sm" variant="ghost" onClick={() => setShowBulkConfirm(true)} disabled={bulkDeleteMutation.isPending} className="h-6 px-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10" data-testid="btn-bulk-delete">
-              {bulkDeleteMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Trash2 className="w-3 h-3 mr-1" />}
+            <span className="text-xs text-red-600 font-medium">
+              {selectedCount} selected
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowBulkConfirm(true)}
+              disabled={bulkDeleteMutation.isPending}
+              className="h-6 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-500/10"
+              data-testid="btn-bulk-delete"
+            >
+              {bulkDeleteMutation.isPending
+                ? <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                : <Trash2 className="w-3 h-3 mr-1" />}
               Delete Selected
             </Button>
-            <button onClick={() => setSelected(new Set())} className="text-[10px] text-white/30 hover:text-white/60 transition-colors" data-testid="btn-clear-selection">Clear</button>
+            <button
+              onClick={() => setSelected(new Set())}
+              className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="btn-clear-selection"
+            >
+              Clear
+            </button>
           </div>
         )}
       </div>
@@ -416,12 +433,21 @@ export default function AdminCarriers() {
           {search ? "No carriers match your search" : "No carriers yet — import your freight file or add one manually"}
         </div>
       ) : (
-        <div className="rounded-xl border border-white/8 overflow-hidden">
+        <div className="rounded-xl border border-border overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-white/4 border-b border-white/8">
+            <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="px-4 py-2.5 w-8">
-                  <Checkbox checked={allFilteredSelected} onCheckedChange={toggleAll} className="border-white/20" data-testid="checkbox-select-all" aria-label="Select all" />
+                  <Checkbox
+                    checked={allFilteredSelected}
+                    onCheckedChange={toggleAll}
+                    className="border-border"
+                    data-testid="checkbox-select-all"
+                    aria-label="Select all"
+                    ref={(el) => {
+                      if (el) (el as HTMLButtonElement).dataset.indeterminate = String(someFilteredSelected && !allFilteredSelected);
+                    }}
+                  />
                 </th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Carrier</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden sm:table-cell">Contact</th>
@@ -435,12 +461,12 @@ export default function AdminCarriers() {
                 const isChecked = selected.has(c.id);
                 const hasContact = c.primaryEmail || c.phone;
                 return (
-                  <tr key={c.id} className={`border-b border-white/4 transition-colors ${isChecked ? "bg-amber-500/5" : "hover:bg-white/2"}`} data-testid={`carrier-row-${c.id}`}>
+                  <tr key={c.id} className={`border-b border-border transition-colors ${isChecked ? "bg-amber-500/5" : "hover:bg-muted/50"}`} data-testid={`carrier-row-${c.id}`}>
                     <td className="px-4 py-3">
-                      <Checkbox checked={isChecked} onCheckedChange={() => toggleOne(c.id)} className="border-white/20" data-testid={`checkbox-carrier-${c.id}`} />
+                      <Checkbox checked={isChecked} onCheckedChange={() => toggleOne(c.id)} className="border-border" data-testid={`checkbox-carrier-${c.id}`} />
                     </td>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-white">{c.name}</div>
+                      <div className="font-medium text-foreground">{c.name}</div>
                       <div className="flex items-center gap-2 mt-0.5">
                         {c.payeeCode && <span className="text-[10px] text-amber-400/70">Payee: {c.payeeCode}</span>}
                         {c.mcDot && <span className="text-[10px] text-muted-foreground">MC: {c.mcDot}</span>}
@@ -459,7 +485,7 @@ export default function AdminCarriers() {
                             <Phone className="w-2.5 h-2.5 shrink-0" />{c.phone}
                           </div>
                         )}
-                        {!c.primaryEmail && !c.phone && <span className="text-[10px] text-white/20">—</span>}
+                        {!c.primaryEmail && !c.phone && <span className="text-[10px] text-muted-foreground/40">—</span>}
                       </div>
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell">
@@ -468,18 +494,22 @@ export default function AdminCarriers() {
                           <MapPin className="w-2.5 h-2.5 shrink-0" />
                           {[c.city, c.state].filter(Boolean).join(", ")}
                         </div>
-                      ) : <span className="text-[10px] text-white/20">—</span>}
+                      ) : <span className="text-[10px] text-muted-foreground/40">—</span>}
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell">
                       <div className="flex flex-wrap gap-1">
                         {(c.equipmentTypes ?? []).slice(0, 2).map(e => (
-                          <Badge key={e} variant="outline" className="text-[9px] py-0 px-1 border-amber-500/25 text-amber-300/70">{e}</Badge>
+                          <Badge key={e} variant="outline" className="text-[9px] py-0 px-1 border-amber-500/40 text-amber-700 dark:text-amber-400">{e}</Badge>
                         ))}
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
-                        <button onClick={() => openEdit(c)} className="p-1.5 rounded hover:bg-white/8 text-muted-foreground hover:text-white transition-colors" data-testid={`btn-edit-carrier-${c.id}`}>
+                        <button
+                          onClick={() => openEdit(c)}
+                          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                          data-testid={`btn-edit-carrier-${c.id}`}
+                        >
                           <Pencil className="w-3 h-3" />
                         </button>
                         <button onClick={() => setDeleteTarget(c)} className="p-1.5 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors" data-testid={`btn-delete-carrier-${c.id}`}>
@@ -507,9 +537,15 @@ export default function AdminCarriers() {
       {/* Edit Dialog */}
       {editTarget && (
         <Dialog open={!!editTarget} onOpenChange={v => { if (!v) setEditTarget(null); }}>
-          <DialogContent className="bg-slate-900 border-white/10 text-white max-w-lg">
+          <DialogContent className="max-w-lg">
             <DialogHeader><DialogTitle className="text-sm">Edit Carrier</DialogTitle></DialogHeader>
-            <CarrierForm form={form} onChange={setForm} onSubmit={() => updateMutation.mutate({ id: editTarget.id, data: formToPayload(form) })} isPending={updateMutation.isPending} submitLabel="Save Changes" />
+            <CarrierForm
+              form={form}
+              onChange={setForm}
+              onSubmit={() => updateMutation.mutate({ id: editTarget.id, data: formToPayload(form) })}
+              isPending={updateMutation.isPending}
+              submitLabel="Save Changes"
+            />
           </DialogContent>
         </Dialog>
       )}
@@ -517,7 +553,7 @@ export default function AdminCarriers() {
       {/* Single delete confirmation */}
       {deleteTarget && (
         <AlertDialog open onOpenChange={v => { if (!v) setDeleteTarget(null); }}>
-          <AlertDialogContent className="bg-slate-900 border-white/10 text-white">
+          <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle className="text-sm">Delete Carrier</AlertDialogTitle>
               <AlertDialogDescription className="text-xs text-muted-foreground">
@@ -536,7 +572,7 @@ export default function AdminCarriers() {
 
       {/* Bulk delete confirmation */}
       <AlertDialog open={showBulkConfirm} onOpenChange={v => { if (!v) setShowBulkConfirm(false); }}>
-        <AlertDialogContent className="bg-slate-900 border-white/10 text-white">
+        <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="text-sm">Delete {selectedCount} Carrier{selectedCount !== 1 ? "s" : ""}?</AlertDialogTitle>
             <AlertDialogDescription className="text-xs text-muted-foreground">
@@ -618,15 +654,15 @@ function CarrierForm({
         </div>
       </div>
       <div>
-        <Label className="text-xs">Equipment Types <span className="text-white/30">(comma-separated)</span></Label>
-        <Input value={form.equipmentTypes} onChange={field("equipmentTypes")} placeholder="Dry Van, Flatbed, Reefer" className="h-8 text-xs mt-1" data-testid="input-carrier-equipment" />
-      </div>
-      <div>
-        <Label className="text-xs">Regions <span className="text-white/30">(comma-separated)</span></Label>
+        <Label className="text-xs">Regions <span className="text-muted-foreground">(comma-separated)</span></Label>
         <Input value={form.regions} onChange={field("regions")} placeholder="TX, LA, MS, OK" className="h-8 text-xs mt-1" data-testid="input-carrier-regions" />
       </div>
       <div>
-        <Label className="text-xs">Tags <span className="text-white/30">(comma-separated)</span></Label>
+        <Label className="text-xs">Equipment Types <span className="text-muted-foreground">(comma-separated)</span></Label>
+        <Input value={form.equipmentTypes} onChange={field("equipmentTypes")} placeholder="Dry Van, Flatbed, Reefer" className="h-8 text-xs mt-1" data-testid="input-carrier-equipment" />
+      </div>
+      <div>
+        <Label className="text-xs">Tags <span className="text-muted-foreground">(comma-separated)</span></Label>
         <Input value={form.tags} onChange={field("tags")} placeholder="preferred, hazmat" className="h-8 text-xs mt-1" />
       </div>
       <div>
