@@ -109,7 +109,7 @@ export default function Dashboard() {
       return next;
     });
   };
-  const [nbaBriefingCollapsed, setNbaBriefingCollapsed] = useState(() => localStorage.getItem("dash_nba_briefing_collapsed") === "true");
+  const [nbaBriefingCollapsed, setNbaBriefingCollapsed] = useState(() => localStorage.getItem("dash_nba_briefing_collapsed") !== "false");
   const [accountGrowthCollapsed, setAccountGrowthCollapsed] = useState(() => localStorage.getItem("dash_account_growth_collapsed") !== "false");
   const [personalMetricsCollapsed, setPersonalMetricsCollapsed] = useState(() => localStorage.getItem("dash_personal_metrics_collapsed") !== "false");
   const [accountsDriftingCollapsed, setAccountsDriftingCollapsed] = useState(() => localStorage.getItem("dash_accounts_drifting_collapsed") === "true");
@@ -940,6 +940,47 @@ export default function Dashboard() {
         });
       })()}
 
+      {/* ── AM NOW zone: RFPs due in ≤7 days (compact strip) ────────────────── */}
+      {isAm && rfp7Days.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 dark:border-red-800 bg-red-50/60 dark:bg-red-950/20 px-4 py-2.5" data-testid="strip-rfp-deadlines-now">
+          <span className="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5 shrink-0">
+            <Calendar className="h-3.5 w-3.5" />
+            RFPs due this week:
+          </span>
+          {rfp7Days.map((rfp: any) => {
+            const due = new Date(rfp.dueDate + "T00:00:00");
+            const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
+            return (
+              <Link key={rfp.id} href={rfp.companyId ? `/companies/${rfp.companyId}` : `/rfp-calendar`} data-testid={`rfp-strip-${rfp.id}`}>
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 whitespace-nowrap hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors cursor-pointer">
+                  {rfp.title ?? rfp.companyName ?? "RFP"} · {diffDays === 0 ? "today" : `${diffDays}d`}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── AM NOW zone: Tasks due today / overdue (compact strip) ───────────── */}
+      {isAm && tasksDueToday.length > 0 && (
+        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-2.5" data-testid="strip-tasks-due-today">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5 shrink-0">
+              <ListTodo className="h-3.5 w-3.5" />
+              {tasksDueToday.length} task{tasksDueToday.length !== 1 ? "s" : ""} due today:
+            </span>
+            {tasksDueToday.slice(0, 5).map((task) => (
+              <span key={task.id} className="text-xs text-amber-700 dark:text-amber-400 truncate max-w-[180px]" data-testid={`task-strip-${task.id}`}>
+                · {task.title}
+              </span>
+            ))}
+            {tasksDueToday.length > 5 && (
+              <span className="text-xs text-amber-600 dark:text-amber-500">+{tasksDueToday.length - 5} more</span>
+            )}
+          </div>
+        </div>
+      )}
+
       <HeroBanner
         currentUser={currentUser as SafeUser}
         briefingData={briefingData}
@@ -1035,47 +1076,6 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </PortletErrorBoundary>
-      )}
-
-      {/* ── AM NOW zone: RFPs due in ≤7 days (compact strip) ────────────────── */}
-      {isAm && rfp7Days.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 dark:border-red-800 bg-red-50/60 dark:bg-red-950/20 px-4 py-2.5" data-testid="strip-rfp-deadlines-now">
-          <span className="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5 shrink-0">
-            <Calendar className="h-3.5 w-3.5" />
-            RFPs due this week:
-          </span>
-          {rfp7Days.map((rfp: any) => {
-            const due = new Date(rfp.dueDate + "T00:00:00");
-            const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
-            return (
-              <Link key={rfp.id} href={rfp.companyId ? `/companies/${rfp.companyId}` : `/rfp-calendar`} data-testid={`rfp-strip-${rfp.id}`}>
-                <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 whitespace-nowrap hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors cursor-pointer">
-                  {rfp.title ?? rfp.companyName ?? "RFP"} · {diffDays === 0 ? "today" : `${diffDays}d`}
-                </span>
-              </Link>
-            );
-          })}
-        </div>
-      )}
-
-      {/* ── AM NOW zone: Tasks due today / overdue (compact strip) ───────────── */}
-      {isAm && tasksDueToday.length > 0 && (
-        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-2.5" data-testid="strip-tasks-due-today">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5 shrink-0">
-              <ListTodo className="h-3.5 w-3.5" />
-              {tasksDueToday.length} task{tasksDueToday.length !== 1 ? "s" : ""} due today:
-            </span>
-            {tasksDueToday.slice(0, 5).map((task) => (
-              <span key={task.id} className="text-xs text-amber-700 dark:text-amber-400 truncate max-w-[180px]" data-testid={`task-strip-${task.id}`}>
-                · {task.title}
-              </span>
-            ))}
-            {tasksDueToday.length > 5 && (
-              <span className="text-xs text-amber-600 dark:text-amber-500">+{tasksDueToday.length - 5} more</span>
-            )}
-          </div>
-        </div>
       )}
 
       {/* ── Outbound Touchpoints Today (collapsed by default, running context) ── */}
