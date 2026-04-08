@@ -374,6 +374,16 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
+  // Gate for suppressing the legacy NextBestActionsPortlet when Phase 1 NBA cards are
+  // active — same queryKey as NbaDashboardPanel so TanStack reuses the cached result
+  // (zero extra HTTP requests).
+  const { data: nbaCardsForGate = [] } = useQuery<{ id: string }[]>({
+    queryKey: ["/api/nba/cards"],
+    staleTime: 60_000,
+    enabled: isAm || isNam,
+  });
+  const nbaHasCards = nbaCardsForGate.length > 0;
+
   const { data: leaderboard = [], isLoading: leaderboardLoading } = useQuery<{
     metric: string;
     customLabel: string | null;
@@ -1018,7 +1028,9 @@ export default function Dashboard() {
       />
 
       {/* ── "Do This First" — NBA priority actions (top of dashboard) ─────── */}
-      {!isLmRole && (
+      {/* Hidden for AM/NAM when Phase 1 cards are active — NbaDashboardPanel wins.   */}
+      {/* Shown as fallback when no cards exist, and always shown for Directors/others. */}
+      {!isLmRole && ((!isAm && !isNam) || !nbaHasCards) && (
         <PortletErrorBoundary label="Priority Actions">
           <NextBestActionsPortlet
             collapsed={nbaBriefingCollapsed}
