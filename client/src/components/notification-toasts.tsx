@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import {
   Bell, X, BellRing, ListTodo, MessageSquare, CheckCircle2,
   Target, Users, Megaphone, CornerDownRight, ExternalLink,
-  Building2, CalendarOff, SquareCheck, Lightbulb, Star,
+  Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Notification } from "@shared/schema";
@@ -27,6 +27,7 @@ const TYPE_CONFIG: Record<string, { icon: React.ReactNode; accent: string; label
   pto_acknowledged: { icon: <SquareCheck className="h-4 w-4" />,  accent: "text-green-500",  label: "PTO Acknowledged" },
   app_suggestion:  { icon: <Lightbulb className="h-4 w-4" />,    accent: "text-yellow-500", label: "New Suggestion" },
   promotion_nomination: { icon: <Star className="h-4 w-4" />,   accent: "text-amber-400",  label: "Nomination" },
+  lane_assigned:        { icon: <Truck className="h-4 w-4" />,   accent: "text-amber-500",  label: "Lane Assigned" },
 };
 
 function timeAgo(dateStr: string) {

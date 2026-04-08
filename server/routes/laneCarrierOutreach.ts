@@ -650,6 +650,24 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         emailDrafts: [],
       });
 
+      // In-app notification — only when assigning to someone other than yourself
+      if (ownerUserId && ownerUserId !== user.id) {
+        // lane.origin already includes state (e.g. "laredo, tx") — use as-is
+        const origin = lane.origin;
+        const dest = lane.destination;
+        const loadsWk = lane.avgLoadsPerWeek ? `${parseFloat(lane.avgLoadsPerWeek).toFixed(1)}/wk` : null;
+        const equip = lane.equipmentType ?? null;
+        const bodyParts = [loadsWk, equip ? `${equip} equipment` : null, "Open your Lane Work Queue to start carrier outreach."].filter(Boolean);
+        await storage.createNotification({
+          userId: ownerUserId,
+          type: "lane_assigned",
+          title: `Lane assigned to you — ${origin} → ${dest}`,
+          body: bodyParts.join(" · "),
+          link: "/lanes/work-queue",
+          relatedId: req.params.laneId,
+        });
+      }
+
       res.json(updated);
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Failed to assign lane" });
