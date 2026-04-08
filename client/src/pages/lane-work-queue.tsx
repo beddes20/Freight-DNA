@@ -23,6 +23,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
   Truck,
   AlertCircle,
   CheckCircle2,
@@ -41,6 +51,7 @@ import {
   Building2,
   Filter,
   Database,
+  PlusCircle,
 } from "lucide-react";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -66,6 +77,7 @@ interface LaneItem {
     ownerUserId: string | null;
     ownerName: string | null;
     assignedAt: string | null;
+    isManual: boolean;
   };
   contactableCount: number;
   totalBenchCount: number;
@@ -312,6 +324,15 @@ function LaneRow({
             <span className="text-sm font-semibold text-foreground">{laneLabel(item.lane)}</span>
             {/* Frequency badge — prominent, always first */}
             <FrequencyBadge val={item.lane.avgLoadsPerWeek} />
+            {item.lane.isManual && (
+              <Badge
+                variant="outline"
+                className="text-[10px] py-0 px-1.5 border-violet-500/50 text-violet-400 bg-violet-500/10"
+                data-testid={`badge-manual-${item.lane.id}`}
+              >
+                Manual
+              </Badge>
+            )}
             <Badge variant="outline" className="text-[10px] py-0 px-1.5">
               {item.lane.equipmentType ?? "Any"}
             </Badge>
@@ -517,6 +538,193 @@ function BucketSection({
   );
 }
 
+// ── Build Lane Dialog ──────────────────────────────────────────────────────────
+
+interface BuildLaneForm {
+  origin: string;
+  originState: string;
+  destination: string;
+  destinationState: string;
+  equipmentType: string;
+  avgLoadsPerWeek: string;
+  companyName: string;
+  notes: string;
+}
+
+const EQUIPMENT_TYPES = ["Dry Van", "Reefer", "Flatbed", "Step Deck", "RGN", "Tanker", "Box Truck", "Other"];
+
+function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState<BuildLaneForm>({
+    origin: "",
+    originState: "",
+    destination: "",
+    destinationState: "",
+    equipmentType: "",
+    avgLoadsPerWeek: "",
+    companyName: "",
+    notes: "",
+  });
+
+  const buildMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/lanes/manual", {
+        origin: form.origin.trim(),
+        originState: form.originState.trim() || undefined,
+        destination: form.destination.trim(),
+        destinationState: form.destinationState.trim() || undefined,
+        equipmentType: form.equipmentType || undefined,
+        avgLoadsPerWeek: form.avgLoadsPerWeek ? parseFloat(form.avgLoadsPerWeek) : undefined,
+        companyName: form.companyName.trim() || undefined,
+        notes: form.notes.trim() || undefined,
+      }).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+      toast({ title: "Lane created", description: "Manual lane added to the work queue." });
+      onCreated();
+      onClose();
+      setForm({ origin: "", originState: "", destination: "", destinationState: "", equipmentType: "", avgLoadsPerWeek: "", companyName: "", notes: "" });
+    },
+    onError: () => toast({ title: "Failed to create lane", variant: "destructive" }),
+  });
+
+  const canSubmit = form.origin.trim().length > 0 && form.destination.trim().length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-lg" data-testid="dialog-build-lane">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <PlusCircle className="w-4 h-4 text-violet-400" />
+            Build Lane
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="grid gap-4 py-2">
+          {/* Origin row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="build-origin" className="text-xs">Origin City <span className="text-destructive">*</span></Label>
+              <Input
+                id="build-origin"
+                placeholder="e.g. Salt Lake City"
+                value={form.origin}
+                onChange={e => setForm(f => ({ ...f, origin: e.target.value }))}
+                data-testid="input-build-origin"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="build-origin-state" className="text-xs">Origin State</Label>
+              <Input
+                id="build-origin-state"
+                placeholder="e.g. UT"
+                maxLength={2}
+                value={form.originState}
+                onChange={e => setForm(f => ({ ...f, originState: e.target.value.toUpperCase() }))}
+                data-testid="input-build-origin-state"
+              />
+            </div>
+          </div>
+
+          {/* Destination row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="build-dest" className="text-xs">Destination City <span className="text-destructive">*</span></Label>
+              <Input
+                id="build-dest"
+                placeholder="e.g. Dallas"
+                value={form.destination}
+                onChange={e => setForm(f => ({ ...f, destination: e.target.value }))}
+                data-testid="input-build-dest"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="build-dest-state" className="text-xs">Destination State</Label>
+              <Input
+                id="build-dest-state"
+                placeholder="e.g. TX"
+                maxLength={2}
+                value={form.destinationState}
+                onChange={e => setForm(f => ({ ...f, destinationState: e.target.value.toUpperCase() }))}
+                data-testid="input-build-dest-state"
+              />
+            </div>
+          </div>
+
+          {/* Equipment + Loads/week */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Equipment Type</Label>
+              <Select value={form.equipmentType} onValueChange={v => setForm(f => ({ ...f, equipmentType: v === "__none__" ? "" : v }))}>
+                <SelectTrigger className="h-9 text-sm" data-testid="select-build-equipment">
+                  <SelectValue placeholder="Any" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Any</SelectItem>
+                  {EQUIPMENT_TYPES.map(t => (
+                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="build-loads" className="text-xs">Loads / Week</Label>
+              <Input
+                id="build-loads"
+                type="number"
+                min="0.1"
+                step="0.5"
+                placeholder="e.g. 10"
+                value={form.avgLoadsPerWeek}
+                onChange={e => setForm(f => ({ ...f, avgLoadsPerWeek: e.target.value }))}
+                data-testid="input-build-loads"
+              />
+            </div>
+          </div>
+
+          {/* Customer name */}
+          <div className="space-y-1.5">
+            <Label htmlFor="build-customer" className="text-xs">Customer Name (optional)</Label>
+            <Input
+              id="build-customer"
+              placeholder="e.g. Acme Corp"
+              value={form.companyName}
+              onChange={e => setForm(f => ({ ...f, companyName: e.target.value }))}
+              data-testid="input-build-customer"
+            />
+          </div>
+
+          {/* Notes */}
+          <div className="space-y-1.5">
+            <Label htmlFor="build-notes" className="text-xs">Notes / Context (optional)</Label>
+            <Textarea
+              id="build-notes"
+              placeholder="e.g. Customer mentioned 10 loads/wk starting this week, SLC → Dallas corridor"
+              rows={3}
+              value={form.notes}
+              onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+              data-testid="textarea-build-notes"
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} data-testid="btn-build-lane-cancel">Cancel</Button>
+          <Button
+            onClick={() => buildMutation.mutate()}
+            disabled={!canSubmit || buildMutation.isPending}
+            className="gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
+            data-testid="btn-build-lane-submit"
+          >
+            {buildMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PlusCircle className="w-3.5 h-3.5" />}
+            {buildMutation.isPending ? "Creating…" : "Build Lane"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function LaneWorkQueuePage() {
@@ -525,6 +733,7 @@ export default function LaneWorkQueuePage() {
   const [openLaneId, setOpenLaneId] = useState<string | null>(null);
   const [highFreqOnly, setHighFreqOnly] = useState(false);
   const [customerFilter, setCustomerFilter] = useState<string>("__all__");
+  const [buildLaneOpen, setBuildLaneOpen] = useState(false);
 
   const managerRoles = ["admin", "director", "national_account_manager", "logistics_manager"];
   const isManager = managerRoles.includes(user?.role ?? "");
@@ -666,6 +875,17 @@ export default function LaneWorkQueuePage() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Build Lane button */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs gap-1.5 border-violet-500/40 text-violet-400 hover:bg-violet-500/10"
+            onClick={() => setBuildLaneOpen(true)}
+            data-testid="btn-build-lane"
+          >
+            <PlusCircle className="w-3.5 h-3.5" />
+            Build Lane
+          </Button>
           {/* Customer filter dropdown */}
           {(queue?.customers?.length ?? 0) > 0 && (
             <Select
@@ -972,6 +1192,13 @@ export default function LaneWorkQueuePage() {
           </>
         )}
       </div>
+
+      {/* Build Lane dialog */}
+      <BuildLaneDialog
+        open={buildLaneOpen}
+        onClose={() => setBuildLaneOpen(false)}
+        onCreated={() => {}}
+      />
 
       {/* Outreach panel */}
       <CarrierOutreachPanel

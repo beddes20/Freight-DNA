@@ -555,6 +555,7 @@ export interface IStorage {
   getRecurringLanes(orgId: string, userId?: string): Promise<RecurringLane[]>;
   getRecurringLane(id: string): Promise<RecurringLane | undefined>;
   upsertRecurringLane(data: InsertRecurringLane & { orgId: string; origin: string; destination: string; equipmentType?: string | null; companyId?: string | null }): Promise<RecurringLane>;
+  createRecurringLane(data: InsertRecurringLane): Promise<RecurringLane>;
   updateRecurringLane(id: string, data: Partial<InsertRecurringLane>): Promise<RecurringLane | undefined>;
   deleteRecurringLane(id: string): Promise<boolean>;
   getEligibleRecurringLanes(orgId: string): Promise<RecurringLane[]>;
@@ -3525,6 +3526,11 @@ export class DatabaseStorage implements IStorage {
 
   async getRecurringLane(id: string): Promise<RecurringLane | undefined> {
     const [row] = await db.select().from(recurringLanes).where(eq(recurringLanes.id, id));
+    return row;
+  }
+
+  async createRecurringLane(data: InsertRecurringLane): Promise<RecurringLane> {
+    const [row] = await db.insert(recurringLanes).values(data).returning();
     return row;
   }
 

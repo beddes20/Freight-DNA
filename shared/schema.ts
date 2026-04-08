@@ -1224,6 +1224,7 @@ export const recurringLanes = pgTable("recurring_lanes", {
   snoozedUntil: text("snoozed_until"),
   carriersContactedCount: integer("carriers_contacted_count").default(0),
   resolvedAt: text("resolved_at"),
+  isManual: boolean("is_manual").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

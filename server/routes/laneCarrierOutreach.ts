@@ -602,6 +602,54 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
   });
 
+  // ── Manual Lane Creation ───────────────────────────────────────────────────
+
+  app.post("/api/lanes/manual", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const schema = z.object({
+      origin: z.string().min(1, "Origin city required"),
+      originState: z.string().optional().or(z.literal("")),
+      destination: z.string().min(1, "Destination city required"),
+      destinationState: z.string().optional().or(z.literal("")),
+      equipmentType: z.string().optional().or(z.literal("")),
+      avgLoadsPerWeek: z.coerce.number().positive("Must be a positive number").optional(),
+      companyName: z.string().optional().or(z.literal("")),
+      notes: z.string().optional().or(z.literal("")),
+    });
+
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    const { origin, originState, destination, destinationState, equipmentType, avgLoadsPerWeek, companyName } = parsed.data;
+
+    try {
+      const lane = await storage.createRecurringLane({
+        orgId: user.organizationId,
+        origin,
+        originState: originState || null,
+        destination,
+        destinationState: destinationState || null,
+        equipmentType: equipmentType || null,
+        avgLoadsPerWeek: avgLoadsPerWeek != null ? String(avgLoadsPerWeek) : null,
+        companyName: companyName || null,
+        isEligible: true,
+        eligibilityConfidence: "high",
+        isManual: true,
+        weeksActive: 0,
+        lookbackWeeks: 4,
+        hasPreferredCarrierProgram: false,
+        carriersContactedCount: 0,
+      });
+      res.status(201).json(lane);
+    } catch (err) {
+      console.error("[lanes/manual] error:", err);
+      res.status(500).json({ error: "Failed to create manual lane" });
+    }
+  });
+
   app.get("/api/recurring-lanes/:id", async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
