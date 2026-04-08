@@ -12,6 +12,7 @@
  *   R5  Overdue Next Action   Execute         overdue task + contextual boosters
  *   R7  Spot-to-Contract      Execute·Grow    spotLoads > 0 + no awards
  *   R9  RFP Coverage Gap      Grow·Deepen     2+ uncovered high-volume RFP facilities + no recent touch
+ *   R11 Stalled Award Lanes  Execute         award >= 30 days old + low/zero loads + no recent touch
  *
  * Analytics separation (locked spec):
  *   fired_count  = all generated cards including superseded/expired
@@ -31,7 +32,8 @@ export type Phase1RuleType =
   | "stale_account"
   | "overdue_next_action"
   | "spot_to_contract"
-  | "rfp_coverage_gap";
+  | "rfp_coverage_gap"
+  | "stalled_award_lanes";
 
 export type Phase1OutcomeType = "protect" | "execute" | "grow" | "deepen";
 
@@ -546,6 +548,91 @@ function evalR9(s: Phase1Signals, companyRfps: Rfp[]): CardCandidate | null {
   };
 }
 
+/** R11 — Stalled Award Lanes (Execute)
+ *
+ * Fires when a company has an award that's old enough to have started shipping
+ * (>= 30 days from awardDate) but the company's total recent loads (last 60 days)
+ * are very low or zero — suggesting the awarded lanes haven't activated.
+ *
+ * Phase 1 constraint: uses company-level total loads as a proxy since lane-level
+ * load data isn't normalized. Explicitly documented as an approximation.
+ *
+ * Suppression guards:
+ *   - No awards on file → null
+ *   - Rep touched within 7 days → let the cadence play out
+ *   - All awards are too fresh (< 30 days) → null
+ *   - All awards are very old (> 365 days) → likely expired/irrelevant
+ *   - Company loads in last 60 days >= threshold → lanes are moving, not stalled
+ */
+function evalR11(s: Phase1Signals): CardCandidate | null {
+  const { awards, daysSinceLastTouch, financialRows, company, tier } = s;
+
+  if (awards.length === 0) return null;
+  if (daysSinceLastTouch !== null && daysSinceLastTouch <= 7) return null;
+
+  const now = Date.now();
+  const MIN_AGE_DAYS = 30;
+  const MAX_AGE_DAYS = 365;
+
+  const activeAwards = awards.filter(a => {
+    if (!a.awardDate) return false;
+    const ageDays = Math.floor((now - new Date(a.awardDate).getTime()) / 86_400_000);
+    return ageDays >= MIN_AGE_DAYS && ageDays <= MAX_AGE_DAYS;
+  });
+
+  if (activeAwards.length === 0) return null;
+
+  // Find the most recent active award (primary signal)
+  activeAwards.sort((a, b) => (b.awardDate ?? "").localeCompare(a.awardDate ?? ""));
+  const primaryAward = activeAwards[0];
+  const primaryAgeDays = Math.floor((now - new Date(primaryAward.awardDate!).getTime()) / 86_400_000);
+
+  // Check company loads in last 60 days (proxy for "are lanes moving?")
+  const STALL_LOAD_THRESHOLD = 5;
+  const sixtyDaysAgo = new Date();
+  sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+  const cutoffMonth = sixtyDaysAgo.toISOString().slice(0, 7);
+
+  const recentLoads = financialRows
+    .filter(r => r.month >= cutoffMonth)
+    .reduce((sum, r) => sum + r.loads, 0);
+
+  // Suppress: loads are healthy — award lanes appear to be moving
+  if (recentLoads >= STALL_LOAD_THRESHOLD) return null;
+
+  // Don't fire if we have no financial data at all — too uncertain
+  // (we can't distinguish "lanes stalled" from "no data uploaded yet")
+  if (financialRows.length === 0) return null;
+
+  const laneList = (primaryAward.lanes ?? []).filter(Boolean);
+  const laneCount = laneList.length;
+  const topLane = laneList[0] ?? "the awarded lanes";
+  const laneSnippet = laneCount > 1
+    ? `${topLane} and ${laneCount - 1} other lane${laneCount - 1 !== 1 ? "s" : ""}`
+    : topLane;
+
+  const confidence = (primaryAgeDays >= 60 && tier !== null) ? "high" : "medium";
+
+  return {
+    ruleType: "stalled_award_lanes",
+    outcomeType: "execute",
+    confidence,
+    signalCount: activeAwards.length + 1,
+    signalSummary: [
+      `Award "${primaryAward.title}" is ${primaryAgeDays} days old`,
+      `${recentLoads} loads recorded in last 60 days (threshold: ${STALL_LOAD_THRESHOLD})`,
+      `${activeAwards.length} active award${activeAwards.length !== 1 ? "s" : ""} on file`,
+    ],
+    whyThisNow: `${company.name} has an award from ${primaryAgeDays} days ago — "${primaryAward.title}" (${laneSnippet}) — but only ${recentLoads} load${recentLoads !== 1 ? "s" : ""} recorded in the last 60 days. Contracted lanes may not be activating as expected.`,
+    suggestedAction: `Call your contact at ${company.name} to confirm which lanes are active, whether the tendering process is set up, and if there are any barriers to moving freight on the awarded corridors.`,
+    expectedOutcome: "Unblock lane activation, confirm first-load timeline, and identify whether additional onboarding support is needed to convert the paper win into moving freight.",
+    growthLever: "award_activation",
+    relationshipMove: "Activation check-in; advance relationship trust",
+    accountTier: tier,
+    urgencyScore: primaryAgeDays, // older = more urgent
+  };
+}
+
 // ── Per-company evaluation ────────────────────────────────────────────────────
 
 /**
@@ -579,6 +666,7 @@ export async function evaluateCompany(
   const r5 = evalR5(signals, userId);           if (r5) candidates.push(r5);
   const r7 = evalR7(signals);                   if (r7) candidates.push(r7);
   const r9 = evalR9(signals, companyRfps);      if (r9) candidates.push(r9);
+  const r11 = evalR11(signals);                 if (r11) candidates.push(r11);
 
   if (candidates.length === 0) {
     return { companyId: company.id, companyName: company.name, winner: null, superseded: [] };

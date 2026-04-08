@@ -225,6 +225,7 @@ export interface IStorage {
   getTask(id: string): Promise<Task | undefined>;
   findProcurementTask(awardId: string, lane: string): Promise<Task | undefined>;
   findRfpCoverageReviewTask(rfpId: string): Promise<Task | undefined>;
+  findAwardOnboardingTask(awardId: string): Promise<Task | undefined>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
@@ -937,6 +938,13 @@ export class DatabaseStorage implements IStorage {
   async findRfpCoverageReviewTask(rfpId: string): Promise<Task | undefined> {
     const results = await db.select().from(tasks).where(
       sql`attached_lane_data @> ${JSON.stringify([{ type: "rfp_coverage_review", rfpId }])}::jsonb`
+    ).orderBy(desc(tasks.createdAt));
+    return results[0];
+  }
+
+  async findAwardOnboardingTask(awardId: string): Promise<Task | undefined> {
+    const results = await db.select().from(tasks).where(
+      sql`attached_lane_data @> ${JSON.stringify([{ type: "award_onboarding", awardId }])}::jsonb`
     ).orderBy(desc(tasks.createdAt));
     return results[0];
   }

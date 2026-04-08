@@ -2641,6 +2641,51 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         return res.status(400).json({ error: parsed.error.message });
       }
       const award = await storage.createAward(parsed.data);
+
+      // Auto-create an AM-facing onboarding task for each new award.
+      // Non-fatal: task failure must never block the award creation response.
+      try {
+        const existingOnboarding = await storage.findAwardOnboardingTask(award.id);
+        if (!existingOnboarding) {
+          const currentUser = await getCurrentUser(req);
+          const company = award.companyId ? await storage.getCompany(award.companyId) : null;
+          const assignee = company?.assignedTo ?? currentUser?.id;
+          if (assignee) {
+            const assignedBy = currentUser?.id ?? assignee;
+            const laneList = (award.lanes ?? []).filter(Boolean);
+            const laneCount = laneList.length;
+            // Build lane summary for notes (first 3 lanes)
+            const laneSnippet = laneList.slice(0, 3).join("; ") || "No specific lanes recorded";
+            // Due date: 7 business days from today
+            const dueMs = new Date();
+            let bDays = 0;
+            while (bDays < 7) {
+              dueMs.setDate(dueMs.getDate() + 1);
+              const dow = dueMs.getDay();
+              if (dow !== 0 && dow !== 6) bDays++;
+            }
+            const dueDate = dueMs.toISOString().split("T")[0];
+            await storage.createTask({
+              title: `Award Onboarding: ${award.title}`,
+              notes: `${laneCount > 0 ? `${laneCount} lane${laneCount !== 1 ? "s" : ""} won (top: ${laneSnippet}).` : "Award created — no lanes specified yet."} Confirm the kickoff timeline with your contact, verify which lanes will start moving first, and check that the tendering process is set up correctly. Log a touchpoint once the first load ships.`,
+              status: "open",
+              dueDate,
+              assignedTo: assignee,
+              assignedBy,
+              companyId: award.companyId ?? null,
+              contactId: null,
+              orgId: req.session.organizationId ?? null,
+              companyName: company?.name ?? null,
+              contactName: null,
+              attachedLaneData: [{ type: "award_onboarding", awardId: award.id, laneCount }],
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
+      } catch (taskErr) {
+        console.error("[award-create] Failed to create onboarding task (non-fatal):", taskErr);
+      }
+
       res.status(201).json(award);
     } catch (error) {
       console.error("Error creating award:", error);

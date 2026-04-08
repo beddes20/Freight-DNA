@@ -66,6 +66,7 @@ import { TasksSection } from "./dashboard/TasksSection";
 import { TeamDirectorySection } from "./dashboard/TeamDirectorySection";
 import { NbaDashboardPanel } from "@/components/NbaDashboardPanel";
 import { CoverageGapsPortlet } from "./dashboard/CoverageGapsPortlet";
+import { AwardHealthPortlet } from "./dashboard/AwardHealthPortlet";
 
 const METRIC_LABELS: Record<string, string> = {
   contacts_added: "New Contacts",
@@ -1118,6 +1119,13 @@ export default function Dashboard() {
       {isAm && (
         <PortletErrorBoundary label="Coverage Gaps">
           <CoverageGapsPortlet />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── Award Lane Health (AM only) ───────────────────────────────────────── */}
+      {isAm && (
+        <PortletErrorBoundary label="Award Health">
+          <AwardHealthPortlet />
         </PortletErrorBoundary>
       )}
 

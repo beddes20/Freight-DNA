@@ -1337,6 +1337,126 @@ export function registerDashboardRoutes(app: Express): void {
     }
   });
 
+  // ── AM Award Health portlet ───────────────────────────────────────────────
+  // Returns awards for the AM's accounts that are old enough to have started
+  // moving freight but show little or no load activity — signals stalled lanes.
+  // Phase 1 constraint: uses company-level monthly loads as a proxy (no per-lane data).
+  app.get("/api/dashboard/award-health", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "account_manager") return res.json([]);
+
+      const [allAwards, allCompanies, uploads] = await Promise.all([
+        storage.getAwards(),
+        storage.getCompanies(user.organizationId),
+        storage.getFinancialUploadsForOrg(user.organizationId),
+      ]);
+
+      const visibleIds = await getVisibleCompanyIds(user);
+      const scopedCompanies = allCompanies.filter(c =>
+        !c.archivedAt && (visibleIds === null || visibleIds.includes(c.id))
+      );
+      const companyMap = new Map(scopedCompanies.map(c => [c.id, c]));
+
+      const now = Date.now();
+      const MIN_AGE_DAYS = 30;
+      const MAX_AGE_DAYS = 365;
+      const STALL_LOAD_THRESHOLD = 5; // loads in last 60 days
+
+      // Build a normName helper inline (same logic as nbaPhase1Engine)
+      const normN = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      // Precompute loads-per-company map (last 60 days)
+      const sixtyDaysAgo = new Date();
+      sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+      const cutoffMonth = sixtyDaysAgo.toISOString().slice(0, 7);
+
+      const companyLoadsRecent = new Map<string, number>();
+      for (const company of scopedCompanies) {
+        const crmNorm = normN(company.name);
+        const aliasNorms = company.financialAlias
+          ? company.financialAlias.split(",").map((s: string) => normN(s.trim())).filter(Boolean)
+          : [];
+        let recentLoads = 0;
+        for (const upload of uploads) {
+          const rows = (upload.rows as any[]) ?? [];
+          for (const row of rows) {
+            const month = String(row.month ?? "").slice(0, 7);
+            if (month < cutoffMonth) continue;
+            const cust = normN(String(row.customerName ?? ""));
+            if (cust !== crmNorm && !aliasNorms.some((a: string) => cust === a)) continue;
+            recentLoads += Number(row.totalLoads ?? 0);
+          }
+        }
+        companyLoadsRecent.set(company.id, recentLoads);
+      }
+
+      interface AwardHealthRow {
+        awardId: string;
+        awardTitle: string;
+        companyId: string;
+        companyName: string;
+        awardDate: string | null;
+        awardAgeDays: number;
+        laneCount: number;
+        value: string | null;
+        recentLoads: number;
+        hasFinancialData: boolean;
+      }
+
+      const stalledAwards: AwardHealthRow[] = [];
+
+      for (const award of allAwards) {
+        if (!companyMap.has(award.companyId)) continue;
+        const company = companyMap.get(award.companyId)!;
+
+        // Age gate
+        const awardMs = award.awardDate ? new Date(award.awardDate).getTime() : null;
+        const awardAgeDays = awardMs ? Math.floor((now - awardMs) / 86_400_000) : null;
+        if (awardAgeDays === null) continue; // no date = skip
+        if (awardAgeDays < MIN_AGE_DAYS) continue; // too fresh
+        if (awardAgeDays > MAX_AGE_DAYS) continue; // too old — likely expired/irrelevant
+
+        const recentLoads = companyLoadsRecent.get(award.companyId) ?? 0;
+        const hasFinancialData = uploads.some(u => {
+          const rows = (u.rows as any[]) ?? [];
+          const crmNorm = normN(company.name);
+          return rows.some(r => normN(String(r.customerName ?? "")) === crmNorm);
+        });
+
+        // Only surface awards where loads are low/missing — suppress healthy accounts
+        if (hasFinancialData && recentLoads >= STALL_LOAD_THRESHOLD) continue;
+
+        const laneCount = (award.lanes ?? []).filter(Boolean).length;
+
+        stalledAwards.push({
+          awardId: award.id,
+          awardTitle: award.title,
+          companyId: award.companyId,
+          companyName: company.name,
+          awardDate: award.awardDate ?? null,
+          awardAgeDays,
+          laneCount,
+          value: award.value ?? null,
+          recentLoads,
+          hasFinancialData,
+        });
+      }
+
+      // Sort: no-financial-data accounts last (uncertain); within known, sort by award age desc
+      stalledAwards.sort((a, b) => {
+        if (a.hasFinancialData !== b.hasFinancialData) return a.hasFinancialData ? -1 : 1;
+        return b.awardAgeDays - a.awardAgeDays;
+      });
+
+      res.json(stalledAwards.slice(0, 10));
+    } catch (err) {
+      console.error("Award health error:", err);
+      res.status(500).json({ error: "Failed to load award health" });
+    }
+  });
+
   // ── AM Coverage Gaps portlet ──────────────────────────────────────────────
   // Returns the top uncovered high-volume RFP facility sites across all of
   // the current AM's accounts. Reuses the same facility-coverage algorithm as
