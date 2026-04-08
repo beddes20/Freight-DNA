@@ -267,7 +267,20 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             <CheckCircle2 className="w-3 h-3 mr-0.5" />
             Done
           </Button>
-          {card.companyId && (
+          {card.companyId && card.ruleType === "overdue_next_action" ? (
+            <a
+              href={`/companies/${card.companyId}`}
+              data-testid={`nba-card-open-account-${card.id}`}
+            >
+              <Button
+                size="sm"
+                className="h-6 text-[10px] px-2 bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 border border-violet-500/30"
+              >
+                <ArrowRight className="w-3 h-3 mr-0.5" />
+                Open Account
+              </Button>
+            </a>
+          ) : card.companyId ? (
             <Button
               size="sm"
               onClick={() => setShowLogTouch(true)}
@@ -278,7 +291,7 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
               <PhoneCall className="w-3 h-3 mr-0.5" />
               Log Touch
             </Button>
-          )}
+          ) : null}
         </div>
       </div>
 
