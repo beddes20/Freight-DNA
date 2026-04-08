@@ -592,13 +592,22 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     const lane = await storage.getRecurringLane(req.params.laneId);
     if (!lane || lane.orgId !== user.organizationId) return res.status(404).json({ error: "Lane not found" });
 
-    // AMs can only reassign lanes they own; managers/admins can reassign any
     const isManager = ["admin", "director", "national_account_manager", "logistics_manager"].includes(user.role);
-    if (!isManager && lane.ownerUserId !== user.id) {
-      return res.status(403).json({ error: "You can only reassign lanes you own" });
+
+    // Non-managers: can only self-assign (take ownership of an unassigned lane)
+    // They cannot give a lane away to someone else
+    if (!isManager) {
+      if (lane.ownerUserId && lane.ownerUserId !== user.id) {
+        return res.status(403).json({ error: "You can only assign lanes that are currently unassigned" });
+      }
     }
 
     const { ownerUserId } = req.body as { ownerUserId: string | null };
+
+    // Non-managers can only assign to themselves
+    if (!isManager && ownerUserId && ownerUserId !== user.id) {
+      return res.status(403).json({ error: "You can only assign a lane to yourself" });
+    }
 
     // Validate the new owner belongs to this org
     if (ownerUserId) {

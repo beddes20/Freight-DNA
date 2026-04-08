@@ -3528,7 +3528,9 @@ export class DatabaseStorage implements IStorage {
         result.noContactable.push(item);
       } else if (contacted === 0) {
         result.assignedUntouched.push(item);
-      } else if (contacted < completionThreshold) {
+      } else {
+        // inProgress: 1+ contacted but below threshold
+        // Also catches edge case where contacted >= threshold but resolvedAt not yet set
         result.inProgress.push(item);
       }
     }

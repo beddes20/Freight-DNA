@@ -158,6 +158,10 @@ function LaneRow({
                 <Phone className="w-3 h-3" />
                 {item.contactableCount} contactable
               </span>
+            ) : item.totalBenchCount === 0 ? (
+              <span className="text-[11px] text-muted-foreground italic flex items-center gap-0.5">
+                No carriers on bench
+              </span>
             ) : (
               <span className="text-[11px] text-orange-500 flex items-center gap-0.5">
                 <Mail className="w-3 h-3" />
