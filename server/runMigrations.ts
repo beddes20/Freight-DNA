@@ -1130,4 +1130,162 @@ export async function runMigrations() {
   } finally {
     clientFF.release();
   }
+
+  // Lane Carrier Outreach v1 — core tables (Task #148)
+  const clientLCO = await pool.connect();
+  try {
+    // 1. Carrier catalog
+    await clientLCO.query(`
+      CREATE TABLE IF NOT EXISTS carriers (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        mc_dot text,
+        regions text[] NOT NULL DEFAULT '{}',
+        equipment_types text[] NOT NULL DEFAULT '{}',
+        tags text[] NOT NULL DEFAULT '{}',
+        primary_email text,
+        backup_email text,
+        last_email_validated_at text,
+        notes text,
+        created_at timestamp NOT NULL DEFAULT NOW(),
+        updated_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_carriers_org ON carriers(org_id)`);
+
+    // 2. Recurring lanes
+    await clientLCO.query(`
+      CREATE TABLE IF NOT EXISTS recurring_lanes (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        company_name text,
+        origin text NOT NULL,
+        origin_state text,
+        destination text NOT NULL,
+        destination_state text,
+        equipment_type text,
+        avg_loads_per_week decimal(6,2),
+        weeks_active integer DEFAULT 0,
+        lookback_weeks integer DEFAULT 4,
+        has_preferred_carrier_program boolean DEFAULT false,
+        owner_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        overseer_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        lane_score integer,
+        lane_score_factors jsonb,
+        eligibility_confidence text NOT NULL DEFAULT 'medium',
+        last_scored_at text,
+        snoozed_until text,
+        carriers_contacted_count integer DEFAULT 0,
+        resolved_at text,
+        created_at timestamp NOT NULL DEFAULT NOW(),
+        updated_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_recurring_lanes_org ON recurring_lanes(org_id)`);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_recurring_lanes_company ON recurring_lanes(org_id, company_id)`);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_recurring_lanes_owner ON recurring_lanes(org_id, owner_user_id)`);
+    await clientLCO.query(`ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS is_eligible boolean NOT NULL DEFAULT false`);
+
+    // 3. Lane carrier interest (bench per lane)
+    await clientLCO.query(`
+      CREATE TABLE IF NOT EXISTS lane_carrier_interest (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        lane_id varchar NOT NULL REFERENCES recurring_lanes(id) ON DELETE CASCADE,
+        carrier_id varchar REFERENCES carriers(id) ON DELETE SET NULL,
+        carrier_name text NOT NULL,
+        interest_status text NOT NULL DEFAULT 'needs_follow_up',
+        reply_snippet text,
+        last_reply_snippet text,
+        classified_at text,
+        notes text,
+        fit_score integer,
+        fit_reason text,
+        outreach_sent_at text,
+        created_at timestamp NOT NULL DEFAULT NOW(),
+        updated_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_lci_lane ON lane_carrier_interest(lane_id)`);
+    // Partial unique indexes matching application-level dedup:
+    // (a) id-backed: one row per lane+carrier catalog entry
+    await clientLCO.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_lci_unique_carrier ON lane_carrier_interest(lane_id, carrier_id) WHERE carrier_id IS NOT NULL`);
+    // (b) name-only: one row per lane+carrier name when no catalog entry exists yet
+    await clientLCO.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_lci_unique_name ON lane_carrier_interest(lane_id, carrier_name) WHERE carrier_id IS NULL`);
+
+    // 4. Carrier outreach logs
+    await clientLCO.query(`
+      CREATE TABLE IF NOT EXISTS carrier_outreach_logs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id),
+        lane_id varchar NOT NULL REFERENCES recurring_lanes(id) ON DELETE CASCADE,
+        company_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        carrier_ids text[] NOT NULL DEFAULT '{}',
+        carrier_names text[] NOT NULL DEFAULT '{}',
+        actor_user_id varchar NOT NULL REFERENCES users(id),
+        owner_user_id varchar REFERENCES users(id),
+        overseer_user_id varchar REFERENCES users(id),
+        outreach_mode text NOT NULL DEFAULT 'lane_building',
+        email_drafts jsonb DEFAULT '[]',
+        timestamp timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_col_lane ON carrier_outreach_logs(lane_id)`);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_col_org ON carrier_outreach_logs(org_id)`);
+
+    // 5. Add linked_lane_id to nba_cards
+    await clientLCO.query(`ALTER TABLE nba_cards ADD COLUMN IF NOT EXISTS linked_lane_id varchar`);
+
+    console.log("[migrations] lane carrier outreach tables ensured");
+  } catch (err) {
+    console.error("[migrations] lane carrier outreach tables error:", err);
+  } finally {
+    clientLCO.release();
+  }
+
+  // Feature Flags table (Task #148)
+  const clientFlagTable = await pool.connect();
+  try {
+    await clientFlagTable.query(`
+      CREATE TABLE IF NOT EXISTS feature_flags (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        flag_key text NOT NULL,
+        enabled boolean NOT NULL DEFAULT false,
+        updated_at timestamp NOT NULL DEFAULT NOW(),
+        updated_by_id varchar REFERENCES users(id),
+        UNIQUE (org_id, flag_key)
+      )
+    `);
+    // Ensure missing columns on pre-existing tables from earlier schema iterations
+    await clientFlagTable.query(`ALTER TABLE feature_flags ADD COLUMN IF NOT EXISTS updated_by_id varchar REFERENCES users(id)`);
+    await clientFlagTable.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'feature_flags' AND column_name = 'updated_at' AND data_type = 'text'
+        ) THEN
+          UPDATE feature_flags SET updated_at = NOW()::text WHERE updated_at IS NULL;
+          ALTER TABLE feature_flags
+            ALTER COLUMN updated_at TYPE timestamp USING updated_at::timestamp,
+            ALTER COLUMN updated_at SET DEFAULT NOW(),
+            ALTER COLUMN updated_at SET NOT NULL;
+        END IF;
+      END $$
+    `);
+    // Seed lane_carrier_outreach_v1 as disabled by default (operators enable per org for controlled rollout)
+    await clientFlagTable.query(`
+      INSERT INTO feature_flags (id, org_id, flag_key, enabled)
+      SELECT gen_random_uuid(), o.id, 'lane_carrier_outreach_v1', false
+      FROM organizations o
+      ON CONFLICT (org_id, flag_key) DO NOTHING
+    `);
+    console.log("[migrations] feature_flags table ensured");
+  } catch (err) {
+    console.error("[migrations] feature_flags error:", err);
+  } finally {
+    clientFlagTable.release();
+  }
 }

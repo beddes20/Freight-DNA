@@ -9,6 +9,7 @@ import { registerFinancialRoutes } from "./routes/financials";
 import { registerGoalRoutes } from "./routes/goals";
 import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerForcedFocusRoutes } from "./routes/forcedFocus";
+import { registerLaneCarrierOutreachRoutes } from "./routes/laneCarrierOutreach";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -2976,6 +2977,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerTaskRoutes(app);
   registerForcedFocusRoutes(app);
   registerEngagementRoutes(app);
+  registerLaneCarrierOutreachRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
 
@@ -8920,17 +8922,58 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
   });
 
   // GET /api/nba/cards — fetch visible cards for the current user
+  // Directors and admins get all visible cards in the org (portfolio view).
   app.get("/api/nba/cards", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const limit = Math.min(Number(req.query.limit ?? 5), 5);
-      const cards = await storage.getVisibleNbaCards(currentUser.id, limit);
-      // Exclude cards tied to archived companies — they can persist in the table
-      // after a company is archived but should never reach the dashboard.
+      const isPortfolioRole = ["admin", "director"].includes(currentUser.role);
+      let cards;
+      if (isPortfolioRole) {
+        // Portfolio roles (admin/director) see all org-wide cards — allow up to 200
+        const limit = Math.min(Number(req.query.limit ?? 200), 200);
+        cards = await storage.getVisibleNbaCardsForOrg(currentUser.organizationId, limit);
+      } else {
+        const limit = Math.min(Number(req.query.limit ?? 5), 5);
+        cards = await storage.getVisibleNbaCards(currentUser.id, limit);
+      }
+      // Exclude cards tied to archived companies
       const orgCompanies = await storage.getCompanies(currentUser.organizationId);
       const archivedIds = new Set(orgCompanies.filter(c => c.archivedAt).map(c => c.id));
-      const activeCards = cards.filter(c => !c.companyId || !archivedIds.has(c.companyId));
+      let activeCards = cards.filter(c => !c.companyId || !archivedIds.has(c.companyId));
+      // Suppress recurring_lane_capacity cards when feature flag is disabled
+      const laneOutreachEnabled = await storage.getFeatureFlag(currentUser.organizationId, "lane_carrier_outreach_v1");
+      if (!laneOutreachEnabled) {
+        activeCards = activeCards.filter(c => c.ruleType !== "recurring_lane_capacity");
+      }
+
+      // Annotate lane-capacity cards with owner/overseer names for admin/director chip display
+      const laneCards = activeCards.filter(c => c.ruleType === "recurring_lane_capacity" && c.linkedLaneId);
+      if (laneCards.length > 0) {
+        const laneIds = [...new Set(laneCards.map(c => c.linkedLaneId!))];
+        const lanes = await Promise.all(laneIds.map(id => storage.getRecurringLane(id)));
+        const laneMap = new Map(lanes.filter(Boolean).map(l => [l!.id, l!]));
+
+        // Collect unique user IDs for a single batch lookup
+        const userIds = new Set<string>();
+        lanes.forEach(l => { if (l?.ownerUserId) userIds.add(l.ownerUserId); if (l?.overseerUserId) userIds.add(l.overseerUserId); });
+        const userList = await Promise.all([...userIds].map(id => storage.getUser(id)));
+        const userMap = new Map(userList.filter(Boolean).map(u => [u!.id, u!]));
+
+        activeCards = activeCards.map(c => {
+          if (c.ruleType !== "recurring_lane_capacity" || !c.linkedLaneId) return c;
+          const lane = laneMap.get(c.linkedLaneId);
+          if (!lane) return c;
+          const ownerUser = lane.ownerUserId ? userMap.get(lane.ownerUserId) : undefined;
+          const overseerUser = lane.overseerUserId ? userMap.get(lane.overseerUserId) : undefined;
+          return {
+            ...c,
+            laneOwnerName: ownerUser ? (ownerUser.name?.trim() || ownerUser.username) : null,
+            laneOverseerName: overseerUser ? (overseerUser.name?.trim() || overseerUser.username) : null,
+          };
+        });
+      }
+
       res.json(activeCards);
     } catch (err: any) {
       console.error("[nba/cards GET]", err?.message ?? err);
@@ -8948,6 +8991,15 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const validActions = ["actioned", "dismissed", "snoozed", "alternate"];
       if (!validActions.includes(action)) {
         return res.status(400).json({ error: `action must be one of ${validActions.join(", ")}` });
+      }
+
+      // recurring_lane_capacity cards can only be completed via outreach threshold
+      // or preferred-carrier program toggle — block direct manual resolution
+      if (action === "actioned") {
+        const card = await storage.getNbaCard(req.params.id);
+        if (card?.ruleType === "recurring_lane_capacity") {
+          return res.status(409).json({ error: "Lane capacity cards complete automatically when outreach threshold is reached or a preferred-carrier program is activated" });
+        }
       }
 
       const now = new Date().toISOString();
@@ -8996,8 +9048,8 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { role, organizationId } = currentUser as any;
-      const managerRoles = ["Admin", "Director", "National Account Manager"];
+      const { role, organizationId } = currentUser;
+      const managerRoles = ["admin", "director", "national_account_manager"];
       if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
       const weekStart = String(req.query.weekStart ?? new Date().toISOString().split("T")[0].slice(0, 10));
       const summary = await storage.getNbaManagerSummary(organizationId, weekStart);
@@ -9013,8 +9065,8 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { role, organizationId } = currentUser as any;
-      const managerRoles = ["Admin", "Director", "National Account Manager"];
+      const { role, organizationId } = currentUser;
+      const managerRoles = ["admin", "director", "national_account_manager"];
       if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
       const daysBack = Math.min(Number(req.query.daysBack ?? 30), 90);
       const performance = await storage.getNbaRulePerformance(organizationId, daysBack);
@@ -9030,17 +9082,18 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { role, organizationId } = currentUser as any;
-      if (role !== "Admin") return res.status(403).json({ error: "Admin only" });
+      const { role, organizationId } = currentUser;
+      if (!["admin", "director"].includes(role)) return res.status(403).json({ error: "Admin or Director role required" });
 
       const { runPhase1EngineForOrg } = await import("./nbaPhase1Engine");
-      const results = await runPhase1EngineForOrg(organizationId, storage);
+      const { companyResults, laneCapacitySpecs } = await runPhase1EngineForOrg(organizationId, storage);
 
       let generated = 0;
       let skipped = 0;
       const now = new Date().toISOString();
 
-      for (const { userId, result } of results) {
+      // ── Per-company winner cards (all rules except R12) ──────────────────
+      for (const { userId, result } of companyResults) {
         if (!result.winner) { skipped++; continue; }
 
         // Dedup: skip if a card for same company + same rule already exists in last 14 days
@@ -9050,7 +9103,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         // Supersede any prior visible/generated card for this company with a DIFFERENT rule type
         await storage.supersedePreviousNbaCards(result.companyId, result.winner.ruleType);
 
-        const card = await storage.createNbaCard({
+        await storage.createNbaCard({
           orgId: organizationId,
           userId,
           companyId: result.companyId,
@@ -9059,7 +9112,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
           outcomeType: result.winner.outcomeType,
           confidence: result.winner.confidence,
           signalCount: result.winner.signalCount,
-          signalSummary: result.winner.signalSummary as any,
+          signalSummary: result.winner.signalSummary,
           whyThisNow: result.winner.whyThisNow,
           suggestedAction: result.winner.suggestedAction,
           expectedOutcome: result.winner.expectedOutcome,
@@ -9071,12 +9124,44 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
           createdAt: now,
           contactId: result.winner.contactId,
           linkedTaskId: result.winner.linkedTaskId,
+          linkedLaneId: result.winner.linkedLaneId,
         });
 
         generated++;
       }
 
-      res.json({ generated, skipped, total: results.length });
+      // ── R12: per-lane × owner cards (dedup by laneId + userId) ──────────
+      for (const spec of laneCapacitySpecs) {
+        // Dedup: skip if a recurring_lane_capacity card for this lane already exists in last 30 days
+        const existingLane = await storage.getRecentNbaCardByLane(spec.laneId, spec.userId, 30);
+        if (existingLane) { skipped++; continue; }
+
+        await storage.createNbaCard({
+          orgId: organizationId,
+          userId: spec.userId,
+          companyId: spec.companyId,
+          companyName: spec.companyName,
+          ruleType: spec.candidate.ruleType,
+          outcomeType: spec.candidate.outcomeType,
+          confidence: spec.candidate.confidence,
+          signalCount: spec.candidate.signalCount,
+          signalSummary: spec.candidate.signalSummary,
+          whyThisNow: spec.candidate.whyThisNow,
+          suggestedAction: spec.candidate.suggestedAction,
+          expectedOutcome: spec.candidate.expectedOutcome,
+          growthLever: spec.candidate.growthLever,
+          relationshipMove: spec.candidate.relationshipMove,
+          accountTier: spec.candidate.accountTier,
+          urgencyScore: spec.candidate.urgencyScore,
+          status: "visible",
+          createdAt: now,
+          linkedLaneId: spec.laneId,
+        });
+
+        generated++;
+      }
+
+      res.json({ generated, skipped, total: companyResults.length + laneCapacitySpecs.length });
     } catch (err: any) {
       console.error("[nba/run-engine POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to run NBA engine" });

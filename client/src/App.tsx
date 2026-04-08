@@ -31,6 +31,7 @@ import LandingPage from "@/pages/landing";
 import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
 import AdminUsers from "@/pages/admin-users";
+import AdminCarriers from "@/pages/admin-carriers";
 import RepCustomers from "@/pages/rep-customers";
 import Financials from "@/pages/financials";
 import HistoricalData from "@/pages/historical-data";
@@ -101,6 +102,7 @@ function Router() {
       <Route path="/carrier-lane-search" component={CarrierLaneSearch} />
       <Route path="/research-tasks" component={ResearchTasks} />
       <Route path="/admin/users" component={AdminUsers} />
+      <Route path="/admin/carriers" component={AdminCarriers} />
       <Route path="/reps/:userId" component={RepCustomers} />
       <Route path="/financials" component={Financials} />
       <Route path="/historical-data" component={HistoricalData} />

@@ -111,6 +111,20 @@ import {
   nbaCards,
   type NbaCard,
   type InsertNbaCard,
+  carriers,
+  type Carrier,
+  type InsertCarrier,
+  recurringLanes,
+  type RecurringLane,
+  type InsertRecurringLane,
+  laneCarrierInterest,
+  type LaneCarrierInterest,
+  type InsertLaneCarrierInterest,
+  carrierOutreachLogs,
+  type CarrierOutreachLog,
+  type InsertCarrierOutreachLog,
+  featureFlags,
+  type FeatureFlag,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -461,8 +475,12 @@ export interface IStorage {
   createNbaCard(data: InsertNbaCard): Promise<NbaCard>;
   getVisibleNbaCards(userId: string, limit?: number): Promise<NbaCard[]>;
   getRecentNbaCardByType(companyId: string, ruleType: string, dayLimit: number): Promise<NbaCard | undefined>;
+  getRecentNbaCardByLane(laneId: string, userId: string, dayLimit: number): Promise<NbaCard | undefined>;
+  getNbaCard(id: string): Promise<NbaCard | undefined>;
   resolveNbaCard(id: string, userId: string, data: Record<string, unknown>): Promise<NbaCard | undefined>;
   supersedePreviousNbaCards(companyId: string, winningRuleType: string): Promise<void>;
+  resolveNbaCardsForLane(laneId: string): Promise<void>;
+  getVisibleNbaCardsForOrg(orgId: string, limit?: number): Promise<NbaCard[]>;
   getNbaCardForCompany(companyId: string): Promise<NbaCard | undefined>;
   processExpiredNbaCards(orgId: string, touchpointCompanyId?: string): Promise<void>;
   getNbaManagerSummary(orgId: string, weekStart: string): Promise<Array<{
@@ -481,6 +499,37 @@ export interface IStorage {
   getForcedFocus(id: string): Promise<import('../shared/schema').ForcedFocus | undefined>;
   updateForcedFocusStatus(id: string, status: string): Promise<import('../shared/schema').ForcedFocus | undefined>;
   updateForcedFocus(id: string, data: Partial<import('../shared/schema').InsertForcedFocus>): Promise<import('../shared/schema').ForcedFocus | undefined>;
+
+  // Lane Carrier Outreach v1 — Carrier Catalog
+  getCarriers(orgId: string): Promise<Carrier[]>;
+  getCarrier(id: string): Promise<Carrier | undefined>;
+  createCarrier(data: InsertCarrier): Promise<Carrier>;
+  updateCarrier(id: string, orgId: string, data: Partial<Omit<InsertCarrier, 'orgId'>>): Promise<Carrier | undefined>;
+  deleteCarrier(id: string, orgId: string): Promise<boolean>;
+  upsertCarrierByMcDot(orgId: string, mcDot: string, data: Omit<InsertCarrier, 'orgId'>): Promise<Carrier>;
+
+  // Lane Carrier Outreach v1 — Recurring Lanes
+  getRecurringLanes(orgId: string, userId?: string): Promise<RecurringLane[]>;
+  getRecurringLane(id: string): Promise<RecurringLane | undefined>;
+  upsertRecurringLane(data: InsertRecurringLane & { orgId: string; origin: string; destination: string; equipmentType?: string | null; companyId?: string | null }): Promise<RecurringLane>;
+  updateRecurringLane(id: string, data: Partial<InsertRecurringLane>): Promise<RecurringLane | undefined>;
+  deleteRecurringLane(id: string): Promise<boolean>;
+  getEligibleRecurringLanes(orgId: string): Promise<RecurringLane[]>;
+  retractIneligibleLanes(orgId: string, eligibleIds: string[]): Promise<void>;
+
+  // Lane Carrier Outreach v1 — Carrier Bench (laneCarrierInterest)
+  getLaneCarrierBench(laneId: string): Promise<LaneCarrierInterest[]>;
+  getLaneCarrierInterestById(id: string): Promise<LaneCarrierInterest | undefined>;
+  upsertLaneCarrierInterest(data: InsertLaneCarrierInterest): Promise<LaneCarrierInterest>;
+  updateLaneCarrierInterest(id: string, data: Partial<InsertLaneCarrierInterest>): Promise<LaneCarrierInterest | undefined>;
+
+  // Lane Carrier Outreach v1 — Outreach Logs
+  createCarrierOutreachLog(data: InsertCarrierOutreachLog): Promise<CarrierOutreachLog>;
+  getCarrierOutreachLogs(laneId: string): Promise<CarrierOutreachLog[]>;
+
+  // Lane Carrier Outreach v1 — Feature Flags
+  getFeatureFlag(orgId: string, flagKey: string): Promise<boolean>;
+  setFeatureFlag(orgId: string, flagKey: string, enabled: boolean, updatedById?: string): Promise<void>;
 }
 
 const pool = new Pool({
@@ -2774,9 +2823,13 @@ export class DatabaseStorage implements IStorage {
           eq(nbaCards.status, "visible"),
         )
       )
-      .orderBy(desc(nbaCards.urgencyScore), desc(nbaCards.createdAt))
+      // Protect cards always surface first; within the same outcome tier, highest urgency wins
+      .orderBy(
+        sql`CASE ${nbaCards.outcomeType} WHEN 'protect' THEN 1 WHEN 'execute' THEN 2 WHEN 'grow' THEN 3 WHEN 'deepen' THEN 4 ELSE 5 END`,
+        desc(nbaCards.urgencyScore),
+        desc(nbaCards.createdAt),
+      )
       .limit(limit);
-    // Filter out snoozed cards
     return rows.filter(r => !r.snoozeUntil || r.snoozeUntil <= today);
   }
 
@@ -2797,6 +2850,32 @@ export class DatabaseStorage implements IStorage {
     return rows.filter(r => r.createdAt >= cutoffStr)[0];
   }
 
+  async getRecentNbaCardByLane(laneId: string, userId: string, dayLimit: number): Promise<NbaCard | undefined> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - dayLimit);
+    const cutoffStr = cutoff.toISOString();
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(
+        and(
+          eq(nbaCards.linkedLaneId, laneId),
+          eq(nbaCards.userId, userId),
+          eq(nbaCards.ruleType, "recurring_lane_capacity"),
+          // Only count truly active cards — superseded/actioned/resolved cards
+          // must not block regeneration of a fresh card for the same lane+user
+          sql`${nbaCards.status} IN ('visible', 'generated')`,
+        )
+      )
+      .orderBy(desc(nbaCards.createdAt))
+      .limit(5);
+    return rows.filter(r => r.createdAt >= cutoffStr)[0];
+  }
+
+  async getNbaCard(id: string): Promise<NbaCard | undefined> {
+    const [row] = await db.select().from(nbaCards).where(eq(nbaCards.id, id)).limit(1);
+    return row;
+  }
+
   async resolveNbaCard(id: string, userId: string, data: Record<string, unknown>): Promise<NbaCard | undefined> {
     const now = new Date().toISOString();
     const [row] = await db.update(nbaCards)
@@ -2809,6 +2888,8 @@ export class DatabaseStorage implements IStorage {
   async supersedePreviousNbaCards(companyId: string, winningRuleType: string): Promise<void> {
     // Mark any visible or generated card for this company with a DIFFERENT rule type as superseded.
     // Same rule type within the dedup window is blocked upstream; only cross-rule cards are superseded here.
+    // IMPORTANT: recurring_lane_capacity cards are lane-scoped (not company winners) and must never
+    // be touched by this function — they have their own dedup and lifecycle logic.
     await db.update(nbaCards)
       .set({ status: "superseded" } as any)
       .where(
@@ -2816,8 +2897,41 @@ export class DatabaseStorage implements IStorage {
           eq(nbaCards.companyId, companyId),
           sql`${nbaCards.status} IN ('visible', 'generated')`,
           sql`${nbaCards.ruleType} != ${winningRuleType}`,
+          sql`${nbaCards.ruleType} != 'recurring_lane_capacity'`,
         )
       );
+  }
+
+  async resolveNbaCardsForLane(laneId: string): Promise<void> {
+    const now = new Date().toISOString();
+    await db.update(nbaCards)
+      .set({ status: "actioned", resolvedAt: now } as any)
+      .where(
+        and(
+          eq(nbaCards.linkedLaneId, laneId),
+          eq(nbaCards.ruleType, "recurring_lane_capacity"),
+          sql`${nbaCards.status} IN ('visible', 'generated')`,
+        )
+      );
+  }
+
+  async getVisibleNbaCardsForOrg(orgId: string, limit = 20): Promise<NbaCard[]> {
+    const today = new Date().toISOString().split("T")[0];
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(
+        and(
+          eq(nbaCards.orgId, orgId),
+          eq(nbaCards.status, "visible"),
+        )
+      )
+      .orderBy(
+        sql`CASE ${nbaCards.outcomeType} WHEN 'protect' THEN 1 WHEN 'execute' THEN 2 WHEN 'grow' THEN 3 WHEN 'deepen' THEN 4 ELSE 5 END`,
+        desc(nbaCards.urgencyScore),
+        desc(nbaCards.createdAt),
+      )
+      .limit(limit);
+    return rows.filter(r => !r.snoozeUntil || r.snoozeUntil <= today);
   }
 
   async getNbaCardForCompany(companyId: string): Promise<NbaCard | undefined> {
@@ -2830,7 +2944,11 @@ export class DatabaseStorage implements IStorage {
           eq(nbaCards.status, "visible"),
         )
       )
-      .orderBy(desc(nbaCards.urgencyScore), desc(nbaCards.createdAt))
+      .orderBy(
+        sql`CASE ${nbaCards.outcomeType} WHEN 'protect' THEN 1 WHEN 'execute' THEN 2 WHEN 'grow' THEN 3 WHEN 'deepen' THEN 4 ELSE 5 END`,
+        desc(nbaCards.urgencyScore),
+        desc(nbaCards.createdAt),
+      )
       .limit(1);
     const card = rows[0];
     if (!card) return undefined;
@@ -3032,6 +3150,218 @@ export class DatabaseStorage implements IStorage {
       .where(eq(forcedFocus.id, id))
       .returning();
     return row;
+  }
+
+  // ── Lane Carrier Outreach v1 — Carrier Catalog ────────────────────────────
+
+  async getCarriers(orgId: string): Promise<Carrier[]> {
+    return db.select().from(carriers).where(eq(carriers.orgId, orgId)).orderBy(asc(carriers.name));
+  }
+
+  async getCarrier(id: string): Promise<Carrier | undefined> {
+    const [row] = await db.select().from(carriers).where(eq(carriers.id, id));
+    return row;
+  }
+
+  async createCarrier(data: InsertCarrier): Promise<Carrier> {
+    const [row] = await db.insert(carriers).values(data).returning();
+    return row;
+  }
+
+  async updateCarrier(id: string, orgId: string, data: Partial<Omit<InsertCarrier, 'orgId'>>): Promise<Carrier | undefined> {
+    // Always enforce org constraint in WHERE to prevent cross-tenant updates
+    const [row] = await db.update(carriers)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(eq(carriers.id, id), eq(carriers.orgId, orgId)))
+      .returning();
+    return row;
+  }
+
+  async deleteCarrier(id: string, orgId: string): Promise<boolean> {
+    const result = await db.delete(carriers).where(and(eq(carriers.id, id), eq(carriers.orgId, orgId)));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async upsertCarrierByMcDot(orgId: string, mcDot: string, data: Omit<InsertCarrier, 'orgId'>): Promise<Carrier> {
+    const existing = await db.select().from(carriers)
+      .where(and(eq(carriers.orgId, orgId), eq(carriers.mcDot, mcDot)))
+      .limit(1);
+    if (existing[0]) {
+      const [row] = await db.update(carriers).set({ ...data, updatedAt: new Date() }).where(eq(carriers.id, existing[0].id)).returning();
+      return row;
+    }
+    const [row] = await db.insert(carriers).values({ ...data, orgId }).returning();
+    return row;
+  }
+
+  // ── Lane Carrier Outreach v1 — Recurring Lanes ────────────────────────────
+
+  async getRecurringLanes(orgId: string, userId?: string): Promise<RecurringLane[]> {
+    const orgCond = eq(recurringLanes.orgId, orgId);
+    const whereCond = userId
+      ? and(orgCond, or(eq(recurringLanes.ownerUserId, userId), eq(recurringLanes.overseerUserId, userId)))
+      : orgCond;
+    return db.select().from(recurringLanes).where(whereCond).orderBy(desc(recurringLanes.laneScore));
+  }
+
+  async getRecurringLane(id: string): Promise<RecurringLane | undefined> {
+    const [row] = await db.select().from(recurringLanes).where(eq(recurringLanes.id, id));
+    return row;
+  }
+
+  async upsertRecurringLane(data: InsertRecurringLane & { orgId: string; origin: string; destination: string; equipmentType?: string | null; companyId?: string | null }): Promise<RecurringLane> {
+    const baseCond = and(
+      eq(recurringLanes.orgId, data.orgId),
+      eq(recurringLanes.origin, data.origin),
+      eq(recurringLanes.destination, data.destination),
+      data.companyId ? eq(recurringLanes.companyId, data.companyId) : undefined,
+      data.equipmentType ? eq(recurringLanes.equipmentType, data.equipmentType) : undefined,
+    );
+    const existing = await db.select().from(recurringLanes).where(baseCond).limit(1);
+    if (existing[0]) {
+      // Preserve operator-set fields — engine must not overwrite manual state changes
+      const { hasPreferredCarrierProgram: _pcp, resolvedAt: _rat, snoozedUntil: _snu, ...engineUpdateData } = data;
+      const [row] = await db.update(recurringLanes)
+        .set({ ...engineUpdateData, updatedAt: new Date() })
+        .where(eq(recurringLanes.id, existing[0].id))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(recurringLanes).values(data).returning();
+    return row;
+  }
+
+  async updateRecurringLane(id: string, data: Partial<InsertRecurringLane>): Promise<RecurringLane | undefined> {
+    const [row] = await db.update(recurringLanes).set({ ...data, updatedAt: new Date() }).where(eq(recurringLanes.id, id)).returning();
+    return row;
+  }
+
+  async deleteRecurringLane(id: string): Promise<boolean> {
+    const result = await db.delete(recurringLanes).where(eq(recurringLanes.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getEligibleRecurringLanes(orgId: string): Promise<RecurringLane[]> {
+    const today = new Date().toISOString().split("T")[0];
+    // Only return lanes the engine marked eligible in its most recent run.
+    // isEligible=false means the lane fell out of the rolling 4-week criteria.
+    return db.select().from(recurringLanes).where(
+      and(
+        eq(recurringLanes.orgId, orgId),
+        eq(recurringLanes.isEligible, true),
+        eq(recurringLanes.hasPreferredCarrierProgram, false),
+        or(
+          isNull(recurringLanes.snoozedUntil),
+          sql`${recurringLanes.snoozedUntil} <= ${today}`,
+        ),
+      )
+    ).orderBy(desc(recurringLanes.laneScore));
+  }
+
+  async retractIneligibleLanes(orgId: string, eligibleIds: string[]): Promise<void> {
+    // Mark all lanes in this org that did NOT appear in the current engine run as ineligible.
+    // This ensures stale lanes are excluded from NBA card generation and scoring.
+    if (eligibleIds.length === 0) {
+      // Nothing qualified — mark all org lanes ineligible
+      await db.update(recurringLanes)
+        .set({ isEligible: false })
+        .where(eq(recurringLanes.orgId, orgId));
+    } else {
+      await db.update(recurringLanes)
+        .set({ isEligible: false })
+        .where(
+          and(
+            eq(recurringLanes.orgId, orgId),
+            sql`${recurringLanes.id} NOT IN (${sql.join(eligibleIds.map(id => sql`${id}`), sql`, `)})`,
+          )
+        );
+    }
+  }
+
+  // ── Lane Carrier Outreach v1 — Carrier Bench ──────────────────────────────
+
+  async getLaneCarrierBench(laneId: string): Promise<LaneCarrierInterest[]> {
+    return db.select().from(laneCarrierInterest).where(eq(laneCarrierInterest.laneId, laneId)).orderBy(desc(laneCarrierInterest.fitScore));
+  }
+
+  async getLaneCarrierInterestById(id: string): Promise<LaneCarrierInterest | undefined> {
+    const [row] = await db.select().from(laneCarrierInterest).where(eq(laneCarrierInterest.id, id)).limit(1);
+    return row;
+  }
+
+  async upsertLaneCarrierInterest(data: InsertLaneCarrierInterest): Promise<LaneCarrierInterest> {
+    // Dedup strategy:
+    // 1. When carrierId is set: look for existing id-keyed record first.
+    //    If not found AND carrierName is provided, also look for a name-only record
+    //    with the same carrierName and merge it (add carrierId) — this prevents the
+    //    name-only → id-backed transition from creating a duplicate bench entry.
+    // 2. When carrierId is null: look for existing name-only record.
+    let existingId: string | undefined;
+    if (data.carrierId) {
+      const [byId] = await db.select({ id: laneCarrierInterest.id }).from(laneCarrierInterest)
+        .where(and(eq(laneCarrierInterest.laneId, data.laneId), eq(laneCarrierInterest.carrierId, data.carrierId)))
+        .limit(1);
+      existingId = byId?.id;
+      // Merge any pre-existing name-only entry for the same carrier into this record
+      if (!existingId && data.carrierName) {
+        const [byName] = await db.select({ id: laneCarrierInterest.id }).from(laneCarrierInterest)
+          .where(and(
+            eq(laneCarrierInterest.laneId, data.laneId),
+            isNull(laneCarrierInterest.carrierId),
+            eq(laneCarrierInterest.carrierName, data.carrierName),
+          ))
+          .limit(1);
+        existingId = byName?.id;
+      }
+    } else if (data.carrierName) {
+      const [existing] = await db.select({ id: laneCarrierInterest.id }).from(laneCarrierInterest)
+        .where(and(
+          eq(laneCarrierInterest.laneId, data.laneId),
+          isNull(laneCarrierInterest.carrierId),
+          eq(laneCarrierInterest.carrierName, data.carrierName),
+        ))
+        .limit(1);
+      existingId = existing?.id;
+    }
+    if (existingId) {
+      const [row] = await db.update(laneCarrierInterest).set({ ...data, updatedAt: new Date() }).where(eq(laneCarrierInterest.id, existingId)).returning();
+      return row;
+    }
+    const [row] = await db.insert(laneCarrierInterest).values(data).returning();
+    return row;
+  }
+
+  async updateLaneCarrierInterest(id: string, data: Partial<InsertLaneCarrierInterest>): Promise<LaneCarrierInterest | undefined> {
+    const [row] = await db.update(laneCarrierInterest).set({ ...data, updatedAt: new Date() }).where(eq(laneCarrierInterest.id, id)).returning();
+    return row;
+  }
+
+  // ── Lane Carrier Outreach v1 — Outreach Logs ──────────────────────────────
+
+  async createCarrierOutreachLog(data: InsertCarrierOutreachLog): Promise<CarrierOutreachLog> {
+    const [row] = await db.insert(carrierOutreachLogs).values(data).returning();
+    return row;
+  }
+
+  async getCarrierOutreachLogs(laneId: string): Promise<CarrierOutreachLog[]> {
+    return db.select().from(carrierOutreachLogs).where(eq(carrierOutreachLogs.laneId, laneId)).orderBy(desc(carrierOutreachLogs.timestamp));
+  }
+
+  // ── Lane Carrier Outreach v1 — Feature Flags ──────────────────────────────
+
+  async getFeatureFlag(orgId: string, flagKey: string): Promise<boolean> {
+    const [row] = await db.select().from(featureFlags)
+      .where(and(eq(featureFlags.orgId, orgId), eq(featureFlags.flagKey, flagKey)));
+    return row?.enabled ?? false;
+  }
+
+  async setFeatureFlag(orgId: string, flagKey: string, enabled: boolean, updatedById?: string): Promise<void> {
+    await db.insert(featureFlags)
+      .values({ orgId, flagKey, enabled, updatedById: updatedById ?? null })
+      .onConflictDoUpdate({
+        target: [featureFlags.orgId, featureFlags.flagKey],
+        set: { enabled, updatedAt: new Date(), updatedById: updatedById ?? null },
+      });
   }
 }
 

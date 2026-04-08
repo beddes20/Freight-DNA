@@ -1,0 +1,858 @@
+/**
+ * Lane Carrier Outreach Routes — Task #148
+ *
+ * All endpoints for the recurring lane capacity + carrier outreach workflow.
+ * Gated behind lane_carrier_outreach_v1 feature flag.
+ */
+
+import type { Express, Response } from "express";
+import multer from "multer";
+import XLSX from "xlsx";
+import { storage } from "../storage";
+import { requireAuth, getCurrentUser } from "../auth";
+import { rankCarriersForLane } from "../carrierRankingService";
+import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
+import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
+import { insertCarrierSchema, insertLaneCarrierInterestSchema } from "@shared/schema";
+import { z } from "zod";
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+async function isFeatureEnabled(orgId: string): Promise<boolean> {
+  return storage.getFeatureFlag(orgId, "lane_carrier_outreach_v1");
+}
+
+/** Returns true if feature flag is on; sends 403 and returns false if off. */
+async function assertFlagEnabled(orgId: string, res: Response): Promise<boolean> {
+  const enabled = await isFeatureEnabled(orgId);
+  if (!enabled) {
+    res.status(403).json({ error: "Feature lane_carrier_outreach_v1 is not enabled for this organization" });
+    return false;
+  }
+  return true;
+}
+
+const ADMIN_ROLES = ["admin", "director"];
+
+/**
+ * Fetches a lane, verifies org membership, and enforces lane-level ownership:
+ * - Admins/Directors can access any lane in their org.
+ * - Other users can only access lanes where they are owner or overseer.
+ * Returns the lane on success; sends the error response and returns null on failure.
+ */
+async function getLaneWithAccessCheck(
+  laneId: string,
+  user: { id: string; role: string; organizationId: string },
+  res: Response,
+) {
+  const lane = await storage.getRecurringLane(laneId);
+  if (!lane || lane.orgId !== user.organizationId) {
+    res.status(404).json({ error: "Lane not found" });
+    return null;
+  }
+  if (
+    !ADMIN_ROLES.includes(user.role) &&
+    lane.ownerUserId !== user.id &&
+    lane.overseerUserId !== user.id
+  ) {
+    res.status(403).json({ error: "Access denied: you are not the owner or overseer of this lane" });
+    return null;
+  }
+  return lane;
+}
+
+export function registerLaneCarrierOutreachRoutes(app: Express): void {
+
+  // ── Feature Flag ───────────────────────────────────────────────────────────
+
+  app.get("/api/feature-flags/:key", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const enabled = await storage.getFeatureFlag(user.organizationId, req.params.key);
+    res.json({ key: req.params.key, enabled });
+  });
+
+  app.patch("/api/feature-flags/:key", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!ADMIN_ROLES.includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
+    const { enabled } = req.body;
+    if (typeof enabled !== "boolean") return res.status(400).json({ error: "enabled must be boolean" });
+    await storage.setFeatureFlag(user.organizationId, req.params.key, enabled, user.id);
+    res.json({ success: true });
+  });
+
+  // ── Carrier Catalog ────────────────────────────────────────────────────────
+  // Intentionally role-gated (admin/director) rather than flag-gated:
+  // admins need to seed the carrier catalog *before* enabling the feature flag,
+  // so gating it behind lane_carrier_outreach_v1 would create a pre-launch catch-22.
+
+  app.get("/api/carriers", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!ADMIN_ROLES.includes(user.role)) {
+      return res.status(403).json({ error: "Director/Admin only" });
+    }
+    const list = await storage.getCarriers(user.organizationId);
+    res.json(list);
+  });
+
+  app.post("/api/carriers", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!ADMIN_ROLES.includes(user.role)) {
+      return res.status(403).json({ error: "Director/Admin only" });
+    }
+    const parsed = insertCarrierSchema.safeParse({ ...req.body, orgId: user.organizationId });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const carrier = await storage.createCarrier(parsed.data);
+    res.status(201).json(carrier);
+  });
+
+  app.patch("/api/carriers/:id", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!ADMIN_ROLES.includes(user.role)) {
+      return res.status(403).json({ error: "Director/Admin only" });
+    }
+    // Tenant isolation: verify carrier belongs to this org before updating
+    const existing = await storage.getCarrier(req.params.id);
+    if (!existing || existing.orgId !== user.organizationId) {
+      return res.status(404).json({ error: "Carrier not found" });
+    }
+    // Allowlist: only mutable fields — never allow orgId, id, or timestamps via body
+    const { name, mcDot, regions, equipmentTypes, tags, primaryEmail, backupEmail, notes, lastEmailValidatedAt } = req.body;
+    const allowedData: Record<string, unknown> = {};
+    if (name !== undefined) allowedData.name = name;
+    if (mcDot !== undefined) allowedData.mcDot = mcDot;
+    if (regions !== undefined) allowedData.regions = regions;
+    if (equipmentTypes !== undefined) allowedData.equipmentTypes = equipmentTypes;
+    if (tags !== undefined) allowedData.tags = tags;
+    if (primaryEmail !== undefined) allowedData.primaryEmail = primaryEmail;
+    if (backupEmail !== undefined) allowedData.backupEmail = backupEmail;
+    if (notes !== undefined) allowedData.notes = notes;
+    if (lastEmailValidatedAt !== undefined) allowedData.lastEmailValidatedAt = lastEmailValidatedAt;
+    const carrier = await storage.updateCarrier(req.params.id, user.organizationId, allowedData);
+    if (!carrier) return res.status(404).json({ error: "Carrier not found" });
+    res.json(carrier);
+  });
+
+  app.delete("/api/carriers/:id", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!["admin", "director"].includes(user.role)) {
+      return res.status(403).json({ error: "Admin/Director only" });
+    }
+    // Tenant isolation: verify carrier belongs to this org before deleting
+    const existing = await storage.getCarrier(req.params.id);
+    if (!existing || existing.orgId !== user.organizationId) {
+      return res.status(404).json({ error: "Carrier not found" });
+    }
+    const ok = await storage.deleteCarrier(req.params.id, user.organizationId);
+    if (!ok) return res.status(404).json({ error: "Carrier not found" });
+    res.json({ success: true });
+  });
+
+  // ── Carrier Excel Seed ─────────────────────────────────────────────────────
+
+  app.post("/api/admin/carriers/seed-from-excel", upload.single("file"), async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!ADMIN_ROLES.includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    try {
+      const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheetName = wb.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" }) as Record<string, unknown>[];
+
+      const headers = rows.length > 0 ? Object.keys(rows[0]).map(h => h.toLowerCase().trim()) : [];
+
+      function findCol(keywords: string[]): string | null {
+        for (const kw of keywords) {
+          const idx = headers.findIndex(h => h.includes(kw));
+          if (idx >= 0) return Object.keys(rows[0])[idx];
+        }
+        return null;
+      }
+
+      const nameCol = findCol(["carrier name", "name", "company"]);
+      const mcCol = findCol(["mc", "mc#", "mc number", "dot", "mc/dot"]);
+      const emailCol = findCol(["email", "primary email", "contact email"]);
+      const backupEmailCol = findCol(["backup email", "secondary email", "alt email"]);
+      const regionCol = findCol(["region", "regions", "state", "territory"]);
+      const equipCol = findCol(["equipment", "equip", "mode", "trailer type"]);
+      const tagsCol = findCol(["tags", "notes", "specialties"]);
+
+      let seeded = 0;
+      let skipped = 0;
+
+      // Pre-load existing carrier names for no-MC/DOT dedup (avoid duplicates on re-seed)
+      const existingCarriers = await storage.getCarriers(user.organizationId);
+      const existingNameSet = new Set(existingCarriers.map(c => c.name.toLowerCase().trim()));
+
+      for (const row of rows) {
+        const name = nameCol ? String(row[nameCol] ?? "").trim() : "";
+        if (!name) { skipped++; continue; }
+
+        const mcDot = mcCol ? String(row[mcCol] ?? "").trim() : null;
+        const primaryEmail = emailCol ? String(row[emailCol] ?? "").trim() || null : null;
+        const backupEmail = backupEmailCol ? String(row[backupEmailCol] ?? "").trim() || null : null;
+        const regions = regionCol
+          ? String(row[regionCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
+          : [];
+        const equipmentTypes = equipCol
+          ? String(row[equipCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
+          : [];
+        const tags = tagsCol
+          ? String(row[tagsCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
+          : [];
+
+        if (mcDot) {
+          // MC/DOT is the primary dedup key — upsert by MC/DOT
+          await storage.upsertCarrierByMcDot(user.organizationId, mcDot, {
+            name, mcDot, primaryEmail, backupEmail, regions, equipmentTypes, tags,
+          });
+          existingNameSet.add(name.toLowerCase());
+        } else {
+          // No MC/DOT: skip if a carrier with the same normalized name already exists in this org
+          if (existingNameSet.has(name.toLowerCase())) { skipped++; continue; }
+          await storage.createCarrier({
+            orgId: user.organizationId,
+            name, mcDot: null, primaryEmail, backupEmail, regions, equipmentTypes, tags,
+          });
+          existingNameSet.add(name.toLowerCase());
+        }
+        seeded++;
+      }
+
+      res.json({ seeded, skipped, total: rows.length });
+    } catch (err) {
+      console.error("[carrier-seed]", err);
+      res.status(500).json({ error: "Failed to parse Excel file", details: err?.message });
+    }
+  });
+
+  // ── Lane Outreach Config (client-readable, no flag gate) ──────────────────
+
+  app.get("/api/lane-outreach-config", requireAuth, async (_req, res) => {
+    res.json({
+      completionCarriersContacted: LANE_CONFIG.completionCarriersContacted,
+    });
+  });
+
+  // ── Recurring Lanes ────────────────────────────────────────────────────────
+
+  app.get("/api/recurring-lanes", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const flagOn = await isFeatureEnabled(user.organizationId);
+    if (!flagOn) return res.json([]);
+
+    // Admins/directors see all org lanes; others see lanes they own OR oversee
+    const isPortfolioRole = ADMIN_ROLES.includes(user.role);
+    const lanes = await storage.getRecurringLanes(user.organizationId, isPortfolioRole ? undefined : user.id);
+    res.json(lanes);
+  });
+
+  app.get("/api/recurring-lanes/:id", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const lane = await getLaneWithAccessCheck(req.params.id, user, res);
+    if (!lane) return;
+    res.json(lane);
+  });
+
+  app.patch("/api/recurring-lanes/:id", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    // Only directors/admins may update lane records (includes reassignment of owner/overseer)
+    if (!ADMIN_ROLES.includes(user.role)) {
+      return res.status(403).json({ error: "Director or Admin role required to update lane records" });
+    }
+    const lane = await storage.getRecurringLane(req.params.id);
+    if (!lane || lane.orgId !== user.organizationId) return res.status(404).json({ error: "Lane not found" });
+
+    // Strict allowlist — never allow orgId, id, timestamps, or system fields to be mutated
+    const LANE_MUTABLE_FIELDS = ["ownerUserId", "overseerUserId", "hasPreferredCarrierProgram"] as const;
+    const updates: Record<string, unknown> = {};
+    for (const field of LANE_MUTABLE_FIELDS) {
+      if (field in req.body) updates[field] = req.body[field];
+    }
+
+    // Validate reassigned user IDs belong to the same org — prevent cross-tenant assignment
+    if (updates.ownerUserId) {
+      const owner = await storage.getUser(updates.ownerUserId as string);
+      if (!owner || owner.organizationId !== user.organizationId) {
+        return res.status(403).json({ error: "Owner user not found in your organization" });
+      }
+    }
+    if (updates.overseerUserId) {
+      const overseer = await storage.getUser(updates.overseerUserId as string);
+      if (!overseer || overseer.organizationId !== user.organizationId) {
+        return res.status(403).json({ error: "Overseer user not found in your organization" });
+      }
+    }
+
+    // Auto-resolve lane when hasPreferredCarrierProgram is toggled true
+    const preferredProgramToggled = updates.hasPreferredCarrierProgram === true && !lane.resolvedAt;
+    if (preferredProgramToggled) {
+      const now = new Date().toISOString();
+      const snoozeUntil = new Date();
+      snoozeUntil.setDate(snoozeUntil.getDate() + LANE_CONFIG.snoozeAfterResolveDays);
+      updates.resolvedAt = now;
+      updates.snoozedUntil = snoozeUntil.toISOString().split("T")[0];
+    }
+
+    const updated = await storage.updateRecurringLane(req.params.id, updates);
+
+    // Resolve linked NBA cards so they leave users' dashboards
+    if (preferredProgramToggled) {
+      await storage.resolveNbaCardsForLane(req.params.id);
+    }
+
+    // Audit log: record any ownership reassignment
+    const ownerChanged = req.body.ownerUserId && req.body.ownerUserId !== lane.ownerUserId;
+    const overseerChanged = req.body.overseerUserId && req.body.overseerUserId !== lane.overseerUserId;
+    if (ownerChanged || overseerChanged) {
+      await storage.createCarrierOutreachLog({
+        orgId: user.organizationId,
+        laneId: req.params.id,
+        companyId: lane.companyId ?? null,
+        carrierIds: [],
+        carrierNames: [],
+        actorUserId: user.id,
+        ownerUserId: updated?.ownerUserId ?? null,
+        overseerUserId: updated?.overseerUserId ?? null,
+        outreachMode: "reassignment",
+        emailDrafts: [],
+      });
+    }
+
+    res.json(updated);
+  });
+
+  // Run the recurring lane engine + scoring on demand (admin/director)
+  app.post("/api/recurring-lanes/run-engine", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
+
+    try {
+      const result = await runRecurringLaneEngineForOrg(user.organizationId, storage);
+      await scoreAllEligibleLanes(user.organizationId, storage);
+      res.json({ ...result, message: "Engine + scoring complete" });
+    } catch (err) {
+      res.status(500).json({ error: err?.message ?? "Engine error" });
+    }
+  });
+
+  // ── Carrier Suggestions (AI-ranked) ───────────────────────────────────────
+
+  app.get("/api/lanes/:laneId/carrier-suggestions", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    if (!lane) return;
+
+    try {
+      const ranked = await rankCarriersForLane(lane, storage);
+      res.json({ carriers: ranked });
+    } catch (err) {
+      res.status(500).json({ error: err?.message });
+    }
+  });
+
+  // ── Draft Outreach Emails ──────────────────────────────────────────────────
+
+  app.post("/api/lanes/:laneId/draft-outreach-emails", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    if (!lane) return;
+
+    const { carrierIds, outreachMode = "lane_building" } = req.body;
+    let { carrierNames } = req.body as { carrierNames?: string[] };
+
+    // Allow carrierIds-only requests — derive names from carrier records server-side
+    if ((!Array.isArray(carrierNames) || carrierNames.length === 0) && Array.isArray(carrierIds) && carrierIds.length > 0) {
+      const fetched = await Promise.all(
+        (carrierIds as string[]).map(async (id) => {
+          if (!id) return null;
+          const c = await storage.getCarrier(id);
+          return c && c.orgId === user!.organizationId ? c.name : null;
+        })
+      );
+      if (fetched.some(n => n === null)) {
+        return res.status(400).json({ error: "One or more carrierIds not found in your organization" });
+      }
+      carrierNames = fetched as string[];
+    }
+
+    if (!Array.isArray(carrierNames) || carrierNames.length === 0) {
+      return res.status(400).json({ error: "carrierNames or carrierIds is required" });
+    }
+
+    try {
+      const { callAI } = await import("../aiHelpers");
+      const emails = await Promise.all(
+        carrierNames.map(async (name: string, idx: number) => {
+          const carrierId = Array.isArray(carrierIds) ? (carrierIds[idx] ?? null) : null;
+          let carrierDetails = "";
+          if (carrierId) {
+            const c = await storage.getCarrier(carrierId);
+            // Org-scope guard: never leak another org's carrier data
+            if (c && c.orgId === user!.organizationId) {
+              if (c.regions?.length) carrierDetails += ` They operate in: ${c.regions.join(", ")}.`;
+              if (c.equipmentTypes?.length) carrierDetails += ` Equipment: ${c.equipmentTypes.join(", ")}.`;
+              if (c.notes) carrierDetails += ` Notes: ${c.notes}.`;
+            }
+          }
+
+          const isKnown = !!carrierId;
+          const origin = `${lane.origin}${lane.originState ? ", " + lane.originState : ""}`;
+          const dest = `${lane.destination}${lane.destinationState ? ", " + lane.destinationState : ""}`;
+          const avgLoads = lane.avgLoadsPerWeek ?? "2–3";
+          const equipment = lane.equipmentType ?? "dry van";
+
+          const modeContext = outreachMode === "immediate_plus_lane"
+            ? `We also have an upcoming load on this corridor that needs coverage soon.`
+            : "";
+
+          const prompt = `
+You are a freight broker writing a professional lane-building outreach email to a carrier.
+
+Carrier name: ${name}
+Known carrier (has history with us): ${isKnown ? "Yes" : "No — new prospect"}${carrierDetails}
+
+Lane details:
+- Origin: ${origin}
+- Destination: ${dest}
+- Equipment: ${equipment}
+- Average volume: ${avgLoads} loads/week
+- This is a recurring corridor — we run freight on this lane consistently.
+${modeContext}
+
+Guidelines:
+- Emphasize recurring corridor opportunity and consistent weekly coverage, NOT just a single load.
+- Explicitly invite flexible responses: "If you don't have a truck this week but could next week, I'd still love to connect."
+- Keep it under 150 words.
+- Professional, friendly, not generic.
+- If this is a known carrier, reference the relationship briefly (we've worked together).
+- If new prospect, introduce Value Truck briefly.
+- Do NOT use placeholders like [Name] — address the carrier company directly.
+- Output ONLY the email body (no subject line, no sign-off).
+`.trim();
+
+          let body = "";
+          try {
+            body = await callAI(prompt);
+          } catch {
+            body = buildFallbackEmail(name, isKnown, origin, dest, equipment, String(avgLoads), outreachMode);
+          }
+
+          return {
+            carrierId,
+            carrierName: name,
+            subject: `Lane-Building Opportunity: ${origin} → ${dest} (${equipment})`,
+            body,
+            outreachMode,
+          };
+        })
+      );
+
+      res.json({ emails });
+    } catch (err) {
+      res.status(500).json({ error: err?.message ?? "Email drafting failed" });
+    }
+  });
+
+  // ── Carrier Interest / Bench ───────────────────────────────────────────────
+
+  app.get("/api/lanes/:laneId/carrier-bench", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    if (!lane) return;
+    const bench = await storage.getLaneCarrierBench(req.params.laneId);
+    res.json(bench);
+  });
+
+  app.post("/api/lanes/:laneId/carrier-interest", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    if (!lane) return;
+
+    const { carrierId, carrierName, interestStatus, notes, fitScore, fitReason, replySnippet } = req.body;
+    if (!carrierName) return res.status(400).json({ error: "carrierName required" });
+
+    // Verify carrierId (if provided) belongs to caller's org — prevent cross-org associations
+    if (carrierId) {
+      const carrier = await storage.getCarrier(carrierId);
+      if (!carrier || carrier.orgId !== user.organizationId) {
+        return res.status(403).json({ error: "Carrier not found in your organization" });
+      }
+    }
+
+    const record = await storage.upsertLaneCarrierInterest({
+      laneId: req.params.laneId,
+      carrierId: carrierId ?? null,
+      carrierName,
+      interestStatus: interestStatus ?? "needs_follow_up",
+      notes: notes ?? null,
+      fitScore: fitScore ?? null,
+      fitReason: fitReason ?? null,
+      replySnippet: replySnippet ?? null,
+      lastReplySnippet: replySnippet ?? null,
+    });
+
+    res.json(record);
+  });
+
+  // ── Reply Classification ───────────────────────────────────────────────────
+
+  app.post("/api/lanes/:laneId/classify-reply", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    if (!lane) return;
+
+    const { replyText, carrierId, carrierName, interestId } = req.body;
+    if (!replyText || !carrierName) return res.status(400).json({ error: "replyText and carrierName required" });
+
+    // Verify carrierId (if provided) belongs to caller's org — prevent cross-org data writes
+    if (carrierId) {
+      const carrier = await storage.getCarrier(carrierId);
+      if (!carrier || carrier.orgId !== user.organizationId) {
+        return res.status(403).json({ error: "Carrier not found in your organization" });
+      }
+    }
+
+    const VALID_STATUSES = ["available_now", "available_next_week", "future_interest", "not_fit", "needs_follow_up"];
+
+    function ruleFallback(text: string): string {
+      const lower = text.toLowerCase();
+      if (lower.includes("not interested") || lower.includes("pass") || lower.includes("no thanks")) return "not_fit";
+      if (lower.includes("no ") || lower.startsWith("no,") || lower === "no") return "not_fit";
+      if (lower.includes("next week") || lower.includes("following week")) return "available_next_week";
+      if (lower.includes("available") || lower.includes("can do") || lower.includes("yes")) return "available_now";
+      if (lower.includes("future") || lower.includes("later") || lower.includes("keep in mind")) return "future_interest";
+      return "needs_follow_up";
+    }
+
+    let classification: string = "needs_follow_up";
+    let confidence = "low";
+
+    try {
+      const { callAI } = await import("../aiHelpers");
+      const prompt = `
+Classify this carrier reply into one of these statuses:
+- available_now: carrier can cover loads immediately
+- available_next_week: carrier says they'll be available next week
+- future_interest: carrier is interested in future freight but not immediately available
+- not_fit: carrier declined or is not interested
+- needs_follow_up: unclear, needs more information or follow-up
+
+Carrier reply: "${replyText}"
+
+Respond with ONLY the status label (one of the 5 above), nothing else.
+`.trim();
+
+      const raw = (await callAI(prompt)).trim().toLowerCase().replace(/[^a-z_]/g, "");
+      if (VALID_STATUSES.includes(raw)) {
+        classification = raw;
+        confidence = "high";
+      } else {
+        // AI returned unrecognized text — fall back to rule-based heuristic
+        classification = ruleFallback(replyText);
+      }
+    } catch {
+      classification = ruleFallback(replyText);
+    }
+
+    // Upsert the interest record
+    const now = new Date().toISOString();
+    if (interestId) {
+      // Cross-record safety: verify the interest record belongs to this lane before updating
+      const existingInterest = await storage.getLaneCarrierInterestById(interestId);
+      if (!existingInterest || existingInterest.laneId !== req.params.laneId) {
+        return res.status(403).json({ error: "Interest record does not belong to this lane" });
+      }
+      await storage.updateLaneCarrierInterest(interestId, {
+        interestStatus: classification,
+        replySnippet: replyText.slice(0, 500),
+        lastReplySnippet: replyText.slice(0, 500),
+        classifiedAt: now,
+      });
+    } else {
+      await storage.upsertLaneCarrierInterest({
+        laneId: req.params.laneId,
+        carrierId: carrierId ?? null,
+        carrierName,
+        interestStatus: classification,
+        replySnippet: replyText.slice(0, 500),
+        lastReplySnippet: replyText.slice(0, 500),
+        classifiedAt: now,
+      });
+    }
+
+    res.json({ classification, confidence, replyText: replyText.slice(0, 500) });
+  });
+
+  // ── Follow-up Suggestions ─────────────────────────────────────────────────
+
+  app.get("/api/lanes/:laneId/followup-suggestions", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    if (!lane) return;
+
+    const bench = await storage.getLaneCarrierBench(req.params.laneId);
+    const logs = await storage.getCarrierOutreachLogs(req.params.laneId);
+
+    const suggestions: Array<{ type: string; priority: "high" | "medium" | "low"; message: string; carrierId?: string | null; carrierName?: string }> = [];
+    const now = new Date();
+
+    // 1. Follow up with "available_next_week" carriers whose window has arrived
+    const nextWeekCarriers = bench.filter(b => b.interestStatus === "available_next_week");
+    for (const c of nextWeekCarriers) {
+      const outreachDate = c.outreachSentAt ? new Date(c.outreachSentAt) : null;
+      const daysSinceOutreach = outreachDate ? Math.floor((now.getTime() - outreachDate.getTime()) / 86400000) : 8;
+      if (daysSinceOutreach >= 7) {
+        suggestions.push({
+          type: "follow_up_next_week",
+          priority: "high",
+          message: `${c.carrierName} said they'd be available next week — follow up now.`,
+          carrierId: c.carrierId,
+          carrierName: c.carrierName,
+        });
+      }
+    }
+
+    // 2. High-fit carriers with no reply
+    const noReplyHighFit = bench.filter(b =>
+      b.interestStatus === "needs_follow_up" && (b.fitScore ?? 0) >= 60 && b.outreachSentAt
+    );
+    for (const c of noReplyHighFit.slice(0, 3)) {
+      suggestions.push({
+        type: "no_reply_high_fit",
+        priority: "medium",
+        message: `${c.carrierName} (fit score ${c.fitScore}) hasn't replied — consider a follow-up call.`,
+        carrierId: c.carrierId,
+        carrierName: c.carrierName,
+      });
+    }
+
+    // 3. Repeated positive carriers — flag for preferred program
+    const positiveCarriers = bench.filter(b =>
+      b.interestStatus === "available_now" || b.interestStatus === "available_next_week"
+    );
+    for (const c of positiveCarriers) {
+      if ((c.fitScore ?? 0) >= 75) {
+        suggestions.push({
+          type: "preferred_program_candidate",
+          priority: "low",
+          message: `${c.carrierName} is a strong fit — consider adding them to the preferred carrier program for this lane.`,
+          carrierId: c.carrierId,
+          carrierName: c.carrierName,
+        });
+      }
+    }
+
+    // 4. If no outreach yet — nudge to start
+    if (logs.length === 0) {
+      suggestions.push({
+        type: "start_outreach",
+        priority: "high",
+        message: "No outreach sent yet — select carriers from the ranked list to begin.",
+      });
+    }
+
+    try {
+      const { callAI } = await import("../aiHelpers");
+      const origin = `${lane.origin}${lane.originState ? ", " + lane.originState : ""}`;
+      const dest = `${lane.destination}${lane.destinationState ? ", " + lane.destinationState : ""}`;
+      const benchSummary = bench.map(b =>
+        `${b.carrierName}: ${b.interestStatus}${b.lastReplySnippet ? ` ("${b.lastReplySnippet.slice(0, 80)}")` : ""}`
+      ).join("\n");
+
+      const prompt = `
+You are a freight capacity advisor. Review the carrier bench status for this lane and suggest the top 2-3 next best actions in plain language (1 sentence each).
+
+Lane: ${origin} → ${dest} | Avg ${lane.avgLoadsPerWeek ?? "?"} loads/week
+Carrier bench:
+${benchSummary || "No carriers contacted yet."}
+
+Outreach logs: ${logs.length} total outreach sessions.
+
+Rules for suggestions:
+- Prioritize carriers who said "next week" if a week has passed.
+- Flag high-fit no-reply carriers for phone follow-up.
+- If 3+ carriers are interested, suggest closing the bench and flagging for preferred program review.
+- Keep suggestions under 20 words each.
+- Return as a JSON array: [{"type":"...", "priority":"high|medium|low", "message":"..."}]
+`.trim();
+
+      const raw = await callAI(prompt);
+      const jsonMatch = raw.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const aiSuggestions = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(aiSuggestions)) {
+          for (const s of aiSuggestions.slice(0, 3)) {
+            if (s.message) suggestions.unshift({ type: s.type ?? "ai", priority: s.priority ?? "medium", message: s.message });
+          }
+        }
+      }
+    } catch {
+      // AI enrichment is additive — rule-based suggestions still returned
+    }
+
+    res.json({ suggestions: suggestions.slice(0, 6) });
+  });
+
+  // ── Outreach Log & Card Completion ────────────────────────────────────────
+
+  app.post("/api/lanes/:laneId/outreach-log", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    if (!lane) return;
+
+    const { carrierIds, carrierNames, outreachMode, emailDrafts, ownerUserId, overseerUserId, capturedEmails } = req.body;
+    if (!Array.isArray(carrierNames) || carrierNames.length === 0) {
+      return res.status(400).json({ error: "carrierNames required" });
+    }
+
+    // Persist ad-hoc captured emails back to carrier catalog (org-scoped)
+    if (capturedEmails && typeof capturedEmails === "object") {
+      for (let i = 0; i < carrierNames.length; i++) {
+        const cId = carrierIds?.[i] ?? null;
+        const key = cId ?? carrierNames[i];
+        const email = typeof capturedEmails[key] === "string" ? (capturedEmails[key] as string).trim() : null;
+        if (email && cId) {
+          // Only persist if carrier belongs to this org (updateCarrier enforces org constraint)
+          await storage.updateCarrier(cId, user.organizationId, { primaryEmail: email }).catch(() => {/* non-fatal */});
+        }
+      }
+    }
+
+    // Validate every non-null carrierId belongs to the caller's org before writing
+    if (Array.isArray(carrierIds)) {
+      for (const cId of carrierIds) {
+        if (!cId) continue;
+        const c = await storage.getCarrier(cId);
+        if (!c || c.orgId !== user.organizationId) {
+          return res.status(403).json({ error: `Carrier ${cId} not found in your organization` });
+        }
+      }
+    }
+
+    const log = await storage.createCarrierOutreachLog({
+      orgId: user.organizationId,
+      laneId: req.params.laneId,
+      companyId: lane.companyId ?? null,
+      carrierIds: carrierIds ?? carrierNames.map(() => null),
+      carrierNames,
+      actorUserId: user.id,
+      ownerUserId: ownerUserId ?? lane.ownerUserId ?? null,
+      overseerUserId: overseerUserId ?? lane.overseerUserId ?? null,
+      outreachMode: outreachMode ?? "lane_building",
+      emailDrafts: emailDrafts ?? [],
+    });
+
+    // First upsert bench entries so the count reflects real distinct carriers contacted
+    const now = new Date().toISOString();
+    for (let i = 0; i < carrierNames.length; i++) {
+      const cId = carrierIds?.[i] ?? null;
+      await storage.upsertLaneCarrierInterest({
+        laneId: req.params.laneId,
+        carrierId: cId,
+        carrierName: carrierNames[i],
+        interestStatus: "needs_follow_up",
+        outreachSentAt: now,
+      });
+    }
+
+    // Count distinct carriers in the bench that have been contacted.
+    // Deduplicate: prefer carrierId when set; fall back to normalized carrierName.
+    // This prevents inflated counts if the same carrier appears under different
+    // carrierId / name-only entries for the same lane.
+    const updatedBench = await storage.getLaneCarrierBench(req.params.laneId);
+    const contactedKeys = new Set<string>();
+    for (const b of updatedBench) {
+      if (!b.outreachSentAt) continue;
+      contactedKeys.add(b.carrierId ?? b.carrierName.toLowerCase().trim());
+    }
+    const newCount = contactedKeys.size;
+    await storage.updateRecurringLane(req.params.laneId, { carriersContactedCount: newCount });
+
+    // Check if completion threshold reached (from shared LANE_CONFIG)
+    const THRESHOLD = LANE_CONFIG.completionCarriersContacted;
+    let resolved = false;
+    if (newCount >= THRESHOLD) {
+      const resolveNow = new Date().toISOString();
+      const snoozeUntil = new Date();
+      snoozeUntil.setDate(snoozeUntil.getDate() + LANE_CONFIG.snoozeAfterResolveDays);
+      await storage.updateRecurringLane(req.params.laneId, {
+        resolvedAt: resolveNow,
+        snoozedUntil: snoozeUntil.toISOString().split("T")[0],
+      });
+      // Resolve all active NBA cards tied to this lane so they leave the dashboard
+      await storage.resolveNbaCardsForLane(req.params.laneId);
+      resolved = true;
+    }
+
+    res.json({ log, carriersContactedCount: newCount, resolved });
+  });
+
+  app.get("/api/lanes/:laneId/outreach-log", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    if (!lane) return;
+    const logs = await storage.getCarrierOutreachLogs(req.params.laneId);
+    res.json(logs);
+  });
+}
+
+// ── Fallback email generator ───────────────────────────────────────────────
+
+function buildFallbackEmail(
+  name: string,
+  isKnown: boolean,
+  origin: string,
+  dest: string,
+  equipment: string,
+  avgLoads: string,
+  mode: string,
+): string {
+  const intro = isKnown
+    ? `We've worked together before and value our relationship.`
+    : `Value Truck is a freight brokerage focused on building strong carrier partnerships.`;
+
+  const modeNote = mode === "immediate_plus_lane"
+    ? ` We also have an immediate load available on this corridor right now.`
+    : "";
+
+  return `Hi ${name} team,
+
+${intro} We're reaching out about a recurring lane we run consistently: ${origin} → ${dest} (${equipment}), averaging ${avgLoads} loads per week.
+
+We're building our carrier bench for this corridor and would love to connect about ongoing coverage.${modeNote}
+
+If you don't have capacity this week, no worries — I'd still like to keep you in mind for future freight on this lane. When works for a quick call?`;
+}

@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -32,7 +32,15 @@ const SALES_ROLES = ["admin", "director", "national_account_manager", "account_m
 
 const PROSPECTS_ROLES = ["admin", "sales", "sales_director"];
 
-const navItems = [
+type NavItem = {
+  title: string;
+  url: string;
+  icon: LucideIcon;
+  roles?: string[];
+  badge?: number;
+};
+
+const navItems: NavItem[] = [
   { title: "Dashboard",         url: "/",                 icon: LayoutGrid    },
   { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     roles: PROSPECTS_ROLES },
   { title: "Customers",         url: "/customers",        icon: Network,       roles: SALES_ROLES },
@@ -57,20 +65,20 @@ const navItems = [
   },
 ];
 
-const pipelineItems = [
-  { title: "RFP & Awards",       url: "/rfp-awards",         icon: Trophy,    roles: undefined },
-  { title: "RFP Calendar",       url: "/rfp-calendar",       icon: Calendar,  roles: undefined },
+const pipelineItems: NavItem[] = [
+  { title: "RFP & Awards",       url: "/rfp-awards",         icon: Trophy    },
+  { title: "RFP Calendar",       url: "/rfp-calendar",       icon: Calendar  },
   { title: "Rep Scorecard",      url: "/rep-scorecard",      icon: Medal,     roles: ["admin", "director", "national_account_manager", "sales_director"] },
   { title: "LM Check-In Log",   url: "/lm-checkin-history", icon: History,   roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
 ];
 
-const laneToolItems = [
-  { title: "Lane Research",       url: "/research-tasks",      icon: ClipboardList, roles: undefined },
-  { title: "RFP Lane Search",     url: "/rfp-lane-search",     icon: MapPin,        roles: undefined },
-  { title: "Carrier Lane Search", url: "/carrier-lane-search", icon: Truck,         roles: undefined },
+const laneToolItems: NavItem[] = [
+  { title: "Lane Research",       url: "/research-tasks",      icon: ClipboardList },
+  { title: "RFP Lane Search",     url: "/rfp-lane-search",     icon: MapPin        },
+  { title: "Carrier Lane Search", url: "/carrier-lane-search", icon: Truck         },
 ];
 
-const toolItems = [
+const toolItems: NavItem[] = [
   { title: "Resources", url: "/tools",    icon: Wrench        },
   { title: "Training",  url: "/training", icon: GraduationCap },
 ];
@@ -98,7 +106,7 @@ function NotificationBadge({ count }: { count: number }) {
   );
 }
 
-function NavLink({ item, isActive, badge }: { item: { title: string; url: string; icon: React.ElementType }; isActive: boolean; badge?: number }) {
+function NavLink({ item, isActive, badge }: { item: NavItem; isActive: boolean; badge?: number }) {
   const Icon = item.icon;
   return (
     <SidebarMenuItem>
@@ -230,7 +238,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems
-                .filter(item => !('roles' in item) || (user?.role && (item as any).roles.includes(user.role)))
+                .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
                 .map(item => (
                   <NavLink
                     key={item.title}
@@ -295,6 +303,16 @@ export function AppSidebar() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {(user?.role === "admin" || user?.role === "director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/carriers"}>
+                      <Link href="/admin/carriers" data-testid="link-admin-carriers">
+                        <Truck className="h-4 w-4" />
+                        <span>Carrier Catalog</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild isActive={location === "/financials"}>
                     <Link href="/financials" data-testid="link-financials">

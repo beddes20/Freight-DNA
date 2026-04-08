@@ -1104,6 +1104,7 @@ export const nbaCards = pgTable("nba_cards", {
   linkedCommitmentId: varchar("linked_commitment_id"),
   linkedTouchpointId: varchar("linked_touchpoint_id"),
   linkedTaskId: varchar("linked_task_id"),
+  linkedLaneId: varchar("linked_lane_id"),
   outcomeLinkedAt: text("outcome_linked_at"),
   outcomeTypeLinked: text("outcome_type_linked"),
   createdAt: text("created_at").notNull(),
@@ -1137,3 +1138,130 @@ export const forcedFocus = pgTable("forced_focus", {
 export const insertForcedFocusSchema = createInsertSchema(forcedFocus).omit({ id: true });
 export type InsertForcedFocus = z.infer<typeof insertForcedFocusSchema>;
 export type ForcedFocus = typeof forcedFocus.$inferSelect;
+
+// ─── Lane Carrier Outreach v1 ─────────────────────────────────────────────────
+
+/**
+ * Carrier catalog — source of truth after one-time Excel seed.
+ * orgId scoped so each org maintains its own carrier rolodex.
+ */
+export const carriers = pgTable("carriers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  mcDot: text("mc_dot"),
+  regions: text("regions").array().default(sql`'{}'::text[]`),
+  equipmentTypes: text("equipment_types").array().default(sql`'{}'::text[]`),
+  tags: text("tags").array().default(sql`'{}'::text[]`),
+  primaryEmail: text("primary_email"),
+  backupEmail: text("backup_email"),
+  lastEmailValidatedAt: text("last_email_validated_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertCarrierSchema = createInsertSchema(carriers).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertCarrier = z.infer<typeof insertCarrierSchema>;
+export type Carrier = typeof carriers.$inferSelect;
+
+/**
+ * Recurring lanes identified by the capacity engine.
+ * One record per unique origin+destination+equipment+account combination per org.
+ */
+export const recurringLanes = pgTable("recurring_lanes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  companyName: text("company_name"),
+  origin: text("origin").notNull(),
+  originState: text("origin_state"),
+  destination: text("destination").notNull(),
+  destinationState: text("destination_state"),
+  equipmentType: text("equipment_type"),
+  avgLoadsPerWeek: decimal("avg_loads_per_week", { precision: 6, scale: 2 }),
+  weeksActive: integer("weeks_active").default(0),
+  lookbackWeeks: integer("lookback_weeks").default(4),
+  hasPreferredCarrierProgram: boolean("has_preferred_carrier_program").default(false),
+  ownerUserId: varchar("owner_user_id").references(() => users.id, { onDelete: "set null" }),
+  overseerUserId: varchar("overseer_user_id").references(() => users.id, { onDelete: "set null" }),
+  laneScore: integer("lane_score"),
+  laneScoreFactors: jsonb("lane_score_factors"),
+  eligibilityConfidence: text("eligibility_confidence").notNull().default("medium"), // "high" | "medium" | "borderline"
+  lastScoredAt: text("last_scored_at"),
+  isEligible: boolean("is_eligible").default(false).notNull(),
+  snoozedUntil: text("snoozed_until"),
+  carriersContactedCount: integer("carriers_contacted_count").default(0),
+  resolvedAt: text("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertRecurringLaneSchema = createInsertSchema(recurringLanes).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertRecurringLane = z.infer<typeof insertRecurringLaneSchema>;
+export type RecurringLane = typeof recurringLanes.$inferSelect;
+
+/**
+ * Carrier bench per lane — tracks interest status and reply context for each
+ * carrier that has been evaluated or contacted for a recurring lane.
+ */
+export const laneCarrierInterest = pgTable("lane_carrier_interest", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  laneId: varchar("lane_id").notNull().references(() => recurringLanes.id, { onDelete: "cascade" }),
+  carrierId: varchar("carrier_id").references(() => carriers.id, { onDelete: "set null" }),
+  carrierName: text("carrier_name").notNull(),
+  interestStatus: text("interest_status").notNull().default("needs_follow_up"),
+  // available_now | available_next_week | future_interest | not_fit | needs_follow_up
+  replySnippet: text("reply_snippet"),
+  lastReplySnippet: text("last_reply_snippet"),
+  classifiedAt: text("classified_at"),
+  notes: text("notes"),
+  fitScore: integer("fit_score"),
+  fitReason: text("fit_reason"),
+  outreachSentAt: text("outreach_sent_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("lane_carrier_interest_lane_carrier").on(table.laneId, table.carrierId),
+]);
+export const insertLaneCarrierInterestSchema = createInsertSchema(laneCarrierInterest).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertLaneCarrierInterest = z.infer<typeof insertLaneCarrierInterestSchema>;
+export type LaneCarrierInterest = typeof laneCarrierInterest.$inferSelect;
+
+/**
+ * Outreach activity log — every time a user contacts carriers for a lane.
+ */
+export const carrierOutreachLogs = pgTable("carrier_outreach_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id),
+  laneId: varchar("lane_id").notNull().references(() => recurringLanes.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  carrierIds: text("carrier_ids").array().notNull().default(sql`'{}'::text[]`),
+  carrierNames: text("carrier_names").array().notNull().default(sql`'{}'::text[]`),
+  actorUserId: varchar("actor_user_id").notNull().references(() => users.id),
+  ownerUserId: varchar("owner_user_id").references(() => users.id),
+  overseerUserId: varchar("overseer_user_id").references(() => users.id),
+  outreachMode: text("outreach_mode").notNull().default("lane_building"),
+  // lane_building | immediate_plus_lane
+  emailDrafts: jsonb("email_drafts").default([]),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+});
+export const insertCarrierOutreachLogSchema = createInsertSchema(carrierOutreachLogs).omit({ id: true, timestamp: true });
+export type InsertCarrierOutreachLog = z.infer<typeof insertCarrierOutreachLogSchema>;
+export type CarrierOutreachLog = typeof carrierOutreachLogs.$inferSelect;
+
+/**
+ * Feature flags — org-level key/value toggle for feature gating.
+ * lane_carrier_outreach_v1: true/false
+ */
+export const featureFlags = pgTable("feature_flags", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  flagKey: text("flag_key").notNull(),
+  enabled: boolean("enabled").notNull().default(false),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  updatedById: varchar("updated_by_id").references(() => users.id),
+}, (table) => [
+  uniqueIndex("feature_flags_org_key").on(table.orgId, table.flagKey),
+]);
+export const insertFeatureFlagSchema = createInsertSchema(featureFlags).omit({ id: true, updatedAt: true });
+export type InsertFeatureFlag = z.infer<typeof insertFeatureFlagSchema>;
+export type FeatureFlag = typeof featureFlags.$inferSelect;

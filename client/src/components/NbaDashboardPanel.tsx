@@ -40,10 +40,11 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
     onError: () => toast({ title: "Engine run failed", variant: "destructive" }),
   });
 
-  // Hard cap at 5 — server enforces this, but double-check client-side too
+  // Portfolio roles (admin/director) see all cards from the server; others are capped at 5
+  const isPortfolioRole = ["admin", "director"].includes(userRole);
   const visible = cards
     .filter(c => !dismissed.has(c.id) && !actioned.has(c.id))
-    .slice(0, 5);
+    .slice(0, isPortfolioRole ? 200 : 5);
 
   // During initial load show a skeleton so the panel doesn't flash in/out.
   if (isLoading) {

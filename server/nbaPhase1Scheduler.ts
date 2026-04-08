@@ -7,11 +7,16 @@
  *   2. Supersedes stale generated/visible cards for that company
  *   3. Writes a new visible card to nba_cards
  *   4. Auto-expires cards older than 14 days that remain unactioned
+ *
+ * Separately, per-lane × owner cards from generateLaneCapacityCards() are
+ * deduped by (laneId, userId) with a 30-day window and written with linkedLaneId set.
  */
 
 import cron from "node-cron";
 import { storage } from "./storage";
 import { runPhase1EngineForOrg } from "./nbaPhase1Engine";
+import { runRecurringLaneEngineForOrg } from "./recurringLaneCapacityEngine";
+import { scoreAllEligibleLanes } from "./laneScoringService";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -21,13 +26,11 @@ function log(msg: string) {
 async function runNbaPhase1ForAllOrgs(): Promise<void> {
   log("Starting nightly NBA Phase 1 engine run…");
   try {
-    // Get all active orgs (exclude valubuaz by convention)
     const EXCLUDED_ORG_ID = "da3ed822"; // valubuaz — always excluded from org engine runs
     const orgs = await storage.getOrganizations?.() ?? [];
     const activeOrgs = orgs.filter((o: any) => o.id && !o.id.startsWith(EXCLUDED_ORG_ID));
 
     if (activeOrgs.length === 0) {
-      // Fallback: try the known org directly in development
       log("No orgs found via getOrganizations — trying direct run for known org…");
       return;
     }
@@ -38,20 +41,29 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
     for (const org of activeOrgs) {
       log(`Processing org ${org.id}…`);
       try {
-        // First expire old cards for this org
         await storage.processExpiredNbaCards(org.id);
 
-        const results = await runPhase1EngineForOrg(org.id, storage);
+        // Refresh recurring lane data and scores before card generation
+        try {
+          const { upserted } = await runRecurringLaneEngineForOrg(org.id, storage);
+          if (upserted > 0) {
+            await scoreAllEligibleLanes(org.id, storage);
+            log(`Org ${org.id}: lane engine upserted ${upserted} lanes, scored eligible`);
+          }
+        } catch (laneErr: any) {
+          log(`Org ${org.id}: lane engine warning (non-fatal): ${laneErr?.message ?? laneErr}`);
+        }
+
+        const engineOutput = await runPhase1EngineForOrg(org.id, storage);
         const now = new Date().toISOString();
 
-        for (const { userId, result } of results) {
+        // ── Per-company winner cards ─────────────────────────────────────────
+        for (const { userId, result } of engineOutput.companyResults) {
           if (!result.winner) { totalSkipped++; continue; }
 
-          // Dedup: skip if same company + same rule already has a card in last 14 days
           const existing = await storage.getRecentNbaCardByType(result.companyId, result.winner.ruleType, 14);
           if (existing) { totalSkipped++; continue; }
 
-          // Supersede any prior visible/generated card for this company with a DIFFERENT rule type
           await storage.supersedePreviousNbaCards(result.companyId, result.winner.ruleType);
 
           await storage.createNbaCard({
@@ -63,7 +75,7 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
             outcomeType: result.winner.outcomeType,
             confidence: result.winner.confidence,
             signalCount: result.winner.signalCount,
-            signalSummary: result.winner.signalSummary as any,
+            signalSummary: result.winner.signalSummary as string[],
             whyThisNow: result.winner.whyThisNow,
             suggestedAction: result.winner.suggestedAction,
             expectedOutcome: result.winner.expectedOutcome,
@@ -75,6 +87,36 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
             createdAt: now,
             contactId: result.winner.contactId,
             linkedTaskId: result.winner.linkedTaskId,
+          });
+          totalGenerated++;
+        }
+
+        // ── Per-lane × owner cards (recurring_lane_capacity) ─────────────────
+        for (const spec of engineOutput.laneCapacitySpecs) {
+          // Dedup: skip if this (laneId, userId) already has a card within 30 days
+          const existingLane = await storage.getRecentNbaCardByLane(spec.laneId, spec.userId, 30);
+          if (existingLane) { totalSkipped++; continue; }
+
+          await storage.createNbaCard({
+            orgId: org.id,
+            userId: spec.userId,
+            companyId: spec.companyId,
+            companyName: spec.companyName,
+            ruleType: spec.candidate.ruleType,
+            outcomeType: spec.candidate.outcomeType,
+            confidence: spec.candidate.confidence,
+            signalCount: spec.candidate.signalCount,
+            signalSummary: spec.candidate.signalSummary as string[],
+            whyThisNow: spec.candidate.whyThisNow,
+            suggestedAction: spec.candidate.suggestedAction,
+            expectedOutcome: spec.candidate.expectedOutcome,
+            growthLever: spec.candidate.growthLever,
+            relationshipMove: spec.candidate.relationshipMove,
+            accountTier: spec.candidate.accountTier,
+            urgencyScore: spec.candidate.urgencyScore,
+            status: "visible",
+            createdAt: now,
+            linkedLaneId: spec.laneId,
           });
           totalGenerated++;
         }
@@ -92,7 +134,6 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
 }
 
 export function initNbaPhase1Scheduler(): void {
-  // Run nightly at 3:00 AM
   cron.schedule("0 3 * * *", runNbaPhase1ForAllOrgs, { timezone: "America/Chicago" });
   log("NBA Phase 1 nightly scheduler registered (3:00 AM CT)");
 }

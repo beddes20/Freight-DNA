@@ -22,7 +22,7 @@
  */
 
 import type { IStorage } from "./storage";
-import type { Company, Contact, Touchpoint, Task, FinancialUpload, MarketShareEntry, Award, Rfp } from "../shared/schema";
+import type { Company, Contact, Touchpoint, Task, FinancialUpload, MarketShareEntry, Award, Rfp, RecurringLane } from "../shared/schema";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -33,7 +33,8 @@ export type Phase1RuleType =
   | "overdue_next_action"
   | "spot_to_contract"
   | "rfp_coverage_gap"
-  | "stalled_award_lanes";
+  | "stalled_award_lanes"
+  | "recurring_lane_capacity";
 
 export type Phase1OutcomeType = "protect" | "execute" | "grow" | "deepen";
 
@@ -49,9 +50,10 @@ export interface CardCandidate {
   growthLever?: string;
   relationshipMove?: string;
   accountTier: "A" | "B" | null;
-  urgencyScore: number;          // days since signal threshold exceeded
+  urgencyScore: number;          // days since signal threshold exceeded; for lane cards = laneScore
   contactId?: string;            // if rule is tied to a specific contact
   linkedTaskId?: string;         // for R5
+  linkedLaneId?: string;         // for R12 recurring_lane_capacity
 }
 
 export interface CompanyEvalResult {
@@ -59,6 +61,15 @@ export interface CompanyEvalResult {
   companyName: string;
   winner: CardCandidate | null;           // the one card to show
   superseded: CardCandidate[];            // all others (stored for diagnostics)
+}
+
+/** Emitted by the lane-capacity sub-engine — one entry per eligible lane × owner */
+export interface LaneCapacityCardSpec {
+  userId: string;
+  companyId: string;
+  companyName: string;
+  laneId: string;
+  candidate: CardCandidate;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -633,6 +644,115 @@ function evalR11(s: Phase1Signals): CardCandidate | null {
   };
 }
 
+// ── R12: Recurring Lane Capacity ─────────────────────────────────────────────
+
+/**
+ * Build a single CardCandidate for ONE specific recurring lane.
+ * Used by generateLaneCapacityCards (one card per lane × owner user).
+ */
+function buildLaneCapacityCandidate(
+  company: Company,
+  lane: RecurringLane,
+  allEligibleCount: number,
+): CardCandidate {
+  const origin = `${lane.origin}${lane.originState ? ", " + lane.originState : ""}`;
+  const dest = `${lane.destination}${lane.destinationState ? ", " + lane.destinationState : ""}`;
+  const avgLoads = lane.avgLoadsPerWeek ?? "2+";
+  const tier = accountTier(company);
+  const confidence: "high" | "medium" = lane.eligibilityConfidence === "high" ? "high" : "medium";
+
+  return {
+    ruleType: "recurring_lane_capacity",
+    outcomeType: "execute",
+    confidence,
+    signalCount: allEligibleCount,
+    signalSummary: [
+      `${origin} → ${dest} (${lane.equipmentType ?? "any equipment"})`,
+      `Avg ${avgLoads} loads/week · ${lane.weeksActive ?? 0}/${lane.lookbackWeeks ?? 4} weeks active`,
+      `Lane score: ${lane.laneScore ?? "unscored"} · Confidence: ${lane.eligibilityConfidence}`,
+    ],
+    whyThisNow: `${company.name} is running freight on ${origin} → ${dest} averaging ${avgLoads} loads/week. No preferred carrier is locked in — building a bench now protects capacity and margin.`,
+    suggestedAction: `Lock In Capacity on ${origin} → ${dest}: rank carriers, draft outreach emails, and build a bench for this recurring lane.`,
+    expectedOutcome: "Secure committed carrier capacity on a high-frequency lane, reduce spot-rate exposure, and build toward a preferred-carrier program.",
+    growthLever: "lane_capacity",
+    relationshipMove: "Operational credibility — reliable capacity = trusted broker",
+    accountTier: tier,
+    // urgencyScore = laneScore so high-scoring lanes surface first in the panel
+    urgencyScore: lane.laneScore ?? 0,
+    linkedLaneId: lane.id,
+  };
+}
+
+/**
+ * Generate one LaneCapacityCardSpec per eligible lane × owner user.
+ * Called separately from per-company evaluation so each lane gets its own card.
+ * Dedup key: laneId (not companyId), so multiple lanes per company each fire.
+ */
+export function generateLaneCapacityCards(
+  allCompanies: Company[],
+  recurringLanes: RecurringLane[],
+  flagEnabled: boolean,
+): LaneCapacityCardSpec[] {
+  if (!flagEnabled) return [];
+
+  const companyMap = new Map(allCompanies.map(c => [c.id, c]));
+  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  const eligible = recurringLanes.filter(l => {
+    // Permanently excluded if preferred program is set
+    if (l.hasPreferredCarrierProgram) return false;
+    // Eligible when not currently snoozed (resolvedAt is kept as historical marker only —
+    // lanes re-enter evaluation automatically once snoozedUntil expires)
+    return !l.snoozedUntil || l.snoozedUntil <= today;
+  });
+
+  const specs: LaneCapacityCardSpec[] = [];
+
+  // Group by companyId to get allEligibleCount per company
+  const byCompany = new Map<string, RecurringLane[]>();
+  for (const lane of eligible) {
+    if (!lane.companyId) continue;
+    const arr = byCompany.get(lane.companyId) ?? [];
+    arr.push(lane);
+    byCompany.set(lane.companyId, arr);
+  }
+
+  for (const [companyId, lanes] of byCompany) {
+    const company = companyMap.get(companyId);
+    if (!company || !company.assignedTo) continue;
+
+    for (const lane of lanes) {
+      const ownerUserId = lane.ownerUserId ?? company.assignedTo;
+      const candidate = buildLaneCapacityCandidate(company, lane, lanes.length);
+      // Emit one card per lane, assigned to the owner user only.
+      // The overseer is visible via lane.overseerUserId in the outreach panel
+      // so directors/admins still have full context without duplicate cards.
+      specs.push({
+        userId: ownerUserId,
+        companyId,
+        companyName: company.name,
+        laneId: lane.id,
+        candidate,
+      });
+    }
+  }
+
+  return specs;
+}
+
+/**
+ * @deprecated R12 is no longer evaluated at the per-company level.
+ * Lane capacity cards are now generated via generateLaneCapacityCards().
+ * This stub is kept to avoid breaking the evaluateCompany function signature.
+ */
+function evalR12LaneCapacity(
+  company: Company,
+  companyLanes: RecurringLane[],
+  flagEnabled: boolean,
+): CardCandidate | null {
+  // No longer generates cards from this path — handled by generateLaneCapacityCards()
+  return null;
+}
+
 // ── Per-company evaluation ────────────────────────────────────────────────────
 
 /**
@@ -648,6 +768,8 @@ export async function evaluateCompany(
   allAwards: Award[],
   openRfpCompanyIds: Set<string>,
   allRfps: Rfp[] = [],
+  companyLanesMap?: Map<string, RecurringLane[]>,
+  laneFeatureEnabled?: boolean,
 ): Promise<CompanyEvalResult> {
   const signals = await gatherPhase1Signals(company, orgId, userId, storage, uploads, allAwards);
 
@@ -667,6 +789,11 @@ export async function evaluateCompany(
   const r7 = evalR7(signals);                   if (r7) candidates.push(r7);
   const r9 = evalR9(signals, companyRfps);      if (r9) candidates.push(r9);
   const r11 = evalR11(signals);                 if (r11) candidates.push(r11);
+
+  // R12: Recurring Lane Capacity
+  const companyLanes = companyLanesMap?.get(company.id) ?? [];
+  const r12 = evalR12LaneCapacity(company, companyLanes, laneFeatureEnabled ?? false);
+  if (r12) candidates.push(r12);
 
   if (candidates.length === 0) {
     return { companyId: company.id, companyName: company.name, winner: null, superseded: [] };
@@ -691,17 +818,35 @@ export async function evaluateCompany(
  * Returns evaluation results per company (caller writes cards to DB).
  * Processes companies in controlled batches to avoid overwhelming the DB.
  */
+export interface Phase1EngineOutput {
+  /** One winner card per company/owner (all rules except R12) */
+  companyResults: Array<{ userId: string; result: CompanyEvalResult }>;
+  /** One card spec per eligible lane × owner user (R12 only) */
+  laneCapacitySpecs: LaneCapacityCardSpec[];
+}
+
 export async function runPhase1EngineForOrg(
   orgId: string,
   storage: IStorage,
-): Promise<Array<{ userId: string; result: CompanyEvalResult }>> {
+): Promise<Phase1EngineOutput> {
   // Fetch shared data once (expensive queries done once per org)
-  const [allCompanies, uploads, allAwards, allRfps] = await Promise.all([
+  const [allCompanies, uploads, allAwards, allRfps, recurringLanes, laneFeatureEnabled] = await Promise.all([
     storage.getCompanies(orgId),
     storage.getFinancialUploadsForOrg(orgId),
     storage.getAwards(),
     storage.getRfps(),
+    storage.getEligibleRecurringLanes(orgId).catch(() => []),
+    storage.getFeatureFlag(orgId, "lane_carrier_outreach_v1").catch(() => false),
   ]);
+
+  // Build companyId → RecurringLane[] map (passed to evaluateCompany but R12 is now a no-op there)
+  const companyLanesMap = new Map<string, RecurringLane[]>();
+  for (const lane of recurringLanes) {
+    if (!lane.companyId) continue;
+    const existing = companyLanesMap.get(lane.companyId) ?? [];
+    existing.push(lane);
+    companyLanesMap.set(lane.companyId, existing);
+  }
 
   // Build set of companyIds that have open RFPs (for R5 booster)
   const openRfpCompanyIds = new Set<string>(
@@ -716,10 +861,10 @@ export async function runPhase1EngineForOrg(
     return !!co;
   });
 
-  // Exclude unowned, archived, and valubuaz-org companies from engine evaluation.
+  // Exclude unowned, archived companies from engine evaluation
   const assigned = allCompanies.filter(c => c.assignedTo && c.organizationId === orgId && !c.archivedAt);
 
-  const results: Array<{ userId: string; result: CompanyEvalResult }> = [];
+  const companyResults: Array<{ userId: string; result: CompanyEvalResult }> = [];
 
   // Process in batches of 10 to avoid parallel query overload
   const BATCH_SIZE = 10;
@@ -736,11 +881,16 @@ export async function runPhase1EngineForOrg(
           orgAwards,
           openRfpCompanyIds,
           allRfps,
+          companyLanesMap,
+          laneFeatureEnabled,
         ).then(result => ({ userId: company.assignedTo!, result }))
       )
     );
-    results.push(...batchResults);
+    companyResults.push(...batchResults);
   }
 
-  return results;
+  // R12: generate one card per eligible lane × owner user (separate from company-level cards)
+  const laneCapacitySpecs = generateLaneCapacityCards(allCompanies, recurringLanes, laneFeatureEnabled);
+
+  return { companyResults, laneCapacitySpecs };
 }
