@@ -506,6 +506,7 @@ export interface IStorage {
   createCarrier(data: InsertCarrier): Promise<Carrier>;
   updateCarrier(id: string, orgId: string, data: Partial<Omit<InsertCarrier, 'orgId'>>): Promise<Carrier | undefined>;
   deleteCarrier(id: string, orgId: string): Promise<boolean>;
+  bulkDeleteCarriers(ids: string[], orgId: string): Promise<number>;
   upsertCarrierByMcDot(orgId: string, mcDot: string, data: Omit<InsertCarrier, 'orgId'>): Promise<Carrier>;
 
   // Lane Carrier Outreach v1 — Recurring Lanes
@@ -3180,6 +3181,12 @@ export class DatabaseStorage implements IStorage {
   async deleteCarrier(id: string, orgId: string): Promise<boolean> {
     const result = await db.delete(carriers).where(and(eq(carriers.id, id), eq(carriers.orgId, orgId)));
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async bulkDeleteCarriers(ids: string[], orgId: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await db.delete(carriers).where(and(inArray(carriers.id, ids), eq(carriers.orgId, orgId)));
+    return result.rowCount ?? 0;
   }
 
   async upsertCarrierByMcDot(orgId: string, mcDot: string, data: Omit<InsertCarrier, 'orgId'>): Promise<Carrier> {

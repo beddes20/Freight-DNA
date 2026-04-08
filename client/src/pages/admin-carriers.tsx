@@ -6,7 +6,7 @@
  *   - Browse / search carrier list
  *   - Add single carrier via form
  *   - Bulk seed from Excel upload
- *   - Edit / delete carriers
+ *   - Edit / delete / bulk-delete carriers
  *   - Run recurring lane engine + scoring
  *   - Toggle lane_carrier_outreach_v1 feature flag
  */
@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -49,9 +50,6 @@ import {
   ToggleLeft,
   ToggleRight,
   Search,
-  MapPin,
-  Mail,
-  ChevronRight,
 } from "lucide-react";
 
 interface Carrier {
@@ -120,10 +118,11 @@ export default function AdminCarriers() {
   const [editTarget, setEditTarget] = useState<Carrier | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Carrier | null>(null);
   const [form, setForm] = useState<CarrierFormData>(EMPTY_FORM);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
-  // Only enable queries once the user is resolved AND confirmed admin/director
   const isAdmin = !!user && ADMIN_ROLES.includes(user.role);
 
   const { data: carriers = [], isLoading } = useQuery<Carrier[]>({
@@ -169,6 +168,18 @@ export default function AdminCarriers() {
       toast({ title: "Carrier deleted" });
     },
     onError: () => toast({ title: "Failed to delete carrier", variant: "destructive" }),
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      apiRequest("DELETE", "/api/carriers", { ids }).then(r => r.json()) as Promise<{ deleted: number }>,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/carriers"] });
+      setSelected(new Set());
+      setShowBulkConfirm(false);
+      toast({ title: `${data.deleted} carrier${data.deleted !== 1 ? "s" : ""} deleted` });
+    },
+    onError: () => toast({ title: "Bulk delete failed", variant: "destructive" }),
   });
 
   const seedMutation = useMutation({
@@ -230,6 +241,33 @@ export default function AdminCarriers() {
     (c.primaryEmail ?? "").toLowerCase().includes(search.toLowerCase())
   );
 
+  const allFilteredSelected = filtered.length > 0 && filtered.every(c => selected.has(c.id));
+  const someFilteredSelected = filtered.some(c => selected.has(c.id));
+
+  function toggleAll() {
+    if (allFilteredSelected) {
+      setSelected(prev => {
+        const next = new Set(prev);
+        filtered.forEach(c => next.delete(c.id));
+        return next;
+      });
+    } else {
+      setSelected(prev => {
+        const next = new Set(prev);
+        filtered.forEach(c => next.add(c.id));
+        return next;
+      });
+    }
+  }
+
+  function toggleOne(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) seedMutation.mutate(file);
@@ -244,6 +282,7 @@ export default function AdminCarriers() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   const flagEnabled = flagData?.enabled ?? false;
+  const selectedCount = selected.size;
 
   return (
     <div className="min-h-screen bg-[hsl(var(--background))] text-[hsl(var(--foreground))] p-6">
@@ -336,16 +375,46 @@ export default function AdminCarriers() {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="relative mb-4 max-w-sm">
-        <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
-        <Input
-          placeholder="Search carriers…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="pl-8 text-sm h-9"
-          data-testid="input-search-carriers"
-        />
+      {/* Search + bulk action bar */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Search carriers…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-8 text-sm h-9"
+            data-testid="input-search-carriers"
+          />
+        </div>
+
+        {selectedCount > 0 && (
+          <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-1.5">
+            <span className="text-xs text-red-300 font-medium">
+              {selectedCount} selected
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowBulkConfirm(true)}
+              disabled={bulkDeleteMutation.isPending}
+              className="h-6 px-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
+              data-testid="btn-bulk-delete"
+            >
+              {bulkDeleteMutation.isPending
+                ? <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                : <Trash2 className="w-3 h-3 mr-1" />}
+              Delete Selected
+            </Button>
+            <button
+              onClick={() => setSelected(new Set())}
+              className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
+              data-testid="btn-clear-selection"
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -363,6 +432,18 @@ export default function AdminCarriers() {
           <table className="w-full text-sm">
             <thead className="bg-white/4 border-b border-white/8">
               <tr>
+                <th className="px-4 py-2.5 w-8">
+                  <Checkbox
+                    checked={allFilteredSelected}
+                    onCheckedChange={toggleAll}
+                    className="border-white/20"
+                    data-testid="checkbox-select-all"
+                    aria-label="Select all"
+                    ref={(el) => {
+                      if (el) (el as HTMLButtonElement).dataset.indeterminate = String(someFilteredSelected && !allFilteredSelected);
+                    }}
+                  />
+                </th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Carrier</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden sm:table-cell">Regions</th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden md:table-cell">Equipment</th>
@@ -371,49 +452,64 @@ export default function AdminCarriers() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(c => (
-                <tr key={c.id} className="border-b border-white/4 hover:bg-white/2 transition-colors" data-testid={`carrier-row-${c.id}`}>
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-white">{c.name}</div>
-                    {c.mcDot && <div className="text-[10px] text-muted-foreground">MC/DOT: {c.mcDot}</div>}
-                  </td>
-                  <td className="px-4 py-3 hidden sm:table-cell">
-                    <div className="flex flex-wrap gap-1">
-                      {(c.regions ?? []).slice(0, 3).map(r => (
-                        <Badge key={r} variant="outline" className="text-[9px] py-0 px-1 border-white/15 text-white/50">{r}</Badge>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 hidden md:table-cell">
-                    <div className="flex flex-wrap gap-1">
-                      {(c.equipmentTypes ?? []).slice(0, 2).map(e => (
-                        <Badge key={e} variant="outline" className="text-[9px] py-0 px-1 border-amber-500/25 text-amber-300/70">{e}</Badge>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 hidden lg:table-cell text-xs text-muted-foreground">
-                    {c.primaryEmail ?? "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1 justify-end">
-                      <button
-                        onClick={() => openEdit(c)}
-                        className="p-1.5 rounded hover:bg-white/8 text-muted-foreground hover:text-white transition-colors"
-                        data-testid={`btn-edit-carrier-${c.id}`}
-                      >
-                        <Pencil className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => setDeleteTarget(c)}
-                        className="p-1.5 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors"
-                        data-testid={`btn-delete-carrier-${c.id}`}
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map(c => {
+                const isChecked = selected.has(c.id);
+                return (
+                  <tr
+                    key={c.id}
+                    className={`border-b border-white/4 transition-colors ${isChecked ? "bg-amber-500/5" : "hover:bg-white/2"}`}
+                    data-testid={`carrier-row-${c.id}`}
+                  >
+                    <td className="px-4 py-3">
+                      <Checkbox
+                        checked={isChecked}
+                        onCheckedChange={() => toggleOne(c.id)}
+                        className="border-white/20"
+                        data-testid={`checkbox-carrier-${c.id}`}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-white">{c.name}</div>
+                      {c.mcDot && <div className="text-[10px] text-muted-foreground">MC/DOT: {c.mcDot}</div>}
+                    </td>
+                    <td className="px-4 py-3 hidden sm:table-cell">
+                      <div className="flex flex-wrap gap-1">
+                        {(c.regions ?? []).slice(0, 3).map(r => (
+                          <Badge key={r} variant="outline" className="text-[9px] py-0 px-1 border-white/15 text-white/50">{r}</Badge>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 hidden md:table-cell">
+                      <div className="flex flex-wrap gap-1">
+                        {(c.equipmentTypes ?? []).slice(0, 2).map(e => (
+                          <Badge key={e} variant="outline" className="text-[9px] py-0 px-1 border-amber-500/25 text-amber-300/70">{e}</Badge>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 hidden lg:table-cell text-xs text-muted-foreground">
+                      {c.primaryEmail ?? "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1 justify-end">
+                        <button
+                          onClick={() => openEdit(c)}
+                          className="p-1.5 rounded hover:bg-white/8 text-muted-foreground hover:text-white transition-colors"
+                          data-testid={`btn-edit-carrier-${c.id}`}
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget(c)}
+                          className="p-1.5 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors"
+                          data-testid={`btn-delete-carrier-${c.id}`}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -424,6 +520,7 @@ export default function AdminCarriers() {
         <p className="text-xs text-muted-foreground mt-3">
           {filtered.length} of {carriers.length} carrier{carriers.length !== 1 ? "s" : ""}
           {search && ` matching "${search}"`}
+          {selectedCount > 0 && ` · ${selectedCount} selected`}
         </p>
       )}
 
@@ -445,7 +542,7 @@ export default function AdminCarriers() {
         </Dialog>
       )}
 
-      {/* Delete confirmation */}
+      {/* Single delete confirmation */}
       {deleteTarget && (
         <AlertDialog open onOpenChange={v => { if (!v) setDeleteTarget(null); }}>
           <AlertDialogContent className="bg-slate-900 border-white/10 text-white">
@@ -469,6 +566,32 @@ export default function AdminCarriers() {
           </AlertDialogContent>
         </AlertDialog>
       )}
+
+      {/* Bulk delete confirmation */}
+      <AlertDialog open={showBulkConfirm} onOpenChange={v => { if (!v) setShowBulkConfirm(false); }}>
+        <AlertDialogContent className="bg-slate-900 border-white/10 text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-sm">Delete {selectedCount} Carrier{selectedCount !== 1 ? "s" : ""}?</AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-muted-foreground">
+              This will permanently remove {selectedCount} carrier{selectedCount !== 1 ? "s" : ""} from the catalog.
+              Any outreach history linked to these carriers will also be removed. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="h-8 text-xs" onClick={() => setShowBulkConfirm(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => bulkDeleteMutation.mutate(Array.from(selected))}
+              className="h-8 text-xs bg-red-500 hover:bg-red-400"
+              disabled={bulkDeleteMutation.isPending}
+              data-testid="btn-confirm-bulk-delete"
+            >
+              {bulkDeleteMutation.isPending
+                ? <Loader2 className="w-3 h-3 animate-spin" />
+                : `Delete ${selectedCount}`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

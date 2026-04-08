@@ -153,6 +153,18 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     res.json({ success: true });
   });
 
+  // ── Bulk delete carriers ───────────────────────────────────────────────────
+  app.delete("/api/carriers", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!ADMIN_ROLES.includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
+    const ids = req.body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids array required" });
+    if (ids.some(id => typeof id !== "string")) return res.status(400).json({ error: "All ids must be strings" });
+    const deleted = await storage.bulkDeleteCarriers(ids, user.organizationId);
+    res.json({ deleted });
+  });
+
   // ── Carrier Excel Seed ─────────────────────────────────────────────────────
 
   app.post("/api/admin/carriers/seed-from-excel", upload.single("file"), async (req, res) => {
