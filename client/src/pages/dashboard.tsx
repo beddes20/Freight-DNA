@@ -981,15 +981,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      <HeroBanner
-        currentUser={currentUser as SafeUser}
-        briefingData={briefingData}
-        isDirector={isDirector}
-        onOpenLayoutPanel={() => setLayoutPanelOpen(true)}
-        isLeadership={canAssignForcedFocus}
-        onAssignForcedFocus={() => { setForcedFocusEditId(undefined); setForcedFocusPrefill(undefined); setForcedFocusDialogOpen(true); }}
-      />
-
       {/* ── Forced Focus banner (Leadership Priority) — above NBA for reps/LMs ─── */}
       {!isDirector && !isNam && (
         <PortletErrorBoundary label="Leadership Priority">
@@ -1016,6 +1007,15 @@ export default function Dashboard() {
           <NbaDashboardPanel userRole={currentUser?.role ?? ""} isAdmin={isAdmin} />
         </PortletErrorBoundary>
       )}
+
+      <HeroBanner
+        currentUser={currentUser as SafeUser}
+        briefingData={briefingData}
+        isDirector={isDirector}
+        onOpenLayoutPanel={() => setLayoutPanelOpen(true)}
+        isLeadership={canAssignForcedFocus}
+        onAssignForcedFocus={() => { setForcedFocusEditId(undefined); setForcedFocusPrefill(undefined); setForcedFocusDialogOpen(true); }}
+      />
 
       {/* ── "Do This First" — NBA priority actions (top of dashboard) ─────── */}
       {!isLmRole && (
