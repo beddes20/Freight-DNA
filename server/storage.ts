@@ -507,6 +507,9 @@ export interface IStorage {
   updateCarrier(id: string, orgId: string, data: Partial<Omit<InsertCarrier, 'orgId'>>): Promise<Carrier | undefined>;
   deleteCarrier(id: string, orgId: string): Promise<boolean>;
   bulkDeleteCarriers(ids: string[], orgId: string): Promise<number>;
+  getCarrierByPayeeCode(orgId: string, payeeCode: string): Promise<Carrier | undefined>;
+  getCarrierByMcNumber(orgId: string, mcNumber: string): Promise<Carrier | undefined>;
+  getCarrierByNormalizedName(orgId: string, normalizedName: string): Promise<Carrier | undefined>;
   upsertCarrierByMcDot(orgId: string, mcDot: string, data: Omit<InsertCarrier, 'orgId'>): Promise<Carrier>;
 
   // Lane Carrier Outreach v1 — Recurring Lanes
@@ -3187,6 +3190,29 @@ export class DatabaseStorage implements IStorage {
     if (ids.length === 0) return 0;
     const result = await db.delete(carriers).where(and(inArray(carriers.id, ids), eq(carriers.orgId, orgId)));
     return result.rowCount ?? 0;
+  }
+
+  async getCarrierByPayeeCode(orgId: string, payeeCode: string): Promise<Carrier | undefined> {
+    const [row] = await db.select().from(carriers)
+      .where(and(eq(carriers.orgId, orgId), eq(carriers.payeeCode, payeeCode)))
+      .limit(1);
+    return row;
+  }
+
+  async getCarrierByMcNumber(orgId: string, mcNumber: string): Promise<Carrier | undefined> {
+    const normalized = mcNumber.trim().toUpperCase();
+    const [row] = await db.select().from(carriers)
+      .where(and(eq(carriers.orgId, orgId), sql`upper(trim(mc_dot)) = ${normalized}`))
+      .limit(1);
+    return row;
+  }
+
+  async getCarrierByNormalizedName(orgId: string, normalizedName: string): Promise<Carrier | undefined> {
+    const upper = normalizedName.trim().toUpperCase().replace(/\s+/g, " ");
+    const [row] = await db.select().from(carriers)
+      .where(and(eq(carriers.orgId, orgId), sql`upper(regexp_replace(trim(name), '\\s+', ' ', 'g')) = ${upper}`))
+      .limit(1);
+    return row;
   }
 
   async upsertCarrierByMcDot(orgId: string, mcDot: string, data: Omit<InsertCarrier, 'orgId'>): Promise<Carrier> {

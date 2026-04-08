@@ -1237,6 +1237,13 @@ export async function runMigrations() {
     // 5. Add linked_lane_id to nba_cards
     await clientLCO.query(`ALTER TABLE nba_cards ADD COLUMN IF NOT EXISTS linked_lane_id varchar`);
 
+    // 6. Carrier master-data columns (payee_code, phone, city, state)
+    await clientLCO.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS payee_code text`);
+    await clientLCO.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS phone text`);
+    await clientLCO.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS city text`);
+    await clientLCO.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS state text`);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_carriers_payee ON carriers(org_id, payee_code) WHERE payee_code IS NOT NULL`);
+
     console.log("[migrations] lane carrier outreach tables ensured");
   } catch (err) {
     console.error("[migrations] lane carrier outreach tables error:", err);

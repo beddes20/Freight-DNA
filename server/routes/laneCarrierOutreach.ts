@@ -178,12 +178,18 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const sheetName = wb.SheetNames[0];
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" }) as Record<string, unknown>[];
 
-      if (rows.length === 0) return res.json({ seeded: 0, skipped: 0, total: 0 });
+      if (rows.length === 0) return res.json({ mode: "empty", total: 0 });
 
       const originalKeys = Object.keys(rows[0]);
       const headers = originalKeys.map(h => h.toLowerCase().trim());
 
+      /** Case-insensitive substring column finder. First keyword wins. */
       function findCol(keywords: string[]): string | null {
+        for (const kw of keywords) {
+          // Prefer exact match first, then substring
+          const exact = headers.findIndex(h => h === kw);
+          if (exact >= 0) return originalKeys[exact];
+        }
         for (const kw of keywords) {
           const idx = headers.findIndex(h => h.includes(kw));
           if (idx >= 0) return originalKeys[idx];
@@ -191,120 +197,266 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         return null;
       }
 
-      // ── Detect file type ────────────────────────────────────────────────────
-      // Financial/TMS exports have customer + shipper/consignee/origin columns alongside
-      // a plain "Carrier" column (one load per row). Carrier directory files have one
-      // row per carrier with name, MC#, email, region, etc.
-      const isFinancialFile =
-        headers.some(h => h === "customer" || h.startsWith("customer")) &&
-        (headers.some(h => h.includes("shipper") || h.includes("consignee") || h.includes("origin city") || h.includes("dest")) ||
-         headers.some(h => h === "carrier" || h === "carrier name" || h.startsWith("carrier")));
+      function str(row: Record<string, unknown>, col: string | null): string {
+        return col ? String(row[col] ?? "").trim() : "";
+      }
 
-      // ── Column resolution ───────────────────────────────────────────────────
-      // For financial files: use the plain "Carrier" / "Carrier Name" column.
-      // For directory files: also accept "Name" or "Company" as the carrier name.
-      const nameCol = isFinancialFile
-        ? findCol(["carrier name", "carrier"])
-        : findCol(["carrier name", "name", "company", "carrier"]);
+      // ── File type detection ──────────────────────────────────────────────────
+      //
+      // FINANCIAL/TMS file:  has a "payee code" (or "payee") column alongside
+      //   load-level context (customer + shipper/consignee/origin/dest).
+      //   One row per load — many rows per carrier.
+      //
+      // CARRIER ROLODEX file: has a "payee code" column alongside carrier
+      //   master-data columns (MC number, phone number, contact email) but
+      //   NOT load-level customer/shipper columns.
+      //
+      // LEGACY DIRECTORY file: no payee code — name/company based, one row per carrier.
 
-      const mcCol   = findCol(["mc number", "mc#", "mc/dot", "dot number", "dot#", "dot", "mc"]);
-      const emailCol       = findCol(["primary email", "contact email", "email"]);
-      const backupEmailCol = findCol(["backup email", "secondary email", "alt email"]);
-      const equipCol = findCol(["equipment type", "equip type", "trailer type", "equipment", "equip", "service type", "mode", "load mode"]);
+      const hasPayeeCol     = headers.some(h => h === "payee code" || h === "payee");
+      const hasCustomerCol  = headers.some(h => h === "customer" || h.startsWith("customer "));
+      const hasLoadContext  = headers.some(h =>
+        h.includes("shipper") || h.includes("consignee") ||
+        h.includes("origin city") || h.includes("dest city") || h.includes("delivery date"));
+      const hasRolodexCols  = headers.some(h => h === "phone number" || h === "contact email" || h === "mc number");
 
-      // Avoid pulling shipper/consignee state columns as carrier regions in financial files.
-      // Only use region/territory columns that are genuinely about the carrier's coverage area.
-      const regionCol = isFinancialFile
-        ? findCol(["region", "territory"])
-        : findCol(["region", "regions", "territory", "state"]);
+      type FileMode = "financial" | "rolodex" | "directory";
+      let mode: FileMode;
+      if (hasPayeeCol && (hasCustomerCol || hasLoadContext)) {
+        mode = "financial";
+      } else if (hasPayeeCol && hasRolodexCols) {
+        mode = "rolodex";
+      } else {
+        mode = "directory";
+      }
 
-      const tagsCol = findCol(["tags", "specialties", "notes"]);
+      const orgId = user.organizationId;
 
-      // ── Pre-load existing carriers for dedup ────────────────────────────────
-      const existingCarriers = await storage.getCarriers(user.organizationId);
-      const existingNameSet = new Set(existingCarriers.map(c => c.name.toLowerCase().trim()));
+      // ════════════════════════════════════════════════════════════════════════
+      // MODE A — FINANCIAL / TMS FILE
+      // ════════════════════════════════════════════════════════════════════════
+      if (mode === "financial") {
+        const payeeCol = findCol(["payee code", "payee"]);
+        const nameCol  = findCol(["carrier name", "carrier", "payee name"]);
+        const equipCol = findCol(["equipment type", "equip type", "trailer type", "equipment", "equip", "service type", "mode", "load mode"]);
 
-      let seeded = 0;
-      let skipped = 0;
-
-      if (isFinancialFile) {
-        // ── Financial file path ─────────────────────────────────────────────
-        // Aggregate all rows by carrier name, collecting unique equipment types.
-        // One carrier may appear thousands of times across load rows.
-        const carrierMap = new Map<string, { equipTypes: Set<string> }>();
+        // Aggregate per payee code → collect name + equipment types across all rows
+        type FinAgg = { name: string; equipTypes: Set<string> };
+        const byPayee = new Map<string, FinAgg>();
+        let blankRows = 0;
 
         for (const row of rows) {
-          const name = nameCol ? String(row[nameCol] ?? "").trim() : "";
-          if (!name) { skipped++; continue; }
-          const key = name.toLowerCase();
-          if (!carrierMap.has(key)) carrierMap.set(key, { equipTypes: new Set() });
-          const equip = equipCol ? String(row[equipCol] ?? "").trim() : "";
-          if (equip) carrierMap.get(key)!.equipTypes.add(equip);
+          const payee = str(row, payeeCol);
+          if (!payee) { blankRows++; continue; }
+          const key = payee.toLowerCase();
+          if (!byPayee.has(key)) {
+            byPayee.set(key, { name: str(row, nameCol) || payee, equipTypes: new Set() });
+          }
+          const equip = str(row, equipCol);
+          if (equip) byPayee.get(key)!.equipTypes.add(equip);
         }
 
-        for (const [key, data] of carrierMap) {
-          // Use original-case name from first occurrence
-          const name = nameCol
-            ? String(rows.find(r => String(r[nameCol] ?? "").trim().toLowerCase() === key)?.[nameCol] ?? key).trim()
-            : key;
-          const equipmentTypes = Array.from(data.equipTypes);
+        let created = 0;
+        let alreadyExisted = 0;
 
-          if (existingNameSet.has(key)) {
-            // Already exists — skip (user can enrich later via the carrier edit UI)
-            skipped++;
+        for (const [payeeKey, agg] of byPayee) {
+          const existing = await storage.getCarrierByPayeeCode(orgId, payeeKey);
+          if (existing) { alreadyExisted++; continue; }
+
+          await storage.createCarrier({
+            orgId,
+            name: agg.name,
+            payeeCode: payeeKey,
+            mcDot: null, phone: null, city: null, state: null,
+            primaryEmail: null, backupEmail: null,
+            regions: [],
+            equipmentTypes: Array.from(agg.equipTypes),
+            tags: [],
+          });
+          created++;
+        }
+
+        return res.json({
+          mode: "financial",
+          total: rows.length,
+          blankRowsSkipped: blankRows,
+          uniqueCarriers: byPayee.size,
+          created,
+          alreadyExisted,
+        });
+      }
+
+      // ════════════════════════════════════════════════════════════════════════
+      // MODE B — CARRIER ROLODEX FILE
+      // ════════════════════════════════════════════════════════════════════════
+      if (mode === "rolodex") {
+        const payeeCol  = findCol(["payee code", "payee"]);
+        const nameCol   = findCol(["name", "legal name", "carrier name", "company name", "company"]);
+        const mcCol     = findCol(["mc number", "mc#", "mc num", "mc"]);
+        const phoneCol  = findCol(["phone number", "phone", "tel"]);
+        const emailCol  = findCol(["contact email", "email"]);
+        const cityCol   = findCol(["city"]);
+        const stateCol  = findCol(["state"]);
+
+        // Stats
+        let blankRows      = 0;
+        let matchedPayee   = 0;
+        let matchedMc      = 0;
+        let matchedName    = 0;
+        let created        = 0;
+        let upToDate       = 0;
+        const conflicts: string[] = [];
+
+        for (const row of rows) {
+          const payeeCode = str(row, payeeCol);
+          const rawName   = str(row, nameCol);
+
+          if (!payeeCode && !rawName) { blankRows++; continue; }
+
+          const mcNumber = str(row, mcCol);
+          const phone    = str(row, phoneCol) || null;
+          const email    = str(row, emailCol) || null;
+          const city     = str(row, cityCol)  || null;
+          const state    = str(row, stateCol) || null;
+
+          // ── Match priority ──────────────────────────────────────────────────
+          let existing = payeeCode
+            ? await storage.getCarrierByPayeeCode(orgId, payeeCode)
+            : undefined;
+          let matchHow = "payee";
+
+          if (!existing && mcNumber) {
+            existing = await storage.getCarrierByMcNumber(orgId, mcNumber);
+            matchHow = "mc";
+          }
+          if (!existing && rawName) {
+            existing = await storage.getCarrierByNormalizedName(orgId, rawName);
+            matchHow = "name";
+          }
+
+          // ── No match → create ───────────────────────────────────────────────
+          if (!existing) {
+            if (!rawName) { blankRows++; continue; }
+            await storage.createCarrier({
+              orgId,
+              name: rawName,
+              payeeCode: payeeCode || null,
+              mcDot: mcNumber || null,
+              phone, city, state,
+              primaryEmail: email,
+              backupEmail: null,
+              regions: [], equipmentTypes: [], tags: [],
+            });
+            created++;
             continue;
           }
-          await storage.createCarrier({
-            orgId: user.organizationId,
-            name, mcDot: null, primaryEmail: null, backupEmail: null,
-            regions: [], equipmentTypes, tags: [],
-          });
-          existingNameSet.add(key);
-          seeded++;
+
+          // ── Match found → enrich missing fields ─────────────────────────────
+          if (matchHow === "payee") matchedPayee++;
+          else if (matchHow === "mc") matchedMc++;
+          else matchedName++;
+
+          // MC number conflict detection
+          if (mcNumber && existing.mcDot && existing.mcDot.trim().toUpperCase() !== mcNumber.trim().toUpperCase()) {
+            conflicts.push(`${existing.name}: existing MC ${existing.mcDot} ≠ rolodex MC ${mcNumber}`);
+          }
+
+          // Prefer non-empty rolodex value; never overwrite existing non-empty with blank
+          const patch: Record<string, string | null> = {};
+          if (!existing.payeeCode && payeeCode)                   patch.payeeCode    = payeeCode;
+          if (!existing.mcDot    && mcNumber && !conflicts.find(c => c.startsWith(existing!.name))) patch.mcDot = mcNumber;
+          if (!existing.phone    && phone)                        patch.phone        = phone;
+          if (!existing.primaryEmail && email)                    patch.primaryEmail = email;
+          if (!existing.city     && city)                         patch.city         = city;
+          if (!existing.state    && state)                        patch.state        = state;
+
+          if (Object.keys(patch).length === 0) { upToDate++; continue; }
+          await storage.updateCarrier(existing.id, orgId, patch as any);
         }
-      } else {
-        // ── Carrier directory path ──────────────────────────────────────────
-        // One row per carrier; MC/DOT is the primary dedup key when present.
+
+        // ── Recurring-lane cross-reference ─────────────────────────────────────
+        // Carriers on recurring freight = carriers we discovered from the financial
+        // file (they have a payeeCode). Report how many of those now have contact info.
+        const allCarriers = await storage.getCarriers(orgId);
+        const recurringCarriers = allCarriers.filter(c => c.payeeCode); // financial-file sourced
+        const recurringEnriched = recurringCarriers.filter(c => c.primaryEmail || c.phone).length;
+        const recurringMissingContact = recurringCarriers.filter(c => !c.primaryEmail && !c.phone).length;
+
+        return res.json({
+          mode: "rolodex",
+          total: rows.length,
+          blankRowsSkipped: blankRows,
+          created,
+          matchedPayee,
+          matchedMc,
+          matchedName,
+          upToDate,
+          conflicts,
+          recurringLaneCarriers: recurringCarriers.length,
+          recurringEnrichedWithContact: recurringEnriched,
+          recurringMissingContact,
+        });
+      }
+
+      // ════════════════════════════════════════════════════════════════════════
+      // MODE C — LEGACY DIRECTORY FILE (no payee code column)
+      // ════════════════════════════════════════════════════════════════════════
+      {
+        const nameCol        = findCol(["carrier name", "name", "company", "carrier"]);
+        const mcCol          = findCol(["mc number", "mc#", "mc/dot", "dot number", "dot#", "dot", "mc"]);
+        const emailCol       = findCol(["primary email", "contact email", "email"]);
+        const backupEmailCol = findCol(["backup email", "secondary email", "alt email"]);
+        const phoneCol       = findCol(["phone number", "phone"]);
+        const cityCol        = findCol(["city"]);
+        const stateCol       = findCol(["state"]);
+        const equipCol       = findCol(["equipment type", "equip type", "trailer type", "equipment", "equip", "service type", "mode", "load mode"]);
+        const regionCol      = findCol(["region", "regions", "territory"]);
+        const tagsCol        = findCol(["tags", "specialties", "notes"]);
+
+        const existingCarriers = await storage.getCarriers(orgId);
+        const existingNameSet  = new Set(existingCarriers.map(c => c.name.toLowerCase().trim()));
+
+        let created = 0;
+        let skipped = 0;
+
         for (const row of rows) {
-          const name = nameCol ? String(row[nameCol] ?? "").trim() : "";
+          const name = str(row, nameCol);
           if (!name) { skipped++; continue; }
 
-          const mcDot = mcCol ? String(row[mcCol] ?? "").trim() || null : null;
-          const primaryEmail    = emailCol       ? String(row[emailCol]       ?? "").trim() || null : null;
-          const backupEmail     = backupEmailCol ? String(row[backupEmailCol] ?? "").trim() || null : null;
-          const regions = regionCol
-            ? String(row[regionCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
-            : [];
-          const equipmentTypes = equipCol
-            ? String(row[equipCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
-            : [];
-          const tags = tagsCol
-            ? String(row[tagsCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
-            : [];
+          const mcDot          = str(row, mcCol) || null;
+          const primaryEmail   = str(row, emailCol) || null;
+          const backupEmail    = str(row, backupEmailCol) || null;
+          const phone          = str(row, phoneCol) || null;
+          const city           = str(row, cityCol) || null;
+          const state          = str(row, stateCol) || null;
+          const regions        = regionCol ? str(row, regionCol).split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean) : [];
+          const equipmentTypes = equipCol  ? str(row, equipCol).split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)  : [];
+          const tags           = tagsCol   ? str(row, tagsCol).split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)   : [];
 
           if (mcDot) {
-            await storage.upsertCarrierByMcDot(user.organizationId, mcDot, {
-              name, mcDot, primaryEmail, backupEmail, regions, equipmentTypes, tags,
+            await storage.upsertCarrierByMcDot(orgId, mcDot, {
+              name, mcDot, phone, city, state, primaryEmail, backupEmail, regions, equipmentTypes, tags,
             });
             existingNameSet.add(name.toLowerCase());
+            created++;
           } else {
             if (existingNameSet.has(name.toLowerCase())) { skipped++; continue; }
             await storage.createCarrier({
-              orgId: user.organizationId,
-              name, mcDot: null, primaryEmail, backupEmail, regions, equipmentTypes, tags,
+              orgId, name, mcDot: null, phone, city, state,
+              primaryEmail, backupEmail, regions, equipmentTypes, tags,
             });
             existingNameSet.add(name.toLowerCase());
+            created++;
           }
-          seeded++;
         }
-      }
 
-      res.json({
-        seeded,
-        skipped,
-        total: rows.length,
-        mode: isFinancialFile ? "financial" : "directory",
-      });
+        return res.json({
+          mode: "directory",
+          total: rows.length,
+          created,
+          skipped,
+        });
+      }
     } catch (err) {
       console.error("[carrier-seed]", err);
       res.status(500).json({ error: "Failed to parse Excel file", details: (err as Error)?.message });

@@ -1,14 +1,10 @@
 /**
  * Admin — Carriers
  *
- * Manage the carrier rolodex for lane-carrier outreach.
- * Supports:
- *   - Browse / search carrier list
- *   - Add single carrier via form
- *   - Bulk seed from Excel upload
- *   - Edit / delete / bulk-delete carriers
- *   - Run recurring lane engine + scoring
- *   - Toggle lane_carrier_outreach_v1 feature flag
+ * Manages the carrier rolodex for lane-carrier outreach.
+ * Supports financial file import (creates carriers by Payee code),
+ * rolodex import (enriches carriers with MC#, phone, email, city/state),
+ * and legacy directory import (name-based, one row per carrier).
  */
 
 import { useState, useRef } from "react";
@@ -50,12 +46,19 @@ import {
   ToggleLeft,
   ToggleRight,
   Search,
+  Phone,
+  Mail,
+  MapPin,
 } from "lucide-react";
 
 interface Carrier {
   id: string;
   name: string;
+  payeeCode: string | null;
   mcDot: string | null;
+  phone: string | null;
+  city: string | null;
+  state: string | null;
   regions: string[];
   equipmentTypes: string[];
   tags: string[];
@@ -66,7 +69,11 @@ interface Carrier {
 
 interface CarrierFormData {
   name: string;
+  payeeCode: string;
   mcDot: string;
+  phone: string;
+  city: string;
+  state: string;
   primaryEmail: string;
   backupEmail: string;
   regions: string;
@@ -76,14 +83,18 @@ interface CarrierFormData {
 }
 
 const EMPTY_FORM: CarrierFormData = {
-  name: "", mcDot: "", primaryEmail: "", backupEmail: "",
-  regions: "", equipmentTypes: "", tags: "", notes: "",
+  name: "", payeeCode: "", mcDot: "", phone: "", city: "", state: "",
+  primaryEmail: "", backupEmail: "", regions: "", equipmentTypes: "", tags: "", notes: "",
 };
 
 function carrierToForm(c: Carrier): CarrierFormData {
   return {
     name: c.name,
+    payeeCode: c.payeeCode ?? "",
     mcDot: c.mcDot ?? "",
+    phone: c.phone ?? "",
+    city: c.city ?? "",
+    state: c.state ?? "",
     primaryEmail: c.primaryEmail ?? "",
     backupEmail: c.backupEmail ?? "",
     regions: (c.regions ?? []).join(", "),
@@ -96,7 +107,11 @@ function carrierToForm(c: Carrier): CarrierFormData {
 function formToPayload(f: CarrierFormData) {
   return {
     name: f.name.trim(),
+    payeeCode: f.payeeCode.trim() || null,
     mcDot: f.mcDot.trim() || null,
+    phone: f.phone.trim() || null,
+    city: f.city.trim() || null,
+    state: f.state.trim() || null,
     primaryEmail: f.primaryEmail.trim() || null,
     backupEmail: f.backupEmail.trim() || null,
     regions: f.regions.split(",").map(s => s.trim()).filter(Boolean),
@@ -107,6 +122,65 @@ function formToPayload(f: CarrierFormData) {
 }
 
 const ADMIN_ROLES = ["admin", "director"];
+
+// ── Seed response types ───────────────────────────────────────────────────────
+
+interface SeedResponseFinancial {
+  mode: "financial";
+  total: number;
+  blankRowsSkipped: number;
+  uniqueCarriers: number;
+  created: number;
+  alreadyExisted: number;
+}
+
+interface SeedResponseRolodex {
+  mode: "rolodex";
+  total: number;
+  blankRowsSkipped: number;
+  created: number;
+  matchedPayee: number;
+  matchedMc: number;
+  matchedName: number;
+  upToDate: number;
+  conflicts: string[];
+  recurringLaneCarriers: number;
+  recurringEnrichedWithContact: number;
+  recurringMissingContact: number;
+}
+
+interface SeedResponseDirectory {
+  mode: "directory";
+  total: number;
+  created: number;
+  skipped: number;
+}
+
+type SeedResponse = SeedResponseFinancial | SeedResponseRolodex | SeedResponseDirectory | { mode: "empty"; total: number };
+
+function seedToast(data: SeedResponse): { title: string; description: string } {
+  if (data.mode === "financial") {
+    return {
+      title: `${data.created} carrier${data.created !== 1 ? "s" : ""} created from freight file`,
+      description: `Scanned ${data.total.toLocaleString()} load rows → ${data.uniqueCarriers} unique Payee codes found. ${data.alreadyExisted} already in catalog. Upload your carrier rolodex next to enrich these with MC#, phone, and email.`,
+    };
+  }
+  if (data.mode === "rolodex") {
+    const enriched = data.matchedPayee + data.matchedMc + data.matchedName;
+    const conflictNote = data.conflicts.length > 0 ? ` · ${data.conflicts.length} MC# conflict${data.conflicts.length !== 1 ? "s" : ""} logged.` : "";
+    return {
+      title: `Rolodex import complete — ${enriched} enriched, ${data.created} new`,
+      description: `Matched by Payee: ${data.matchedPayee} · MC#: ${data.matchedMc} · Name: ${data.matchedName} · Already up-to-date: ${data.upToDate}${conflictNote}  Freight-file carriers: ${data.recurringEnrichedWithContact} have contact info, ${data.recurringMissingContact} still missing phone/email.`,
+    };
+  }
+  if (data.mode === "directory") {
+    return {
+      title: `${data.created} carrier${data.created !== 1 ? "s" : ""} imported`,
+      description: `${data.skipped} duplicate${data.skipped !== 1 ? "s" : ""} skipped out of ${data.total.toLocaleString()} rows.`,
+    };
+  }
+  return { title: "File was empty", description: "No rows found in the uploaded file." };
+}
 
 export default function AdminCarriers() {
   const { user } = useAuth();
@@ -120,8 +194,6 @@ export default function AdminCarriers() {
   const [form, setForm] = useState<CarrierFormData>(EMPTY_FORM);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
-
-  // ── Data ──────────────────────────────────────────────────────────────────
 
   const isAdmin = !!user && ADMIN_ROLES.includes(user.role);
 
@@ -138,8 +210,7 @@ export default function AdminCarriers() {
   // ── Mutations ─────────────────────────────────────────────────────────────
 
   const createMutation = useMutation({
-    mutationFn: (data: ReturnType<typeof formToPayload>) =>
-      apiRequest("POST", "/api/carriers", data),
+    mutationFn: (data: ReturnType<typeof formToPayload>) => apiRequest("POST", "/api/carriers", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/carriers"] });
       setShowAddDialog(false);
@@ -189,21 +260,16 @@ export default function AdminCarriers() {
       const res = await fetch("/api/admin/carriers/seed-from-excel", { method: "POST", body: fd });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? `Seed failed (${res.status})`);
+        throw new Error((body as { error?: string }).error ?? `Import failed (${res.status})`);
       }
-      return res.json() as Promise<{ seeded: number; skipped: number; total: number; mode?: string }>;
+      return res.json() as Promise<SeedResponse>;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/carriers"] });
-      const isFinancial = data.mode === "financial";
-      toast({
-        title: `${data.seeded} carrier${data.seeded !== 1 ? "s" : ""} added`,
-        description: isFinancial
-          ? `Extracted from ${data.total.toLocaleString()} load rows — ${data.skipped} duplicate${data.skipped !== 1 ? "s" : ""} skipped. You can enrich carriers with MC#, email, and regions from the carrier list below.`
-          : `${data.skipped} duplicate${data.skipped !== 1 ? "s" : ""} skipped out of ${data.total.toLocaleString()} rows.`,
-      });
+      const { title, description } = seedToast(data);
+      toast({ title, description });
     },
-    onError: (err: Error) => toast({ title: "Seed failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "Import failed", description: err.message, variant: "destructive" }),
   });
 
   const engineMutation = useMutation({
@@ -223,7 +289,6 @@ export default function AdminCarriers() {
     onError: () => toast({ title: "Failed to toggle flag", variant: "destructive" }),
   });
 
-  // Role guard — after all hooks
   if (user && !ADMIN_ROLES.includes(user.role)) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 py-24 text-center">
@@ -232,13 +297,15 @@ export default function AdminCarriers() {
     );
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Derived ───────────────────────────────────────────────────────────────
 
   const filtered = carriers.filter(c =>
     !search ||
     c.name.toLowerCase().includes(search.toLowerCase()) ||
+    (c.payeeCode ?? "").toLowerCase().includes(search.toLowerCase()) ||
     (c.mcDot ?? "").includes(search) ||
-    (c.primaryEmail ?? "").toLowerCase().includes(search.toLowerCase())
+    (c.primaryEmail ?? "").toLowerCase().includes(search.toLowerCase()) ||
+    (c.phone ?? "").includes(search)
   );
 
   const allFilteredSelected = filtered.length > 0 && filtered.every(c => selected.has(c.id));
@@ -246,26 +313,14 @@ export default function AdminCarriers() {
 
   function toggleAll() {
     if (allFilteredSelected) {
-      setSelected(prev => {
-        const next = new Set(prev);
-        filtered.forEach(c => next.delete(c.id));
-        return next;
-      });
+      setSelected(prev => { const n = new Set(prev); filtered.forEach(c => n.delete(c.id)); return n; });
     } else {
-      setSelected(prev => {
-        const next = new Set(prev);
-        filtered.forEach(c => next.add(c.id));
-        return next;
-      });
+      setSelected(prev => { const n = new Set(prev); filtered.forEach(c => n.add(c.id)); return n; });
     }
   }
 
   function toggleOne(id: string) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -274,30 +329,28 @@ export default function AdminCarriers() {
     e.target.value = "";
   }
 
-  function openEdit(c: Carrier) {
-    setEditTarget(c);
-    setForm(carrierToForm(c));
-  }
-
-  // ── Render ─────────────────────────────────────────────────────────────────
+  function openEdit(c: Carrier) { setEditTarget(c); setForm(carrierToForm(c)); }
 
   const flagEnabled = flagData?.enabled ?? false;
   const selectedCount = selected.size;
 
   return (
     <div className="min-h-screen bg-[hsl(var(--background))] text-[hsl(var(--foreground))] p-6">
+
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-amber-500/20 flex items-center justify-center">
             <Truck className="w-5 h-5 text-amber-400" />
           </div>
           <div>
             <h1 className="text-lg font-bold">Carrier Catalog</h1>
-            <p className="text-xs text-muted-foreground">Manage your carrier rolodex for lane capacity outreach</p>
+            <p className="text-xs text-muted-foreground">
+              Upload your <strong>freight file</strong> first to discover carriers, then upload your <strong>carrier rolodex</strong> to enrich them with MC#, phone, and email.
+            </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {/* Feature flag toggle */}
           <div className="flex items-center gap-2 border border-white/10 rounded-lg px-3 py-1.5">
             <span className="text-xs text-muted-foreground">Outreach Feature</span>
@@ -307,125 +360,60 @@ export default function AdminCarriers() {
               className={`transition-colors ${flagEnabled ? "text-emerald-400" : "text-white/30"}`}
               data-testid="feature-flag-toggle"
             >
-              {flagEnabled
-                ? <ToggleRight className="w-5 h-5" />
-                : <ToggleLeft className="w-5 h-5" />}
+              {flagEnabled ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
             </button>
           </div>
 
-          {/* Run engine */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => engineMutation.mutate()}
-            disabled={engineMutation.isPending}
-            className="text-xs"
-            data-testid="btn-run-engine"
-          >
+          <Button variant="outline" size="sm" onClick={() => engineMutation.mutate()} disabled={engineMutation.isPending} className="text-xs" data-testid="btn-run-engine">
             {engineMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <RefreshCw className="w-3 h-3 mr-1" />}
             Run Lane Engine
           </Button>
 
-          {/* Excel seed */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            className="hidden"
-            onChange={handleFileChange}
-            data-testid="file-input-seed"
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={seedMutation.isPending}
-            className="text-xs"
-            data-testid="btn-seed-excel"
-          >
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileChange} data-testid="file-input-seed" />
+          <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={seedMutation.isPending} className="text-xs" data-testid="btn-seed-excel">
             {seedMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Upload className="w-3 h-3 mr-1" />}
-            Seed from Excel
+            Import File
           </Button>
 
-          {/* Add carrier */}
           <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
             <DialogTrigger asChild>
-              <Button
-                size="sm"
-                onClick={() => setForm(EMPTY_FORM)}
-                className="text-xs bg-amber-500 hover:bg-amber-400 text-black"
-                data-testid="btn-add-carrier"
-              >
-                <Plus className="w-3 h-3 mr-1" />
-                Add Carrier
+              <Button size="sm" onClick={() => setForm(EMPTY_FORM)} className="text-xs bg-amber-500 hover:bg-amber-400 text-black" data-testid="btn-add-carrier">
+                <Plus className="w-3 h-3 mr-1" />Add Carrier
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-slate-900 border-white/10 text-white">
-              <DialogHeader>
-                <DialogTitle className="text-sm">Add Carrier</DialogTitle>
-              </DialogHeader>
-              <CarrierForm
-                form={form}
-                onChange={setForm}
-                onSubmit={() => createMutation.mutate(formToPayload(form))}
-                isPending={createMutation.isPending}
-              />
+            <DialogContent className="bg-slate-900 border-white/10 text-white max-w-lg">
+              <DialogHeader><DialogTitle className="text-sm">Add Carrier</DialogTitle></DialogHeader>
+              <CarrierForm form={form} onChange={setForm} onSubmit={() => createMutation.mutate(formToPayload(form))} isPending={createMutation.isPending} />
             </DialogContent>
           </Dialog>
         </div>
       </div>
 
-      {/* Search + bulk action bar */}
-      <div className="flex items-center gap-3 mb-4">
+      {/* Search + bulk bar */}
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         <div className="relative max-w-sm flex-1">
           <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
-          <Input
-            placeholder="Search carriers…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="pl-8 text-sm h-9"
-            data-testid="input-search-carriers"
-          />
+          <Input placeholder="Search carriers…" value={search} onChange={e => setSearch(e.target.value)} className="pl-8 text-sm h-9" data-testid="input-search-carriers" />
         </div>
 
         {selectedCount > 0 && (
           <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-1.5">
-            <span className="text-xs text-red-300 font-medium">
-              {selectedCount} selected
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setShowBulkConfirm(true)}
-              disabled={bulkDeleteMutation.isPending}
-              className="h-6 px-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
-              data-testid="btn-bulk-delete"
-            >
-              {bulkDeleteMutation.isPending
-                ? <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                : <Trash2 className="w-3 h-3 mr-1" />}
+            <span className="text-xs text-red-300 font-medium">{selectedCount} selected</span>
+            <Button size="sm" variant="ghost" onClick={() => setShowBulkConfirm(true)} disabled={bulkDeleteMutation.isPending} className="h-6 px-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10" data-testid="btn-bulk-delete">
+              {bulkDeleteMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Trash2 className="w-3 h-3 mr-1" />}
               Delete Selected
             </Button>
-            <button
-              onClick={() => setSelected(new Set())}
-              className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
-              data-testid="btn-clear-selection"
-            >
-              Clear
-            </button>
+            <button onClick={() => setSelected(new Set())} className="text-[10px] text-white/30 hover:text-white/60 transition-colors" data-testid="btn-clear-selection">Clear</button>
           </div>
         )}
       </div>
 
       {/* Table */}
       {isLoading ? (
-        <div className="flex items-center gap-2 text-muted-foreground text-sm py-8">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Loading carriers…
-        </div>
+        <div className="flex items-center gap-2 text-muted-foreground text-sm py-8"><Loader2 className="w-4 h-4 animate-spin" />Loading carriers…</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground text-sm">
-          {search ? "No carriers match your search" : "No carriers yet — add one or seed from Excel"}
+          {search ? "No carriers match your search" : "No carriers yet — import your freight file or add one manually"}
         </div>
       ) : (
         <div className="rounded-xl border border-white/8 overflow-hidden">
@@ -433,76 +421,68 @@ export default function AdminCarriers() {
             <thead className="bg-white/4 border-b border-white/8">
               <tr>
                 <th className="px-4 py-2.5 w-8">
-                  <Checkbox
-                    checked={allFilteredSelected}
-                    onCheckedChange={toggleAll}
-                    className="border-white/20"
-                    data-testid="checkbox-select-all"
-                    aria-label="Select all"
-                    ref={(el) => {
-                      if (el) (el as HTMLButtonElement).dataset.indeterminate = String(someFilteredSelected && !allFilteredSelected);
-                    }}
-                  />
+                  <Checkbox checked={allFilteredSelected} onCheckedChange={toggleAll} className="border-white/20" data-testid="checkbox-select-all" aria-label="Select all" />
                 </th>
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Carrier</th>
-                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden sm:table-cell">Regions</th>
-                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden md:table-cell">Equipment</th>
-                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden lg:table-cell">Email</th>
+                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden sm:table-cell">Contact</th>
+                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden md:table-cell">Location</th>
+                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden lg:table-cell">Equipment</th>
                 <th className="px-4 py-2.5 w-20" />
               </tr>
             </thead>
             <tbody>
               {filtered.map(c => {
                 const isChecked = selected.has(c.id);
+                const hasContact = c.primaryEmail || c.phone;
                 return (
-                  <tr
-                    key={c.id}
-                    className={`border-b border-white/4 transition-colors ${isChecked ? "bg-amber-500/5" : "hover:bg-white/2"}`}
-                    data-testid={`carrier-row-${c.id}`}
-                  >
+                  <tr key={c.id} className={`border-b border-white/4 transition-colors ${isChecked ? "bg-amber-500/5" : "hover:bg-white/2"}`} data-testid={`carrier-row-${c.id}`}>
                     <td className="px-4 py-3">
-                      <Checkbox
-                        checked={isChecked}
-                        onCheckedChange={() => toggleOne(c.id)}
-                        className="border-white/20"
-                        data-testid={`checkbox-carrier-${c.id}`}
-                      />
+                      <Checkbox checked={isChecked} onCheckedChange={() => toggleOne(c.id)} className="border-white/20" data-testid={`checkbox-carrier-${c.id}`} />
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-white">{c.name}</div>
-                      {c.mcDot && <div className="text-[10px] text-muted-foreground">MC/DOT: {c.mcDot}</div>}
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {c.payeeCode && <span className="text-[10px] text-amber-400/70">Payee: {c.payeeCode}</span>}
+                        {c.mcDot && <span className="text-[10px] text-muted-foreground">MC: {c.mcDot}</span>}
+                        {!hasContact && <span className="text-[10px] text-red-400/70">No contact</span>}
+                      </div>
                     </td>
                     <td className="px-4 py-3 hidden sm:table-cell">
-                      <div className="flex flex-wrap gap-1">
-                        {(c.regions ?? []).slice(0, 3).map(r => (
-                          <Badge key={r} variant="outline" className="text-[9px] py-0 px-1 border-white/15 text-white/50">{r}</Badge>
-                        ))}
+                      <div className="flex flex-col gap-0.5">
+                        {c.primaryEmail && (
+                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                            <Mail className="w-2.5 h-2.5 shrink-0" />{c.primaryEmail}
+                          </div>
+                        )}
+                        {c.phone && (
+                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                            <Phone className="w-2.5 h-2.5 shrink-0" />{c.phone}
+                          </div>
+                        )}
+                        {!c.primaryEmail && !c.phone && <span className="text-[10px] text-white/20">—</span>}
                       </div>
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell">
+                      {(c.city || c.state) ? (
+                        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <MapPin className="w-2.5 h-2.5 shrink-0" />
+                          {[c.city, c.state].filter(Boolean).join(", ")}
+                        </div>
+                      ) : <span className="text-[10px] text-white/20">—</span>}
+                    </td>
+                    <td className="px-4 py-3 hidden lg:table-cell">
                       <div className="flex flex-wrap gap-1">
                         {(c.equipmentTypes ?? []).slice(0, 2).map(e => (
                           <Badge key={e} variant="outline" className="text-[9px] py-0 px-1 border-amber-500/25 text-amber-300/70">{e}</Badge>
                         ))}
                       </div>
                     </td>
-                    <td className="px-4 py-3 hidden lg:table-cell text-xs text-muted-foreground">
-                      {c.primaryEmail ?? "—"}
-                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
-                        <button
-                          onClick={() => openEdit(c)}
-                          className="p-1.5 rounded hover:bg-white/8 text-muted-foreground hover:text-white transition-colors"
-                          data-testid={`btn-edit-carrier-${c.id}`}
-                        >
+                        <button onClick={() => openEdit(c)} className="p-1.5 rounded hover:bg-white/8 text-muted-foreground hover:text-white transition-colors" data-testid={`btn-edit-carrier-${c.id}`}>
                           <Pencil className="w-3 h-3" />
                         </button>
-                        <button
-                          onClick={() => setDeleteTarget(c)}
-                          className="p-1.5 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors"
-                          data-testid={`btn-delete-carrier-${c.id}`}
-                        >
+                        <button onClick={() => setDeleteTarget(c)} className="p-1.5 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors" data-testid={`btn-delete-carrier-${c.id}`}>
                           <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
@@ -527,17 +507,9 @@ export default function AdminCarriers() {
       {/* Edit Dialog */}
       {editTarget && (
         <Dialog open={!!editTarget} onOpenChange={v => { if (!v) setEditTarget(null); }}>
-          <DialogContent className="bg-slate-900 border-white/10 text-white">
-            <DialogHeader>
-              <DialogTitle className="text-sm">Edit Carrier</DialogTitle>
-            </DialogHeader>
-            <CarrierForm
-              form={form}
-              onChange={setForm}
-              onSubmit={() => updateMutation.mutate({ id: editTarget.id, data: formToPayload(form) })}
-              isPending={updateMutation.isPending}
-              submitLabel="Save Changes"
-            />
+          <DialogContent className="bg-slate-900 border-white/10 text-white max-w-lg">
+            <DialogHeader><DialogTitle className="text-sm">Edit Carrier</DialogTitle></DialogHeader>
+            <CarrierForm form={form} onChange={setForm} onSubmit={() => updateMutation.mutate({ id: editTarget.id, data: formToPayload(form) })} isPending={updateMutation.isPending} submitLabel="Save Changes" />
           </DialogContent>
         </Dialog>
       )}
@@ -549,17 +521,12 @@ export default function AdminCarriers() {
             <AlertDialogHeader>
               <AlertDialogTitle className="text-sm">Delete Carrier</AlertDialogTitle>
               <AlertDialogDescription className="text-xs text-muted-foreground">
-                Remove <strong>{deleteTarget.name}</strong> from the carrier catalog? This cannot be undone.
+                Remove <strong>{deleteTarget.name}</strong> from the catalog? This cannot be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel className="h-8 text-xs" onClick={() => setDeleteTarget(null)}>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => deleteMutation.mutate(deleteTarget.id)}
-                className="h-8 text-xs bg-red-500 hover:bg-red-400"
-                disabled={deleteMutation.isPending}
-                data-testid="btn-confirm-delete-carrier"
-              >
+              <AlertDialogAction onClick={() => deleteMutation.mutate(deleteTarget.id)} className="h-8 text-xs bg-red-500 hover:bg-red-400" disabled={deleteMutation.isPending} data-testid="btn-confirm-delete-carrier">
                 {deleteMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Delete"}
               </AlertDialogAction>
             </AlertDialogFooter>
@@ -573,21 +540,13 @@ export default function AdminCarriers() {
           <AlertDialogHeader>
             <AlertDialogTitle className="text-sm">Delete {selectedCount} Carrier{selectedCount !== 1 ? "s" : ""}?</AlertDialogTitle>
             <AlertDialogDescription className="text-xs text-muted-foreground">
-              This will permanently remove {selectedCount} carrier{selectedCount !== 1 ? "s" : ""} from the catalog.
-              Any outreach history linked to these carriers will also be removed. This cannot be undone.
+              Permanently removes {selectedCount} carrier{selectedCount !== 1 ? "s" : ""} and any linked outreach history. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="h-8 text-xs" onClick={() => setShowBulkConfirm(false)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => bulkDeleteMutation.mutate(Array.from(selected))}
-              className="h-8 text-xs bg-red-500 hover:bg-red-400"
-              disabled={bulkDeleteMutation.isPending}
-              data-testid="btn-confirm-bulk-delete"
-            >
-              {bulkDeleteMutation.isPending
-                ? <Loader2 className="w-3 h-3 animate-spin" />
-                : `Delete ${selectedCount}`}
+            <AlertDialogAction onClick={() => bulkDeleteMutation.mutate(Array.from(selected))} className="h-8 text-xs bg-red-500 hover:bg-red-400" disabled={bulkDeleteMutation.isPending} data-testid="btn-confirm-bulk-delete">
+              {bulkDeleteMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : `Delete ${selectedCount}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -596,7 +555,7 @@ export default function AdminCarriers() {
   );
 }
 
-// ── Carrier Form ─────────────────────────────────────────────────────────────
+// ── Carrier Form ──────────────────────────────────────────────────────────────
 
 function CarrierForm({
   form,
@@ -617,15 +576,25 @@ function CarrierForm({
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3 max-h-[70vh] overflow-y-auto pr-1">
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label className="text-xs">Carrier Name *</Label>
           <Input value={form.name} onChange={field("name")} placeholder="ACME Trucking" className="h-8 text-xs mt-1" data-testid="input-carrier-name" />
         </div>
         <div>
+          <Label className="text-xs">Payee Code</Label>
+          <Input value={form.payeeCode} onChange={field("payeeCode")} placeholder="ACME01" className="h-8 text-xs mt-1" data-testid="input-carrier-payee" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
           <Label className="text-xs">MC/DOT</Label>
           <Input value={form.mcDot} onChange={field("mcDot")} placeholder="MC-123456" className="h-8 text-xs mt-1" data-testid="input-carrier-mc" />
+        </div>
+        <div>
+          <Label className="text-xs">Phone</Label>
+          <Input value={form.phone} onChange={field("phone")} placeholder="555-123-4567" className="h-8 text-xs mt-1" data-testid="input-carrier-phone" />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -638,13 +607,23 @@ function CarrierForm({
           <Input value={form.backupEmail} onChange={field("backupEmail")} placeholder="backup@acme.com" className="h-8 text-xs mt-1" />
         </div>
       </div>
-      <div>
-        <Label className="text-xs">Regions <span className="text-white/30">(comma-separated)</span></Label>
-        <Input value={form.regions} onChange={field("regions")} placeholder="TX, LA, MS, OK" className="h-8 text-xs mt-1" data-testid="input-carrier-regions" />
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label className="text-xs">City</Label>
+          <Input value={form.city} onChange={field("city")} placeholder="Dallas" className="h-8 text-xs mt-1" data-testid="input-carrier-city" />
+        </div>
+        <div>
+          <Label className="text-xs">State</Label>
+          <Input value={form.state} onChange={field("state")} placeholder="TX" className="h-8 text-xs mt-1" data-testid="input-carrier-state" />
+        </div>
       </div>
       <div>
         <Label className="text-xs">Equipment Types <span className="text-white/30">(comma-separated)</span></Label>
         <Input value={form.equipmentTypes} onChange={field("equipmentTypes")} placeholder="Dry Van, Flatbed, Reefer" className="h-8 text-xs mt-1" data-testid="input-carrier-equipment" />
+      </div>
+      <div>
+        <Label className="text-xs">Regions <span className="text-white/30">(comma-separated)</span></Label>
+        <Input value={form.regions} onChange={field("regions")} placeholder="TX, LA, MS, OK" className="h-8 text-xs mt-1" data-testid="input-carrier-regions" />
       </div>
       <div>
         <Label className="text-xs">Tags <span className="text-white/30">(comma-separated)</span></Label>
@@ -654,12 +633,7 @@ function CarrierForm({
         <Label className="text-xs">Notes</Label>
         <Textarea value={form.notes} onChange={field("notes")} placeholder="Any context about this carrier…" className="text-xs mt-1 resize-none min-h-[60px]" />
       </div>
-      <Button
-        onClick={onSubmit}
-        disabled={!form.name.trim() || isPending}
-        className="bg-amber-500 hover:bg-amber-400 text-black font-semibold text-xs h-8"
-        data-testid="btn-submit-carrier-form"
-      >
+      <Button onClick={onSubmit} disabled={!form.name.trim() || isPending} className="bg-amber-500 hover:bg-amber-400 text-black font-semibold text-xs h-8" data-testid="btn-submit-carrier-form">
         {isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
         {submitLabel}
       </Button>
