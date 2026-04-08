@@ -110,6 +110,62 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     res.status(201).json(carrier);
   });
 
+  // ── Phase 2: External Carrier Import + Sourcing Performance ──────────────
+
+  /** GET /api/carriers/sourcing-performance — per-channel analytics */
+  app.get("/api/carriers/sourcing-performance", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    try {
+      const channels = await storage.getCarrierSourcingPerformance(user.organizationId);
+      res.json(channels);
+    } catch (err) {
+      console.error("[sourcing-performance] error:", err);
+      res.status(500).json({ error: "Failed to fetch sourcing performance" });
+    }
+  });
+
+  /** POST /api/carriers/import — import carriers without lane context */
+  app.post("/api/carriers/import", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const schema = z.object({
+      carriers: z.array(z.object({
+        name: z.string().min(1),
+        email: z.string().email().optional().or(z.literal("")),
+        phone: z.string().optional(),
+        mcDot: z.string().optional(),
+      })).min(1).max(200),
+      source: z.string().min(1).max(64),
+      rawInput: z.string().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    try {
+      const { batch, results } = await storage.importCarriersForLane(
+        user.organizationId, null, user.id,
+        parsed.data.carriers.map(c => ({ ...c, email: c.email || undefined })),
+        parsed.data.source,
+        parsed.data.rawInput
+      );
+      res.status(201).json({ batch, results });
+    } catch (err) {
+      console.error("[carriers/import] error:", err);
+      res.status(500).json({ error: "Import failed" });
+    }
+  });
+
+  /** GET /api/carriers/import-batches — list all org import batches */
+  app.get("/api/carriers/import-batches", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const batches = await storage.getCarrierImportBatches(user.organizationId);
+    res.json(batches);
+  });
+
   app.patch("/api/carriers/:id", async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
@@ -1435,6 +1491,58 @@ Rules for suggestions:
     if (!lane) return;
     const logs = await storage.getCarrierOutreachLogs(req.params.laneId);
     res.json(logs);
+  });
+
+  // ── Phase 2: Lane-specific carrier import ─────────────────────────────────
+
+  /** POST /api/lanes/:laneId/import-carriers — import external carriers for a lane */
+  app.post("/api/lanes/:laneId/import-carriers", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const { laneId } = req.params;
+    const lane = await storage.getRecurringLane(laneId);
+    if (!lane || lane.orgId !== user.organizationId) {
+      return res.status(404).json({ error: "Lane not found" });
+    }
+
+    const schema = z.object({
+      carriers: z.array(z.object({
+        name: z.string().min(1),
+        email: z.string().email().optional().or(z.literal("")),
+        phone: z.string().optional(),
+        mcDot: z.string().optional(),
+      })).min(1).max(200),
+      source: z.string().min(1).max(64),
+      rawInput: z.string().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    try {
+      const { batch, results } = await storage.importCarriersForLane(
+        user.organizationId,
+        laneId,
+        user.id,
+        parsed.data.carriers.map(c => ({ ...c, email: c.email || undefined })),
+        parsed.data.source,
+        parsed.data.rawInput
+      );
+      res.status(201).json({ batch, results });
+    } catch (err) {
+      console.error("[lanes/import-carriers] error:", err);
+      res.status(500).json({ error: "Import failed" });
+    }
+  });
+
+  /** GET /api/lanes/:laneId/import-batches — list import batches for a lane */
+  app.get("/api/lanes/:laneId/import-batches", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const batches = await storage.getCarrierImportBatches(user.organizationId, req.params.laneId);
+    res.json(batches);
   });
 }
 

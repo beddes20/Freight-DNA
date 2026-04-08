@@ -55,7 +55,11 @@ import {
   Clock,
   History,
   Copy,
+  Upload,
+  Plus,
+  ExternalLink,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -100,7 +104,44 @@ interface RankedCarrier {
   regions: string[];
   equipmentTypes: string[];
   tags: string[];
+  sourceChannel: string | null;
 }
+
+interface ParsedImportCarrier {
+  name: string;
+  email?: string;
+  phone?: string;
+  mcDot?: string;
+}
+
+interface ImportResult {
+  carrier: { id: string; name: string; primaryEmail?: string | null; sourceChannel?: string | null };
+  status: "new" | "matched";
+  matchType?: "email_exact" | "mc_exact" | "name_fuzzy";
+  addedToBench: boolean;
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  dat: "DAT",
+  loadsmart: "Loadsmart",
+  csv_paste: "Paste Import",
+  import_paste: "Paste Import",
+  manual: "Manual",
+  engine: "Engine",
+  excel_seed: "Excel Seed",
+  other: "Other",
+};
+
+const SOURCE_COLORS: Record<string, string> = {
+  dat: "border-sky-500/40 text-sky-400",
+  loadsmart: "border-violet-500/40 text-violet-400",
+  import_paste: "border-teal-500/40 text-teal-400",
+  csv_paste: "border-teal-500/40 text-teal-400",
+  manual: "border-slate-500/40 text-slate-400",
+  engine: "border-blue-500/40 text-blue-400",
+  excel_seed: "border-emerald-500/40 text-emerald-400",
+  other: "border-white/20 text-white/40",
+};
 
 interface EmailDraft {
   carrierId: string | null;
@@ -242,6 +283,11 @@ export function CarrierOutreachPanel({
   const [capturedEmails, setCapturedEmails] = useState<Record<string, string>>({});
   // Shared outreach template that applies to all selected carriers
   const [sharedTemplate, setSharedTemplate] = useState("");
+  // ── Import tab state ──────────────────────────────────────────────────────
+  const [importPasteText, setImportPasteText] = useState("");
+  const [importSource, setImportSource] = useState("dat");
+  const [parsedImportCarriers, setParsedImportCarriers] = useState<ParsedImportCarrier[] | null>(null);
+  const [importResults, setImportResults] = useState<ImportResult[] | null>(null);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -391,6 +437,26 @@ export function CarrierOutreachPanel({
     enabled: !!laneId && open,
   });
 
+  const importCarriersMutation = useMutation({
+    mutationFn: (body: { carriers: ParsedImportCarrier[]; source: string; rawInput?: string }) =>
+      apiRequest("POST", `/api/lanes/${laneId}/import-carriers`, body).then(r => r.json()),
+    onSuccess: (data: { batch: { id: string; newCount: number; matchedCount: number }; results: ImportResult[] }) => {
+      setImportResults(data.results);
+      queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "carrier-bench"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "carrier-suggestions"] });
+      refetchBench();
+      toast({
+        title: `${data.batch.newCount} new carrier${data.batch.newCount !== 1 ? "s" : ""} imported`,
+        description: data.batch.matchedCount > 0
+          ? `${data.batch.matchedCount} already in catalog. All ${data.results.length} added to bench.`
+          : `All added to bench.`,
+      });
+    },
+    onError: () => {
+      toast({ title: "Import failed", description: "Could not import carriers. Please try again.", variant: "destructive" });
+    },
+  });
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   const rankedCarriers = suggestionsData?.carriers ?? [];
@@ -418,6 +484,55 @@ export function CarrierOutreachPanel({
       else next.add(key);
       return next;
     });
+  }
+
+  /**
+   * Smart parser — handles tab-delimited (DAT), CSV, pipe-delimited, or freeform.
+   * Attempts to detect name | email | phone | MC# from each line.
+   * Returns array of ParsedImportCarrier objects.
+   */
+  function parseImportText(raw: string): ParsedImportCarrier[] {
+    const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/;
+    const MC_RE = /\bMC[-#\s]?(\d{5,8})\b/i;
+    const PHONE_RE = /(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/;
+
+    const lines = raw
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(l => l.length > 2);
+
+    return lines.map(line => {
+      // Detect delimiter: tab → DAT export; pipe; comma; space fallback
+      const delim = line.includes("\t") ? "\t" : line.includes("|") ? "|" : line.includes(",") ? "," : null;
+      let parts = delim ? line.split(delim).map(p => p.trim()) : [line];
+
+      // Extract structured fields
+      const emailMatch = line.match(EMAIL_RE);
+      const mcMatch = line.match(MC_RE);
+      const phoneMatch = line.match(PHONE_RE);
+
+      // Remove matched tokens from parts to isolate name
+      let remaining = line;
+      if (emailMatch) remaining = remaining.replace(emailMatch[0], "");
+      if (mcMatch) remaining = remaining.replace(mcMatch[0], "");
+      if (phoneMatch) remaining = remaining.replace(phoneMatch[0], "");
+      if (delim) remaining = remaining.split(delim)[0];
+
+      // Clean up name
+      const name = remaining
+        .replace(/[|,\t]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!name || name.length < 2) return null;
+
+      return {
+        name,
+        email: emailMatch ? emailMatch[0] : undefined,
+        mcDot: mcMatch ? `MC${mcMatch[1]}` : undefined,
+        phone: phoneMatch ? phoneMatch[0] : undefined,
+      } as ParsedImportCarrier;
+    }).filter((c): c is ParsedImportCarrier => c !== null);
   }
 
   function handleGenerateOutreach() {
@@ -722,6 +837,10 @@ export function CarrierOutreachPanel({
             <TabsTrigger value="bench" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-bench">
               Bench {bench.length > 0 ? `(${bench.length})` : ""}
             </TabsTrigger>
+            <TabsTrigger value="import" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-import">
+              <Upload className="w-3 h-3 mr-1" />
+              Import
+            </TabsTrigger>
             <TabsTrigger value="followup" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-followup">
               Follow-up
             </TabsTrigger>
@@ -797,6 +916,11 @@ export function CarrierOutreachPanel({
                             <Badge variant="outline" className="text-[9px] py-0 px-1 border-white/15 text-white/40">
                               {HISTORY_MATCH_LABELS[c.historyMatch] ?? c.historyMatch}
                             </Badge>
+                            {c.sourceChannel && SOURCE_LABELS[c.sourceChannel] && (
+                              <Badge variant="outline" className={`text-[9px] py-0 px-1 ${SOURCE_COLORS[c.sourceChannel] ?? "border-white/20 text-white/40"}`}>
+                                {SOURCE_LABELS[c.sourceChannel]}
+                              </Badge>
+                            )}
                             {!c.primaryEmail && !capturedEmails[c.carrierId ?? c.carrierName] && (
                               <Badge variant="outline" className="text-[9px] py-0 px-1 border-orange-500/40 text-orange-400 flex items-center gap-0.5">
                                 <Mail className="w-2.5 h-2.5" />
@@ -1016,6 +1140,179 @@ export function CarrierOutreachPanel({
                     Emails sent and logged to lane history. View the History tab for details.
                   </p>
                 )}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ── Import Tab ──────────────────────────────────────────────── */}
+          <TabsContent value="import" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto" data-testid="tab-content-import">
+            {importResults ? (
+              /* Success state — show import results */
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <div>
+                    <p className="text-xs font-semibold text-emerald-300">
+                      {importResults.filter(r => r.status === "new").length} new carriers imported
+                    </p>
+                    {importResults.filter(r => r.status === "matched").length > 0 && (
+                      <p className="text-[10px] text-white/50">
+                        {importResults.filter(r => r.status === "matched").length} matched existing catalog records
+                      </p>
+                    )}
+                    <p className="text-[10px] text-white/50">All carriers added to lane bench</p>
+                  </div>
+                </div>
+
+                {/* Result list */}
+                <div className="flex flex-col gap-1.5">
+                  {importResults.map((r, idx) => (
+                    <div key={idx} className="flex items-center gap-2 p-2 bg-white/3 rounded border border-white/8">
+                      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.status === "new" ? "bg-emerald-400" : "bg-amber-400"}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-white truncate">{r.carrier.name}</p>
+                        {r.carrier.primaryEmail && (
+                          <p className="text-[10px] text-white/40 truncate">{r.carrier.primaryEmail}</p>
+                        )}
+                      </div>
+                      <Badge variant="outline" className={`text-[9px] py-0 px-1 shrink-0 ${
+                        r.status === "new" ? "border-emerald-500/40 text-emerald-400" : "border-amber-500/40 text-amber-400"
+                      }`}>
+                        {r.status === "new" ? "New" : r.matchType === "email_exact" ? "Email match" : r.matchType === "mc_exact" ? "MC match" : "Name match"}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setImportResults(null);
+                    setParsedImportCarriers(null);
+                    setImportPasteText("");
+                  }}
+                  className="w-full text-xs border-white/15 text-white/60 hover:bg-white/6"
+                  data-testid="btn-import-again"
+                >
+                  <Upload className="w-3 h-3 mr-1" />
+                  Import More Carriers
+                </Button>
+              </div>
+            ) : parsedImportCarriers ? (
+              /* Preview state — show parsed carriers before confirm */
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-white">{parsedImportCarriers.length} carriers parsed</p>
+                  <button
+                    onClick={() => setParsedImportCarriers(null)}
+                    className="text-[10px] text-white/40 hover:text-white/60"
+                    data-testid="btn-import-back"
+                  >
+                    ← Edit
+                  </button>
+                </div>
+
+                {/* Preview table */}
+                <div className="flex flex-col gap-1">
+                  <div className="grid grid-cols-12 gap-2 px-2 py-1 text-[9px] uppercase tracking-wide text-white/30">
+                    <span className="col-span-5">Name</span>
+                    <span className="col-span-4">Email</span>
+                    <span className="col-span-3">MC#</span>
+                  </div>
+                  {parsedImportCarriers.map((c, idx) => (
+                    <div key={idx} className="grid grid-cols-12 gap-2 px-2 py-1.5 bg-white/3 rounded border border-white/8">
+                      <span className="col-span-5 text-[10px] text-white truncate">{c.name}</span>
+                      <span className="col-span-4 text-[10px] text-white/50 truncate">{c.email ?? "—"}</span>
+                      <span className="col-span-3 text-[10px] text-white/50 truncate">{c.mcDot ?? "—"}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <Button
+                  size="sm"
+                  onClick={() => importCarriersMutation.mutate({
+                    carriers: parsedImportCarriers,
+                    source: importSource,
+                    rawInput: importPasteText,
+                  })}
+                  disabled={importCarriersMutation.isPending}
+                  className="w-full text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+                  data-testid="btn-confirm-import"
+                >
+                  {importCarriersMutation.isPending
+                    ? <><Loader2 className="w-3 h-3 animate-spin mr-1" />Importing…</>
+                    : <><Plus className="w-3 h-3 mr-1" />Import & Add {parsedImportCarriers.length} to Bench</>
+                  }
+                </Button>
+              </div>
+            ) : (
+              /* Input state — paste textarea */
+              <div className="flex flex-col gap-4">
+                <div>
+                  <p className="text-xs text-white/60 mb-3">
+                    Paste carrier contacts from DAT, Loadsmart, or any other platform. Supports tab-delimited, CSV, or plain name + email format.
+                  </p>
+                  <div className="text-[9px] text-white/30 mb-2 font-mono bg-white/3 border border-white/8 rounded px-2 py-1.5 space-y-0.5">
+                    <div className="text-white/50 mb-1">Supported formats (one per line):</div>
+                    <div>ABC Transport Inc, abc@transport.com, MC123456</div>
+                    <div>XYZ Logistics | xyz@logistics.com</div>
+                    <div>Smith Trucking LLC {"  "} MC789012</div>
+                    <div>John's Hauling Co (paste name only if no email)</div>
+                  </div>
+                </div>
+
+                {/* Source selector */}
+                <div>
+                  <p className="text-[9px] text-white/40 uppercase tracking-wide mb-1.5">Source Platform</p>
+                  <Select value={importSource} onValueChange={setImportSource}>
+                    <SelectTrigger className="h-8 text-xs bg-white/5 border-white/15 text-white/80" data-testid="select-import-source">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="dat">DAT Load Board</SelectItem>
+                      <SelectItem value="loadsmart">Loadsmart</SelectItem>
+                      <SelectItem value="csv_paste">CSV / Spreadsheet Paste</SelectItem>
+                      <SelectItem value="manual">Manual Entry</SelectItem>
+                      <SelectItem value="other">Other Platform</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Paste area */}
+                <div>
+                  <p className="text-[9px] text-white/40 uppercase tracking-wide mb-1.5">Carrier List</p>
+                  <Textarea
+                    value={importPasteText}
+                    onChange={e => setImportPasteText(e.target.value)}
+                    placeholder={"ABC Transport Inc, abc@transport.com, MC123456\nXYZ Logistics, xyz@example.com\nSmith Trucking LLC"}
+                    className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[160px] placeholder:text-white/20 font-mono"
+                    data-testid="textarea-import-paste"
+                  />
+                  {importPasteText && (
+                    <p className="text-[9px] text-white/30 mt-1">
+                      {importPasteText.split("\n").filter(l => l.trim().length > 2).length} lines detected
+                    </p>
+                  )}
+                </div>
+
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    const parsed = parseImportText(importPasteText);
+                    if (parsed.length === 0) {
+                      toast({ title: "No carriers parsed", description: "Check format and try again.", variant: "destructive" });
+                      return;
+                    }
+                    setParsedImportCarriers(parsed);
+                  }}
+                  disabled={!importPasteText.trim()}
+                  className="w-full text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+                  data-testid="btn-parse-import"
+                >
+                  <ExternalLink className="w-3 h-3 mr-1" />
+                  Parse & Preview
+                </Button>
               </div>
             )}
           </TabsContent>

@@ -58,6 +58,7 @@ export interface RankedCarrier {
   marginContribution: number | null;   // derived from financial rows margin field if available
   customerHistoryLoads: number;        // loads this carrier hauled for the same customer
   priorOutcomeBoost: boolean;          // true if prior bench outcome was positive (available_now/next_week)
+  sourceChannel: string | null;        // where this carrier was originally sourced from
 }
 
 function normStr(s: string): string {
@@ -322,6 +323,7 @@ export async function rankCarriersForLane(
       marginContribution: hist?.totalMargin ?? null,
       customerHistoryLoads: custLoads,
       priorOutcomeBoost: hadPositiveOutcome,
+      sourceChannel: (carrier as any).sourceChannel ?? null,
     });
   }
 
@@ -379,6 +381,7 @@ export async function rankCarriersForLane(
       marginContribution: hist.totalMargin,
       customerHistoryLoads: custLoadsHist,
       priorOutcomeBoost: hadPositiveOutcomeHist,
+      sourceChannel: null,
     });
   }
 

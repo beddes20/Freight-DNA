@@ -552,6 +552,20 @@ export default function LaneWorkQueuePage() {
     staleTime: 60_000,
   });
 
+  const { data: sourcingPerf = [] } = useQuery<Array<{
+    sourceChannel: string;
+    label: string;
+    carriersImported: number;
+    outreached: number;
+    responded: number;
+    responseRate: number;
+  }>>({
+    queryKey: ["/api/carriers/sourcing-performance"],
+    queryFn: () => fetch("/api/carriers/sourcing-performance").then(r => r.json()),
+    enabled: isAdminOrDirector,
+    staleTime: 60_000,
+  });
+
   // Helper to apply customer + high-freq filters to a bucket
   const filterBucket = (items: LaneItem[]) => {
     let out = items;
@@ -769,6 +783,51 @@ export default function LaneWorkQueuePage() {
                     </span>
                   </span>
                 )}
+              </div>
+            )}
+
+            {/* Sourcing Performance Panel — admin/director only */}
+            {isAdminOrDirector && sourcingPerf.length > 0 && (
+              <div className="mb-5 rounded-lg border border-border bg-card" data-testid="sourcing-performance-panel">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+                  <div className="w-6 h-6 rounded bg-teal-500/15 flex items-center justify-center">
+                    <svg className="w-3.5 h-3.5 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">Carrier Sourcing Performance</p>
+                    <p className="text-[10px] text-muted-foreground">Response rates by channel</p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Source</th>
+                        <th className="text-right px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Imported</th>
+                        <th className="text-right px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Outreached</th>
+                        <th className="text-right px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Responded</th>
+                        <th className="text-right px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Response %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sourcingPerf.map(ch => (
+                        <tr key={ch.sourceChannel} className="border-b border-border/50 last:border-0 hover:bg-muted/20">
+                          <td className="px-4 py-2 font-medium text-foreground">{ch.label}</td>
+                          <td className="px-4 py-2 text-right text-muted-foreground">{ch.carriersImported}</td>
+                          <td className="px-4 py-2 text-right text-muted-foreground">{ch.outreached}</td>
+                          <td className="px-4 py-2 text-right text-emerald-500">{ch.responded}</td>
+                          <td className="px-4 py-2 text-right">
+                            <span className={`font-semibold ${ch.responseRate >= 40 ? "text-emerald-400" : ch.responseRate >= 20 ? "text-amber-400" : "text-muted-foreground"}`}>
+                              {ch.responseRate}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 

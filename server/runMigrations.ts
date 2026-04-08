@@ -1249,6 +1249,33 @@ export async function runMigrations() {
     await clientLCO.query(`ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS assigned_by_user_id varchar REFERENCES users(id) ON DELETE SET NULL`);
     await clientLCO.query(`ALTER TABLE lane_carrier_interest ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'suggested'`);
 
+    // 8. Phase 1 send-tracking on carrier_outreach_logs
+    await clientLCO.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS sent_at timestamp`);
+    await clientLCO.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS delivery_status varchar DEFAULT 'draft'`);
+    await clientLCO.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS failure_reason text`);
+    await clientLCO.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS recipients jsonb`);
+
+    // 9. Phase 2 — external carrier sourcing + import
+    await clientLCO.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS source_channel text`);
+    await clientLCO.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS import_batch_id varchar`);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_carriers_source ON carriers(org_id, source_channel) WHERE source_channel IS NOT NULL`);
+    await clientLCO.query(`
+      CREATE TABLE IF NOT EXISTS carrier_import_batches (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        lane_id varchar REFERENCES recurring_lanes(id) ON DELETE SET NULL,
+        source text NOT NULL,
+        created_by varchar NOT NULL REFERENCES users(id),
+        created_at timestamp NOT NULL DEFAULT NOW(),
+        carrier_count integer NOT NULL DEFAULT 0,
+        new_count integer NOT NULL DEFAULT 0,
+        matched_count integer NOT NULL DEFAULT 0,
+        raw_input text
+      )
+    `);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_cib_org ON carrier_import_batches(org_id)`);
+    await clientLCO.query(`CREATE INDEX IF NOT EXISTS idx_cib_lane ON carrier_import_batches(lane_id) WHERE lane_id IS NOT NULL`);
+
     console.log("[migrations] lane carrier outreach tables ensured");
   } catch (err) {
     console.error("[migrations] lane carrier outreach tables error:", err);

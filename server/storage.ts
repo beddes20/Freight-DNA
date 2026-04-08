@@ -125,6 +125,9 @@ import {
   type InsertCarrierOutreachLog,
   featureFlags,
   type FeatureFlag,
+  carrierImportBatches,
+  type CarrierImportBatch,
+  type InsertCarrierImportBatch,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -167,6 +170,22 @@ export interface LaneWorkQueueResult {
   noContactable: LaneWorkQueueItem[];        // isEligible, assigned, 0 contactable carriers
   assignedUntouched: LaneWorkQueueItem[];    // isEligible, assigned, carriersContactedCount = 0
   inProgress: LaneWorkQueueItem[];           // 0 < carriersContactedCount < threshold
+}
+
+export interface CarrierImportResult {
+  carrier: Carrier;
+  status: "new" | "matched";
+  matchType?: "email_exact" | "mc_exact" | "name_fuzzy";
+  addedToBench: boolean;
+}
+
+export interface CarrierSourcingChannel {
+  sourceChannel: string;
+  label: string;
+  carriersImported: number;
+  outreached: number;
+  responded: number;
+  responseRate: number;
 }
 
 export interface IStorage {
@@ -555,6 +574,18 @@ export interface IStorage {
   // Lane Carrier Outreach v1 — Feature Flags
   getFeatureFlag(orgId: string, flagKey: string): Promise<boolean>;
   setFeatureFlag(orgId: string, flagKey: string, enabled: boolean, updatedById?: string): Promise<void>;
+
+  // Lane Carrier Outreach v2 — External Import + Sourcing
+  importCarriersForLane(
+    orgId: string,
+    laneId: string | null,
+    userId: string,
+    carriers: Array<{ name: string; email?: string; phone?: string; mcDot?: string }>,
+    source: string,
+    rawInput?: string
+  ): Promise<{ batch: CarrierImportBatch; results: CarrierImportResult[] }>;
+  getCarrierImportBatches(orgId: string, laneId?: string): Promise<CarrierImportBatch[]>;
+  getCarrierSourcingPerformance(orgId: string): Promise<CarrierSourcingChannel[]>;
 
   // Lane Carrier Outreach v1.5 — Assignment + Work Queue
   assignLaneOwner(laneId: string, orgId: string, ownerUserId: string | null, assignedByUserId: string): Promise<RecurringLane | undefined>;
@@ -3289,6 +3320,198 @@ export class DatabaseStorage implements IStorage {
     }
     const [row] = await db.insert(carriers).values({ ...data, orgId }).returning();
     return row;
+  }
+
+  // ── Lane Carrier Outreach v2 — External Import + Sourcing ─────────────────
+
+  /**
+   * Strips common carrier name suffixes for fuzzy dedup matching.
+   */
+  private _normalizeCarrierName(name: string): string {
+    return name
+      .toUpperCase()
+      .trim()
+      .replace(/\b(LLC|INC|CORP|CORPORATION|LTD|CO|COMPANY|TRANSPORTATION|TRANSPORT|TRUCKING|LOGISTICS|FREIGHT|CARRIERS?|LINES?|EXPRESS|SERVICES?)\b/g, "")
+      .replace(/[^A-Z0-9\s]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  async importCarriersForLane(
+    orgId: string,
+    laneId: string | null,
+    userId: string,
+    incomingCarriers: Array<{ name: string; email?: string; phone?: string; mcDot?: string }>,
+    source: string,
+    rawInput?: string
+  ): Promise<{ batch: CarrierImportBatch; results: CarrierImportResult[] }> {
+    const results: CarrierImportResult[] = [];
+    let newCount = 0;
+    let matchedCount = 0;
+
+    // Pre-load all org carriers once for name-based dedup (avoid N queries)
+    const allOrgCarriers = await db.select().from(carriers).where(eq(carriers.orgId, orgId));
+    const normalizedNames = new Map<string, Carrier>();
+    for (const c of allOrgCarriers) {
+      const norm = this._normalizeCarrierName(c.name);
+      if (norm) normalizedNames.set(norm, c);
+    }
+
+    for (const inc of incomingCarriers) {
+      let matchedCarrier: Carrier | undefined;
+      let matchType: CarrierImportResult["matchType"];
+
+      // 1. Email exact match
+      if (!matchedCarrier && inc.email) {
+        const emailNorm = inc.email.trim().toLowerCase();
+        const found = allOrgCarriers.find(
+          c => c.primaryEmail?.trim().toLowerCase() === emailNorm || c.backupEmail?.trim().toLowerCase() === emailNorm
+        );
+        if (found) { matchedCarrier = found; matchType = "email_exact"; }
+      }
+
+      // 2. MC/DOT exact match
+      if (!matchedCarrier && inc.mcDot) {
+        const mcNorm = inc.mcDot.trim().toUpperCase().replace(/^MC[-\s]?/i, "");
+        const found = allOrgCarriers.find(c => c.mcDot?.trim().toUpperCase().replace(/^MC[-\s]?/i, "") === mcNorm);
+        if (found) { matchedCarrier = found; matchType = "mc_exact"; }
+      }
+
+      // 3. Normalized name fuzzy match
+      if (!matchedCarrier) {
+        const norm = this._normalizeCarrierName(inc.name);
+        if (norm && normalizedNames.has(norm)) {
+          matchedCarrier = normalizedNames.get(norm)!;
+          matchType = "name_fuzzy";
+        }
+      }
+
+      if (matchedCarrier) {
+        // Update any new contact info on the matched carrier
+        const updates: Partial<InsertCarrier> = { updatedAt: new Date() };
+        if (inc.email && !matchedCarrier.primaryEmail) updates.primaryEmail = inc.email;
+        if (inc.phone && !matchedCarrier.phone) updates.phone = inc.phone;
+        if (Object.keys(updates).length > 1) {
+          const [updated] = await db.update(carriers).set(updates).where(eq(carriers.id, matchedCarrier.id)).returning();
+          matchedCarrier = updated;
+          // Update in-memory list too
+          const idx = allOrgCarriers.findIndex(c => c.id === matchedCarrier!.id);
+          if (idx >= 0) allOrgCarriers[idx] = updated;
+        }
+        matchedCount++;
+        results.push({ carrier: matchedCarrier, status: "matched", matchType, addedToBench: !!laneId });
+      } else {
+        // Create new carrier
+        const [newCarrier] = await db.insert(carriers).values({
+          orgId,
+          name: inc.name.trim(),
+          primaryEmail: inc.email?.trim() || null,
+          phone: inc.phone?.trim() || null,
+          mcDot: inc.mcDot?.trim() || null,
+          sourceChannel: source,
+          regions: [],
+          equipmentTypes: [],
+          tags: [],
+        } as any).returning();
+        allOrgCarriers.push(newCarrier);
+        const norm = this._normalizeCarrierName(newCarrier.name);
+        if (norm) normalizedNames.set(norm, newCarrier);
+        newCount++;
+        results.push({ carrier: newCarrier, status: "new", addedToBench: !!laneId });
+      }
+    }
+
+    // Create batch record
+    const [batch] = await db.insert(carrierImportBatches).values({
+      orgId,
+      laneId: laneId || null,
+      source,
+      createdBy: userId,
+      carrierCount: incomingCarriers.length,
+      newCount,
+      matchedCount,
+      rawInput: rawInput || null,
+    }).returning();
+
+    // Update importBatchId on newly created carriers
+    const newCarrierIds = results.filter(r => r.status === "new").map(r => r.carrier.id);
+    if (newCarrierIds.length > 0) {
+      await db.update(carriers).set({ importBatchId: batch.id } as any).where(inArray(carriers.id, newCarrierIds));
+    }
+
+    // Upsert all imported carriers onto the lane bench (if lane context provided)
+    if (laneId) {
+      for (const result of results) {
+        await db.insert(laneCarrierInterest).values({
+          orgId,
+          laneId,
+          carrierId: result.carrier.id,
+          carrierName: result.carrier.name,
+          status: "needs_follow_up",
+          sourceType: "manually_added",
+          notes: `Imported via ${source}`,
+        } as any).onConflictDoNothing();
+      }
+    }
+
+    return { batch, results };
+  }
+
+  async getCarrierImportBatches(orgId: string, laneId?: string): Promise<CarrierImportBatch[]> {
+    const conditions = [eq(carrierImportBatches.orgId, orgId)];
+    if (laneId) conditions.push(eq(carrierImportBatches.laneId, laneId));
+    return db.select().from(carrierImportBatches).where(and(...conditions)).orderBy(desc(carrierImportBatches.createdAt));
+  }
+
+  async getCarrierSourcingPerformance(orgId: string): Promise<CarrierSourcingChannel[]> {
+    // Count carriers by source channel
+    const channelRows = await pool.query<{ source_channel: string; cnt: string }>(
+      `SELECT source_channel, COUNT(*)::int AS cnt FROM carriers WHERE org_id = $1 AND source_channel IS NOT NULL GROUP BY source_channel`,
+      [orgId]
+    );
+
+    // For each channel's carriers, count how many have bench entries (outreached)
+    // and how many bench entries have responded (available_now or available_next_week)
+    const benchStats = await pool.query<{ source_channel: string; outreached: string; responded: string }>(
+      `SELECT c.source_channel,
+               COUNT(DISTINCT lci.carrier_id)::int AS outreached,
+               COUNT(DISTINCT CASE WHEN lci.interest_status IN ('available_now','available_next_week') THEN lci.carrier_id END)::int AS responded
+        FROM lane_carrier_interest lci
+        JOIN carriers c ON c.id = lci.carrier_id
+        WHERE c.org_id = $1 AND c.source_channel IS NOT NULL
+        GROUP BY c.source_channel`,
+      [orgId]
+    );
+    const benchMap = new Map<string, { outreached: number; responded: number }>();
+    for (const row of benchStats.rows) {
+      benchMap.set(row.source_channel, { outreached: Number(row.outreached), responded: Number(row.responded) });
+    }
+
+    const LABELS: Record<string, string> = {
+      dat: "DAT",
+      loadsmart: "Loadsmart",
+      csv_paste: "Paste Import",
+      manual: "Manual Entry",
+      engine: "Engine Discovery",
+      excel_seed: "Excel Seed",
+      import_paste: "Paste Import",
+      other: "Other",
+    };
+
+    return channelRows.rows.map(row => {
+      const channel = row.source_channel;
+      const bench = benchMap.get(channel) ?? { outreached: 0, responded: 0 };
+      const carriersImported = Number(row.cnt);
+      const rate = bench.outreached > 0 ? Math.round((bench.responded / bench.outreached) * 100) : 0;
+      return {
+        sourceChannel: channel,
+        label: LABELS[channel] ?? channel,
+        carriersImported,
+        outreached: bench.outreached,
+        responded: bench.responded,
+        responseRate: rate,
+      };
+    });
   }
 
   // ── Lane Carrier Outreach v1 — Recurring Lanes ────────────────────────────

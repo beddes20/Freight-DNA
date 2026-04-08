@@ -1161,12 +1161,38 @@ export const carriers = pgTable("carriers", {
   backupEmail: text("backup_email"),
   lastEmailValidatedAt: text("last_email_validated_at"),
   notes: text("notes"),
+  /** Phase 2 sourcing fields */
+  sourceChannel: text("source_channel"),
+  // 'engine' | 'import_paste' | 'import_csv' | 'excel_seed' | 'dat' | 'manual' | null
+  importBatchId: varchar("import_batch_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 export const insertCarrierSchema = createInsertSchema(carriers).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertCarrier = z.infer<typeof insertCarrierSchema>;
 export type Carrier = typeof carriers.$inferSelect;
+
+/**
+ * Carrier import batches — tracks every bulk import event for sourcing analytics.
+ * Each import from the CarrierOutreachPanel creates one batch record.
+ */
+export const carrierImportBatches = pgTable("carrier_import_batches", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  laneId: varchar("lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
+  source: text("source").notNull(),
+  // 'dat' | 'loadsmart' | 'csv_paste' | 'manual' | 'other'
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  carrierCount: integer("carrier_count").notNull().default(0),
+  newCount: integer("new_count").notNull().default(0),
+  matchedCount: integer("matched_count").notNull().default(0),
+  rawInput: text("raw_input"),
+  // stores the original pasted text for audit purposes
+});
+export const insertCarrierImportBatchSchema = createInsertSchema(carrierImportBatches).omit({ id: true, createdAt: true });
+export type InsertCarrierImportBatch = z.infer<typeof insertCarrierImportBatchSchema>;
+export type CarrierImportBatch = typeof carrierImportBatches.$inferSelect;
 
 /**
  * Recurring lanes identified by the capacity engine.
