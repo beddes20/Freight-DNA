@@ -523,8 +523,8 @@ export async function runPhase1EngineForOrg(
     return !!co;
   });
 
-  // Exclude unowned companies and valubuaz org (always excluded from org queries)
-  const assigned = allCompanies.filter(c => c.assignedTo && c.organizationId === orgId);
+  // Exclude unowned, archived, and valubuaz-org companies from engine evaluation.
+  const assigned = allCompanies.filter(c => c.assignedTo && c.organizationId === orgId && !c.archivedAt);
 
   const results: Array<{ userId: string; result: CompanyEvalResult }> = [];
 

@@ -5085,12 +5085,15 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       // Fetch all org companies once — used for both name lookup and admin visibility.
-      const allCompanies = await storage.getCompanies(user.organizationId);
+      // Exclude archived companies so they never appear in NBA recommendations.
+      const allCompanies = (await storage.getCompanies(user.organizationId)).filter(c => !c.archivedAt);
       const nameMap = new Map(allCompanies.map(c => [c.id, c.name]));
 
       // null means admin / all-access; otherwise filter to RBAC-visible IDs.
+      // In both cases, intersect with active (non-archived) company IDs.
       const rawIds = await getVisibleCompanyIds(user);
-      const visibleIds: string[] = rawIds ?? allCompanies.map(c => c.id);
+      const activeIds = new Set(allCompanies.map(c => c.id));
+      const visibleIds: string[] = (rawIds ?? [...activeIds]).filter(id => activeIds.has(id));
       if (visibleIds.length === 0) return res.json({ items: [], totalEvaluated: 0 });
 
       // Pull cached growth scores to order evaluations (at_risk first).
@@ -8831,7 +8834,12 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const limit = Math.min(Number(req.query.limit ?? 5), 5);
       const cards = await storage.getVisibleNbaCards(currentUser.id, limit);
-      res.json(cards);
+      // Exclude cards tied to archived companies — they can persist in the table
+      // after a company is archived but should never reach the dashboard.
+      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
+      const archivedIds = new Set(orgCompanies.filter(c => c.archivedAt).map(c => c.id));
+      const activeCards = cards.filter(c => !c.companyId || !archivedIds.has(c.companyId));
+      res.json(activeCards);
     } catch (err: any) {
       console.error("[nba/cards GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch NBA cards" });

@@ -19,6 +19,11 @@ export function registerTaskRoutes(app: Express) {
       } else {
         filtered = allTasks.filter(t => t.assignedTo === user.id || t.assignedBy === user.id);
       }
+      // Exclude tasks tied to archived companies from the dashboard.
+      // Tasks with no companyId (standalone tasks) are always kept.
+      const orgCompanies = await storage.getCompanies(user.organizationId);
+      const archivedCompanyIds = new Set(orgCompanies.filter(c => c.archivedAt).map(c => c.id));
+      filtered = filtered.filter(t => !t.companyId || !archivedCompanyIds.has(t.companyId));
       const counts = await storage.getTaskCommentCounts(filtered.map(t => t.id));
       return res.json(filtered.map(t => ({ ...t, commentCount: counts[t.id] ?? 0 })));
     } catch (error) {
