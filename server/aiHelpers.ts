@@ -5,15 +5,21 @@
 
 import OpenAI from "openai";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let _openai: OpenAI | null = null;
+
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return _openai;
+}
 
 /**
  * Send a prompt to GPT-4o-mini and return the text response.
- * Throws if the API call fails.
+ * Throws if the API call fails or no API key is configured.
  */
 export async function callAI(prompt: string, maxTokens = 400): Promise<string> {
+  const openai = getOpenAI();
   const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [{ role: "user", content: prompt }],

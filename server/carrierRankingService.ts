@@ -13,7 +13,7 @@
  * V1 uses rule-based scoring; AI enrichment is additive.
  */
 
-import type { RecurringLane, Carrier, FinancialUpload } from "@shared/schema";
+import type { RecurringLane, Carrier, FinancialUpload, LaneCarrierInterest } from "@shared/schema";
 import type { IStorage } from "./storage";
 
 /** Typed shape of TMS rows from financial upload JSONB */
@@ -56,6 +56,8 @@ export interface RankedCarrier {
   isNewProspect: boolean;
   estimatedOnTimePct: number | null;   // derived from financial row on-time field if available
   marginContribution: number | null;   // derived from financial rows margin field if available
+  customerHistoryLoads: number;        // loads this carrier hauled for the same customer
+  priorOutcomeBoost: boolean;          // true if prior bench outcome was positive (available_now/next_week)
 }
 
 function normStr(s: string): string {
@@ -149,16 +151,57 @@ function extractCarrierHistoryFromUploads(
 }
 
 /**
+ * Extract how many loads a carrier ran for a specific customer from financial uploads.
+ * Used as an additional ranking signal when customer context is available.
+ */
+function extractCustomerHistoryLoads(
+  uploads: FinancialUpload[],
+  carrierName: string,
+  customerName: string,
+): number {
+  if (!customerName || !carrierName) return 0;
+  const customerNorm = normStr(customerName);
+  const carrierNorm = normStr(carrierName);
+  let count = 0;
+  // Sort newest first (same strategy as extractCarrierHistoryFromUploads)
+  const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+  for (const upload of sorted.slice(0, 3)) {
+    const rows = (upload.rows as TmsRow[]) ?? [];
+    for (const row of rows) {
+      const rowCarrier = normStr(row.carrier ?? row.carrierName ?? row.carrier_name ?? "");
+      const rowCustomer = normStr(row.customerName ?? "");
+      if (!rowCarrier || !rowCustomer) continue;
+      if (rowCarrier === carrierNorm && rowCustomer.includes(customerNorm.slice(0, 6))) count++;
+    }
+  }
+  return count;
+}
+
+/**
  * Rank all carriers in the org catalog for a given lane.
+ * bench (optional): existing lane_carrier_interest rows for outcome-based boosts.
  */
 export async function rankCarriersForLane(
   lane: RecurringLane,
   storage: IStorage,
+  bench?: LaneCarrierInterest[],
 ): Promise<RankedCarrier[]> {
   const [catalogCarriers, uploads] = await Promise.all([
     storage.getCarriers(lane.orgId),
     storage.getFinancialUploadsForOrg(lane.orgId),
   ]);
+
+  // Build a set of carrier names/ids that had positive prior outcomes on this bench
+  const positiveOutcomeStatuses = new Set(["available_now", "available_next_week"]);
+  const positiveOutcomeCarrierKeys = new Set<string>();
+  if (bench) {
+    for (const b of bench) {
+      if (positiveOutcomeStatuses.has(b.interestStatus ?? "")) {
+        if (b.carrierId) positiveOutcomeCarrierKeys.add(b.carrierId);
+        positiveOutcomeCarrierKeys.add(normStr(b.carrierName));
+      }
+    }
+  }
 
   const history = extractCarrierHistoryFromUploads(uploads, lane);
   const laneOrigin = normStr(lane.origin);
@@ -166,6 +209,7 @@ export async function rankCarriersForLane(
   const laneEquip = normStr(lane.equipmentType ?? "");
   const laneOriginState = normStr(lane.originState ?? "");
   const laneDestState = normStr(lane.destinationState ?? "");
+  const customerName = lane.companyName ?? "";
 
   const ranked: RankedCarrier[] = [];
 
@@ -238,6 +282,22 @@ export async function rankCarriersForLane(
     // Notes / email present bonus
     if (carrier.primaryEmail) fitScore += 5;
 
+    // Customer history signal: carrier has run freight for this same customer before
+    const custLoads = extractCustomerHistoryLoads(uploads, carrier.name, customerName);
+    if (custLoads > 0) {
+      fitScore += Math.min(15, 8 + custLoads * 2);
+      reasons.push(`Hauled for ${customerName} (${custLoads} loads)`);
+    }
+
+    // Prior outreach outcome signal: carrier responded positively on a previous bench
+    const hadPositiveOutcome =
+      positiveOutcomeCarrierKeys.has(carrier.id) ||
+      positiveOutcomeCarrierKeys.has(carrierNorm);
+    if (hadPositiveOutcome) {
+      fitScore += 10;
+      reasons.push("Showed availability in prior outreach");
+    }
+
     fitScore = Math.min(100, fitScore);
 
     if (fitScore === 0 && historyMatch === "none" && !regionMatch) continue; // skip zero-fit unknown carriers
@@ -260,6 +320,8 @@ export async function rankCarriersForLane(
       isNewProspect: (hist?.loads ?? 0) === 0,
       estimatedOnTimePct: hist?.avgOnTimePct ?? null,
       marginContribution: hist?.totalMargin ?? null,
+      customerHistoryLoads: custLoads,
+      priorOutcomeBoost: hadPositiveOutcome,
     });
   }
 
@@ -283,6 +345,20 @@ export async function rankCarriersForLane(
       else if (hist.avgOnTimePct >= 85) { fitScore = Math.min(100, fitScore + 4); reasons.push(`On-time: ${hist.avgOnTimePct.toFixed(0)}%`); }
     }
 
+    // Customer history signal for TMS-only carriers
+    const custLoadsHist = extractCustomerHistoryLoads(uploads, carrierNorm, customerName);
+    if (custLoadsHist > 0) {
+      fitScore = Math.min(100, fitScore + Math.min(15, 8 + custLoadsHist * 2));
+      reasons.push(`Hauled for ${customerName} (${custLoadsHist} loads)`);
+    }
+
+    // Outreach outcome signal for TMS-only carriers
+    const hadPositiveOutcomeHist = positiveOutcomeCarrierKeys.has(carrierNorm);
+    if (hadPositiveOutcomeHist) {
+      fitScore = Math.min(100, fitScore + 10);
+      reasons.push("Showed availability in prior outreach");
+    }
+
     ranked.push({
       carrierId: null,
       carrierName: toTitleCase(carrierNorm),
@@ -301,6 +377,8 @@ export async function rankCarriersForLane(
       isNewProspect: false,
       estimatedOnTimePct: hist.avgOnTimePct,
       marginContribution: hist.totalMargin,
+      customerHistoryLoads: custLoadsHist,
+      priorOutcomeBoost: hadPositiveOutcomeHist,
     });
   }
 
@@ -368,7 +446,9 @@ function extractExactLaneLoads(uploads: FinancialUpload[], lane: RecurringLane, 
   const destNorm = normStr(lane.destination);
   const carrierNorm = normStr(carrierName);
   let count = 0;
-  for (const upload of uploads.slice(0, 2)) {
+  // Sort newest first to ensure we check recent uploads, not oldest 2
+  const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+  for (const upload of sorted.slice(0, 2)) {
     const rows = (upload.rows as TmsRow[]) ?? [];
     for (const row of rows) {
       const rowOrigin = normStr(row.shipperCity ?? row.originCity ?? row.origin ?? "");

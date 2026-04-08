@@ -50,6 +50,11 @@ import {
   Loader2,
   User,
   UserCheck,
+  Send,
+  XCircle,
+  Clock,
+  History,
+  Copy,
 } from "lucide-react";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -129,6 +134,26 @@ interface FollowupSuggestion {
   carrierName?: string;
 }
 
+interface OutreachLog {
+  id: string;
+  carrierNames: string[];
+  outreachMode: string;
+  timestamp: string;
+  sentAt: string | null;
+  deliveryStatus: string | null;
+  failureReason: string | null;
+  recipients: Array<{
+    carrierId: string | null;
+    carrierName: string;
+    email: string | null;
+    status: "sent" | "failed" | "no_email";
+    error?: string;
+  }> | null;
+  emailDrafts: EmailDraft[] | null;
+}
+
+type PerDraftSendStatus = "idle" | "sending" | "sent" | "failed" | "no_email";
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const INTEREST_STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -205,6 +230,9 @@ export function CarrierOutreachPanel({
   const [showEmails, setShowEmails] = useState(false);
   const [replyInputs, setReplyInputs] = useState<Record<string, string>>({});
   const [expandedReply, setExpandedReply] = useState<string | null>(null);
+  // Per-draft send status (keyed by index)
+  const [draftSendStatus, setDraftSendStatus] = useState<Record<number, PerDraftSendStatus>>({});
+  const [sendOverallStatus, setSendOverallStatus] = useState<"idle" | "sending" | "done">("idle");
   // Carrier suggestion filters
   const [activeOnly, setActiveOnly] = useState(false);
   const [excludeServiceFlags, setExcludeServiceFlags] = useState(false);
@@ -320,6 +348,49 @@ export function CarrierOutreachPanel({
     onError: () => toast({ title: "Failed to update status", variant: "destructive" }),
   });
 
+  const sendOutreachMutation = useMutation({
+    mutationFn: (body: {
+      emailDrafts: EmailDraft[];
+      outreachMode: string;
+      capturedEmails?: Record<string, string>;
+    }) => apiRequest("POST", `/api/lanes/${laneId}/send-outreach-emails`, body).then(r => r.json()),
+    onSuccess: (data: { results: Array<{ carrierId: string | null; carrierName: string; email: string | null; status: string; error?: string }>; sentCount: number; failedCount: number; carriersContactedCount: number; resolved: boolean }) => {
+      // Map results back to per-draft statuses
+      const newStatuses: Record<number, PerDraftSendStatus> = {};
+      emailDrafts.forEach((draft, idx) => {
+        const r = data.results.find(r => r.carrierName === draft.carrierName);
+        newStatuses[idx] = (r?.status as PerDraftSendStatus) ?? "idle";
+      });
+      setDraftSendStatus(newStatuses);
+      setSendOverallStatus("done");
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes", laneId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "carrier-bench"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "outreach-history"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/nba/cards"] });
+      refetchBench();
+      if (data.resolved) {
+        onCarriersContacted?.();
+        toast({ title: "Lane bench complete!", description: "Carrier emails sent — bench resolved. Snoozing 30 days." });
+      } else if (data.failedCount === 0) {
+        toast({ title: `${data.sentCount} email${data.sentCount > 1 ? "s" : ""} sent!`, description: "Outreach logged to lane history." });
+      } else if (data.sentCount > 0) {
+        toast({ title: `${data.sentCount} sent, ${data.failedCount} failed`, description: "Check per-carrier status below.", variant: "destructive" });
+      } else {
+        toast({ title: "All sends failed", description: data.results.map(r => r.error).filter(Boolean).join("; "), variant: "destructive" });
+      }
+    },
+    onError: () => {
+      setSendOverallStatus("idle");
+      toast({ title: "Send failed", description: "Could not reach the email service. Verify configuration.", variant: "destructive" });
+    },
+  });
+
+  const { data: outreachHistory = [], refetch: refetchHistory } = useQuery<OutreachLog[]>({
+    queryKey: ["/api/lanes", laneId, "outreach-history"],
+    queryFn: () => fetch(`/api/lanes/${laneId}/outreach-log`).then(r => r.json()),
+    enabled: !!laneId && open,
+  });
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   const rankedCarriers = suggestionsData?.carriers ?? [];
@@ -405,6 +476,26 @@ export function CarrierOutreachPanel({
       carrierNames: selected.map(c => c.carrierName),
       outreachMode,
       emailDrafts: allDrafts,
+      capturedEmails: Object.keys(emailsToSave).length > 0 ? emailsToSave : undefined,
+    });
+  }
+
+  function handleSendOutreach() {
+    if (emailDrafts.length === 0) {
+      toast({ title: "Generate drafts first before sending" });
+      return;
+    }
+    // Build captured emails map from component state
+    const emailsToSave: Record<string, string> = {};
+    for (const draft of emailDrafts) {
+      const key = draft.carrierId ?? draft.carrierName;
+      if (capturedEmails[key]?.trim()) emailsToSave[key] = capturedEmails[key].trim();
+    }
+    setSendOverallStatus("sending");
+    setDraftSendStatus(Object.fromEntries(emailDrafts.map((_, i) => [i, "sending"])));
+    sendOutreachMutation.mutate({
+      emailDrafts,
+      outreachMode,
       capturedEmails: Object.keys(emailsToSave).length > 0 ? emailsToSave : undefined,
     });
   }
@@ -634,6 +725,9 @@ export function CarrierOutreachPanel({
             <TabsTrigger value="followup" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-followup">
               Follow-up
             </TabsTrigger>
+            <TabsTrigger value="history" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-history">
+              History {outreachHistory.length > 0 ? `(${outreachHistory.length})` : ""}
+            </TabsTrigger>
           </TabsList>
 
           {/* ── Carrier Suggestions Tab ─────────────────────────────────── */}
@@ -805,32 +899,123 @@ export function CarrierOutreachPanel({
             {showEmails && emailDrafts.length > 0 && (
               <div className="mt-4">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs font-semibold text-white/80">Drafted Emails</p>
-                  <button
-                    onClick={() => setShowEmails(false)}
-                    className="text-[10px] text-white/30 hover:text-white/60"
-                  >
-                    Hide
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-semibold text-white/80">Drafted Emails ({emailDrafts.length})</p>
+                    {sendOverallStatus === "done" && (
+                      <span className="text-[9px] text-emerald-400 flex items-center gap-0.5">
+                        <CheckCircle2 className="w-2.5 h-2.5" /> Sent
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => navigator.clipboard.writeText(emailDrafts.map(d => `To: ${d.carrierName}\nSubject: ${d.subject}\n\n${d.body}`).join("\n\n---\n\n"))}
+                      className="text-[10px] text-white/30 hover:text-white/60 flex items-center gap-0.5"
+                      data-testid="btn-copy-all-drafts"
+                      title="Copy all drafts to clipboard"
+                    >
+                      <Copy className="w-2.5 h-2.5" /> Copy all
+                    </button>
+                    <button
+                      onClick={() => setShowEmails(false)}
+                      className="text-[10px] text-white/30 hover:text-white/60"
+                    >
+                      Hide
+                    </button>
+                  </div>
                 </div>
                 <div className="flex flex-col gap-3">
-                  {emailDrafts.map((draft, i) => (
-                    <div key={i} className="bg-white/4 rounded-lg border border-white/8 p-3">
-                      <p className="text-[10px] font-semibold text-amber-300 mb-1">{draft.carrierName}</p>
-                      <p className="text-[10px] text-white/50 mb-1"><span className="text-white/30">Subject:</span> {draft.subject}</p>
-                      <Textarea
-                        value={draft.body}
-                        onChange={e => setEmailDrafts(prev => {
-                          const next = [...prev];
-                          next[i] = { ...next[i], body: e.target.value };
-                          return next;
-                        })}
-                        className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[100px]"
-                        data-testid={`email-draft-${i}`}
-                      />
-                    </div>
-                  ))}
+                  {emailDrafts.map((draft, i) => {
+                    const status = draftSendStatus[i];
+                    return (
+                      <div key={i} className={`rounded-lg border p-3 ${
+                        status === "sent" ? "bg-emerald-500/5 border-emerald-500/20" :
+                        status === "failed" ? "bg-red-500/5 border-red-500/20" :
+                        status === "no_email" ? "bg-orange-500/5 border-orange-500/20" :
+                        "bg-white/4 border-white/8"
+                      }`}>
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-[10px] font-semibold text-amber-300">{draft.carrierName}</p>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => navigator.clipboard.writeText(draft.body)}
+                              className="text-[9px] text-white/30 hover:text-white/60"
+                              title="Copy body"
+                              data-testid={`btn-copy-draft-${i}`}
+                            >
+                              <Copy className="w-2.5 h-2.5" />
+                            </button>
+                            {status === "sent" && (
+                              <span className="text-[9px] text-emerald-400 flex items-center gap-0.5" data-testid={`draft-status-sent-${i}`}>
+                                <CheckCircle2 className="w-2.5 h-2.5" /> Sent
+                              </span>
+                            )}
+                            {status === "failed" && (
+                              <span className="text-[9px] text-red-400 flex items-center gap-0.5" data-testid={`draft-status-failed-${i}`}>
+                                <XCircle className="w-2.5 h-2.5" /> Failed
+                              </span>
+                            )}
+                            {status === "no_email" && (
+                              <span className="text-[9px] text-orange-400 flex items-center gap-0.5" data-testid={`draft-status-no-email-${i}`}>
+                                <AlertCircle className="w-2.5 h-2.5" /> No email
+                              </span>
+                            )}
+                            {status === "sending" && (
+                              <span className="text-[9px] text-blue-400 flex items-center gap-0.5" data-testid={`draft-status-sending-${i}`}>
+                                <Loader2 className="w-2.5 h-2.5 animate-spin" /> Sending
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-white/50 mb-1"><span className="text-white/30">Subject:</span> {draft.subject}</p>
+                        <Textarea
+                          value={draft.body}
+                          onChange={e => setEmailDrafts(prev => {
+                            const next = [...prev];
+                            next[i] = { ...next[i], body: e.target.value };
+                            return next;
+                          })}
+                          disabled={sendOverallStatus !== "idle"}
+                          className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[100px] disabled:opacity-60"
+                          data-testid={`email-draft-${i}`}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
+
+                {/* Send / Log actions inside the drafts block */}
+                {sendOverallStatus === "idle" && (
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      size="sm"
+                      onClick={handleSendOutreach}
+                      disabled={sendOutreachMutation.isPending}
+                      className="flex-1 h-8 text-xs bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                      data-testid="btn-send-emails"
+                    >
+                      {sendOutreachMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Send className="w-3 h-3 mr-1" />}
+                      Send Emails ({emailDrafts.length})
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleLogOutreach}
+                      disabled={outreachLogMutation.isPending}
+                      className="flex-1 h-8 text-xs border-white/20 text-white/60 hover:bg-white/5"
+                      data-testid="btn-log-without-sending"
+                    >
+                      {outreachLogMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <ClipboardCheck className="w-3 h-3 mr-1" />}
+                      Log Only
+                    </Button>
+                  </div>
+                )}
+                {sendOverallStatus === "done" && (
+                  <p className="mt-2 text-[10px] text-emerald-400/70 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Emails sent and logged to lane history. View the History tab for details.
+                  </p>
+                )}
               </div>
             )}
           </TabsContent>
@@ -1005,6 +1190,90 @@ export function CarrierOutreachPanel({
               </div>
             )}
           </TabsContent>
+
+          {/* ── History Tab ──────────────────────────────────────────────── */}
+          <TabsContent value="history" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
+            {outreachHistory.length === 0 ? (
+              <p className="text-xs text-white/40 py-4">
+                No outreach history yet. Send emails to see them logged here.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {outreachHistory.map(log => {
+                  const status = log.deliveryStatus ?? "draft";
+                  const statusConfig = {
+                    sent: { label: "Sent", color: "text-emerald-400", icon: <CheckCircle2 className="w-3 h-3" /> },
+                    partial: { label: "Partial", color: "text-amber-400", icon: <AlertCircle className="w-3 h-3" /> },
+                    failed: { label: "Failed", color: "text-red-400", icon: <XCircle className="w-3 h-3" /> },
+                    draft: { label: "Logged", color: "text-white/40", icon: <ClipboardCheck className="w-3 h-3" /> },
+                  }[status] ?? { label: status, color: "text-white/40", icon: <Clock className="w-3 h-3" /> };
+                  return (
+                    <div key={log.id} className="bg-white/4 rounded-lg border border-white/8 p-3" data-testid={`outreach-log-${log.id}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className={`flex items-center gap-1 text-[10px] font-semibold ${statusConfig.color}`}>
+                              {statusConfig.icon}
+                              {statusConfig.label}
+                            </span>
+                            <span className="text-[9px] text-white/30">·</span>
+                            <span className="text-[9px] text-white/40">
+                              {log.outreachMode === "immediate_plus_lane" ? "Immediate + Lane" : "Lane-Building"}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-white/70 mt-1 font-medium">
+                            {log.carrierNames.join(", ")}
+                          </p>
+                          {log.sentAt && (
+                            <p className="text-[9px] text-white/30 mt-0.5">
+                              Sent {new Date(log.sentAt).toLocaleString()}
+                            </p>
+                          )}
+                          {!log.sentAt && (
+                            <p className="text-[9px] text-white/30 mt-0.5">
+                              Logged {new Date(log.timestamp).toLocaleString()}
+                            </p>
+                          )}
+                          {log.failureReason && (
+                            <p className="text-[9px] text-red-400/70 mt-0.5">Error: {log.failureReason}</p>
+                          )}
+                        </div>
+                        <span className="text-[9px] text-white/30 shrink-0">
+                          {log.carrierNames.length} carrier{log.carrierNames.length !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+
+                      {/* Per-recipient breakdown */}
+                      {log.recipients && log.recipients.length > 0 && (
+                        <div className="mt-2 flex flex-col gap-1">
+                          {log.recipients.map((r, ri) => (
+                            <div key={ri} className="flex items-center gap-2 text-[9px]">
+                              <span className="text-white/50">{r.carrierName}</span>
+                              {r.email && <span className="text-white/30">{r.email}</span>}
+                              {r.status === "sent" && <span className="text-emerald-400 flex items-center gap-0.5"><CheckCircle2 className="w-2 h-2" /> sent</span>}
+                              {r.status === "failed" && <span className="text-red-400 flex items-center gap-0.5"><XCircle className="w-2 h-2" /> {r.error ?? "failed"}</span>}
+                              {r.status === "no_email" && <span className="text-orange-400">no email on file</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Show drafted email subjects */}
+                      {log.emailDrafts && log.emailDrafts.length > 0 && (
+                        <div className="mt-2 flex flex-col gap-0.5">
+                          {log.emailDrafts.map((d, di) => (
+                            <p key={di} className="text-[9px] text-white/30 truncate">
+                              <span className="text-white/20">Subject:</span> {d.subject}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </TabsContent>
         </Tabs>
 
         {/* Sticky action bar */}
@@ -1022,13 +1291,19 @@ export function CarrierOutreachPanel({
           </Button>
           <Button
             size="sm"
-            onClick={handleLogOutreach}
-            disabled={selectedCarriers.size === 0 || outreachLogMutation.isPending}
+            onClick={showEmails && emailDrafts.length > 0 ? handleSendOutreach : handleLogOutreach}
+            disabled={(selectedCarriers.size === 0 && emailDrafts.length === 0) || outreachLogMutation.isPending || sendOutreachMutation.isPending}
             className="flex-1 h-8 text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold"
             data-testid="btn-mark-contacted"
           >
-            {outreachLogMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
-            Mark Contacted ({selectedCarriers.size})
+            {(outreachLogMutation.isPending || sendOutreachMutation.isPending) ? (
+              <Loader2 className="w-3 h-3 animate-spin mr-1" />
+            ) : showEmails && emailDrafts.length > 0 ? (
+              <Send className="w-3 h-3 mr-1" />
+            ) : (
+              <CheckCircle2 className="w-3 h-3 mr-1" />
+            )}
+            {showEmails && emailDrafts.length > 0 ? `Send Emails (${emailDrafts.length})` : `Mark Contacted (${selectedCarriers.size})`}
           </Button>
         </div>
       </SheetContent>

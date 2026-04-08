@@ -550,6 +550,7 @@ export interface IStorage {
   // Lane Carrier Outreach v1 — Outreach Logs
   createCarrierOutreachLog(data: InsertCarrierOutreachLog): Promise<CarrierOutreachLog>;
   getCarrierOutreachLogs(laneId: string): Promise<CarrierOutreachLog[]>;
+  updateCarrierOutreachLog(id: string, fields: Partial<InsertCarrierOutreachLog>): Promise<CarrierOutreachLog>;
 
   // Lane Carrier Outreach v1 — Feature Flags
   getFeatureFlag(orgId: string, flagKey: string): Promise<boolean>;
@@ -3467,6 +3468,11 @@ export class DatabaseStorage implements IStorage {
 
   async getCarrierOutreachLogs(laneId: string): Promise<CarrierOutreachLog[]> {
     return db.select().from(carrierOutreachLogs).where(eq(carrierOutreachLogs.laneId, laneId)).orderBy(desc(carrierOutreachLogs.timestamp));
+  }
+
+  async updateCarrierOutreachLog(id: string, fields: Partial<InsertCarrierOutreachLog>): Promise<CarrierOutreachLog> {
+    const [row] = await db.update(carrierOutreachLogs).set(fields).where(eq(carrierOutreachLogs.id, id)).returning();
+    return row;
   }
 
   // ── Lane Carrier Outreach v1 — Feature Flags ──────────────────────────────

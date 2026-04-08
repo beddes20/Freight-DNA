@@ -15,6 +15,7 @@ import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapac
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
 import { insertCarrierSchema, insertLaneCarrierInterestSchema, type InsertCarrier } from "@shared/schema";
 import { z } from "zod";
+import { sendEmail } from "../emailService";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -776,7 +777,9 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!lane) return;
 
     try {
-      const ranked = await rankCarriersForLane(lane, storage);
+      // Pass existing bench data so ranking can boost carriers with positive prior outcomes
+      const bench = await storage.getLaneCarrierBench(req.params.laneId);
+      const ranked = await rankCarriersForLane(lane, storage, bench);
       res.json({ carriers: ranked });
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Failed to rank carriers" });
@@ -1155,6 +1158,172 @@ Rules for suggestions:
     }
 
     res.json({ suggestions: suggestions.slice(0, 6) });
+  });
+
+  // ── Send Outreach Emails (Phase 1) ────────────────────────────────────────
+  // Sends emails via the configured provider (Resend → SMTP fallback),
+  // creates an outreach log with send-tracking fields, and upserts bench entries.
+
+  app.post("/api/lanes/:laneId/send-outreach-emails", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    if (!lane) return;
+
+    interface SendDraft {
+      carrierId: string | null;
+      carrierName: string;
+      subject: string;
+      body: string;
+      outreachMode?: string;
+      recipientEmail?: string | null;
+    }
+
+    const { emailDrafts, outreachMode = "lane_building", capturedEmails = {} } = req.body as {
+      emailDrafts: SendDraft[];
+      outreachMode?: string;
+      capturedEmails?: Record<string, string>;
+    };
+
+    if (!Array.isArray(emailDrafts) || emailDrafts.length === 0) {
+      return res.status(400).json({ error: "emailDrafts array is required" });
+    }
+
+    // Org-guard: validate every carrierId belongs to caller's org
+    for (const draft of emailDrafts) {
+      if (!draft.carrierId) continue;
+      const c = await storage.getCarrier(draft.carrierId);
+      if (!c || c.orgId !== user.organizationId) {
+        return res.status(403).json({ error: `Carrier ${draft.carrierId} not found in your organization` });
+      }
+    }
+
+    // Persist ad-hoc captured emails to catalog before sending
+    for (const draft of emailDrafts) {
+      const key = draft.carrierId ?? draft.carrierName;
+      const capturedEmail = typeof capturedEmails[key] === "string" ? capturedEmails[key].trim() : null;
+      if (capturedEmail && draft.carrierId) {
+        await storage.updateCarrier(draft.carrierId, user.organizationId, { primaryEmail: capturedEmail }).catch(() => {/*non-fatal*/});
+      }
+    }
+
+    // Build per-carrier recipients list by resolving email addresses
+    type RecipientResult = {
+      carrierId: string | null;
+      carrierName: string;
+      email: string | null;
+      status: "sent" | "failed" | "no_email";
+      error?: string;
+    };
+
+    const results: RecipientResult[] = [];
+    let sentCount = 0;
+    let failedCount = 0;
+
+    for (const draft of emailDrafts) {
+      // Resolve email: captured > catalog primary > catalog backup
+      let email: string | null = null;
+      const key = draft.carrierId ?? draft.carrierName;
+      if (capturedEmails[key]?.trim()) {
+        email = capturedEmails[key].trim();
+      } else if (draft.recipientEmail) {
+        email = draft.recipientEmail;
+      } else if (draft.carrierId) {
+        const c = await storage.getCarrier(draft.carrierId);
+        if (c && c.orgId === user.organizationId) {
+          email = c.primaryEmail ?? c.backupEmail ?? null;
+        }
+      }
+
+      if (!email) {
+        results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email: null, status: "no_email", error: "No email address available" });
+        continue;
+      }
+
+      // Build plain-text version by stripping any HTML
+      const _fromName = process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
+      const plainText = draft.body.replace(/<[^>]+>/g, "").trim();
+      const htmlBody = `<div style="font-family:Arial,sans-serif;max-width:600px;line-height:1.6">${draft.body.replace(/\n/g, "<br/>")}</div><br/><p style="color:#888;font-size:12px">— ${_fromName}</p>`;
+
+      try {
+        const ok = await sendEmail({ to: email, subject: draft.subject, html: htmlBody, text: plainText });
+        if (ok) {
+          results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "sent" });
+          sentCount++;
+        } else {
+          results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "failed", error: "Email provider returned failure" });
+          failedCount++;
+        }
+      } catch (err: any) {
+        results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "failed", error: err?.message ?? "Send error" });
+        failedCount++;
+      }
+    }
+
+    const overallStatus =
+      sentCount === emailDrafts.length ? "sent" :
+      sentCount === 0 ? "failed" :
+      "partial";
+
+    // Create outreach log with send-tracking fields
+    const now = new Date();
+    const log = await storage.createCarrierOutreachLog({
+      orgId: user.organizationId,
+      laneId: req.params.laneId,
+      companyId: lane.companyId ?? null,
+      carrierIds: emailDrafts.map(d => d.carrierId ?? null),
+      carrierNames: emailDrafts.map(d => d.carrierName),
+      actorUserId: user.id,
+      ownerUserId: lane.ownerUserId ?? null,
+      overseerUserId: lane.overseerUserId ?? null,
+      outreachMode,
+      emailDrafts: emailDrafts as any,
+      sentAt: sentCount > 0 ? now : null,
+      deliveryStatus: overallStatus,
+      failureReason: failedCount > 0 ? results.filter(r => r.error).map(r => `${r.carrierName}: ${r.error}`).join("; ") : null,
+      recipients: results as any,
+    });
+
+    // Upsert bench entries for carriers that were contacted (sent or no_email still = attempt)
+    const sentAt = now.toISOString();
+    for (const r of results) {
+      if (r.status === "no_email") continue; // don't mark as contacted if no email existed
+      await storage.upsertLaneCarrierInterest({
+        laneId: req.params.laneId,
+        carrierId: r.carrierId,
+        carrierName: r.carrierName,
+        interestStatus: "needs_follow_up",
+        outreachSentAt: sentAt,
+      });
+    }
+
+    // Update carriersContactedCount on the lane
+    const updatedBench = await storage.getLaneCarrierBench(req.params.laneId);
+    const contactedKeys = new Set<string>();
+    for (const b of updatedBench) {
+      if (!b.outreachSentAt) continue;
+      contactedKeys.add(b.carrierId ?? b.carrierName.toLowerCase().trim());
+    }
+    const newCount = contactedKeys.size;
+    await storage.updateRecurringLane(req.params.laneId, { carriersContactedCount: newCount });
+
+    // Auto-resolve if threshold reached
+    let resolved = false;
+    if (newCount >= LANE_CONFIG.completionCarriersContacted) {
+      const resolveNow = new Date().toISOString();
+      const snoozeUntil = new Date();
+      snoozeUntil.setDate(snoozeUntil.getDate() + LANE_CONFIG.snoozeAfterResolveDays);
+      await storage.updateRecurringLane(req.params.laneId, {
+        resolvedAt: resolveNow,
+        snoozedUntil: snoozeUntil.toISOString().split("T")[0],
+      });
+      await storage.resolveNbaCardsForLane(req.params.laneId);
+      resolved = true;
+    }
+
+    res.json({ log, results, sentCount, failedCount, carriersContactedCount: newCount, resolved, overallStatus });
   });
 
   // ── Outreach Log & Card Completion ────────────────────────────────────────

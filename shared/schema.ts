@@ -1255,6 +1255,13 @@ export const carrierOutreachLogs = pgTable("carrier_outreach_logs", {
   // lane_building | immediate_plus_lane
   emailDrafts: jsonb("email_drafts").default([]),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
+  // Send-tracking fields (Phase 1)
+  sentAt: timestamp("sent_at"),
+  deliveryStatus: varchar("delivery_status").default("draft"),
+  // draft | sending | sent | failed | partial
+  failureReason: text("failure_reason"),
+  recipients: jsonb("recipients"),
+  // [{carrierId, carrierName, email, status: 'sent'|'failed', error?: string}]
 });
 export const insertCarrierOutreachLogSchema = createInsertSchema(carrierOutreachLogs).omit({ id: true, timestamp: true });
 export type InsertCarrierOutreachLog = z.infer<typeof insertCarrierOutreachLogSchema>;
