@@ -3327,8 +3327,34 @@ export class DatabaseStorage implements IStorage {
       const [row] = await db.update(laneCarrierInterest).set({ ...data, updatedAt: new Date() }).where(eq(laneCarrierInterest.id, existingId)).returning();
       return row;
     }
-    const [row] = await db.insert(laneCarrierInterest).values(data).returning();
-    return row;
+
+    // INSERT — for null-carrierId rows the partial unique index may reject concurrent duplicates.
+    // Catch PostgreSQL unique_violation (23505) and retry as update so concurrent requests
+    // from the same user (e.g. double-click) merge cleanly instead of returning a 500.
+    try {
+      const [row] = await db.insert(laneCarrierInterest).values(data).returning();
+      return row;
+    } catch (insertErr: any) {
+      if (insertErr?.code === "23505" && !data.carrierId && data.carrierName) {
+        // Another request beat us to it — fetch the row it created and update instead
+        const [existing] = await db.select({ id: laneCarrierInterest.id })
+          .from(laneCarrierInterest)
+          .where(and(
+            eq(laneCarrierInterest.laneId, data.laneId),
+            isNull(laneCarrierInterest.carrierId),
+            eq(laneCarrierInterest.carrierName, data.carrierName),
+          ))
+          .limit(1);
+        if (existing) {
+          const [row] = await db.update(laneCarrierInterest)
+            .set({ ...data, updatedAt: new Date() })
+            .where(eq(laneCarrierInterest.id, existing.id))
+            .returning();
+          return row;
+        }
+      }
+      throw insertErr;
+    }
   }
 
   async updateLaneCarrierInterest(id: string, data: Partial<InsertLaneCarrierInterest>): Promise<LaneCarrierInterest | undefined> {

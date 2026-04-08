@@ -313,7 +313,7 @@ export async function scoreAllEligibleLanes(
       const { score, factors } = await scoreLane(lane, storage);
       await storage.updateRecurringLane(lane.id, {
         laneScore: score,
-        laneScoreFactors: factors as Record<string, unknown>,
+        laneScoreFactors: factors as unknown as Record<string, unknown>,
         lastScoredAt: now,
       });
     } catch (err) {

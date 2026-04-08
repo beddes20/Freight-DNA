@@ -1221,6 +1221,10 @@ export const laneCarrierInterest = pgTable("lane_carrier_interest", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("lane_carrier_interest_lane_carrier").on(table.laneId, table.carrierId),
+  // Partial unique index: prevents duplicate name-only bench entries under concurrent requests.
+  // PostgreSQL allows multiple NULLs in a standard unique index, so this explicit partial
+  // index covers (laneId, carrierName) WHERE carrier_id IS NULL.
+  uniqueIndex("lane_carrier_interest_name_null_carrier").on(table.laneId, table.carrierName).where(sql`carrier_id IS NULL`),
 ]);
 export const insertLaneCarrierInterestSchema = createInsertSchema(laneCarrierInterest).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertLaneCarrierInterest = z.infer<typeof insertLaneCarrierInterestSchema>;
