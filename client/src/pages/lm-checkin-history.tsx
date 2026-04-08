@@ -36,14 +36,17 @@ export default function LmCheckinHistory() {
   const [filterType, setFilterType] = useState("all");
 
   const managerRoles = ["admin","director","national_account_manager","sales_director","account_manager"];
-  if (!user || !managerRoles.includes(user.role)) {
-    return <div className="p-8 text-muted-foreground text-sm">Access denied.</div>;
-  }
+  const isAuthorized = !!user && managerRoles.includes(user.role);
 
   const params = new URLSearchParams({ from, to });
   const { data: rows = [], isLoading, refetch } = useQuery<CheckinRow[]>({
     queryKey: [`/api/lm-checkins/history?${params.toString()}`],
+    enabled: isAuthorized,
   });
+
+  if (!isAuthorized) {
+    return <div className="p-8 text-muted-foreground text-sm">Access denied.</div>;
+  }
 
   const filtered = filterType === "all" ? rows : rows.filter(r => r.check_type === filterType);
 
