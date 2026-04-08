@@ -150,6 +150,7 @@ interface EmailDraft {
   subject: string;
   body: string;
   outreachMode: string;
+  recipientEmail?: string | null;
 }
 
 interface CarrierInterest {
@@ -289,6 +290,9 @@ export function CarrierOutreachPanel({
   const [importSource, setImportSource] = useState("dat");
   const [parsedImportCarriers, setParsedImportCarriers] = useState<ParsedImportCarrier[] | null>(null);
   const [importResults, setImportResults] = useState<ImportResult[] | null>(null);
+  // ── Ad-hoc email paste state ───────────────────────────────────────────────
+  const [adHocEmailPasteText, setAdHocEmailPasteText] = useState("");
+  const [adHocEmailsExpanded, setAdHocEmailsExpanded] = useState(false);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -402,11 +406,10 @@ export function CarrierOutreachPanel({
       capturedEmails?: Record<string, string>;
     }) => apiRequest("POST", `/api/lanes/${laneId}/send-outreach-emails`, body).then(r => r.json()),
     onSuccess: (data: { results: Array<{ carrierId: string | null; carrierName: string; email: string | null; status: string; error?: string }>; sentCount: number; failedCount: number; carriersContactedCount: number; resolved: boolean }) => {
-      // Map results back to per-draft statuses
+      // Map results back to per-draft statuses by index (safer than name-match for duplicate ad-hoc entries)
       const newStatuses: Record<number, PerDraftSendStatus> = {};
-      emailDrafts.forEach((draft, idx) => {
-        const r = data.results.find(r => r.carrierName === draft.carrierName);
-        newStatuses[idx] = (r?.status as PerDraftSendStatus) ?? "idle";
+      emailDrafts.forEach((_draft, idx) => {
+        newStatuses[idx] = (data.results[idx]?.status as PerDraftSendStatus) ?? "idle";
       });
       setDraftSendStatus(newStatuses);
       setSendOverallStatus("done");
@@ -536,34 +539,88 @@ export function CarrierOutreachPanel({
     }).filter((c): c is ParsedImportCarrier => c !== null);
   }
 
+  /**
+   * Parses a raw string of email addresses (comma, space, or newline separated).
+   * Returns { valid, invalid } arrays.
+   */
+  function parseAdHocEmails(raw: string): { valid: string[]; invalid: string[] } {
+    const EMAIL_RE = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+    const tokens = raw
+      .split(/[\s,;\n]+/)
+      .map(t => t.trim().toLowerCase())
+      .filter(t => t.length > 0);
+    const valid: string[] = [];
+    const invalid: string[] = [];
+    const seen = new Set<string>();
+    for (const token of tokens) {
+      if (seen.has(token)) continue;
+      seen.add(token);
+      if (EMAIL_RE.test(token)) valid.push(token);
+      else invalid.push(token);
+    }
+    return { valid, invalid };
+  }
+
+  const adHocParsed = adHocEmailPasteText.trim() ? parseAdHocEmails(adHocEmailPasteText) : { valid: [], invalid: [] };
+
   function handleGenerateOutreach() {
     const selected = filteredCarriers.filter(c => selectedCarriers.has(c.carrierId ?? c.carrierName));
-    if (selected.length === 0) {
-      toast({ title: "Select at least one carrier first" });
+    if (selected.length === 0 && adHocParsed.valid.length === 0) {
+      toast({ title: "Select at least one carrier or paste email addresses first" });
       return;
     }
+    const origin = lane ? `${lane.origin}${lane.originState ? ", " + lane.originState : ""}` : "";
+    const dest = lane ? `${lane.destination}${lane.destinationState ? ", " + lane.destinationState : ""}` : "";
+    const equipment = lane?.equipmentType ?? "dry van";
+    const subject = `Lane-Building Opportunity: ${origin} → ${dest} (${equipment})`;
+
+    const fallbackBody = `Hi,\n\nI wanted to reach out about a recurring lane we run consistently on the ${origin} → ${dest} corridor. We're looking to build capacity with reliable carriers for this lane.\n\nWould you be interested in discussing a partnership? Even if you don't have a truck available this week, I'd love to connect for future coverage.\n\nLet me know — thanks!`;
+
+    // Build ad-hoc drafts for pasted email addresses, embedding the recipient email directly
+    const adHocDrafts: EmailDraft[] = adHocParsed.valid.map(email => ({
+      carrierId: null,
+      carrierName: `Ad-hoc: ${email}`,
+      subject,
+      body: sharedTemplate.trim() || fallbackBody,
+      outreachMode,
+      recipientEmail: email,
+    }));
+
     // If user has provided a shared template, apply it to all selected carriers directly
     // (skip AI drafting — the shared template IS the email body, personalized only by carrier name)
     if (sharedTemplate.trim()) {
-      const origin = lane ? `${lane.origin}${lane.originState ? ", " + lane.originState : ""}` : "";
-      const dest = lane ? `${lane.destination}${lane.destinationState ? ", " + lane.destinationState : ""}` : "";
-      const equipment = lane?.equipmentType ?? "dry van";
-      const drafts: EmailDraft[] = selected.map(c => ({
+      const carrierDrafts: EmailDraft[] = selected.map(c => ({
         carrierId: c.carrierId,
         carrierName: c.carrierName,
-        subject: `Lane-Building Opportunity: ${origin} → ${dest} (${equipment})`,
+        subject,
         body: sharedTemplate.trim(),
         outreachMode,
       }));
-      setEmailDrafts(drafts);
+      setEmailDrafts([...carrierDrafts, ...adHocDrafts]);
       setShowEmails(true);
       return;
     }
-    draftEmailsMutation.mutate({
-      carrierIds: selected.map(c => c.carrierId),
-      carrierNames: selected.map(c => c.carrierName),
-      outreachMode,
-    });
+
+    if (selected.length > 0) {
+      // AI-draft for catalog carriers; ad-hoc drafts appended after
+      draftEmailsMutation.mutate(
+        {
+          carrierIds: selected.map(c => c.carrierId),
+          carrierNames: selected.map(c => c.carrierName),
+          outreachMode,
+        },
+        {
+          onSuccess: (data: { emails: EmailDraft[] }) => {
+            setEmailDrafts([...(data.emails ?? []), ...adHocDrafts]);
+            setShowEmails(true);
+          },
+        }
+      );
+    } else {
+      // Only ad-hoc emails — show them directly
+      setEmailDrafts(adHocDrafts);
+      setShowEmails(true);
+    }
   }
 
   function handleLogOutreach() {
@@ -1180,6 +1237,102 @@ export function CarrierOutreachPanel({
 
           {/* ── Import Tab ──────────────────────────────────────────────── */}
           <TabsContent value="import" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto" data-testid="tab-content-import">
+
+            {/* ── Paste Emails (Ad-hoc outreach) ─────────────────────────── */}
+            <div className="mb-5">
+              <button
+                onClick={() => setAdHocEmailsExpanded(v => !v)}
+                className="w-full flex items-center justify-between gap-2 py-2 text-left"
+                data-testid="btn-toggle-paste-emails"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded bg-blue-500/20 flex items-center justify-center shrink-0">
+                    <Mail className="w-3 h-3 text-blue-400" />
+                  </div>
+                  <span className="text-xs font-semibold text-white/80">Paste Email Addresses</span>
+                  {adHocParsed.valid.length > 0 && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-300">
+                      {adHocParsed.valid.length} ready
+                    </span>
+                  )}
+                </div>
+                {adHocEmailsExpanded ? <ChevronUp className="w-3.5 h-3.5 text-white/40" /> : <ChevronDown className="w-3.5 h-3.5 text-white/40" />}
+              </button>
+
+              {adHocEmailsExpanded && (
+                <div className="flex flex-col gap-3 mt-2 p-3 bg-white/3 border border-white/8 rounded-lg">
+                  <p className="text-[10px] text-white/50">
+                    Paste email addresses for carriers not in the catalog — from DAT, broker groups, etc. These will be included when you send outreach. No carrier records are created.
+                  </p>
+                  <Textarea
+                    value={adHocEmailPasteText}
+                    onChange={e => setAdHocEmailPasteText(e.target.value)}
+                    placeholder={"carrier@example.com, dispatcher@trucking.com\nops@freightco.com"}
+                    className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[80px] placeholder:text-white/20 font-mono"
+                    data-testid="textarea-adhoc-emails"
+                  />
+
+                  {/* Parsed result display */}
+                  {adHocEmailPasteText.trim() && (
+                    <div className="flex flex-col gap-1.5">
+                      {adHocParsed.valid.length > 0 && (
+                        <div className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                          <span className="text-[10px] text-emerald-300 font-medium">
+                            {adHocParsed.valid.length} valid address{adHocParsed.valid.length !== 1 ? "es" : ""} found
+                          </span>
+                        </div>
+                      )}
+                      {adHocParsed.invalid.length > 0 && (
+                        <div className="flex items-start gap-1.5">
+                          <AlertCircle className="w-3 h-3 text-orange-400 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="text-[10px] text-orange-300">
+                              {adHocParsed.invalid.length} invalid (will be skipped):
+                            </span>
+                            <span className="text-[10px] text-orange-400/70 ml-1 break-all">
+                              {adHocParsed.invalid.join(", ")}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      {adHocParsed.valid.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {adHocParsed.valid.map((email, i) => (
+                            <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-300 font-mono">
+                              {email}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {adHocEmailPasteText.trim() && (
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => setAdHocEmailPasteText("")}
+                        variant="outline"
+                        className="h-7 text-[10px] border-white/15 text-white/40 hover:bg-white/5"
+                        data-testid="btn-clear-adhoc-emails"
+                      >
+                        Clear
+                      </Button>
+                      {adHocParsed.valid.length > 0 && (
+                        <p className="text-[10px] text-blue-400/70 flex items-center gap-1 flex-1">
+                          <Mail className="w-2.5 h-2.5" />
+                          These will be included when you generate &amp; send outreach from the Carriers tab
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-white/8 mb-4" />
+
             {importResults ? (
               /* Success state — show import results */
               <div className="flex flex-col gap-4">
@@ -1577,15 +1730,21 @@ export function CarrierOutreachPanel({
                       {/* Per-recipient breakdown */}
                       {log.recipients && log.recipients.length > 0 && (
                         <div className="mt-2 flex flex-col gap-1">
-                          {log.recipients.map((r, ri) => (
-                            <div key={ri} className="flex items-center gap-2 text-[9px]">
-                              <span className="text-white/50">{r.carrierName}</span>
-                              {r.email && <span className="text-white/30">{r.email}</span>}
-                              {r.status === "sent" && <span className="text-emerald-400 flex items-center gap-0.5"><CheckCircle2 className="w-2 h-2" /> sent</span>}
-                              {r.status === "failed" && <span className="text-red-400 flex items-center gap-0.5"><XCircle className="w-2 h-2" /> {r.error ?? "failed"}</span>}
-                              {r.status === "no_email" && <span className="text-orange-400">no email on file</span>}
-                            </div>
-                          ))}
+                          {log.recipients.map((r, ri) => {
+                            const isAdHoc = r.carrierId === null && r.carrierName.startsWith("Ad-hoc:");
+                            const displayName = isAdHoc ? (r.email ?? r.carrierName) : r.carrierName;
+                            return (
+                              <div key={ri} className="flex items-center gap-2 text-[9px] flex-wrap">
+                                {isAdHoc && (
+                                  <span className="px-1 py-0.5 rounded bg-blue-500/15 border border-blue-500/25 text-blue-400">Ad-hoc</span>
+                                )}
+                                <span className="text-white/50">{displayName}</span>
+                                {r.status === "sent" && <span className="text-emerald-400 flex items-center gap-0.5"><CheckCircle2 className="w-2 h-2" /> sent</span>}
+                                {r.status === "failed" && <span className="text-red-400 flex items-center gap-0.5"><XCircle className="w-2 h-2" /> {r.error ?? "failed"}</span>}
+                                {r.status === "no_email" && <span className="text-orange-400">no email on file</span>}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
 
@@ -1613,12 +1772,12 @@ export function CarrierOutreachPanel({
             variant="outline"
             size="sm"
             onClick={handleGenerateOutreach}
-            disabled={selectedCarriers.size === 0 || draftEmailsMutation.isPending}
+            disabled={(selectedCarriers.size === 0 && adHocParsed.valid.length === 0) || draftEmailsMutation.isPending}
             className="flex-1 h-8 text-xs border-amber-500/30 text-amber-300 hover:bg-amber-500/10"
             data-testid="btn-generate-outreach"
           >
             {draftEmailsMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Mail className="w-3 h-3 mr-1" />}
-            Generate Carrier Outreach ({selectedCarriers.size})
+            Generate Outreach ({selectedCarriers.size + adHocParsed.valid.length})
           </Button>
           <Button
             size="sm"
