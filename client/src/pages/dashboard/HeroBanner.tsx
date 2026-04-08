@@ -33,15 +33,7 @@ export function HeroBanner({ currentUser, briefingData, isDirector, onOpenLayout
           <p className="text-xs font-medium tracking-widest uppercase mb-1" style={{ color: "#ffb400" }}>
             {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
           </p>
-          <h2 className="text-xl font-bold leading-tight text-white">
-            {(() => {
-              const h = new Date().getHours();
-              const greeting = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-              const first = currentUser?.name?.split(" ")[0];
-              return first ? `${greeting}, ${first}` : greeting;
-            })()}
-          </h2>
-          <p className="mt-1.5 text-sm tracking-wide" style={{ color: "#ffc333" }} data-testid="text-dna-tagline-hero">
+          <p className="mt-0.5 text-sm tracking-wide" style={{ color: "#ffc333" }} data-testid="text-dna-tagline-hero">
             <span className="font-bold">DNA</span>
             <span className="mx-2" style={{ color: "#444" }}>·</span>
             <span className="font-bold">D</span>own <span className="font-bold">N</span>ot <span className="font-bold">A</span>cross
