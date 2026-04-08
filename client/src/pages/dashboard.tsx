@@ -695,6 +695,9 @@ export default function Dashboard() {
   const completedCount = myTasks.filter(t => t.status === "completed").length;
   const displayTasks = openTasks.slice(0, 10);
 
+  // Lane procurement tasks — created when a lane is assigned in the work queue
+  const laneProcurementTasks = openTasks.filter(t => (t.laneContext as any)?.type === "lane_procurement");
+
   // AM NOW zone: RFPs due within 7 days (compact strip)
   const rfp7Days = urgentRfps.filter((rfp: any) => {
     if (!rfp.dueDate) return false;
@@ -707,7 +710,11 @@ export default function Dashboard() {
   const tasksDueToday = openTasks.filter(t => t.dueDate && t.dueDate <= todayStr);
 
   // Split open tasks into "incoming" (assigned by others, not yet acknowledged) and regular
-  const incomingTasks = displayTasks.filter(t => t.assignedBy !== currentUser?.id && taskAssignedNotifMap.has(t.id));
+  // Lane procurement tasks are always treated as "incoming" so they surface prominently
+  const incomingTasks = displayTasks.filter(t =>
+    (t.assignedBy !== currentUser?.id && taskAssignedNotifMap.has(t.id)) ||
+    (t.laneContext as any)?.type === "lane_procurement"
+  );
   const regularTasks = displayTasks.filter(t => !incomingTasks.includes(t));
 
   const toggleStatusMutation = useMutation({
@@ -1766,6 +1773,40 @@ export default function Dashboard() {
               );
             })}
           </CardContent>}
+        </Card>
+      )}
+
+      {laneProcurementTasks.length > 0 && (
+        <Card className="border-l-4 border-l-teal-500 dark:border-l-teal-500 bg-teal-50/30 dark:bg-teal-950/20" data-testid="card-lane-assigned-alert">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base text-teal-700 dark:text-teal-400">
+              <Truck className="h-4 w-4" />
+              Lane{laneProcurementTasks.length !== 1 ? "s" : ""} Assigned — Ready to Work
+              <Badge className="ml-auto bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-300 font-normal border-teal-300">
+                {laneProcurementTasks.length} lane{laneProcurementTasks.length !== 1 ? "s" : ""}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-2">
+            {laneProcurementTasks.map(task => {
+              const corridor = task.title.replace(/^Work assigned lane:\s*/i, "").replace(/^Unknown Customer\s*—\s*/i, "");
+              return (
+                <Link key={task.id} href="/lanes/work-queue">
+                  <div className="flex items-center justify-between gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer" data-testid={`lane-assigned-row-${task.id}`}>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{corridor}</p>
+                      {task.description && (
+                        <p className="text-xs text-muted-foreground truncate">{task.description.split("\n")[0]}</p>
+                      )}
+                    </div>
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium shrink-0 bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400">
+                      Work queue →
+                    </span>
+                  </div>
+                </Link>
+              );
+            })}
+          </CardContent>
         </Card>
       )}
 

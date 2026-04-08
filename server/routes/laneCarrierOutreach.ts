@@ -800,14 +800,17 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         emailDrafts: [],
       });
 
-      // In-app notification — only when assigning to someone other than yourself
-      if (ownerUserId && ownerUserId !== user.id) {
-        // lane.origin already includes state (e.g. "laredo, tx") — use as-is
+      // In-app notification — always notify the assignee (includes self-assign)
+      if (ownerUserId) {
         const origin = lane.origin;
         const dest = lane.destination;
         const loadsWk = lane.avgLoadsPerWeek ? `${parseFloat(lane.avgLoadsPerWeek).toFixed(1)}/wk` : null;
         const equip = lane.equipmentType ?? null;
-        const bodyParts = [loadsWk, equip ? `${equip} equipment` : null, "Open your Lane Work Queue to start carrier outreach."].filter(Boolean);
+        const bodyParts = [
+          loadsWk,
+          equip ? `${equip} equipment` : null,
+          "Open your Lane Work Queue to start carrier outreach.",
+        ].filter(Boolean);
         await storage.createNotification({
           userId: ownerUserId,
           type: "lane_assigned",
