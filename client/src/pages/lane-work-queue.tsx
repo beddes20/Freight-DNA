@@ -457,6 +457,36 @@ export default function LaneWorkQueuePage() {
                 <p className="text-xs text-muted-foreground mt-1">No eligible lanes need attention right now.</p>
               </div>
             )}
+
+            {/* Admin debug panel — queue correctness at a glance */}
+            {user?.role === "admin" && queue && !isLoading && (
+              <details className="mt-8 border border-border rounded-lg overflow-hidden" data-testid="admin-debug-panel">
+                <summary className="px-4 py-2 text-[11px] text-muted-foreground cursor-pointer select-none hover:bg-muted/40 transition-colors">
+                  Admin: Queue Debug ({totalLanes} lanes across {Object.values(queue).filter(Array.isArray).filter(a => a.length > 0).length} buckets)
+                </summary>
+                <div className="px-4 py-3 bg-muted/20 font-mono text-[10px] leading-relaxed space-y-2">
+                  {(["unassigned", "noContactable", "assignedUntouched", "inProgress"] as const).map(bucket => (
+                    <div key={bucket}>
+                      <span className="text-foreground font-semibold">{bucket}</span>
+                      <span className="text-muted-foreground"> ({queue[bucket].length})</span>
+                      {queue[bucket].length > 0 && (
+                        <ul className="pl-3 mt-0.5 space-y-0.5">
+                          {queue[bucket].map(item => (
+                            <li key={item.lane.id} className="text-muted-foreground">
+                              {item.lane.id.slice(0, 8)}… {item.lane.origin}→{item.lane.destination}
+                              {" | "}owner={item.lane.ownerName ?? "none"}
+                              {" | "}contacted={item.lane.carriersContactedCount ?? 0}
+                              {" | "}bench={item.totalBenchCount}
+                              {" | "}contactable={item.contactableCount}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </>
         )}
       </div>

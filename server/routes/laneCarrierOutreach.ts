@@ -497,6 +497,15 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
     try {
       const queue = await storage.getLaneWorkQueue(user.organizationId, LANE_CONFIG.completionCarriersContacted);
+      // Debug summary log — helps verify bucket distribution in dev/staging without digging into code
+      const totals = {
+        unassigned: queue.unassigned.length,
+        noContactable: queue.noContactable.length,
+        assignedUntouched: queue.assignedUntouched.length,
+        inProgress: queue.inProgress.length,
+        total: queue.unassigned.length + queue.noContactable.length + queue.assignedUntouched.length + queue.inProgress.length,
+      };
+      console.log(`[work-queue] org=${user.organizationId} buckets=${JSON.stringify(totals)} requestedBy=${user.id}(${user.role})`);
       res.json(queue);
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Failed to load work queue" });
