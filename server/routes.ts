@@ -2041,6 +2041,45 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       };
 
       const rfp = await storage.createRfp(rfpData);
+
+      // Auto-create a coverage-review task for the AM when the upload has extracted lanes.
+      // Non-fatal: a task creation failure must never block the upload response.
+      if (result.highVolumeLanes && result.highVolumeLanes.length >= 1) {
+        try {
+          const existingCoverageTask = await storage.findRfpCoverageReviewTask(rfp.id);
+          if (!existingCoverageTask) {
+            const currentUser = await getCurrentUser(req);
+            const assignee = company.assignedTo ?? currentUser?.id;
+            if (assignee) {
+              const assignedBy = currentUser?.id ?? assignee;
+              const laneCount = result.highVolumeLanes.length;
+              const topLanes = result.highVolumeLanes
+                .slice(0, 3)
+                .map((l: any) => l.lane || `${l.origin || "?"} → ${l.destination || "?"}`)
+                .filter(Boolean)
+                .join("; ");
+              await storage.createTask({
+                title: `RFP Coverage Review: ${rfpData.title}`,
+                notes: `New RFP uploaded with ${laneCount} high-volume lane${laneCount !== 1 ? "s" : ""}. Top lanes: ${topLanes}. Open the RFP tab to review uncovered facility sites, identify missing contacts, and assign relationship owners to key locations.`,
+                status: "open",
+                dueDate: null,
+                assignedTo: assignee,
+                assignedBy,
+                companyId: rfp.companyId,
+                contactId: null,
+                orgId: req.session.organizationId ?? null,
+                companyName: company.name ?? null,
+                contactName: null,
+                attachedLaneData: [{ type: "rfp_coverage_review", rfpId: rfp.id, laneCount }],
+                createdAt: new Date().toISOString(),
+              });
+            }
+          }
+        } catch (taskErr) {
+          console.error("[rfp-upload] Failed to create coverage-review task (non-fatal):", taskErr);
+        }
+      }
+
       res.status(201).json({ rfp, analysis: result.analysis, headers: result.headers, highVolumeLanes: result.highVolumeLanes, previewRows: result.rows.slice(0, 10), sheetName: result.sheetName });
     } catch (error) {
       console.error("Error uploading RFP:", error);

@@ -1,18 +1,17 @@
 /**
  * NBA Phase 1 Engine — Trust-First Freight Growth Recommendations
  *
- * Implements 5 high-confidence rules that generate persistent nba_cards.
+ * Implements 6 high-confidence rules that generate persistent nba_cards.
  * Rules are evaluated per account; collision logic selects exactly ONE card per account.
  * All cards are written to the database — the UI reads from nba_cards, not from this engine directly.
  *
  * Rule priority (highest first):
- *   R1  Load Decline        Protect         financial monthly comparison
- *   R2  Single-Thread Risk  Protect·Deepen  1 contact + stale
- *   R3  Stale Account       Protect·Execute 21+ days no touch + revenue
- *   R5  Overdue Next Action Execute         overdue task + contextual boosters
- *   R7  Spot-to-Contract    Execute·Grow    spotLoads > 0 + no awards
- *
- * R9 (Contact Regression) is queued as fast-follow — not activated in Phase 1.
+ *   R1  Load Decline          Protect         financial monthly comparison
+ *   R2  Single-Thread Risk    Protect·Deepen  1 contact + stale
+ *   R3  Stale Account         Protect·Execute 21+ days no touch + revenue
+ *   R5  Overdue Next Action   Execute         overdue task + contextual boosters
+ *   R7  Spot-to-Contract      Execute·Grow    spotLoads > 0 + no awards
+ *   R9  RFP Coverage Gap      Grow·Deepen     2+ uncovered high-volume RFP facilities + no recent touch
  *
  * Analytics separation (locked spec):
  *   fired_count  = all generated cards including superseded/expired
@@ -22,7 +21,7 @@
  */
 
 import type { IStorage } from "./storage";
-import type { Company, Contact, Touchpoint, Task, FinancialUpload, MarketShareEntry, Award } from "../shared/schema";
+import type { Company, Contact, Touchpoint, Task, FinancialUpload, MarketShareEntry, Award, Rfp } from "../shared/schema";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,7 +30,8 @@ export type Phase1RuleType =
   | "single_thread_risk"
   | "stale_account"
   | "overdue_next_action"
-  | "spot_to_contract";
+  | "spot_to_contract"
+  | "rfp_coverage_gap";
 
 export type Phase1OutcomeType = "protect" | "execute" | "grow" | "deepen";
 
@@ -446,6 +446,101 @@ function evalR7(s: Phase1Signals): CardCandidate | null {
   };
 }
 
+/** R9 — RFP Coverage Gap (Grow · Deepen)
+ *
+ * Fires when the company's RFP data contains 2+ uncovered high-volume facility
+ * sites (no contact owns those locations) and the AM hasn't touched the account
+ * in more than 7 days. Suppressed for trivial or low-volume gaps.
+ */
+function evalR9(s: Phase1Signals, companyRfps: Rfp[]): CardCandidate | null {
+  const { contacts, daysSinceLastTouch, company, tier } = s;
+
+  if (companyRfps.length === 0) return null;
+
+  // Suppression: rep touched very recently — let current cadence play out
+  if (daysSinceLastTouch !== null && daysSinceLastTouch <= 7) return null;
+
+  // Build facility map from all RFPs for this company
+  const facilityMap = new Map<string, { name: string; state: string; totalVolume: number }>();
+
+  for (const rfp of companyRfps) {
+    const fd = rfp.fileData as { highVolumeLanes?: any[] } | null;
+    if (!fd?.highVolumeLanes) continue;
+
+    for (const lane of fd.highVolumeLanes) {
+      const addFacility = (name: string, state: string) => {
+        if (!name) return;
+        const key = `${name.toLowerCase()}|${state.toLowerCase()}`;
+        const existing = facilityMap.get(key);
+        if (existing) {
+          existing.totalVolume += lane.volume || 0;
+        } else {
+          facilityMap.set(key, { name, state, totalVolume: lane.volume || 0 });
+        }
+      };
+      addFacility(lane.origin || "", lane.originState || "");
+      addFacility(lane.destination || "", lane.destinationState || "");
+    }
+  }
+
+  if (facilityMap.size === 0) return null;
+
+  // Determine uncovered facilities using same string-match logic as the API route
+  const uncovered: Array<{ name: string; state: string; totalVolume: number }> = [];
+
+  for (const [, f] of facilityMap) {
+    const fLow = f.name.toLowerCase();
+    const sLow = f.state.toLowerCase();
+    const fullLow = f.state ? `${fLow}, ${sLow}` : fLow;
+
+    const covered = contacts.some(c => {
+      const lanes = (c.lanes ?? []).map((l: string) => l.toLowerCase().trim());
+      const regions = (c.regions ?? []).map((r: string) => r.toLowerCase().trim());
+      return (
+        lanes.some(l => l.includes(fLow) || fLow.includes(l) || l.includes(fullLow)) ||
+        regions.some(r => r.includes(fLow) || fLow.includes(r) || (sLow.length >= 2 && r === sLow) || r.includes(fullLow))
+      );
+    });
+
+    if (!covered && f.totalVolume > 0) uncovered.push(f);
+  }
+
+  // Suppression: fewer than 2 uncovered sites — not a meaningful pattern
+  if (uncovered.length < 2) return null;
+
+  uncovered.sort((a, b) => b.totalVolume - a.totalVolume);
+  const topFacility = uncovered[0];
+
+  // Suppression: top uncovered facility is low-volume — not worth a card
+  if (topFacility.totalVolume < 100) return null;
+
+  const totalVolume = uncovered.reduce((sum, f) => sum + f.totalVolume, 0);
+  const facLabel = topFacility.state
+    ? `${topFacility.name}, ${topFacility.state}`
+    : topFacility.name;
+
+  const confidence = (uncovered.length >= 4 || topFacility.totalVolume >= 500) ? "high" : "medium";
+
+  return {
+    ruleType: "rfp_coverage_gap",
+    outcomeType: "grow",
+    confidence,
+    signalCount: uncovered.length,
+    signalSummary: [
+      `${uncovered.length} uncovered facility sites in RFP data`,
+      `Top gap: ${facLabel} (${topFacility.totalVolume.toLocaleString()} loads/yr)`,
+      `${totalVolume.toLocaleString()} total loads/yr across uncovered sites`,
+    ],
+    whyThisNow: `${company.name}'s RFP data shows ${uncovered.length} facility sites with no assigned contacts — ${facLabel} alone represents ${topFacility.totalVolume.toLocaleString()} loads/yr of untapped relationship opportunity.`,
+    suggestedAction: `Ask your existing contacts at ${company.name} for introductions at ${facLabel}. Map who owns inbound/outbound freight decisions at each uncovered site.`,
+    expectedOutcome: "Add at least one contact per uncovered high-volume facility to build multi-thread coverage and reduce single-thread risk across the account's network.",
+    growthLever: "network_expansion",
+    relationshipMove: "intro_request",
+    accountTier: tier,
+    urgencyScore: daysSinceLastTouch ?? 0,
+  };
+}
+
 // ── Per-company evaluation ────────────────────────────────────────────────────
 
 /**
@@ -460,20 +555,25 @@ export async function evaluateCompany(
   uploads: FinancialUpload[],
   allAwards: Award[],
   openRfpCompanyIds: Set<string>,
+  allRfps: Rfp[] = [],
 ): Promise<CompanyEvalResult> {
   const signals = await gatherPhase1Signals(company, orgId, userId, storage, uploads, allAwards);
 
   // Inject open-RFP signal (gathered outside at batch level for efficiency)
   (signals as any).hasOpenRfp = openRfpCompanyIds.has(company.id);
 
+  // Filter RFPs to this company for R9
+  const companyRfps = allRfps.filter(r => r.companyId === company.id);
+
   // Evaluate rules in priority order
   const candidates: CardCandidate[] = [];
 
-  const r1 = evalR1(signals);             if (r1) candidates.push(r1);
-  const r2 = evalR2(signals);             if (r2) candidates.push(r2);
-  const r3 = evalR3(signals);             if (r3) candidates.push(r3);
-  const r5 = evalR5(signals, userId);     if (r5) candidates.push(r5);
-  const r7 = evalR7(signals);             if (r7) candidates.push(r7);
+  const r1 = evalR1(signals);                   if (r1) candidates.push(r1);
+  const r2 = evalR2(signals);                   if (r2) candidates.push(r2);
+  const r3 = evalR3(signals);                   if (r3) candidates.push(r3);
+  const r5 = evalR5(signals, userId);           if (r5) candidates.push(r5);
+  const r7 = evalR7(signals);                   if (r7) candidates.push(r7);
+  const r9 = evalR9(signals, companyRfps);      if (r9) candidates.push(r9);
 
   if (candidates.length === 0) {
     return { companyId: company.id, companyName: company.name, winner: null, superseded: [] };
@@ -542,6 +642,7 @@ export async function runPhase1EngineForOrg(
           uploads,
           orgAwards,
           openRfpCompanyIds,
+          allRfps,
         ).then(result => ({ userId: company.assignedTo!, result }))
       )
     );

@@ -55,6 +55,7 @@ const RULE_LABELS: Record<string, string> = {
   stale_account:       "Stale Account",
   overdue_next_action: "Overdue Action",
   spot_to_contract:    "Spot-to-Contract",
+  rfp_coverage_gap:    "RFP Coverage Gap",
 };
 
 const OUTCOME_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {

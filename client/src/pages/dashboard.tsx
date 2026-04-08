@@ -65,6 +65,7 @@ import { WeeklyCommitmentsPanel, TeamCommitmentsPortlet } from "./dashboard/Week
 import { TasksSection } from "./dashboard/TasksSection";
 import { TeamDirectorySection } from "./dashboard/TeamDirectorySection";
 import { NbaDashboardPanel } from "@/components/NbaDashboardPanel";
+import { CoverageGapsPortlet } from "./dashboard/CoverageGapsPortlet";
 
 const METRIC_LABELS: Record<string, string> = {
   contacts_added: "New Contacts",
@@ -1110,6 +1111,13 @@ export default function Dashboard() {
               localStorage.setItem("dash_account_growth_collapsed", String(next));
             }}
           />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── RFP Coverage Gaps (AM only) ──────────────────────────────────────── */}
+      {isAm && (
+        <PortletErrorBoundary label="Coverage Gaps">
+          <CoverageGapsPortlet />
         </PortletErrorBoundary>
       )}
 

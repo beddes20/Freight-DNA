@@ -1337,4 +1337,119 @@ export function registerDashboardRoutes(app: Express): void {
     }
   });
 
+  // ── AM Coverage Gaps portlet ──────────────────────────────────────────────
+  // Returns the top uncovered high-volume RFP facility sites across all of
+  // the current AM's accounts. Reuses the same facility-coverage algorithm as
+  // GET /api/companies/:id/facility-coverage — no new schema required.
+  // Only produces results for account_manager role; returns [] for all others.
+  app.get("/api/dashboard/coverage-gaps", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      // Only meaningful for AMs — avoids expensive multi-company fan-out for other roles.
+      if (user.role !== "account_manager") return res.json([]);
+
+      const [allRfps, allCompanies] = await Promise.all([
+        storage.getRfps(),
+        storage.getCompanies(user.organizationId),
+      ]);
+
+      const visibleIds = await getVisibleCompanyIds(user);
+      const scopedCompanies = allCompanies.filter(c =>
+        !c.archivedAt && (visibleIds === null || visibleIds.includes(c.id))
+      );
+      const companyMap = new Map(scopedCompanies.map(c => [c.id, c]));
+
+      // Find which companies have at least one RFP with extracted lane data
+      const companiesWithLanes = new Set<string>();
+      for (const rfp of allRfps) {
+        if (!companyMap.has(rfp.companyId)) continue;
+        const fd = rfp.fileData as { highVolumeLanes?: unknown[] } | null;
+        if (fd?.highVolumeLanes && fd.highVolumeLanes.length > 0) {
+          companiesWithLanes.add(rfp.companyId);
+        }
+      }
+
+      interface GapRow {
+        companyId: string;
+        companyName: string;
+        facilityName: string;
+        state: string;
+        type: "origin" | "destination";
+        totalVolume: number;
+        laneCount: number;
+        rfpTitles: string[];
+      }
+
+      const allGaps: GapRow[] = [];
+
+      for (const companyId of companiesWithLanes) {
+        const company = companyMap.get(companyId)!;
+        const contacts = await storage.getContactsByCompany(companyId);
+        const companyRfps = allRfps.filter(r => r.companyId === companyId);
+
+        // Build facility map — same algorithm as /api/companies/:id/facility-coverage
+        const facilityMap = new Map<string, GapRow>();
+
+        for (const rfp of companyRfps) {
+          const fd = rfp.fileData as { highVolumeLanes?: any[] } | null;
+          if (!fd?.highVolumeLanes) continue;
+
+          for (const lane of fd.highVolumeLanes) {
+            const addFacility = (name: string, state: string, type: "origin" | "destination") => {
+              if (!name) return;
+              const key = `${name.toLowerCase()}|${state.toLowerCase()}|${type}`;
+              const existing = facilityMap.get(key);
+              if (existing) {
+                existing.totalVolume += lane.volume || 0;
+                existing.laneCount += 1;
+                if (!existing.rfpTitles.includes(rfp.title)) existing.rfpTitles.push(rfp.title);
+              } else {
+                facilityMap.set(key, {
+                  companyId,
+                  companyName: company.name,
+                  facilityName: name,
+                  state,
+                  type,
+                  totalVolume: lane.volume || 0,
+                  laneCount: 1,
+                  rfpTitles: [rfp.title],
+                });
+              }
+            };
+            addFacility(lane.origin || "", lane.originState || "", "origin");
+            addFacility(lane.destination || "", lane.destinationState || "", "destination");
+          }
+        }
+
+        // Determine which facilities are uncovered by any contact
+        for (const [, f] of facilityMap) {
+          const fLow = f.facilityName.toLowerCase();
+          const sLow = f.state.toLowerCase();
+          const fullLow = f.state ? `${fLow}, ${sLow}` : fLow;
+
+          const covered = contacts.some(c => {
+            const lanes = (c.lanes ?? []).map((l: string) => l.toLowerCase().trim());
+            const regions = (c.regions ?? []).map((r: string) => r.toLowerCase().trim());
+            return (
+              lanes.some(l => l.includes(fLow) || fLow.includes(l) || l.includes(fullLow)) ||
+              regions.some(r => r.includes(fLow) || fLow.includes(r) || (sLow.length >= 2 && r === sLow) || r.includes(fullLow))
+            );
+          });
+
+          // Only surface non-trivial gaps — filter out zero-volume entries
+          if (!covered && f.totalVolume > 0) allGaps.push(f);
+        }
+      }
+
+      // Sort by volume descending; cap at 15 rows to keep the portlet light
+      allGaps.sort((a, b) => b.totalVolume - a.totalVolume);
+      res.json(allGaps.slice(0, 15));
+    } catch (err) {
+      console.error("Coverage gaps error:", err);
+      res.status(500).json({ error: "Failed to load coverage gaps" });
+    }
+  });
+
 }
