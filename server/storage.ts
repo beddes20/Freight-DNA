@@ -553,7 +553,7 @@ export interface IStorage {
 
   // Lane Carrier Outreach v1.5 — Assignment + Work Queue
   assignLaneOwner(laneId: string, orgId: string, ownerUserId: string | null, assignedByUserId: string): Promise<RecurringLane | undefined>;
-  getLaneWorkQueue(orgId: string, completionThreshold: number): Promise<LaneWorkQueueResult>;
+  getLaneWorkQueue(orgId: string, completionThreshold: number, scopedUserIds?: string[]): Promise<LaneWorkQueueResult>;
 }
 
 const pool = new Pool({
@@ -3463,10 +3463,10 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async getLaneWorkQueue(orgId: string, completionThreshold: number): Promise<LaneWorkQueueResult> {
+  async getLaneWorkQueue(orgId: string, completionThreshold: number, scopedUserIds?: string[]): Promise<LaneWorkQueueResult> {
     // Fetch all eligible, non-snoozed, non-preferred lanes for the org
     const today = new Date().toISOString().split("T")[0];
-    const eligibleLanes = await db.select().from(recurringLanes).where(
+    const eligibleLanesAll = await db.select().from(recurringLanes).where(
       and(
         eq(recurringLanes.orgId, orgId),
         eq(recurringLanes.isEligible, true),
@@ -3475,6 +3475,13 @@ export class DatabaseStorage implements IStorage {
         isNull(recurringLanes.resolvedAt),
       )
     ).orderBy(desc(recurringLanes.laneScore));
+
+    // Hierarchy scoping: admins/directors pass no scopedUserIds and see everything.
+    // NAMs and LMs pass their team hierarchy IDs; they see unassigned lanes (any
+    // manager can claim or assign those) plus lanes owned by someone in their tree.
+    const eligibleLanes = scopedUserIds && scopedUserIds.length > 0
+      ? eligibleLanesAll.filter(l => !l.ownerUserId || scopedUserIds.includes(l.ownerUserId))
+      : eligibleLanesAll;
 
     if (eligibleLanes.length === 0) {
       return { unassigned: [], noContactable: [], assignedUntouched: [], inProgress: [] };
