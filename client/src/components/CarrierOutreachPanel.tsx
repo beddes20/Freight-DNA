@@ -50,6 +50,7 @@ import {
   Loader2,
   User,
   UserCheck,
+  UserX,
   Send,
   XCircle,
   Clock,
@@ -375,11 +376,11 @@ export function CarrierOutreachPanel({
   const assignLaneMutation = useMutation({
     mutationFn: (ownerUserId: string | null) =>
       apiRequest("POST", `/api/recurring-lanes/${laneId}/assign`, { ownerUserId }).then(r => r.json()),
-    onSuccess: () => {
+    onSuccess: (_data, ownerUserId) => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes", laneId] });
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
-      toast({ title: "Lane assigned" });
+      toast({ title: ownerUserId === null ? "Lane unassigned" : "Lane assigned" });
     },
     onError: () => toast({ title: "Assignment failed", variant: "destructive" }),
   });
@@ -754,26 +755,40 @@ export function CarrierOutreachPanel({
               )}
               {lane.ownerUserId && (() => {
                 const owner = teamMembers.find(m => m.id === lane.ownerUserId);
+                const canUnassign = isManager || lane.ownerUserId === currentUser?.id;
                 return (
-                  <div className="flex items-center gap-1 bg-white/5 border border-white/10 rounded-full px-2 py-0.5"
-                    data-testid="chip-lane-owner">
-                    <User className="w-3 h-3 text-blue-300" />
-                    <span className="text-[11px] text-white/70">Owner: {owner?.name ?? lane.ownerUserId}</span>
-                    {isDirectorOrAdmin && (
-                      <Select
-                        value={lane.ownerUserId}
-                        onValueChange={v => reassignMutation.mutate({ ownerUserId: v })}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <div className="flex items-center gap-1 bg-white/5 border border-white/10 rounded-full px-2 py-0.5"
+                      data-testid="chip-lane-owner">
+                      <User className="w-3 h-3 text-blue-300" />
+                      <span className="text-[11px] text-white/70">Owner: {owner?.name ?? lane.ownerUserId}</span>
+                      {isDirectorOrAdmin && (
+                        <Select
+                          value={lane.ownerUserId}
+                          onValueChange={v => reassignMutation.mutate({ ownerUserId: v })}
+                        >
+                          <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-white/40 hover:text-white/80"
+                            data-testid="btn-reassign-owner">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {teamMembers.map(m => (
+                              <SelectItem key={m.id} value={m.id}>{m.name} ({m.role})</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </div>
+                    {canUnassign && (
+                      <button
+                        onClick={() => assignLaneMutation.mutate(null)}
+                        disabled={assignLaneMutation.isPending}
+                        className="text-[10px] px-2 py-0.5 rounded-full border border-red-400/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-colors flex items-center gap-1 disabled:opacity-50"
+                        data-testid="btn-unassign-lane"
                       >
-                        <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-white/40 hover:text-white/80"
-                          data-testid="btn-reassign-owner">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {teamMembers.map(m => (
-                            <SelectItem key={m.id} value={m.id}>{m.name} ({m.role})</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        <UserX className="w-3 h-3" />
+                        {assignLaneMutation.isPending ? "Unassigning…" : "Unassign"}
+                      </button>
                     )}
                   </div>
                 );
@@ -1091,7 +1106,21 @@ export function CarrierOutreachPanel({
                             )}
                           </div>
                         </div>
-                        <p className="text-[10px] text-white/50 mb-1"><span className="text-white/30">Subject:</span> {draft.subject}</p>
+                        <div className="flex items-center gap-1 mb-1">
+                          <span className="text-[10px] text-white/30 shrink-0">Subject:</span>
+                          <input
+                            type="text"
+                            value={draft.subject}
+                            onChange={e => setEmailDrafts(prev => {
+                              const next = [...prev];
+                              next[i] = { ...next[i], subject: e.target.value };
+                              return next;
+                            })}
+                            disabled={sendOverallStatus !== "idle"}
+                            className="flex-1 text-[10px] text-white/70 bg-white/5 border border-white/10 rounded px-2 py-0.5 focus:outline-none focus:border-amber-400/40 disabled:opacity-60 placeholder:text-white/20"
+                            data-testid={`email-subject-${i}`}
+                          />
+                        </div>
                         <Textarea
                           value={draft.body}
                           onChange={e => setEmailDrafts(prev => {

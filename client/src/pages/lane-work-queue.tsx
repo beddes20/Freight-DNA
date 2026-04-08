@@ -269,12 +269,15 @@ function LaneRow({
   const selfAssignMutation = useMutation({
     mutationFn: (ownerUserId: string | null) =>
       apiRequest("POST", `/api/recurring-lanes/${item.lane.id}/assign`, { ownerUserId }).then(r => r.json()),
-    onSuccess: () => {
+    onSuccess: (_data, ownerUserId) => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
-      toast({ title: "Lane assigned" });
+      toast({ title: ownerUserId === null ? "Lane unassigned" : "Lane assigned" });
     },
     onError: () => toast({ title: "Assignment failed", variant: "destructive" }),
   });
+
+  const canUnassign = item.lane.ownerUserId &&
+    (isManager || item.lane.ownerUserId === currentUser?.id);
 
   const contacted = item.lane.carriersContactedCount ?? 0;
   const progressPct = Math.min(100, (contacted / completionThreshold) * 100);
@@ -384,6 +387,20 @@ function LaneRow({
                 <UserX className="w-3 h-3 text-orange-400" />
                 <span className="text-orange-400">Unassigned</span>
               </div>
+            )}
+
+            {/* Unassign button — shown when lane is assigned and user is owner or manager */}
+            {canUnassign && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 text-[10px] px-2 border-red-400/30 text-red-400 hover:bg-red-500/10 gap-1"
+                onClick={e => { e.stopPropagation(); selfAssignMutation.mutate(null); }}
+                disabled={selfAssignMutation.isPending}
+                data-testid={`btn-unassign-${item.lane.id}`}
+              >
+                {selfAssignMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <><UserX className="w-3 h-3" />Unassign</>}
+              </Button>
             )}
 
             {/* Unassigned lane: show both "Assign to me" (for self) and "Assign to..." dropdown (for managers) */}

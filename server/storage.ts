@@ -3388,10 +3388,10 @@ export class DatabaseStorage implements IStorage {
 
       if (matchedCarrier) {
         // Update any new contact info on the matched carrier
-        const updates: Partial<InsertCarrier> = { updatedAt: new Date() };
+        const updates: Partial<InsertCarrier> = {};
         if (inc.email && !matchedCarrier.primaryEmail) updates.primaryEmail = inc.email;
         if (inc.phone && !matchedCarrier.phone) updates.phone = inc.phone;
-        if (Object.keys(updates).length > 1) {
+        if (Object.keys(updates).length > 0) {
           const [updated] = await db.update(carriers).set(updates).where(eq(carriers.id, matchedCarrier.id)).returning();
           matchedCarrier = updated;
           // Update in-memory list too
@@ -3409,10 +3409,10 @@ export class DatabaseStorage implements IStorage {
           phone: inc.phone?.trim() || null,
           mcDot: inc.mcDot?.trim() || null,
           sourceChannel: source,
-          regions: [],
-          equipmentTypes: [],
-          tags: [],
-        } as any).returning();
+          regions: [] as string[],
+          equipmentTypes: [] as string[],
+          tags: [] as string[],
+        }).returning();
         allOrgCarriers.push(newCarrier);
         const norm = this._normalizeCarrierName(newCarrier.name);
         if (norm) normalizedNames.set(norm, newCarrier);
@@ -3436,21 +3436,20 @@ export class DatabaseStorage implements IStorage {
     // Update importBatchId on newly created carriers
     const newCarrierIds = results.filter(r => r.status === "new").map(r => r.carrier.id);
     if (newCarrierIds.length > 0) {
-      await db.update(carriers).set({ importBatchId: batch.id } as any).where(inArray(carriers.id, newCarrierIds));
+      await db.update(carriers).set({ importBatchId: batch.id }).where(inArray(carriers.id, newCarrierIds));
     }
 
     // Upsert all imported carriers onto the lane bench (if lane context provided)
     if (laneId) {
       for (const result of results) {
         await db.insert(laneCarrierInterest).values({
-          orgId,
           laneId,
           carrierId: result.carrier.id,
           carrierName: result.carrier.name,
-          status: "needs_follow_up",
+          interestStatus: "needs_follow_up",
           sourceType: "manually_added",
           notes: `Imported via ${source}`,
-        } as any).onConflictDoNothing();
+        }).onConflictDoNothing();
       }
     }
 

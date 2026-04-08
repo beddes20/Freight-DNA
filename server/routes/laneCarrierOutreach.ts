@@ -695,19 +695,27 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
     const isManager = ["admin", "director", "national_account_manager", "logistics_manager"].includes(user.role);
 
-    // Non-managers: can only self-assign (take ownership of an unassigned lane)
-    // They cannot give a lane away to someone else
-    if (!isManager) {
-      if (lane.ownerUserId && lane.ownerUserId !== user.id) {
-        return res.status(403).json({ error: "You can only assign lanes that are currently unassigned" });
-      }
-    }
-
     const { ownerUserId } = req.body as { ownerUserId: string | null };
 
-    // Non-managers can only assign to themselves
-    if (!isManager && ownerUserId && ownerUserId !== user.id) {
-      return res.status(403).json({ error: "You can only assign a lane to yourself" });
+    const isSelfUnassign = ownerUserId === null && lane.ownerUserId === user.id;
+    const isLaneOwner = lane.ownerUserId === user.id;
+
+    if (!isManager) {
+      // Non-managers: allow self-assign (lane unassigned or they own it) OR self-unassign (they own it)
+      if (ownerUserId === null) {
+        // Unassign attempt — only allowed if user is the current owner
+        if (!isLaneOwner) {
+          return res.status(403).json({ error: "You can only unassign yourself from lanes you own" });
+        }
+      } else {
+        // Assign attempt — can only assign to themselves, and only if lane is unassigned or they own it
+        if (ownerUserId !== user.id) {
+          return res.status(403).json({ error: "You can only assign a lane to yourself" });
+        }
+        if (lane.ownerUserId && lane.ownerUserId !== user.id) {
+          return res.status(403).json({ error: "You can only assign lanes that are currently unassigned" });
+        }
+      }
     }
 
     // Validate the new owner belongs to this org
@@ -1329,17 +1337,17 @@ Rules for suggestions:
       orgId: user.organizationId,
       laneId: req.params.laneId,
       companyId: lane.companyId ?? null,
-      carrierIds: emailDrafts.map(d => d.carrierId ?? null),
+      carrierIds: emailDrafts.map(d => d.carrierId).filter((id): id is string => id !== null),
       carrierNames: emailDrafts.map(d => d.carrierName),
       actorUserId: user.id,
       ownerUserId: lane.ownerUserId ?? null,
       overseerUserId: lane.overseerUserId ?? null,
       outreachMode,
-      emailDrafts: emailDrafts as any,
+      emailDrafts: JSON.parse(JSON.stringify(emailDrafts)),
       sentAt: sentCount > 0 ? now : null,
       deliveryStatus: overallStatus,
       failureReason: failedCount > 0 ? results.filter(r => r.error).map(r => `${r.carrierName}: ${r.error}`).join("; ") : null,
-      recipients: results as any,
+      recipients: JSON.parse(JSON.stringify(results)),
     });
 
     // Upsert bench entries for carriers that were contacted (sent or no_email still = attempt)
