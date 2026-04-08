@@ -2055,14 +2055,22 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
               const laneCount = result.highVolumeLanes.length;
               const topLanes = result.highVolumeLanes
                 .slice(0, 3)
-                .map((l: any) => l.lane || `${l.origin || "?"} → ${l.destination || "?"}`)
-                .filter(Boolean)
+                .map((l: any) => `${l.origin || "?"} → ${l.destination || "?"}`)
                 .join("; ");
+              // Set due date to 5 business days from today
+              const dueMs = new Date();
+              let bDays = 0;
+              while (bDays < 5) {
+                dueMs.setDate(dueMs.getDate() + 1);
+                const dow = dueMs.getDay();
+                if (dow !== 0 && dow !== 6) bDays++;
+              }
+              const dueDate = dueMs.toISOString().split("T")[0];
               await storage.createTask({
                 title: `RFP Coverage Review: ${rfpData.title}`,
-                notes: `New RFP uploaded with ${laneCount} high-volume lane${laneCount !== 1 ? "s" : ""}. Top lanes: ${topLanes}. Open the RFP tab to review uncovered facility sites, identify missing contacts, and assign relationship owners to key locations.`,
+                notes: `${laneCount} high-volume lane${laneCount !== 1 ? "s" : ""} extracted from this RFP (top: ${topLanes}). Open the RFP & Lanes tab to see which facility sites have no contact assigned. For each uncovered location, identify who controls inbound/outbound freight decisions and either add them as a contact or ask an existing contact for an introduction.`,
                 status: "open",
-                dueDate: null,
+                dueDate,
                 assignedTo: assignee,
                 assignedBy,
                 companyId: rfp.companyId,

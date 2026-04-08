@@ -1376,20 +1376,26 @@ export function registerDashboardRoutes(app: Express): void {
         companyName: string;
         facilityName: string;
         state: string;
-        type: "origin" | "destination";
         totalVolume: number;
         laneCount: number;
         rfpTitles: string[];
       }
 
+      const MIN_VOLUME = 50; // loads/yr — below this is not worth surfacing
       const allGaps: GapRow[] = [];
 
       for (const companyId of companiesWithLanes) {
         const company = companyMap.get(companyId)!;
         const contacts = await storage.getContactsByCompany(companyId);
-        const companyRfps = allRfps.filter(r => r.companyId === companyId);
+        // Only consider active (open/pending) RFPs — suppress gaps from expired/rejected RFPs
+        const companyRfps = allRfps.filter(r =>
+          r.companyId === companyId &&
+          (!r.status || r.status === "open" || r.status === "pending")
+        );
+        if (companyRfps.length === 0) continue;
 
-        // Build facility map — same algorithm as /api/companies/:id/facility-coverage
+        // Build facility map — key on name+state only (merge origin and destination entries
+        // for the same physical location into one row to avoid showing the same city twice)
         const facilityMap = new Map<string, GapRow>();
 
         for (const rfp of companyRfps) {
@@ -1397,9 +1403,9 @@ export function registerDashboardRoutes(app: Express): void {
           if (!fd?.highVolumeLanes) continue;
 
           for (const lane of fd.highVolumeLanes) {
-            const addFacility = (name: string, state: string, type: "origin" | "destination") => {
+            const addFacility = (name: string, state: string) => {
               if (!name) return;
-              const key = `${name.toLowerCase()}|${state.toLowerCase()}|${type}`;
+              const key = `${name.toLowerCase()}|${(state || "").toLowerCase()}`;
               const existing = facilityMap.get(key);
               if (existing) {
                 existing.totalVolume += lane.volume || 0;
@@ -1410,16 +1416,15 @@ export function registerDashboardRoutes(app: Express): void {
                   companyId,
                   companyName: company.name,
                   facilityName: name,
-                  state,
-                  type,
+                  state: state || "",
                   totalVolume: lane.volume || 0,
                   laneCount: 1,
                   rfpTitles: [rfp.title],
                 });
               }
             };
-            addFacility(lane.origin || "", lane.originState || "", "origin");
-            addFacility(lane.destination || "", lane.destinationState || "", "destination");
+            addFacility(lane.origin || "", lane.originState || "");
+            addFacility(lane.destination || "", lane.destinationState || "");
           }
         }
 
@@ -1438,8 +1443,8 @@ export function registerDashboardRoutes(app: Express): void {
             );
           });
 
-          // Only surface non-trivial gaps — filter out zero-volume entries
-          if (!covered && f.totalVolume > 0) allGaps.push(f);
+          // Minimum volume threshold + must be uncovered
+          if (!covered && f.totalVolume >= MIN_VOLUME) allGaps.push(f);
         }
       }
 

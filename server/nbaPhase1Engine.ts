@@ -463,7 +463,11 @@ function evalR9(s: Phase1Signals, companyRfps: Rfp[]): CardCandidate | null {
   // Build facility map from all RFPs for this company
   const facilityMap = new Map<string, { name: string; state: string; totalVolume: number }>();
 
-  for (const rfp of companyRfps) {
+  // Suppress gaps from closed or rejected RFPs — only active RFP data is actionable
+  const activeRfps = companyRfps.filter(r => !r.status || r.status === "open" || r.status === "pending");
+  if (activeRfps.length === 0) return null;
+
+  for (const rfp of activeRfps) {
     const fd = rfp.fileData as { highVolumeLanes?: any[] } | null;
     if (!fd?.highVolumeLanes) continue;
 
@@ -537,7 +541,8 @@ function evalR9(s: Phase1Signals, companyRfps: Rfp[]): CardCandidate | null {
     growthLever: "network_expansion",
     relationshipMove: "intro_request",
     accountTier: tier,
-    urgencyScore: daysSinceLastTouch ?? 0,
+    // null = never touched; treat as maximum urgency so these sort first within grow cards
+    urgencyScore: daysSinceLastTouch ?? 999,
   };
 }
 
