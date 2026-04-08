@@ -259,6 +259,7 @@ async function createLaneWithCustomer(
 
 async function cleanup(): Promise<void> {
   const order = [
+    "tasks",
     "lane_carrier_interest",
     "carrier_outreach_activity",
     "carrier_outreach_logs",
@@ -677,6 +678,153 @@ async function main(): Promise<void> {
       unassignedIds.includes(unassignedLane),
       `Director should see unassigned lane ${unassignedLane}`
     );
+  });
+
+  // ── Task creation + lifecycle tests ──────────────────────────────────────
+
+  await runTest("Manager assigning lane to another user creates a lane-procurement task", async () => {
+    const taskAdmin = await createUser(orgId, "admin");  // admin bypasses hierarchy
+    const assignee = await createUser(orgId, "account_manager");
+    const taskLane = await createLane(orgId, null);
+
+    const cookie = await loginAs(taskAdmin.username, taskAdmin.password);
+    const { status } = await apiPost(`/api/recurring-lanes/${taskLane}/assign`, cookie, { ownerUserId: assignee.id });
+    assert(status === 200, `Expected 200 from assign, got ${status}`);
+
+    const res = await q(
+      `SELECT id, title, status, lane_context, lever FROM tasks
+       WHERE lane_context->>'laneId' = $1 AND assigned_to = $2 LIMIT 1`,
+      [taskLane, assignee.id]
+    );
+    assert(res.rows.length === 1, `Expected 1 task created, found ${res.rows.length}`);
+    const task = res.rows[0];
+    track("tasks", task.id);
+    assert(task.status === "open", `Expected task status 'open', got '${task.status}'`);
+    assert(task.lever === "Lane ID", `Expected lever 'Lane ID', got '${task.lever}'`);
+    assert(task.lane_context?.type === "lane_procurement", `Expected lane_context.type='lane_procurement'`);
+    assert(task.lane_context?.laneId === taskLane, `Expected laneId deep-link to match lane`);
+    assert((task.title as string).includes("Work assigned lane:"), `Title should start with 'Work assigned lane:'`);
+  });
+
+  await runTest("Self-assign also creates a lane-procurement task for the assigning user", async () => {
+    const selfUser = await createUser(orgId, "account_manager");
+    const taskLane2 = await createLane(orgId, null);
+
+    const cookie = await loginAs(selfUser.username, selfUser.password);
+    const { status } = await apiPost(`/api/recurring-lanes/${taskLane2}/assign`, cookie, { ownerUserId: selfUser.id });
+    assert(status === 200, `Expected 200 from self-assign, got ${status}`);
+
+    const res = await q(
+      `SELECT id, title, status, lane_context FROM tasks
+       WHERE lane_context->>'laneId' = $1 AND assigned_to = $2 LIMIT 1`,
+      [taskLane2, selfUser.id]
+    );
+    assert(res.rows.length === 1, `Expected 1 task for self-assign, found ${res.rows.length}`);
+    track("tasks", res.rows[0].id);
+    assert(res.rows[0].status === "open", `Self-assign task should be open`);
+  });
+
+  await runTest("Duplicate assignment does not create a second open task for the same lane+user", async () => {
+    const taskAdmin2 = await createUser(orgId, "admin");
+    const assignee2 = await createUser(orgId, "account_manager");
+    const taskLane3 = await createLane(orgId, null);
+
+    const cookie = await loginAs(taskAdmin2.username, taskAdmin2.password);
+
+    // Assign once
+    await apiPost(`/api/recurring-lanes/${taskLane3}/assign`, cookie, { ownerUserId: assignee2.id });
+    // Assign again (re-assign to same user)
+    await apiPost(`/api/recurring-lanes/${taskLane3}/assign`, cookie, { ownerUserId: assignee2.id });
+
+    const res = await q(
+      `SELECT id FROM tasks
+       WHERE lane_context->>'laneId' = $1 AND assigned_to = $2 AND status != 'completed'`,
+      [taskLane3, assignee2.id]
+    );
+    for (const row of res.rows) track("tasks", row.id);
+    assert(res.rows.length === 1, `Expected exactly 1 open task, found ${res.rows.length}`);
+  });
+
+  await runTest("Task laneContext.laneId deep-links to the correct lane in the work queue", async () => {
+    const taskAdmin3 = await createUser(orgId, "admin");
+    const assignee3 = await createUser(orgId, "account_manager");
+    const targetLane = await createLane(orgId, null);
+
+    const cookie = await loginAs(taskAdmin3.username, taskAdmin3.password);
+    await apiPost(`/api/recurring-lanes/${targetLane}/assign`, cookie, { ownerUserId: assignee3.id });
+
+    const res = await q(
+      `SELECT lane_context FROM tasks WHERE lane_context->>'laneId' = $1 AND assigned_to = $2 LIMIT 1`,
+      [targetLane, assignee3.id]
+    );
+    assert(res.rows.length === 1, `Expected task to exist for lane ${targetLane}`);
+    track("tasks", res.rows[0]?.id ?? "");
+    const lc = res.rows[0].lane_context as { laneId?: string; type?: string };
+    assert(lc.laneId === targetLane, `Deep-link laneId mismatch: expected ${targetLane}, got ${lc.laneId}`);
+    assert(lc.type === "lane_procurement", `Expected type='lane_procurement'`);
+  });
+
+  await runTest("Resolving a lane (hasPreferredCarrierProgram=true) auto-completes open lane tasks", async () => {
+    // We need an admin to both assign and resolve
+    const adminUser = await createUser(orgId, "admin");
+    const assignee4 = await createUser(orgId, "account_manager");
+    const resolveLane = await createLane(orgId, null);
+
+    const adminCookie = await loginAs(adminUser.username, adminUser.password);
+
+    // Assign → creates task
+    await apiPost(`/api/recurring-lanes/${resolveLane}/assign`, adminCookie, { ownerUserId: assignee4.id });
+
+    // Verify task is open
+    const beforeRes = await q(
+      `SELECT id, status FROM tasks WHERE lane_context->>'laneId' = $1 AND assigned_to = $2 LIMIT 1`,
+      [resolveLane, assignee4.id]
+    );
+    assert(beforeRes.rows.length === 1, `Expected 1 open task before resolution`);
+    track("tasks", beforeRes.rows[0].id);
+    assert(beforeRes.rows[0].status === "open", `Task should be open before lane resolution`);
+
+    // Resolve the lane via PATCH hasPreferredCarrierProgram=true
+    const bodyStr = JSON.stringify({ hasPreferredCarrierProgram: true });
+    const resolveRes = await httpRequest({
+      method: "PATCH",
+      path: `/api/recurring-lanes/${resolveLane}`,
+      headers: { Cookie: adminCookie, "Content-Type": "application/json" },
+      body: bodyStr,
+    });
+    assert(resolveRes.status === 200, `Expected 200 on resolve, got ${resolveRes.status}`);
+
+    // Verify task is now completed
+    const afterRes = await q(
+      `SELECT status FROM tasks WHERE lane_context->>'laneId' = $1 AND assigned_to = $2 LIMIT 1`,
+      [resolveLane, assignee4.id]
+    );
+    assert(afterRes.rows.length === 1, `Expected 1 task row after resolution`);
+    assert(afterRes.rows[0].status === "completed", `Expected task status 'completed' after lane resolution, got '${afterRes.rows[0].status}'`);
+  });
+
+  await runTest("Notification still fires for manager-to-other-user assignment (not replaced by task)", async () => {
+    const notifAdmin = await createUser(orgId, "admin");
+    const notifAssignee = await createUser(orgId, "account_manager");
+    const notifLane = await createLane(orgId, null);
+
+    const cookie = await loginAs(notifAdmin.username, notifAdmin.password);
+    const { status } = await apiPost(`/api/recurring-lanes/${notifLane}/assign`, cookie, { ownerUserId: notifAssignee.id });
+    assert(status === 200, `Expected 200, got ${status}`);
+
+    const notifRes = await q(
+      `SELECT id FROM notifications WHERE user_id = $1 AND type = 'lane_assigned' AND related_id = $2 LIMIT 1`,
+      [notifAssignee.id, notifLane]
+    );
+    assert(notifRes.rows.length === 1, `Expected in-app notification for lane assignment, found ${notifRes.rows.length}`);
+
+    // Also confirm task was created alongside notification
+    const taskRes = await q(
+      `SELECT id FROM tasks WHERE lane_context->>'laneId' = $1 AND assigned_to = $2 LIMIT 1`,
+      [notifLane, notifAssignee.id]
+    );
+    assert(taskRes.rows.length === 1, `Task should exist alongside notification`);
+    for (const r of taskRes.rows) track("tasks", r.id);
   });
 
   await runTest("Work queue includes 'customers' array with distinct company names", async () => {

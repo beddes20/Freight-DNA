@@ -255,6 +255,10 @@ export interface IStorage {
   findProcurementTask(awardId: string, lane: string): Promise<Task | undefined>;
   findRfpCoverageReviewTask(rfpId: string): Promise<Task | undefined>;
   findAwardOnboardingTask(awardId: string): Promise<Task | undefined>;
+  /** Return an open lane-procurement task for a given lane+user (for dedup check). */
+  findOpenLaneProcurementTask(laneId: string, assignedTo: string): Promise<Task | undefined>;
+  /** Mark all open lane-procurement tasks for a lane as completed (call on lane resolution). */
+  completeTasksForLane(laneId: string): Promise<void>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
@@ -2944,6 +2948,31 @@ export class DatabaseStorage implements IStorage {
           eq(nbaCards.linkedLaneId, laneId),
           eq(nbaCards.ruleType, "recurring_lane_capacity"),
           sql`${nbaCards.status} IN ('visible', 'generated')`,
+        )
+      );
+  }
+
+  async findOpenLaneProcurementTask(laneId: string, assignedTo: string): Promise<Task | undefined> {
+    const rows = await db.select().from(tasks).where(
+      and(
+        eq(tasks.assignedTo, assignedTo),
+        sql`${tasks.laneContext}->>'laneId' = ${laneId}`,
+        sql`${tasks.laneContext}->>'type' = 'lane_procurement'`,
+        sql`${tasks.status} != 'completed'`,
+      )
+    ).limit(1);
+    return rows[0];
+  }
+
+  async completeTasksForLane(laneId: string): Promise<void> {
+    const now = new Date().toISOString();
+    await db.update(tasks)
+      .set({ status: "completed", updatedAt: now })
+      .where(
+        and(
+          sql`${tasks.laneContext}->>'laneId' = ${laneId}`,
+          sql`${tasks.laneContext}->>'type' = 'lane_procurement'`,
+          sql`${tasks.status} != 'completed'`,
         )
       );
   }

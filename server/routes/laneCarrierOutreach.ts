@@ -601,6 +601,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     // Resolve linked NBA cards so they leave users' dashboards
     if (preferredProgramToggled) {
       await storage.resolveNbaCardsForLane(req.params.id);
+      // Auto-complete any open lane-procurement tasks so reps' task lists stay clean
+      await storage.completeTasksForLane(req.params.id);
     }
 
     // Audit log: record any ownership reassignment
@@ -701,6 +703,42 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           link: "/lanes/work-queue",
           relatedId: req.params.laneId,
         });
+      }
+
+      // Create a task for the assignee (self-assign or manager-assign both get a task)
+      // Dedup: skip if an open lane-procurement task already exists for this lane+user
+      if (ownerUserId) {
+        const existing = await storage.findOpenLaneProcurementTask(req.params.laneId, ownerUserId);
+        if (!existing) {
+          const customer = lane.companyName ?? "Unknown Customer";
+          const origin = lane.origin;
+          const dest = lane.destination;
+          const loadsWk = lane.avgLoadsPerWeek ? `${parseFloat(lane.avgLoadsPerWeek).toFixed(1)}/wk` : null;
+          const equip = lane.equipmentType ? ` · ${lane.equipmentType}` : "";
+          const assignerUser = await storage.getUser(user.id);
+          const assignerName = assignerUser ? (assignerUser.name ?? assignerUser.username) : "a manager";
+          const today = new Date().toISOString().split("T")[0];
+          const descLines = [
+            `Assigned by: ${assignerName}`,
+            loadsWk ? `Volume: ${loadsWk}${equip}` : equip ? `Equipment: ${lane.equipmentType}` : null,
+            `Go to the Lane Work Queue to manage carrier outreach for this corridor.`,
+          ].filter(Boolean).join("\n");
+          await storage.createTask({
+            title: `Work assigned lane: ${customer} — ${origin} → ${dest}`,
+            description: descLines,
+            status: "open",
+            dueDate: today,
+            assignedTo: ownerUserId,
+            assignedBy: user.id,
+            orgId: user.organizationId,
+            companyId: lane.companyId ?? null,
+            companyName: customer,
+            lever: "Lane ID",
+            laneContext: { type: "lane_procurement", laneId: req.params.laneId } as any,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+        }
       }
 
       res.json(updated);
