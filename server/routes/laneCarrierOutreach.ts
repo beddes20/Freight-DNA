@@ -166,67 +166,133 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const sheetName = wb.SheetNames[0];
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" }) as Record<string, unknown>[];
 
-      const headers = rows.length > 0 ? Object.keys(rows[0]).map(h => h.toLowerCase().trim()) : [];
+      if (rows.length === 0) return res.json({ seeded: 0, skipped: 0, total: 0 });
+
+      const originalKeys = Object.keys(rows[0]);
+      const headers = originalKeys.map(h => h.toLowerCase().trim());
 
       function findCol(keywords: string[]): string | null {
         for (const kw of keywords) {
           const idx = headers.findIndex(h => h.includes(kw));
-          if (idx >= 0) return Object.keys(rows[0])[idx];
+          if (idx >= 0) return originalKeys[idx];
         }
         return null;
       }
 
-      const nameCol = findCol(["carrier name", "name", "company"]);
-      const mcCol = findCol(["mc", "mc#", "mc number", "dot", "mc/dot"]);
-      const emailCol = findCol(["email", "primary email", "contact email"]);
+      // ── Detect file type ────────────────────────────────────────────────────
+      // Financial/TMS exports have customer + shipper/consignee/origin columns alongside
+      // a plain "Carrier" column (one load per row). Carrier directory files have one
+      // row per carrier with name, MC#, email, region, etc.
+      const isFinancialFile =
+        headers.some(h => h === "customer" || h.startsWith("customer")) &&
+        (headers.some(h => h.includes("shipper") || h.includes("consignee") || h.includes("origin city") || h.includes("dest")) ||
+         headers.some(h => h === "carrier" || h === "carrier name" || h.startsWith("carrier")));
+
+      // ── Column resolution ───────────────────────────────────────────────────
+      // For financial files: use the plain "Carrier" / "Carrier Name" column.
+      // For directory files: also accept "Name" or "Company" as the carrier name.
+      const nameCol = isFinancialFile
+        ? findCol(["carrier name", "carrier"])
+        : findCol(["carrier name", "name", "company", "carrier"]);
+
+      const mcCol   = findCol(["mc number", "mc#", "mc/dot", "dot number", "dot#", "dot", "mc"]);
+      const emailCol       = findCol(["primary email", "contact email", "email"]);
       const backupEmailCol = findCol(["backup email", "secondary email", "alt email"]);
-      const regionCol = findCol(["region", "regions", "state", "territory"]);
-      const equipCol = findCol(["equipment", "equip", "mode", "trailer type"]);
-      const tagsCol = findCol(["tags", "notes", "specialties"]);
+      const equipCol = findCol(["equipment type", "equip type", "trailer type", "equipment", "equip", "service type", "mode", "load mode"]);
+
+      // Avoid pulling shipper/consignee state columns as carrier regions in financial files.
+      // Only use region/territory columns that are genuinely about the carrier's coverage area.
+      const regionCol = isFinancialFile
+        ? findCol(["region", "territory"])
+        : findCol(["region", "regions", "territory", "state"]);
+
+      const tagsCol = findCol(["tags", "specialties", "notes"]);
+
+      // ── Pre-load existing carriers for dedup ────────────────────────────────
+      const existingCarriers = await storage.getCarriers(user.organizationId);
+      const existingNameSet = new Set(existingCarriers.map(c => c.name.toLowerCase().trim()));
 
       let seeded = 0;
       let skipped = 0;
 
-      // Pre-load existing carrier names for no-MC/DOT dedup (avoid duplicates on re-seed)
-      const existingCarriers = await storage.getCarriers(user.organizationId);
-      const existingNameSet = new Set(existingCarriers.map(c => c.name.toLowerCase().trim()));
+      if (isFinancialFile) {
+        // ── Financial file path ─────────────────────────────────────────────
+        // Aggregate all rows by carrier name, collecting unique equipment types.
+        // One carrier may appear thousands of times across load rows.
+        const carrierMap = new Map<string, { equipTypes: Set<string> }>();
 
-      for (const row of rows) {
-        const name = nameCol ? String(row[nameCol] ?? "").trim() : "";
-        if (!name) { skipped++; continue; }
+        for (const row of rows) {
+          const name = nameCol ? String(row[nameCol] ?? "").trim() : "";
+          if (!name) { skipped++; continue; }
+          const key = name.toLowerCase();
+          if (!carrierMap.has(key)) carrierMap.set(key, { equipTypes: new Set() });
+          const equip = equipCol ? String(row[equipCol] ?? "").trim() : "";
+          if (equip) carrierMap.get(key)!.equipTypes.add(equip);
+        }
 
-        const mcDot = mcCol ? String(row[mcCol] ?? "").trim() : null;
-        const primaryEmail = emailCol ? String(row[emailCol] ?? "").trim() || null : null;
-        const backupEmail = backupEmailCol ? String(row[backupEmailCol] ?? "").trim() || null : null;
-        const regions = regionCol
-          ? String(row[regionCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
-          : [];
-        const equipmentTypes = equipCol
-          ? String(row[equipCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
-          : [];
-        const tags = tagsCol
-          ? String(row[tagsCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
-          : [];
+        for (const [key, data] of carrierMap) {
+          // Use original-case name from first occurrence
+          const name = nameCol
+            ? String(rows.find(r => String(r[nameCol] ?? "").trim().toLowerCase() === key)?.[nameCol] ?? key).trim()
+            : key;
+          const equipmentTypes = Array.from(data.equipTypes);
 
-        if (mcDot) {
-          // MC/DOT is the primary dedup key — upsert by MC/DOT
-          await storage.upsertCarrierByMcDot(user.organizationId, mcDot, {
-            name, mcDot, primaryEmail, backupEmail, regions, equipmentTypes, tags,
-          });
-          existingNameSet.add(name.toLowerCase());
-        } else {
-          // No MC/DOT: skip if a carrier with the same normalized name already exists in this org
-          if (existingNameSet.has(name.toLowerCase())) { skipped++; continue; }
+          if (existingNameSet.has(key)) {
+            // Already exists — skip (user can enrich later via the carrier edit UI)
+            skipped++;
+            continue;
+          }
           await storage.createCarrier({
             orgId: user.organizationId,
-            name, mcDot: null, primaryEmail, backupEmail, regions, equipmentTypes, tags,
+            name, mcDot: null, primaryEmail: null, backupEmail: null,
+            regions: [], equipmentTypes, tags: [],
           });
-          existingNameSet.add(name.toLowerCase());
+          existingNameSet.add(key);
+          seeded++;
         }
-        seeded++;
+      } else {
+        // ── Carrier directory path ──────────────────────────────────────────
+        // One row per carrier; MC/DOT is the primary dedup key when present.
+        for (const row of rows) {
+          const name = nameCol ? String(row[nameCol] ?? "").trim() : "";
+          if (!name) { skipped++; continue; }
+
+          const mcDot = mcCol ? String(row[mcCol] ?? "").trim() || null : null;
+          const primaryEmail    = emailCol       ? String(row[emailCol]       ?? "").trim() || null : null;
+          const backupEmail     = backupEmailCol ? String(row[backupEmailCol] ?? "").trim() || null : null;
+          const regions = regionCol
+            ? String(row[regionCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
+            : [];
+          const equipmentTypes = equipCol
+            ? String(row[equipCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
+            : [];
+          const tags = tagsCol
+            ? String(row[tagsCol] ?? "").split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)
+            : [];
+
+          if (mcDot) {
+            await storage.upsertCarrierByMcDot(user.organizationId, mcDot, {
+              name, mcDot, primaryEmail, backupEmail, regions, equipmentTypes, tags,
+            });
+            existingNameSet.add(name.toLowerCase());
+          } else {
+            if (existingNameSet.has(name.toLowerCase())) { skipped++; continue; }
+            await storage.createCarrier({
+              orgId: user.organizationId,
+              name, mcDot: null, primaryEmail, backupEmail, regions, equipmentTypes, tags,
+            });
+            existingNameSet.add(name.toLowerCase());
+          }
+          seeded++;
+        }
       }
 
-      res.json({ seeded, skipped, total: rows.length });
+      res.json({
+        seeded,
+        skipped,
+        total: rows.length,
+        mode: isFinancialFile ? "financial" : "directory",
+      });
     } catch (err) {
       console.error("[carrier-seed]", err);
       res.status(500).json({ error: "Failed to parse Excel file", details: (err as Error)?.message });

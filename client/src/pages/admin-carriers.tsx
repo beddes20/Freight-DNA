@@ -180,11 +180,17 @@ export default function AdminCarriers() {
         const body = await res.json().catch(() => ({}));
         throw new Error((body as { error?: string }).error ?? `Seed failed (${res.status})`);
       }
-      return res.json() as Promise<{ seeded: number; skipped: number; total: number }>;
+      return res.json() as Promise<{ seeded: number; skipped: number; total: number; mode?: string }>;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/carriers"] });
-      toast({ title: `Seeded ${data.seeded} carriers (${data.skipped} skipped)` });
+      const isFinancial = data.mode === "financial";
+      toast({
+        title: `${data.seeded} carrier${data.seeded !== 1 ? "s" : ""} added`,
+        description: isFinancial
+          ? `Extracted from ${data.total.toLocaleString()} load rows — ${data.skipped} duplicate${data.skipped !== 1 ? "s" : ""} skipped. You can enrich carriers with MC#, email, and regions from the carrier list below.`
+          : `${data.skipped} duplicate${data.skipped !== 1 ? "s" : ""} skipped out of ${data.total.toLocaleString()} rows.`,
+      });
     },
     onError: (err: Error) => toast({ title: "Seed failed", description: err.message, variant: "destructive" }),
   });
