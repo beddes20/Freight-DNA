@@ -1948,5 +1948,6 @@ function buildFallbackEmail(
     ? ` We also have an immediate load on this corridor that needs coverage now.`
     : "";
 
-  return `${greeting}${relationship} checking to see if you've got capacity for ${laneDisplay} (${equipment}). We usually have ${volumePhrase} on this lane and are looking to line up steady coverage.${modeNote} Does that fit your network? If so, I'd be glad to talk through it.`;
+  const bareVolume = volumePhrase.replace(/^(usually|around|about)\s+/i, "");
+  return `${greeting}${relationship} checking to see if you've got capacity for ${laneDisplay} (${equipment}). We usually have ${bareVolume} on this lane and are looking to line up steady coverage.${modeNote} Does that fit your network? If so, I'd be glad to talk through it.`;
 }
