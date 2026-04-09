@@ -1,0 +1,145 @@
+You are updating the Value Truck app to make Lane Work Queue and Carrier Hub feel like one cohesive “carrier intelligence” system instead of separate tools.
+
+Goal
+Add:
+1) Clear “Why this carrier” explanations in Lane Work Queue, driven by existing ranking signals.
+2) Cross-links between Lane Work Queue and Carrier Hub so users can move seamlessly between lane-centric and carrier-centric views.
+
+Do NOT redesign the ranking logic or data model in this task. Use existing signals and structures.
+
+Context (high level)
+- Lane Work Queue:
+  - Shows a lane with a right-side panel of ranked carrier suggestions and outreach tools.
+  - Ranking already uses: region/equipment fit, exact lane history, customer history, prior outreach outcomes.
+- Carrier Hub:
+  - Central source of carrier intelligence: company profile, contacts, equipment, geography.
+  - Claimed lane preferences vs proven lane history (separate tables/fields).
+  - Carrier status (active / inactive / flagged / do_not_use) already influences ranking.
+- Outreach:
+  - Send-from-platform endpoints and carrier_outreach_logs table.
+  - Lane History tab shows past outreach on that lane.
+
+Scope of this task
+1) “Why this carrier” explanation in Lane Work Queue.
+2) Cross-link from Lane Work Queue carrier suggestion → Carrier Hub carrier profile.
+3) Cross-link from Carrier Hub carrier profile → “Best lanes right now” list that opens Lane Work Queue for a lane.
+
+No new DB tables and no change to scoring math. Just expose and present information we already have.
+
+Part 1 — “Why this carrier” in Lane Work Queue
+
+Backend:
+- In the existing lane carrier suggestion response (the one the Lane Work Queue right panel uses), add a new field per carrier suggestion:
+  - whyThisCarrier: {
+      hasExactLaneHistory: boolean;
+      exactLaneRuns?: number;          // e.g., 16
+      hasSimilarCorridorHistory: boolean;
+      similarCorridorRuns?: number;
+      hasCustomerHistory: boolean;
+      laneCustomerLoads?: number;
+      matchesClaimedLanePreference: boolean;
+      regionEquipmentFit: 'strong' | 'ok' | 'weak';
+      recentOutreach: {
+        lastSentAt?: string;           // ISO
+        lastOutcome?: 'positive' | 'neutral' | 'negative' | 'no_response';
+      };
+      carrierStatus: 'active' | 'inactive' | 'flagged' | 'do_not_use';
+      rankingScore?: number;           // if available from existing logic
+    }
+
+- Populate these fields based on the existing ranking implementation:
+  - hasExactLaneHistory / exactLaneRuns: true/count when the ranking engine is using exact lane history.
+  - hasSimilarCorridorHistory / similarCorridorRuns: when the signal is “nearby lanes / corridor”.
+  - hasCustomerHistory / laneCustomerLoads: loads run for this customer on any lane.
+  - matchesClaimedLanePreference: when the lane matches a claimed lane/corridor from Carrier Hub.
+  - regionEquipmentFit: map whatever internal numeric fit you have into strong/ok/weak.
+  - recentOutreach: derive from carrier_outreach_logs for this lane + carrier.
+  - carrierStatus: from Carrier Hub carrier status.
+
+Frontend (Lane Work Queue right panel):
+- For each suggested carrier, display a short, human-readable “Why this carrier” snippet based on the above fields.
+  - Examples:
+    - “Ran this exact lane 16 times for this customer; strong region + equipment fit; last outreach positive.”
+    - “Strong regional/equipment fit and claimed interest in this lane; no proven runs yet.”
+    - “Only a regional fit; no lane or customer history yet.”
+- Keep it to 1–2 short lines per carrier; use icons/badges where helpful.
+- Use status styling:
+  - Flagged/do_not_use carriers should either (a) not appear, or (b) appear with a clear “Suppressed” reason if they show up in any special view.
+- Add a “View carrier profile” link/button on each suggestion that opens Carrier Hub for that carrier (next section).
+
+Part 2 — Cross-link Lane Work Queue → Carrier Hub
+
+- On each carrier suggestion card in the Lane Work Queue panel, add a small “View carrier profile” action.
+- Clicking it should:
+  - open Carrier Hub focused on that carrier (existing Carrier Hub layout),
+  - via route params or query string (e.g., /carrier-hub?carrierId=XYZ) or by opening the existing drawer pattern with that carrier selected.
+- Ensure the action:
+  - works from the Lane Work Queue context (no full reload if possible),
+  - preserves the current lane selection when the user navigates back.
+
+Part 3 — Cross-link Carrier Hub → “Best lanes right now”
+
+Backend:
+- Expose a “best lanes for carrier” endpoint or extend an existing one, powered by the same lane ranking engine you already have (but inverted):
+  - Input: carrierId.
+  - Output: list of lane suggestions (limited, e.g., top 10) with:
+    - laneId
+    - lane description (origin/dest, mode)
+    - whyThisLaneForCarrier: {
+        hasExactLaneHistory: boolean;
+        exactLaneRuns?: number;
+        hasSimilarCorridorHistory: boolean;
+        similarCorridorRuns?: number;
+        hasCustomerHistory: boolean;
+        matchesClaimedLanePreference: boolean;
+        regionEquipmentFit: 'strong' | 'ok' | 'weak';
+      }
+
+Frontend (Carrier Hub):
+- In the carrier profile drawer/page, add a section “Best lanes right now” showing the top lane suggestions for that carrier (if any).
+- For each suggested lane, show:
+  - basic lane info (e.g., “Glendale, AZ → Buena Park, CA”),
+  - a short explanation using whyThisLaneForCarrier fields.
+  - an “Open in Lane Work Queue” button.
+
+- Clicking “Open in Lane Work Queue” should:
+  - navigate to Lane Work Queue with that lane selected (whatever pattern you already use when clicking a lane from elsewhere).
+
+AI/explanation layer (small, contained):
+- Use the whyThisCarrier / whyThisLaneForCarrier fields to generate consistent explanation strings.
+- You can:
+  - either build strings manually with simple conditionals (preferred for predictability),
+  - or use a small local helper function; do NOT call external AI APIs in this task.
+- Key requirement: the explanation MUST distinguish:
+  - exact proven lane history,
+  - similar corridor history,
+  - claimed preference only,
+  - and pure regional/equipment fit.
+
+Tests / acceptance
+
+Backend:
+- Unit / integration tests asserting:
+  - lane suggestion responses now include whyThisCarrier with correctly populated fields for:
+    - carrier with exact lane history,
+    - carrier with only claimed preference,
+    - carrier with only regional fit.
+  - “best lanes for carrier” endpoint returns lane suggestions with whyThisLaneForCarrier populated as expected.
+  - flagged/do_not_use carriers respect existing suppression behavior.
+
+Frontend:
+- Lane Work Queue:
+  - “Why this carrier” text appears and matches the mocked response for the three cases above.
+  - “View carrier profile” opens Carrier Hub focused on that carrier.
+- Carrier Hub:
+  - “Best lanes right now” list appears when backend returns suggestions.
+  - “Open in Lane Work Queue” navigates to the lane correctly.
+- UX:
+  - No regressions: existing ranking and outreach flows still work unchanged.
+
+Output
+When you’re done, please respond with:
+1) Files changed (backend + frontend).
+2) The final JSON shape for whyThisCarrier and whyThisLaneForCarrier.
+3) Any assumptions made.
+4) Any follow-up improvements you’d recommend now that this wiring exists.
