@@ -50,6 +50,91 @@ The application uses React, TypeScript, Tailwind CSS, and `shadcn/ui` for a mode
     - **Carrier Hub (Phase 1)**: Central carrier intelligence layer with contact management, claimed lanes, and activity tracking.
     - **LWQ ↔ Carrier Hub Cross-Linking**: Provides explanations for ranked carrier suggestions and allows navigation to Carrier Hub profiles.
 
+## Carrier History & Ranking Contract (locked April 2026)
+
+This contract governs all carrier ranking and TMS history display logic. It is non-negotiable: any future change to carrier ranking or history extraction **must** preserve these guarantees.
+
+### TMS Field-Name Handling
+
+TMS JSONB rows (stored in `financial_uploads.rows`) use **title-case-with-spaces** field names, not camelCase. Both formats must be supported simultaneously.
+
+| Canonical meaning | TMS (real uploads) | Legacy / demo |
+|---|---|---|
+| Origin city | `"Origin"` | `"shipperCity"`, `"Shipper city"` |
+| Origin state | `"Origin state"` | `"shipperState"`, `"Shipper state"` |
+| Destination city | `"Destination"` | `"consigneeCity"`, `"Consignee city"` |
+| Destination state | `"Destination state"` | `"consigneeState"`, `"Consignee state"` |
+| Carrier name | `"Carrier"` | `"carrier"`, `"carrierName"` |
+| Month | `"Month"` | `"month"` |
+
+**Rule**: Always call `readTmsField(row, ...candidates)` with the title-case key listed **before** the camelCase fallback. The function skips empty/null values and returns the first non-empty match.
+
+### Carrier Name Parsing
+
+TMS carrier fields use the format `"PAYCODE - CARRIER NAME"` (e.g., `"DHAMLIAZ - DHAMI CARRIER LLC"`).
+
+- `parseCarrierName(raw)` — strips the payee-code prefix and returns the human-readable name (`"Dhami Carrier LLC"`).
+- `parsePayeeCode(raw)` — extracts the payee code prefix (`"DHAMLIAZ"`). Returns `null` if the format does not match (i.e., the carrier was not stored with a payee code).
+
+Never match carrier names against TMS data using the raw field value. Always pass through `parseCarrierName()` first.
+
+### Month Normalization
+
+TMS month fields arrive as `"2026 M03"` (year + space + M + zero-padded month). The canonical internal format is `"YYYY-MM"`.
+
+- `normalizeTmsMonth(raw)` — converts all known formats to `"YYYY-MM"`:
+  - `"2026 M03"` → `"2026-03"` (real TMS format)
+  - `"2025 M9"` → `"2025-09"` (single-digit month zero-padded)
+  - `"2025-10"` → `"2025-10"` (already canonical, pass-through)
+  - `"2025-10-15"` → `"2025-10"` (ISO date truncated)
+  - `null` / `undefined` / `""` → `""` (safe empty return)
+
+All recency scoring and `lastUsedMonth` values must be in canonical `"YYYY-MM"` form.
+
+### Ranking Guarantee
+
+A carrier that has **confirmed exact-lane TMS history** (same origin city + destination city) **must** receive a higher `fitScore` than a carrier with no TMS history on that lane, regardless of catalog region or equipment attributes. Specifically:
+
+- `historyMatch = "exact"` → `fitScore` in the 80–100 range.
+- `historyMatch = "similar"` (same origin/destination state corridor) → `fitScore` in the 50–79 range.
+- `historyMatch = "region"` (catalog region match, no TMS history) → `fitScore` in the 1–49 range.
+- `historyMatch = "none"` → `fitScore = 0`.
+
+This means `exact > similar > region > none` is a hard ordering invariant. No scoring tweak may ever invert it.
+
+### Shared History Source (LWQ ↔ Carrier Hub)
+
+Both the Lane Work Queue ranking and the Carrier Hub activity feed read from the **same source**: `financial_uploads.rows` JSONB, via the same utility layer. They are not allowed to diverge.
+
+- LWQ uses `rankCarriersForLane()` in `server/carrierRankingService.ts`.
+- Carrier Hub uses `buildCarrierTmsHistory()` in `server/routes/carrierHub.ts`, which applies the same helpers.
+- Carrier Hub matches by **payee code** (exact) OR **normalized name** (fuzzy), in that priority order.
+
+If a carrier has TMS history visible in LWQ suggestions, the same history must be visible in its Carrier Hub activity panel, and vice versa.
+
+### Helper Functions & Test Coverage
+
+All helpers are exported from `server/carrierRankingService.ts`:
+
+| Export | Purpose |
+|---|---|
+| `readTmsField(row, ...keys)` | Multi-key field reader with title-case-first priority |
+| `parseCarrierName(raw)` | Strips `PAYCODE - ` prefix from carrier field |
+| `parsePayeeCode(raw)` | Extracts payee code; returns `null` if no prefix |
+| `normalizeTmsMonth(raw)` | Converts TMS month format to `"YYYY-MM"` |
+| `extractCity(raw)` | Lowercases and strips state suffix from `"CITY, ST"` strings |
+
+Regression coverage lives in `tests/carrier-history-extraction.test.ts` (45 assertions). This file must pass before any merge that touches carrier ranking or TMS history extraction. Run with:
+
+```
+npx tsx tests/carrier-history-extraction.test.ts
+```
+
+All three test suites must stay green at all times:
+- `npx tsx tests/guardrails.test.ts` — 55 assertions (shared surface integrity)
+- `npx tsx tests/my-procurement.test.ts` — 20 assertions (My Procurement contract)
+- `npx tsx tests/carrier-history-extraction.test.ts` — 45 assertions (this contract)
+
 ## External Dependencies
 - **PostgreSQL**: Primary database and session store.
 - **xlsx (SheetJS)**: For Excel and CSV parsing.
