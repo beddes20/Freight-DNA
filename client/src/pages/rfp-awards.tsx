@@ -52,6 +52,8 @@ import {
   XCircle,
   Truck,
   ClipboardList,
+  FolderOpen,
+  CheckCircle2,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -278,6 +280,11 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
     queryKey: ["/api/awards", award.id, "lane-carriers"],
   });
 
+  const { data: procTaskStatus } = useQuery<{ taskCount: number }>({
+    queryKey: ["/api/awards", award.id, "procurement-tasks"],
+  });
+  const hasExistingTasks = (procTaskStatus?.taskCount ?? 0) > 0;
+
   const coveredLanes = highVolumeLanes.filter(
     l => awardCarriers.filter(c => c.lane === l.lane && c.status !== "declined").length >= 5
   ).length;
@@ -291,36 +298,48 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
   };
 
   async function handleGenerateProcurementTasks() {
-    if (highVolumeLanes.length === 0) {
-      toast({
-        title: "No qualifying lanes",
-        description: "No lanes with 50+ loads/year found. Add lanes with volume data to generate procurement tasks.",
-        variant: "destructive",
-      });
-      return;
-    }
     if (!user) return;
     setGeneratingTasks(true);
     try {
       const res = await apiRequest("POST", `/api/awards/${award.id}/procurement-tasks`, {});
-      const { results } = await res.json() as { results: Array<{ lane: string; taskId: string; created: boolean }> };
-      const taskByLane = Object.fromEntries(results.map(r => [r.lane, r.taskId]));
-      const createdLanes: ProcurementLaneInfo[] = highVolumeLanes.map(lane => ({ ...lane, taskId: taskByLane[lane.lane] }));
-      const createdCount = results.filter(r => r.created).length;
-      const reusedCount = results.filter(r => !r.created).length;
-      if (createdCount > 0) queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      const { results } = await res.json() as { results: Array<{ lane: string; taskId: string; created: boolean; failed?: boolean }> };
+      const successResults = results.filter(r => !r.failed);
+      const failedCount = results.filter(r => r.failed).length;
+      const taskByLane = Object.fromEntries(successResults.map(r => [r.lane, r.taskId]));
+      const createdLanes: ProcurementLaneInfo[] = highVolumeLanes
+        .map(lane => {
+          const normalizedLane = lane.lane.trim().replace(/\s+/g, " ").toLowerCase();
+          const taskId = taskByLane[normalizedLane] ?? taskByLane[lane.lane];
+          return taskId ? { ...lane, taskId } : null;
+        })
+        .filter((l): l is ProcurementLaneInfo => l !== null);
+      const createdCount = successResults.filter(r => r.created).length;
+      const reusedCount = successResults.filter(r => !r.created).length;
+      if (createdCount > 0) {
+        queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      }
+      if (successResults.length > 0) {
+        queryClient.invalidateQueries({ queryKey: ["/api/awards", award.id, "procurement-tasks"] });
+      }
       setActiveProcLanes(createdLanes);
       setProcurementDialogOpen(true);
-      toast({
-        title: createdCount > 0
-          ? `${createdCount} procurement task${createdCount !== 1 ? "s" : ""} created`
-          : "Opening existing procurement workspace",
-        description: reusedCount > 0 && createdCount > 0
-          ? `${reusedCount} existing task${reusedCount !== 1 ? "s" : ""} reused, ${createdCount} new.`
-          : reusedCount > 0
-          ? `Using ${reusedCount} existing task${reusedCount !== 1 ? "s" : ""} for this award.`
-          : `One task per qualifying lane. Target 5–10 carrier contacts each.`,
-      });
+      if (failedCount > 0 && successResults.length > 0) {
+        toast({
+          title: `${successResults.length} task${successResults.length !== 1 ? "s" : ""} ready, ${failedCount} lane${failedCount !== 1 ? "s" : ""} failed`,
+          description: "Workspace opened for successful lanes. Some lanes could not be set up — try again.",
+        });
+      } else {
+        toast({
+          title: createdCount > 0
+            ? `${createdCount} procurement task${createdCount !== 1 ? "s" : ""} created`
+            : "Opening existing procurement workspace",
+          description: reusedCount > 0 && createdCount > 0
+            ? `${reusedCount} existing task${reusedCount !== 1 ? "s" : ""} reused, ${createdCount} new.`
+            : reusedCount > 0
+            ? `Using ${reusedCount} existing task${reusedCount !== 1 ? "s" : ""} for this award.`
+            : `One task per qualifying lane. Target 5–10 carrier contacts each.`,
+        });
+      }
     } catch {
       toast({ title: "Failed to generate procurement tasks", variant: "destructive" });
     } finally {
@@ -398,22 +417,34 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
 
           <div className="flex items-center justify-between mt-3 pt-3 border-t gap-2">
             <div className="flex items-center gap-1.5">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleGenerateProcurementTasks}
-                disabled={generatingTasks || highVolumeLanes.length === 0}
-                title={highVolumeLanes.length === 0 ? "No lanes on this award — add lanes in the format: Origin → Destination" : undefined}
-                className="text-xs h-8"
-                data-testid={`button-generate-procurement-${award.id}`}
+              <span
+                className={highVolumeLanes.length === 0 ? "cursor-not-allowed" : undefined}
+                title={highVolumeLanes.length === 0 ? "No lanes in recognized format — use Origin → Destination" : undefined}
               >
-                {generatingTasks ? (
-                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                ) : (
-                  <ClipboardList className="h-3 w-3 mr-1.5" />
-                )}
-                Generate Procurement Tasks
-              </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleGenerateProcurementTasks}
+                  disabled={generatingTasks || highVolumeLanes.length === 0}
+                  className="text-xs h-8"
+                  data-testid={`button-generate-procurement-${award.id}`}
+                >
+                  {generatingTasks ? (
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : hasExistingTasks ? (
+                    <FolderOpen className="h-3 w-3 mr-1.5" />
+                  ) : (
+                    <ClipboardList className="h-3 w-3 mr-1.5" />
+                  )}
+                  {hasExistingTasks ? "Open Procurement Workspace" : "Generate Procurement Tasks"}
+                </Button>
+              </span>
+              {hasExistingTasks && (
+                <Badge className="bg-green-500/10 text-green-700 dark:text-green-400 text-xs gap-1" data-testid={`badge-tasks-setup-${award.id}`}>
+                  <CheckCircle2 className="h-3 w-3" />
+                  Tasks set up
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-1">
               <Button
@@ -1664,22 +1695,43 @@ export default function RfpAwards() {
     setPromptGeneratingTasks(true);
     try {
       const res = await apiRequest("POST", `/api/awards/${procurementPromptAward.id}/procurement-tasks`, {});
-      const { results } = await res.json() as { results: Array<{ lane: string; taskId: string; created: boolean }> };
-      const taskByLane = Object.fromEntries(results.map((r: any) => [r.lane, r.taskId]));
-      const createdLanes: ProcurementLaneInfo[] = procurementPromptLanes.map(lane => ({ ...lane, taskId: taskByLane[lane.lane] }));
-      const createdCount = results.filter((r: any) => r.created).length;
-      if (createdCount > 0) queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      type LaneResult = { lane: string; taskId: string; created: boolean; failed?: boolean };
+      const { results } = await res.json() as { results: LaneResult[] };
+      const successResults = results.filter(r => !r.failed);
+      const failedCount = results.filter(r => r.failed).length;
+      const taskByLane = Object.fromEntries(successResults.map(r => [r.lane, r.taskId]));
+      const createdLanes: ProcurementLaneInfo[] = procurementPromptLanes
+        .map(lane => {
+          const normalizedLane = lane.lane.trim().replace(/\s+/g, " ").toLowerCase();
+          const taskId = taskByLane[normalizedLane] ?? taskByLane[lane.lane];
+          return taskId ? { ...lane, taskId } : null;
+        })
+        .filter((l): l is ProcurementLaneInfo => l !== null);
+      const createdCount = successResults.filter(r => r.created).length;
+      if (createdCount > 0) {
+        queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      }
+      if (successResults.length > 0) {
+        queryClient.invalidateQueries({ queryKey: ["/api/awards", procurementPromptAward.id, "procurement-tasks"] });
+      }
       setPromptProcTitle(`Carrier Procurement — ${procurementPromptAward.title}`);
       setPromptProcLanes(createdLanes);
       setProcurementPromptAward(null);
       setProcurementPromptLanes([]);
       setPromptProcDialogOpen(true);
-      toast({
-        title: createdCount > 0
-          ? `${createdCount} procurement task${createdCount !== 1 ? "s" : ""} created`
-          : "Opening procurement workspace",
-        description: "Target 5–10 carrier contacts per lane.",
-      });
+      if (failedCount > 0 && successResults.length > 0) {
+        toast({
+          title: `${successResults.length} task${successResults.length !== 1 ? "s" : ""} ready, ${failedCount} lane${failedCount !== 1 ? "s" : ""} failed`,
+          description: "Workspace opened for successful lanes. Some lanes could not be set up — try again.",
+        });
+      } else {
+        toast({
+          title: createdCount > 0
+            ? `${createdCount} procurement task${createdCount !== 1 ? "s" : ""} created`
+            : "Opening procurement workspace",
+          description: "Target 5–10 carrier contacts per lane.",
+        });
+      }
     } catch {
       toast({ title: "Failed to generate procurement tasks", variant: "destructive" });
     } finally {

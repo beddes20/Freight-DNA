@@ -8342,7 +8342,28 @@ Respond with valid JSON only:
   // for the same (awardId, lane) pair (Node.js single-thread, but async interleaving is still possible)
   const procTaskCreationLocks = new Map<string, Promise<{ lane: string; taskId: string; created: boolean }>>();
 
-  // Idempotent procurement task generation — server validates qualifying lanes (>=50 loads) and finds-or-creates
+  // Idempotent procurement task generation — server validates qualifying lanes (any parseable origin → destination) and finds-or-creates
+  // Helper: normalize a lane string for dedup matching (trim, collapse whitespace, lowercase)
+  function normalizeLane(lane: string): string {
+    return lane.trim().replace(/\s+/g, " ").toLowerCase();
+  }
+
+  // GET existing procurement tasks for an award (for AwardCard "already set up" indicator)
+  app.get("/api/awards/:awardId/procurement-tasks", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { awardId } = req.params;
+      if (!(await verifyAwardAccess(user, awardId))) return res.status(403).json({ error: "Access denied" });
+      // Count tasks by awardId directly — not gated by current parseable lanes
+      const taskCount = await storage.countProcurementTasksByAward(awardId);
+      return res.status(200).json({ taskCount });
+    } catch (err) {
+      console.error("procurement-tasks GET error", err);
+      return res.status(500).json({ error: "Failed to check procurement tasks" });
+    }
+  });
+
   app.post("/api/awards/:awardId/procurement-tasks", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
@@ -8359,10 +8380,11 @@ Respond with valid JSON only:
       const qualifyingLaneMap = new Map<string, LaneMeta>(
         (award.lanes ?? [])
           .map((l: string) => {
-            const m = l.match(lanePattern);
+            const normalized = normalizeLane(l);
+            const m = normalized.match(lanePattern);
             if (!m) return null;
             const volume = m[3] ? parseInt(m[3].replace(/,/g, "")) : 0;
-            return [l, { origin: m[1].trim(), destination: m[2].trim(), volume }] as [string, LaneMeta];
+            return [normalized, { origin: m[1].trim(), destination: m[2].trim(), volume }] as [string, LaneMeta];
           })
           .filter((entry): entry is [string, LaneMeta] => entry !== null)
       );
@@ -8373,7 +8395,8 @@ Respond with valid JSON only:
       const customerName = company?.name ?? null;
       const awardTitle = award.title ?? null;
       // Per-key serialization prevents concurrent requests from creating duplicate tasks for the same lane
-      const results = await Promise.all(validLaneEntries.map(([laneName, meta]) => {
+      // Use Promise.allSettled so a single lane DB error does not fail the entire request
+      const settled = await Promise.allSettled(validLaneEntries.map(([laneName, meta]) => {
         const lockKey = `${awardId}:${laneName}`;
         if (!procTaskCreationLocks.has(lockKey)) {
           const op = (async () => {
@@ -8411,6 +8434,16 @@ Respond with valid JSON only:
         }
         return procTaskCreationLocks.get(lockKey)!;
       }));
+      const results: Array<{ lane: string; taskId: string; created: boolean; failed?: boolean }> = settled.map((s, i) => {
+        if (s.status === "fulfilled") return s.value;
+        const laneName = validLaneEntries[i][0];
+        console.error(`procurement-tasks: lane "${laneName}" failed`, s.reason);
+        return { lane: laneName, taskId: "", created: false, failed: true };
+      });
+      const successCount = results.filter(r => !r.failed).length;
+      if (successCount === 0) {
+        return res.status(500).json({ error: "Failed to generate procurement tasks for all lanes" });
+      }
       return res.status(200).json({ results });
     } catch (err) {
       console.error("procurement-tasks error", err);

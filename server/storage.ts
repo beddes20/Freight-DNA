@@ -278,6 +278,7 @@ export interface IStorage {
   getTasksByCompany(companyId: string): Promise<Task[]>;
   getTask(id: string): Promise<Task | undefined>;
   findProcurementTask(awardId: string, lane: string): Promise<Task | undefined>;
+  countProcurementTasksByAward(awardId: string): Promise<number>;
   findRfpCoverageReviewTask(rfpId: string): Promise<Task | undefined>;
   findAwardOnboardingTask(awardId: string): Promise<Task | undefined>;
   /** Return an open lane-procurement task for a given lane+user (for dedup check). */
@@ -1061,13 +1062,32 @@ export class DatabaseStorage implements IStorage {
   }
 
   async findProcurementTask(awardId: string, lane: string): Promise<Task | undefined> {
+    // Normalize the input for comparison
+    const normalizedLane = lane.trim().replace(/\s+/g, " ").toLowerCase();
+    // Use SQL-level normalization on the stored lane value so legacy unnormalized rows
+    // are matched without a second query. PostgreSQL jsonb_array_elements extracts each
+    // element; we normalize the stored lane with lower(regexp_replace(...)) and compare
+    // against the already-normalized input value.
     const results = await db.select().from(tasks).where(
-      sql`attached_lane_data @> ${JSON.stringify([{ type: "carrier_procurement", awardId, lane }])}::jsonb`
+      sql`EXISTS (
+        SELECT 1 FROM jsonb_array_elements(attached_lane_data) elem
+        WHERE elem->>'type' = 'carrier_procurement'
+          AND elem->>'awardId' = ${awardId}
+          AND lower(btrim(regexp_replace(elem->>'lane', '\\s+', ' ', 'g'))) = ${normalizedLane}
+      )`
     ).orderBy(
       sql`CASE WHEN status = 'open' THEN 0 ELSE 1 END`,
       desc(tasks.createdAt)
     );
     return results[0];
+  }
+
+  async countProcurementTasksByAward(awardId: string): Promise<number> {
+    // Count all carrier_procurement tasks for the given awardId, regardless of lane format
+    const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(tasks).where(
+      sql`attached_lane_data @> ${JSON.stringify([{ type: "carrier_procurement", awardId }])}::jsonb`
+    );
+    return row?.count ?? 0;
   }
 
   async findRfpCoverageReviewTask(rfpId: string): Promise<Task | undefined> {
