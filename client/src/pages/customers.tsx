@@ -35,6 +35,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CompanyDialog } from "@/components/company-dialog";
 import { GrowthScoreBadge } from "@/components/account-growth-portlet";
+import { MomentumScoreDrawer } from "@/components/momentum-score-drawer";
+import type { MomentumScore } from "@/components/momentum-score-drawer";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { buildAiToasts } from "@/lib/aiTouchUtils";
@@ -177,6 +179,7 @@ export default function Customers() {
   const [quickTouchMeaningful, setQuickTouchMeaningful] = useState(false);
 
   const [quickAddContact, setQuickAddContact] = useState<Company | null>(null);
+  const [momentumCompanyId, setMomentumCompanyId] = useState<string | null>(null);
   const [quickAddName, setQuickAddName] = useState("");
   const [quickAddTitle, setQuickAddTitle] = useState("");
   const [quickAddEmail, setQuickAddEmail] = useState("");
@@ -296,6 +299,16 @@ export default function Customers() {
     staleTime: 10 * 60 * 1000,
   });
   const growthScoreMap = useMemo(() => new Map(growthScores.map(r => [r.companyId, r])), [growthScores]);
+
+  const { data: momentumScoreDetail, isLoading: momentumScoreLoading } = useQuery<MomentumScore>({
+    queryKey: ["/api/companies", momentumCompanyId, "growth-score"],
+    enabled: !!momentumCompanyId,
+    staleTime: 6 * 60 * 60 * 1000,
+  });
+  const momentumCompanyName = useMemo(() => {
+    if (!momentumCompanyId) return "";
+    return (companies as Company[]).find(c => c.id === momentumCompanyId)?.name ?? "";
+  }, [momentumCompanyId, companies]);
 
   const thisMonthKey = (() => {
     const n = new Date();
@@ -686,7 +699,14 @@ export default function Customers() {
                       {!company.archivedAt && (() => {
                         const gs = growthScoreMap.get(company.id);
                         if (!gs) return null;
-                        return <GrowthScoreBadge score={gs.score} band={gs.band} bandLabel={gs.bandLabel} />;
+                        return (
+                          <GrowthScoreBadge
+                            score={gs.score}
+                            band={gs.band}
+                            bandLabel={gs.bandLabel}
+                            onClick={(e) => { e.stopPropagation(); setMomentumCompanyId(company.id); }}
+                          />
+                        );
                       })()}
                       {openTasks > 0 && !company.archivedAt && (
                         <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs">
@@ -951,6 +971,14 @@ export default function Customers() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <MomentumScoreDrawer
+        open={!!momentumCompanyId}
+        onClose={() => setMomentumCompanyId(null)}
+        companyName={momentumCompanyName}
+        scoreData={momentumScoreDetail}
+        isLoading={momentumScoreLoading}
+      />
     </div>
   );
 }

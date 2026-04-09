@@ -5007,7 +5007,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString().slice(0, 16);
 
       const cached = await storage.getGrowthScore(companyId);
-      if (cached && cached.calculatedAt >= thirtyMinAgo) {
+      // Only use cache if it's fresh AND already contains breakdown data
+      if (cached && cached.calculatedAt >= thirtyMinAgo && (cached as any).breakdown) {
         return res.json(cached);
       }
 
@@ -5021,7 +5022,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         calculatedAt: new Date().toISOString().slice(0, 16),
       });
 
-      res.json({ ...saved, bandLabel: result.bandLabel, bandColor: result.bandColor });
+      // Always include breakdown and bandLabel/bandColor from the freshly computed result
+      res.json({ ...saved, bandLabel: result.bandLabel, bandColor: result.bandColor, breakdown: result.breakdown });
     } catch (error) {
       console.error("Error computing growth score:", error);
       res.status(500).json({ error: "Failed to compute growth score" });

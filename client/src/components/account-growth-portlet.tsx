@@ -67,7 +67,7 @@ export function GrowthScoreBadge({
   band: string;
   bandLabel: string;
   size?: "sm" | "md";
-  onClick?: () => void;
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   const style = GROWTH_BAND_STYLES[band] ?? GROWTH_BAND_STYLES.stable;
   const textSize = size === "md" ? "text-sm" : "text-xs";

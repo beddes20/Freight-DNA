@@ -617,6 +617,7 @@ export default function CompanyDetail() {
                             score={growthScore.score}
                             band={growthScore.band}
                             bandLabel={growthScore.bandLabel}
+                            onClick={(e) => { e.stopPropagation(); setMomentumDrawerOpen(true); }}
                           />
                           {growthScore.drivers.length > 0 && (
                             <span className="text-xs text-muted-foreground" title={growthScore.drivers.map(d => `${d.positive ? "↑" : "↓"} ${d.label}`).join(" · ")}>
@@ -1069,6 +1070,14 @@ export default function CompanyDetail() {
           healthScore={healthScore}
         />
       )}
+
+      <MomentumScoreDrawer
+        open={momentumDrawerOpen}
+        onClose={() => setMomentumDrawerOpen(false)}
+        companyName={company?.name ?? ""}
+        scoreData={growthScore}
+        isLoading={growthScoreLoading}
+      />
     </div>
   );
 }
