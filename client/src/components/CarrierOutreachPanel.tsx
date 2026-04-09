@@ -289,7 +289,7 @@ export function CarrierOutreachPanel({
   });
 
   const laneId = laneIdProp ?? (
-    companyLanes
+    (companyLanes ?? [])
           // IMPORTANT: filter by companyId to avoid showing outreach for wrong account
           .filter(l => l.companyId === companyId && !l.resolvedAt && !l.hasPreferredCarrierProgram)
           .sort((a, b) => (b.laneScore ?? 0) - (a.laneScore ?? 0))[0]?.id ?? null
