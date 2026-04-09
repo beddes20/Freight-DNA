@@ -5038,7 +5038,11 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const visibleIds = await getVisibleCompanyIds(user);
+      const rawIds = await getVisibleCompanyIds(user);
+      // null means admin / all-access — resolve to all active company IDs for the org.
+      const visibleIds: string[] = rawIds !== null
+        ? rawIds
+        : (await storage.getCompanies(user.organizationId)).filter(c => !c.archivedAt).map(c => c.id);
       if (visibleIds.length === 0) return res.json([]);
 
       const cached = await storage.getGrowthScoresByOrg(user.organizationId, visibleIds);

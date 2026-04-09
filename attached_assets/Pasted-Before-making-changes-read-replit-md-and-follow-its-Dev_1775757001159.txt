@@ -1,0 +1,111 @@
+Before making changes, read replit.md and follow its Development Guardrails.
+
+First do an overlap check:
+1. List every file this task will touch.
+2. State whether any touched file overlaps with these high-risk shared surfaces:
+- server/routes/laneCarrierOutreach.ts
+- server/laneOutreachEmailBuilder.ts
+- client/src/components/CarrierOutreachPanel.tsx
+- client/src/components/ActivityTab.tsx (or equivalent activity/history files)
+- shared/laneFormatters.ts
+- client/src/pages/customers.tsx
+
+3. If there is overlap, diff against and preserve behavior from these canonical commits unless you explicitly justify a change:
+- b441d18
+- 0aff74a
+- edbaed9
+- 6a44860
+- d62f4d6
+- f91bc34
+- the customer growth-score badge fix
+
+Task:
+Carrier Hub is now receiving LWQ-imported carriers, but the list and detail views are not handling the full dataset correctly.
+
+Observed issues:
+1. Carrier Hub currently shows “500 of 3700 carriers”.
+2. The Lane Work Queue import should have resulted in roughly 12,500 carriers from the uploaded Excel sheet, so the hub total is materially undercounting what was uploaded.
+3. Clicking into an individual carrier does not load the detail view/drawer.
+
+What I need you to do:
+A. Trace the exact source of the “3700” total
+- Identify whether this is caused by:
+  - a backend query filter
+  - org scoping
+  - source filter / sourceChannel filter
+  - pagination cap
+  - import deduplication collapsing records
+  - import job only partially promoting rows into shared carriers
+  - Carrier Hub excluding certain imported carriers
+- Tell me exactly which query/endpoint produces the total and why it is 3700 instead of ~12500.
+
+B. Trace the exact source of the “500 shown” limit
+- Identify whether 500 is:
+  - a frontend page-size cap
+  - backend limit
+  - virtualization setting
+  - hardcoded default
+  - safety cap added for performance
+- If it is intentional, preserve performance but make the UX capable of reaching the full dataset via pagination/infinite scroll/load-more.
+- Do not simply dump 12,500 rows into one render without considering performance.
+
+C. Make Carrier Hub reflect the full imported dataset correctly
+- The total carrier count should reflect all carriers successfully imported from the Excel/LWQ flow for the org.
+- If deduplication legitimately reduced 12,500 uploaded rows into fewer real carrier records, show the true carrier count but also make it explainable.
+- If the current 3700 is wrong because imported carriers are not being promoted into the shared carriers table or are excluded by filters, fix that path.
+
+D. Fix the individual carrier detail view/drawer
+- Clicking a carrier should load reliably.
+- Identify whether the failure is caused by:
+  - oversized payload
+  - N+1 query explosion
+  - timeout
+  - missing carrierId on imported records
+  - bad join on outreach/activity/history tables
+  - frontend waiting on too much data before rendering
+- Make the drawer resilient:
+  - load base carrier details first
+  - lazy-load heavier tabs/sections if needed
+  - do not block the whole drawer on large activity/history payloads
+  - show a loading state and fail gracefully instead of hanging
+
+E. Preserve source visibility behavior
+- Do not regress the recent sourceChannel/source badge/filter work in Admin Catalog or Carrier Hub.
+- LWQ-imported carriers should still be recognizable by source.
+
+Implementation expectations:
+- Prefer targeted fixes over redesign.
+- Preserve performance for large datasets.
+- If the full 12,500 records cannot be safely rendered in one view, implement pagination or incremental loading, but the reported total must still be accurate.
+- If detail data is too heavy, split endpoint responsibilities so summary data loads first and heavy activity/history loads on demand.
+
+Required output before coding:
+- exact files you expect to touch
+- where the 3700 total comes from
+- where the 500 shown limit comes from
+- whether imported rows are being deduped into fewer shared carriers
+- whether this task overlaps any protected shared surfaces
+
+Required verification after coding:
+1. Run all relevant tests
+2. Run:
+- npx tsx tests/guardrails.test.ts
+3. Verify in the running app:
+- Carrier Hub total count
+- number shown per page / reachable via pagination or load-more
+- clicking a carrier opens the drawer
+- at least one LWQ-imported carrier loads successfully
+- source label/badge still appears correctly
+
+Return:
+- short summary of root cause
+- exact files changed
+- what changed in the list query/count behavior
+- what changed in the carrier detail loading behavior
+- whether deduplication explains any difference between 12,500 uploaded rows and final carrier count
+- tests run and results
+- one concrete UI proof example from the running app
+
+Important:
+Do not stop at “it compiles” or “tests pass”.
+I need the actual Carrier Hub count path explained and the individual carrier view confirmed working in the live UI.
