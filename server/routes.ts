@@ -12,6 +12,7 @@ import { registerForcedFocusRoutes } from "./routes/forcedFocus";
 import { registerLaneCarrierOutreachRoutes } from "./routes/laneCarrierOutreach";
 import { registerCarrierHubRoutes } from "./routes/carrierHub";
 import { registerMyProcurementRoutes } from "./routes/myProcurement";
+import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach";
 import { registerIntelRoutes } from "./routes/intel";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -3007,6 +3008,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerLaneCarrierOutreachRoutes(app);
   registerCarrierHubRoutes(app);
   registerMyProcurementRoutes(app);
+  registerProcurementOutreachRoutes(app);
   registerIntelRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
@@ -8595,7 +8597,7 @@ Respond with valid JSON only:
   });
 
   // POST create lane carrier
-  const LANE_CARRIER_STATUS_ENUM = ["contacted", "committed", "declined"] as const;
+  const LANE_CARRIER_STATUS_ENUM = ["contacted", "emailed", "committed", "declined"] as const;
   type LaneCarrierStatus = typeof LANE_CARRIER_STATUS_ENUM[number];
 
   app.post("/api/lane-carriers", requireAuth, async (req, res) => {

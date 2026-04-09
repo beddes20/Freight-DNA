@@ -1013,6 +1013,9 @@ export const laneCarriers = pgTable("lane_carriers", {
   capacityPerWeek: integer("capacity_per_week"),
   notes: text("notes"),
   status: text("status").notNull().default("contacted"),
+  // contacted | emailed | replied | committed | declined
+  outreachLog: jsonb("outreach_log").default([]),
+  // [{sentAt, subject, bodyPreview, email, status}]
   createdAt: text("created_at").notNull(),
 });
 
@@ -1378,7 +1381,7 @@ export type LaneCoverageProfileCarrier = typeof laneCoverageProfileCarriers.$inf
 export const carrierOutreachLogs = pgTable("carrier_outreach_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   orgId: varchar("org_id").notNull().references(() => organizations.id),
-  laneId: varchar("lane_id").notNull().references(() => recurringLanes.id, { onDelete: "cascade" }),
+  laneId: varchar("lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
   companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
   carrierIds: text("carrier_ids").array().notNull().default(sql`'{}'::text[]`),
   carrierNames: text("carrier_names").array().notNull().default(sql`'{}'::text[]`),
@@ -1396,6 +1399,10 @@ export const carrierOutreachLogs = pgTable("carrier_outreach_logs", {
   failureReason: text("failure_reason"),
   recipients: jsonb("recipients"),
   // [{carrierId, carrierName, email, status: 'sent'|'failed', error?: string}]
+  procurementTaskId: varchar("procurement_task_id"),
+  // FK-less reference to tasks.id — set for procurement workflow sends
+  procurementLane: text("procurement_lane"),
+  // lane label string (e.g. "Chicago, IL → Dallas, TX") for procurement-task context
 });
 export const insertCarrierOutreachLogSchema = createInsertSchema(carrierOutreachLogs).omit({ id: true, timestamp: true });
 export type InsertCarrierOutreachLog = z.infer<typeof insertCarrierOutreachLogSchema>;

@@ -1436,4 +1436,28 @@ export async function runMigrations() {
   } finally {
     clientCoverage.release();
   }
+
+  // Task #180 — add outreach_log column to lane_carriers for procurement outreach tracking
+  const clientProcurement = await pool.connect();
+  try {
+    await clientProcurement.query(`ALTER TABLE lane_carriers ADD COLUMN IF NOT EXISTS outreach_log jsonb NOT NULL DEFAULT '[]'::jsonb`);
+    console.log("[migrations] lane_carriers.outreach_log column ensured");
+  } catch (err) {
+    console.error("[migrations] lane_carriers outreach_log column error:", err);
+  } finally {
+    clientProcurement.release();
+  }
+
+  // Task #180 — make carrier_outreach_logs.lane_id nullable so procurement sends can log without a matched recurring lane
+  const clientOutreachLog = await pool.connect();
+  try {
+    await clientOutreachLog.query(`ALTER TABLE carrier_outreach_logs ALTER COLUMN lane_id DROP NOT NULL`);
+    await clientOutreachLog.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS procurement_task_id varchar`);
+    await clientOutreachLog.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS procurement_lane text`);
+    console.log("[migrations] carrier_outreach_logs: lane_id nullable + procurement columns added");
+  } catch (err) {
+    console.error("[migrations] carrier_outreach_logs procurement columns migration error:", err);
+  } finally {
+    clientOutreachLog.release();
+  }
 }
