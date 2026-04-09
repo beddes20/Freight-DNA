@@ -12,7 +12,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { formatLaneDisplay } from "@shared/laneFormatters";
+import { formatLaneDisplay, normalizeEquipmentType } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -162,7 +162,7 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
     item.destination,
     item.destinationState
   );
-  const equip = item.equipmentType ?? "—";
+  const equip = item.equipmentType ? normalizeEquipmentType(item.equipmentType) : "—";
   const avgLoads = item.avgLoadsPerWeek
     ? `~${parseFloat(item.avgLoadsPerWeek).toFixed(1)} loads/wk`
     : null;
