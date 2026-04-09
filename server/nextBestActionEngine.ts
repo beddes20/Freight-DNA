@@ -7,8 +7,8 @@
  *
  * Rule priority table (R1 = highest):
  *  R1   Emergency save        critical   score dropped ≥15 pts AND band = at_risk
- *  R2   Re-engage dormant     critical   45+ days since last touch
- *  R3   Escalate risk         high       band = at_risk AND 21+ days no touch
+ *  R2   Re-engage dormant     critical   7+ business days since last touch
+ *  R3   Escalate risk         high       band = at_risk AND 5+ business days no touch
  *  R4   Margin erosion        high       band = at_risk AND latest-month margin % < 5%   [partial]
  *  R5   Follow up open RFP    high       open RFP deadline ≤14d AND 7+ days no touch
  *  R6   Add stakeholder       moderate   <2 contacts with any relationship base AND growth band
@@ -17,7 +17,7 @@
  *  R9   Schedule QBR          high       no meaningful convo 60d AND loads ≥ 50 ytd      [partial]
  *  R10  Deepen key contact    moderate   a 1st-Base contact has not been touched in 30d+
  *  R11  Account plan          moderate   band newly elevated to growth_ready or higher
- *  R12  Cadence nudge         moderate   21+ days since last touch (catch-all)
+ *  R12  Cadence nudge         moderate   3+ business days since last touch (catch-all)
  *  R13  No action needed      none       fallback — all checks passed
  *
  * Partial rules (marked with [partial]):
@@ -27,6 +27,7 @@
 
 import type { IStorage } from "./storage";
 import type { Touchpoint, Contact, Rfp } from "../shared/schema";
+import { businessDaysAgo } from "./growthScoreCalculator";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -159,7 +160,7 @@ async function gatherSignals(
   companyId: string,
   organizationId: string,
   storage: IStorage,
-): Promise<AccountSignals> {
+): Promise<{ signals: AccountSignals; businessDaysSinceLastTouch: number | null }> {
   const now          = new Date();
   const todayStr     = now.toISOString().slice(0, 10);
   const d7AgoStr     = new Date(now.getTime() - 7  * 86_400_000).toISOString().slice(0, 10);
@@ -195,7 +196,8 @@ async function gatherSignals(
   // ── Touchpoints ───────────────────────────────────────────────────────────
   const sortedTps = [...tps].sort((a, b) => b.date.localeCompare(a.date));
   const lastTp    = sortedTps[0] ?? null;
-  const daysSinceLastTouch = lastTp ? daysSince(lastTp.date) : null;
+  const daysSinceLastTouch         = lastTp ? daysSince(lastTp.date) : null;
+  const businessDaysSinceLastTouch = lastTp ? businessDaysAgo(lastTp.date, todayStr) : null;
 
   const touchesLast30d          = tps.filter(t => t.date >= d30AgoStr).length;
   const touchesPrior30d         = tps.filter(t => t.date >= d60AgoStr && t.date < d30AgoStr).length;
@@ -295,15 +297,19 @@ async function gatherSignals(
   }
 
   return {
-    currentScore, currentBand, previousScore, previousBand, scoreDrop,
-    daysSinceLastTouch, touchesLast30d, touchesPrior30d, meaningfulConvosLast60d,
-    contactCount:    contacts.length,
-    contactsWithBase: contactsWithBase.length,
-    hasHrContact, has3rdBaseContact, stale1stBaseContacts,
-    shippingModeCount, laneCorridorCount,
-    openRfpCount, urgentRfpDaysUntilDue, urgentRfpId, urgentRfpTitle,
-    totalLoadsYtd, latestMonthMarginPct,
-    overdueTaskCount,
+    signals: {
+      currentScore, currentBand, previousScore, previousBand, scoreDrop,
+      daysSinceLastTouch,
+      touchesLast30d, touchesPrior30d, meaningfulConvosLast60d,
+      contactCount:    contacts.length,
+      contactsWithBase: contactsWithBase.length,
+      hasHrContact, has3rdBaseContact, stale1stBaseContacts,
+      shippingModeCount, laneCorridorCount,
+      openRfpCount, urgentRfpDaysUntilDue, urgentRfpId, urgentRfpTitle,
+      totalLoadsYtd, latestMonthMarginPct,
+      overdueTaskCount,
+    } satisfies AccountSignals,
+    businessDaysSinceLastTouch,
   };
 }
 
@@ -313,7 +319,7 @@ async function gatherSignals(
  * Walks R1–R13 in priority order.  Returns the first rule that fires.
  * Never returns null — R13 (no action needed) is always the fallback.
  */
-function evaluateRules(s: AccountSignals): Omit<NextBestAction, "signals"> {
+function evaluateRules(s: AccountSignals, businessDaysSinceLastTouch: number | null): Omit<NextBestAction, "signals"> {
 
   // R1 — Emergency save
   // Fires when the growth score has dropped ≥15 points AND the account is now at_risk.
@@ -336,16 +342,16 @@ function evaluateRules(s: AccountSignals): Omit<NextBestAction, "signals"> {
   }
 
   // R2 — Re-engage dormant contact
-  // Fires when there has been no touchpoint in 45+ days regardless of score band.
+  // Fires when there has been no touchpoint in 7+ business days regardless of score band.
   // This is a pure activity signal — the rep has gone dark on this account.
-  if (s.daysSinceLastTouch === null || s.daysSinceLastTouch >= 45) {
-    const days = s.daysSinceLastTouch ?? 0;
+  if (businessDaysSinceLastTouch === null || businessDaysSinceLastTouch >= 7) {
+    const bd = businessDaysSinceLastTouch ?? 0;
     return {
       ruleId:          "R2",
       actionName:      "Re-Engage a Dormant Contact",
-      reason:          s.daysSinceLastTouch === null
+      reason:          businessDaysSinceLastTouch === null
         ? "This account has never been contacted — time to make first contact."
-        : `No touchpoint in ${days} days — this account is going cold.`,
+        : `No touchpoint in ${bd} business days — this account is going cold.`,
       urgency:         "critical",
       owner:           "rep",
       expectedOutcome: "Re-establish communication and confirm the account is still active.",
@@ -355,13 +361,13 @@ function evaluateRules(s: AccountSignals): Omit<NextBestAction, "signals"> {
   }
 
   // R3 — Escalate service / risk issue
-  // Fires when band is at_risk AND no touch in 21+ days.
+  // Fires when band is at_risk AND no touch in 5+ business days.
   // Score is already in the danger zone and the rep isn't engaging.
-  if (s.currentBand === "at_risk" && (s.daysSinceLastTouch ?? 0) >= 21) {
+  if (s.currentBand === "at_risk" && (businessDaysSinceLastTouch ?? 0) >= 5) {
     return {
       ruleId:          "R3",
       actionName:      "Follow Up on a Service Issue",
-      reason:          `Account is At Risk and hasn't been touched in ${s.daysSinceLastTouch} days — there may be an unresolved issue.`,
+      reason:          `Account is At Risk and hasn't been touched in ${businessDaysSinceLastTouch} business days — there may be an unresolved issue.`,
       urgency:         "high",
       owner:           "rep",
       expectedOutcome: "Uncover any service concerns and restore engagement before the account deteriorates further.",
@@ -535,13 +541,13 @@ function evaluateRules(s: AccountSignals): Omit<NextBestAction, "signals"> {
   }
 
   // R12 — Maintain cadence (catch-all)
-  // Fires when the last touch was 21+ days ago and no higher-priority rule has fired.
+  // Fires when the last touch was 3+ business days ago and no higher-priority rule has fired.
   // Keeps the rep honest about staying in cadence on stable accounts.
-  if ((s.daysSinceLastTouch ?? 0) >= 21) {
+  if ((businessDaysSinceLastTouch ?? 0) >= 3) {
     return {
       ruleId:          "R12",
       actionName:      "Maintain Cadence — Check In",
-      reason:          `It's been ${s.daysSinceLastTouch} days since the last touch — keep the relationship warm.`,
+      reason:          `It's been ${businessDaysSinceLastTouch} business days since the last touch — keep the relationship warm.`,
       urgency:         "moderate",
       owner:           "rep",
       expectedOutcome: "Confirm the account is happy, surface any upcoming needs, and stay top-of-mind.",
@@ -580,7 +586,7 @@ export async function computeNextBestAction(
   organizationId: string,
   storage: IStorage,
 ): Promise<NextBestAction> {
-  const signals = await gatherSignals(companyId, organizationId, storage);
-  const action  = evaluateRules(signals);
+  const { signals, businessDaysSinceLastTouch } = await gatherSignals(companyId, organizationId, storage);
+  const action  = evaluateRules(signals, businessDaysSinceLastTouch);
   return { ...action, signals };
 }

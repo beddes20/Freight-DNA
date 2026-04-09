@@ -15,15 +15,15 @@ export type MomentumBreakdown = {
   touchpointHealth: {
     points: number;
     max: number;
-    recency: { points: number; max: number; daysSinceLastTouch: number | null };
-    frequency30d: { points: number; max: number; count: number };
+    recency: { points: number; max: number; bdSinceLastTouch: number | null };
+    frequency10BD: { points: number; max: number; count: number };
     meaningful30d: { points: number; max: number; count: number };
   };
   momentum: {
     points: number;
     max: number;
-    recent30: number;
-    prior30: number;
+    current10BD: number;
+    prior10BD: number;
     trendLabel: "up" | "flat" | "down" | "reengaging";
   };
   relationshipDepth: {
@@ -53,7 +53,8 @@ export type MomentumBreakdown = {
   };
   penalties: {
     totalPenalty: number;
-    noTouch45Days: number;
+    staleTouchLight: number;
+    staleTouchHeavy: number;
     noMeaningfulConversation90Days: number;
     noThirdOrHomeRun: number;
     overdueTask: number;
@@ -138,11 +139,11 @@ function DriverBullet({ text, positive }: { text: string; positive?: boolean }) 
 
 // ── Recency helper ────────────────────────────────────────────────────────────
 
-function recencyLabel(days: number | null): string {
-  if (days === null) return "Never contacted";
-  if (days === 0) return "Contacted today";
-  if (days === 1) return "1 business day ago";
-  return `${days} days ago`;
+function recencyLabel(bds: number | null): string {
+  if (bds === null) return "Never contacted";
+  if (bds === 0) return "Contacted today";
+  if (bds === 1) return "1 business day ago";
+  return `${bds} business days ago`;
 }
 
 // ── Trend icon ────────────────────────────────────────────────────────────────
@@ -260,12 +261,12 @@ export function MomentumScoreDrawer({
                       barColor="bg-blue-500"
                     >
                       <DriverBullet
-                        text={`Last touch: ${recencyLabel(bd.touchpointHealth.recency.daysSinceLastTouch)} (${bd.touchpointHealth.recency.points}/${bd.touchpointHealth.recency.max} pts)`}
+                        text={`Last touch: ${recencyLabel(bd.touchpointHealth.recency.bdSinceLastTouch)} (${bd.touchpointHealth.recency.points}/${bd.touchpointHealth.recency.max} pts)`}
                         positive={bd.touchpointHealth.recency.points > 0}
                       />
                       <DriverBullet
-                        text={`${bd.touchpointHealth.frequency30d.count} touches in last 30 days (${bd.touchpointHealth.frequency30d.points}/${bd.touchpointHealth.frequency30d.max} pts)`}
-                        positive={bd.touchpointHealth.frequency30d.count > 0}
+                        text={`${bd.touchpointHealth.frequency10BD.count} touches in last 10 business days (${bd.touchpointHealth.frequency10BD.points}/${bd.touchpointHealth.frequency10BD.max} pts)`}
+                        positive={bd.touchpointHealth.frequency10BD.count > 0}
                       />
                       <DriverBullet
                         text={`${bd.touchpointHealth.meaningful30d.count} meaningful conversation${bd.touchpointHealth.meaningful30d.count !== 1 ? "s" : ""} in last 30 days (${bd.touchpointHealth.meaningful30d.points}/${bd.touchpointHealth.meaningful30d.max} pts)`}
@@ -284,7 +285,7 @@ export function MomentumScoreDrawer({
                         <TrendIcon label={bd.momentum.trendLabel} />
                         {bd.momentum.trendLabel === "reengaging"
                           ? "Re-engaging — touches this period with none prior"
-                          : `${bd.momentum.recent30} touches this month vs ${bd.momentum.prior30} prior month (${bd.momentum.trendLabel})`}
+                          : `${bd.momentum.current10BD} touches in last 10 BDs vs ${bd.momentum.prior10BD} prior 10 BDs (${bd.momentum.trendLabel})`}
                       </li>
                     </BucketRow>
 
@@ -378,8 +379,11 @@ export function MomentumScoreDrawer({
                           </span>
                         </div>
                         <ul className="ml-40 pl-2 space-y-0.5 border-l border-red-200 dark:border-red-800">
-                          {bd.penalties.noTouch45Days > 0 && (
-                            <DriverBullet text={`−${bd.penalties.noTouch45Days}: No touch in 45+ days`} positive={false} />
+                          {bd.penalties.staleTouchHeavy > 0 && (
+                            <DriverBullet text={`−${bd.penalties.staleTouchHeavy}: No touch in 7+ business days`} positive={false} />
+                          )}
+                          {bd.penalties.staleTouchLight > 0 && (
+                            <DriverBullet text={`−${bd.penalties.staleTouchLight}: No touch in 3–6 business days`} positive={false} />
                           )}
                           {bd.penalties.noMeaningfulConversation90Days > 0 && (
                             <DriverBullet text={`−${bd.penalties.noMeaningfulConversation90Days}: No meaningful conversation in 90+ days`} positive={false} />
