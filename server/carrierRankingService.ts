@@ -70,6 +70,7 @@ export interface RankedCarrier {
   regionMatch: boolean;                // carrier regions overlap with lane origin/dest
   isIncumbent: boolean;                // true if this carrier is an incumbent for a stable lane
   incumbentRank: number | null;        // 1-based rank among incumbents (null if not incumbent)
+  isDoNotUse: boolean;                 // true if carrier status is do_not_use or tags include do_not_use/no_use
 }
 
 function normStr(s: string): string {
@@ -490,6 +491,9 @@ export async function rankCarriersForLane(
       }
     }
 
+    const isDoNotUse =
+      carrier.status === "do_not_use" ||
+      (carrier.tags ?? []).some(t => ["do_not_use", "no_use"].includes(normStr(t)));
     ranked.push({
       carrierId: carrier.id,
       carrierName: carrier.name,
@@ -516,6 +520,7 @@ export async function rankCarriersForLane(
       regionMatch: !!regionMatch,
       isIncumbent,
       incumbentRank,
+      isDoNotUse,
     });
   }
 
@@ -661,6 +666,7 @@ export async function rankCarriersForLane(
       regionMatch: false,
       isIncumbent: isIncumbentHist,
       incumbentRank: incumbentRankHist,
+      isDoNotUse: false,
     });
   }
 

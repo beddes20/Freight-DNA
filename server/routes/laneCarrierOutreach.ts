@@ -919,6 +919,9 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const includeNewProspects = req.query.includeNewProspects !== "false"; // default true
       const overrideRecentlyContacted = req.query.overrideRecentlyContacted === "true";
 
+      // ── Hard-filter Do Not Use carriers (unconditional) ─────────────────
+      ranked = ranked.filter(c => !c.isDoNotUse);
+
       // ── Filtering ────────────────────────────────────────────────────────
       if (exactOnly) {
         ranked = ranked.filter(c => c.historyMatch === "exact");
