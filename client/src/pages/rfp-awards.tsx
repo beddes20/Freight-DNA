@@ -1169,17 +1169,22 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                           <CheckCircle className="h-3 w-3 mr-1" />
                           Covered
                         </Badge>
+                        {f.coveredBy && f.coveredBy.length > 0 && (
+                          <Badge variant="secondary" className="text-xs">
+                            {f.coveredBy.length} {f.coveredBy.length === 1 ? "planner" : "planners"}
+                          </Badge>
+                        )}
                         <Button
                           size="sm"
-                          variant="outline"
-                          className="h-7 px-2 text-xs"
+                          variant="default"
+                          className="h-7 px-2.5 text-xs bg-blue-600 hover:bg-blue-700 text-white"
                           onClick={() => {
                             setAssignExistingContactId("");
                             setFindPlannerFacility(f);
                           }}
                           data-testid={`button-manage-planners-viewer-${i}`}
                         >
-                          Manage
+                          Add/Remove Planners
                         </Button>
                       </>
                     ) : (

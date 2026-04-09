@@ -589,10 +589,15 @@ export function RfpTab({
                                     </div>
                                     <div className="flex items-center gap-1.5 shrink-0">
                                       <Badge className="bg-green-500/10 text-green-600 dark:text-green-400"><CheckCircle className="h-3 w-3 mr-1" />Covered</Badge>
-                                      <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]"
+                                      {f.coveredBy && f.coveredBy.length > 0 && (
+                                        <Badge variant="secondary" className="text-xs">
+                                          {f.coveredBy.length} {f.coveredBy.length === 1 ? "planner" : "planners"}
+                                        </Badge>
+                                      )}
+                                      <Button size="sm" variant="default" className="h-7 px-2.5 text-xs bg-blue-600 hover:bg-blue-700 text-white"
                                         onClick={() => { setAssignExistingContactId(""); setFindPlannerFacility(f); }}
                                         data-testid={`button-manage-facility-${i}`}>
-                                        Manage
+                                        Add/Remove Planners
                                       </Button>
                                     </div>
                                   </div>
