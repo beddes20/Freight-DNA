@@ -98,7 +98,7 @@ Carriers with confirmed TMS history **must** outrank catalog-region-only carrier
 | `historyMatch` | Meaning | Floor band |
 |---|---|---|
 | `"exact"` | Loads on this exact city pair | 60–100 (≥10 loads → 85, ≥5 → 75, >0 → 60) |
-| `"nearby"` | Both endpoints within 100 miles of lane | 48–100 (≥10 loads → 72, ≥5 → 62, >0 → 48) |
+| `"nearby"` | Both endpoints within 75 miles of lane | 48–100 (≥10 loads → 72, ≥5 → 62, >0 → 48) |
 | `"state_pair"` | Same origin-state → dest-state corridor | 35–100 (≥10 loads → 45, ≥5 → 40, >0 → 35) |
 | `"region"` | Catalog region/equipment match, no TMS history | 1–34 |
 | `"none"` | No matching signals | 0 |
