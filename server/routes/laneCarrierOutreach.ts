@@ -1143,46 +1143,46 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           const avgLoads = lane.avgLoadsPerWeek ?? "2–3";
           const equipment = lane.equipmentType ?? "dry van";
 
-          const modeContext = outreachMode === "immediate_plus_lane"
-            ? `We also have an upcoming load on this corridor that needs coverage soon.`
+          const laneDisplay = formatLaneDisplay(origin, dest);
+          const volumePhrase = humanLoadVolume(avgLoads);
+
+          const immediateNote = outreachMode === "immediate_plus_lane"
+            ? ` We also have an immediate load on this corridor that needs coverage now.`
             : "";
 
-          const prompt = `
-You are a freight broker writing a professional lane-building outreach email to a carrier.
+          const knownNote = isKnown
+            ? "You have hauled for us before — mention the prior relationship briefly (one clause, not a full sentence)."
+            : "This is a new prospect — introduce Value Truck as a freight brokerage in one short sentence at most.";
+
+          const prompt = `You are a freight broker writing a short outreach email to a carrier about a recurring lane.
 
 Carrier name: ${name}
-Known carrier (has history with us): ${isKnown ? "Yes" : "No — new prospect"}${carrierDetails}
+Lane: ${laneDisplay} (${equipment})
+Weekly volume: ${volumePhrase}${immediateNote ? `\nUrgent note: ${immediateNote}` : ""}
+${knownNote}${carrierDetails ? `\nCarrier context:${carrierDetails}` : ""}
 
-Lane details:
-- Origin: ${origin}
-- Destination: ${dest}
-- Equipment: ${equipment}
-- Average volume: ${avgLoads} loads/week
-- This is a recurring corridor — we run freight on this lane consistently.
-${modeContext}
-
-Guidelines:
-- Emphasize recurring corridor opportunity and consistent weekly coverage, NOT just a single load.
-- Explicitly invite flexible responses: "If you don't have a truck this week but could next week, I'd still love to connect."
-- Keep it under 150 words.
-- Professional, friendly, not generic.
-- If this is a known carrier, reference the relationship briefly (we've worked together).
-- If new prospect, introduce Value Truck briefly.
-- Do NOT use placeholders like [Name] — address the carrier company directly.
-- Output ONLY the email body (no subject line, no sign-off).
-`.trim();
+House style — follow every rule exactly:
+- Direct, conversational, freight-native. Sound like a broker, not a sales rep.
+- 3–4 short sentences MAX. Keep it under 100 words.
+- Format the lane as written above: City, ST → City, ST. Never use raw lowercase lane strings.
+- Use the weekly volume phrase exactly as given — do NOT convert it back to a decimal number.
+- BANNED phrases — never use: "carrier bench", "we value our relationship", "ongoing coverage", "reaching out about a recurring lane we run consistently", "averaging X.XX loads per week", "would love to connect", "keep you in mind for future opportunities"
+- Preferred phrasing: "checking to see if you've got capacity", "does that fit your network?", "looking to line up steady coverage", "regular freight", "steady volume", "if this week's tight, no worries"
+- Slightly vary sentence structure — do not copy any example verbatim.
+- End with a simple operational ask.
+- Output ONLY the email body (no subject line, no sign-off, no placeholders).`.trim();
 
           let body = "";
           try {
             body = await callAI(prompt);
           } catch {
-            body = buildFallbackEmail(name, isKnown, origin, dest, equipment, String(avgLoads), outreachMode);
+            body = buildFallbackEmail(name, isKnown, laneDisplay, equipment, volumePhrase, outreachMode);
           }
 
           return {
             carrierId,
             carrierName: name,
-            subject: `Lane-Building Opportunity: ${origin} → ${dest} (${equipment})`,
+            subject: `Capacity Check: ${laneDisplay} (${equipment})`,
             body,
             outreachMode,
           };
@@ -1903,30 +1903,50 @@ Rules for suggestions:
   });
 }
 
+// ── Email generation helpers ───────────────────────────────────────────────
+
+/** Format origin → dest as "City, ST → City, ST" with consistent Title Case */
+function formatLaneDisplay(origin: string, dest: string): string {
+  const titleCase = (s: string) =>
+    s
+      .split(/,\s*/)
+      .map((part, i) =>
+        i === 0
+          ? part.trim().replace(/\b\w/g, (c) => c.toUpperCase())
+          : part.trim().toUpperCase()
+      )
+      .join(", ");
+  return `${titleCase(origin)} → ${titleCase(dest)}`;
+}
+
+/** Convert avgLoadsPerWeek (number or range string) to plain human phrasing */
+function humanLoadVolume(avg: string | number): string {
+  const n = typeof avg === "string" ? parseFloat(avg) : avg;
+  if (isNaN(n)) return "steady volume each week";
+  if (n < 1)   return "about 1 a week";
+  if (n < 2)   return "about 1–2 a week";
+  if (n < 3.5) return "around 2–3 a week";
+  if (n < 5)   return "around 3–5 a week";
+  if (n < 7)   return "usually 5–7 a week";
+  if (n < 9)   return "usually 7–9 a week";
+  return "around 8–10 a week";
+}
+
 // ── Fallback email generator ───────────────────────────────────────────────
 
 function buildFallbackEmail(
   name: string,
   isKnown: boolean,
-  origin: string,
-  dest: string,
+  laneDisplay: string,
   equipment: string,
-  avgLoads: string,
+  volumePhrase: string,
   mode: string,
 ): string {
-  const intro = isKnown
-    ? `We've worked together before and value our relationship.`
-    : `Value Truck is a freight brokerage focused on building strong carrier partnerships.`;
-
+  const greeting = isKnown ? `Hey ${name} —` : `Hey ${name} team —`;
+  const relationship = isKnown ? ` We've hauled together before and` : ``;
   const modeNote = mode === "immediate_plus_lane"
-    ? ` We also have an immediate load available on this corridor right now.`
+    ? ` We also have an immediate load on this corridor that needs coverage now.`
     : "";
 
-  return `Hi ${name} team,
-
-${intro} We're reaching out about a recurring lane we run consistently: ${origin} → ${dest} (${equipment}), averaging ${avgLoads} loads per week.
-
-We're building our carrier bench for this corridor and would love to connect about ongoing coverage.${modeNote}
-
-If you don't have capacity this week, no worries — I'd still like to keep you in mind for future freight on this lane. When works for a quick call?`;
+  return `${greeting}${relationship} checking to see if you've got capacity for ${laneDisplay} (${equipment}). We usually have ${volumePhrase} on this lane and are looking to line up steady coverage.${modeNote} Does that fit your network? If so, I'd be glad to talk through it.`;
 }
