@@ -310,7 +310,7 @@ function LaneRow({
           {item.lane.companyName && (
             <div className="flex items-center gap-1.5 mb-1.5">
               <Building2 className="w-3 h-3 text-blue-400 shrink-0" />
-              <span className="text-xs font-semibold text-blue-300">{item.lane.companyName}</span>
+              <span className="text-xs font-semibold text-blue-500 dark:text-blue-400">{item.lane.companyName}</span>
               {/* CRM match indicator: show 'CRM' badge if companyId resolved, otherwise 'customer name' fallback */}
               {item.lane.companyId ? (
                 <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 bg-blue-500/10">CRM</Badge>
@@ -595,7 +595,7 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
       <DialogContent className="max-w-lg" data-testid="dialog-build-lane">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <PlusCircle className="w-4 h-4 text-violet-400" />
+            <PlusCircle className="w-4 h-4 text-amber-400" />
             Build Lane
           </DialogTitle>
         </DialogHeader>
@@ -713,7 +713,7 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
           <Button
             onClick={() => buildMutation.mutate()}
             disabled={!canSubmit || buildMutation.isPending}
-            className="gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
+            className="gap-1.5 bg-amber-500 hover:bg-amber-600 text-white"
             data-testid="btn-build-lane-submit"
           >
             {buildMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PlusCircle className="w-3.5 h-3.5" />}
@@ -879,7 +879,7 @@ export default function LaneWorkQueuePage() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 text-xs gap-1.5 border-violet-500/40 text-violet-400 hover:bg-violet-500/10"
+            className="h-8 text-xs gap-1.5 border-amber-500/40 text-amber-400 hover:bg-amber-500/10"
             onClick={() => setBuildLaneOpen(true)}
             data-testid="btn-build-lane"
           >
@@ -996,26 +996,26 @@ export default function LaneWorkQueuePage() {
 
             {/* Admin engine metadata debug panel */}
             {isAdminOrDirector && engineStatus?.meta && (
-              <div className="mb-5 rounded-lg border border-slate-700/40 bg-slate-800/30 px-4 py-3 flex flex-wrap gap-4 items-center" data-testid="engine-debug-panel">
+              <div className="mb-5 rounded-lg border border-border bg-muted/30 px-4 py-3 flex flex-wrap gap-4 items-center" data-testid="engine-debug-panel">
                 <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <Database className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="font-medium text-slate-300">Last Engine Run</span>
+                  <Database className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span className="font-medium text-foreground">Last Engine Run</span>
                 </div>
                 <span className="text-[11px] text-muted-foreground">
-                  Source: <span className="text-slate-200">{engineStatus.meta.source}</span>
+                  Source: <span className="text-foreground">{engineStatus.meta.source}</span>
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  Uploads used: <span className="text-slate-200">{engineStatus.meta.uploadIds.length}</span>
+                  Uploads used: <span className="text-foreground">{engineStatus.meta.uploadIds.length}</span>
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  Rows scanned: <span className="text-slate-200">{engineStatus.meta.rowsScanned.toLocaleString()}</span>
+                  Rows scanned: <span className="text-foreground">{engineStatus.meta.rowsScanned.toLocaleString()}</span>
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  Lanes generated: <span className="text-slate-200">{engineStatus.meta.lanesGenerated}</span>
+                  Lanes generated: <span className="text-foreground">{engineStatus.meta.lanesGenerated}</span>
                 </span>
                 {engineStatus.meta.latestUploadDate && (
                   <span className="text-[11px] text-muted-foreground">
-                    Upload date: <span className="text-slate-200">
+                    Upload date: <span className="text-foreground">
                       {new Date(engineStatus.meta.latestUploadDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                     </span>
                   </span>
