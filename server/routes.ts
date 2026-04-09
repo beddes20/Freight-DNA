@@ -494,6 +494,7 @@ export async function registerRoutes(
 
   app.use("/api", (req, res, next) => {
     if (req.path.startsWith("/auth/")) return next();
+    if (req.path === "/config/public" && req.method === "GET") return next();
     if (req.path === "/demo-requests" && req.method === "POST") return next();
     // Public Stripe endpoints (no auth required — landing page checkout flow)
     if (req.path === "/stripe/config" && req.method === "GET") return next();

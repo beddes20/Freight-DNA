@@ -1,4 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useUser, useClerk } from "@clerk/clerk-react";
 import { queryClient, apiRequest, getQueryFn } from "@/lib/queryClient";
 import type { User } from "@shared/schema";
 
@@ -9,48 +10,33 @@ export type SafeUser = Omit<User, "password"> & {
 };
 
 export function useAuth() {
-  const { data: user, isLoading } = useQuery<SafeUser | null>({
+  const { isLoaded: clerkLoaded, isSignedIn } = useUser();
+  const { signOut } = useClerk();
+
+  const { data: user, isLoading: userLoading } = useQuery<SafeUser | null>({
     queryKey: ["/api/auth/me"],
     queryFn: getQueryFn({ on401: "returnNull" }),
+    enabled: clerkLoaded && isSignedIn === true,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: true,
     retry: false,
   });
 
-  const loginMutation = useMutation({
-    mutationFn: async (data: { username: string; password: string }) => {
-      const res = await apiRequest("POST", "/api/auth/login", data);
-      return res.json();
-    },
-    onSuccess: (userData: SafeUser) => {
-      queryClient.setQueryData(["/api/auth/me"], userData);
-    },
-  });
-
-  const registerMutation = useMutation({
-    mutationFn: async (data: { username: string; password: string; name: string }) => {
-      const res = await apiRequest("POST", "/api/auth/register", data);
-      return res.json();
-    },
-    onSuccess: (userData: SafeUser) => {
-      queryClient.setQueryData(["/api/auth/me"], userData);
-    },
-  });
-
   const logoutMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/auth/logout");
+      await signOut();
+      queryClient.clear();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      window.location.href = "/";
     },
   });
 
+  const isLoading = !clerkLoaded || (!!isSignedIn && userLoading);
+
   return {
-    user,
+    user: isSignedIn ? (user ?? null) : null,
     isLoading,
-    login: loginMutation,
-    register: registerMutation,
     logout: logoutMutation,
   };
 }

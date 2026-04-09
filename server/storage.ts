@@ -203,6 +203,7 @@ export interface IStorage {
   /** Auth-only lookup by PK — trusted IDs only (session, FK chains). No org filter. */
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByClerkId(clerkUserId: string): Promise<User | undefined>;
   createPasswordResetToken(userId: string, token: string, expiresAt: string): Promise<void>;
   getPasswordResetToken(token: string): Promise<{ userId: string; expiresAt: string } | undefined>;
   deletePasswordResetTokensByUser(userId: string): Promise<void>;
@@ -655,6 +656,11 @@ export class DatabaseStorage implements IStorage {
 
   async getUserByUsername(username: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user;
+  }
+
+  async getUserByClerkId(clerkUserId: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.clerkUserId, clerkUserId));
     return user;
   }
 

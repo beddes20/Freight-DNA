@@ -13,8 +13,10 @@ import { CrmChatbot } from "@/components/crm-chatbot";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Loader2, UserX, Clock } from "lucide-react";
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback, useState } from "react";
 import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
+import { ClerkProvider, useClerk } from "@clerk/clerk-react";
+import { dark } from "@clerk/themes";
 import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
 import { TourProvider } from "@/components/app-tour";
 import NotFound from "@/pages/not-found";
@@ -149,14 +151,15 @@ function Router() {
 
 function AuthenticatedApp() {
   const { user, isLoading } = useAuth();
+  const { signOut } = useClerk();
 
   const handleInactivityLogout = useCallback(async () => {
     try {
-      await apiRequest("POST", "/api/auth/logout");
+      await signOut();
     } catch {}
     queryClient.clear();
-    window.location.href = "/login";
-  }, []);
+    window.location.href = "/";
+  }, [signOut]);
 
   const { warningVisible, secondsLeft, staySignedIn } = useInactivityTimeout(
     user ? handleInactivityLogout : () => {}
@@ -303,17 +306,39 @@ function AuthenticatedApp() {
 }
 
 function App() {
+  const [clerkKey, setClerkKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/config/public")
+      .then(r => r.json())
+      .then(cfg => setClerkKey(cfg.clerkPublishableKey || null))
+      .catch(() => setClerkKey(null));
+  }, []);
+
+  if (!clerkKey) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   return (
-    <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <TourProvider>
-            <AuthenticatedApp />
-          </TourProvider>
-          <Toaster />
-        </TooltipProvider>
-      </QueryClientProvider>
-    </ErrorBoundary>
+    <ClerkProvider
+      publishableKey={clerkKey}
+      appearance={{ baseTheme: dark }}
+    >
+      <ErrorBoundary>
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <TourProvider>
+              <AuthenticatedApp />
+            </TourProvider>
+            <Toaster />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </ErrorBoundary>
+    </ClerkProvider>
   );
 }
 

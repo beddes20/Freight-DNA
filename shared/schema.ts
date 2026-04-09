@@ -161,7 +161,7 @@ export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   organizationId: varchar("organization_id").notNull().references(() => organizations.id),
   username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+  password: text("password"),
   name: text("name").notNull().default(""),
   role: text("role").notNull().default("account_manager"),
   managerId: varchar("manager_id"),
@@ -169,12 +169,14 @@ export const users = pgTable("users", {
   financialRepId: text("financial_rep_id"),
   createdAt: text("created_at"),
   emailSignature: text("email_signature"),
+  clerkUserId: text("clerk_user_id").unique(),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
 }).extend({
   role: z.enum(userRoles).default("account_manager"),
+  password: z.string().optional(),
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
