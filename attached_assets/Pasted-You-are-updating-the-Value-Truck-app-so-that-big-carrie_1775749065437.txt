@@ -1,0 +1,123 @@
+You are updating the Value Truck app so that “big carrier uploads” done from Lane Work Queue feed into the same Carrier Intelligence layer used by Carrier Hub and Carrier Catalog.
+
+Goal
+Any carrier that is uploaded/used for lane outreach in Lane Work Queue should:
+- exist as a real Carrier record in the shared carrier model,
+- be visible and usable in Carrier Hub,
+- be visible/manageable in Carrier Catalog (admin),
+- be tagged with its origin (“created from lane upload”) so admins can clean/enrich later.
+
+This is a data-plumbing + UX-link task. Do not redesign ranking or outreach logic.
+
+Current state (high level)
+- Lane Work Queue:
+  - Supports a “big carrier upload” for procurement (bulk upload/import carriers for a lane or set of lanes).
+  - Those carriers can receive outreach from within the lane panel.
+  - Some may not exist as full carriers in the main carrier tables.
+- Carrier Catalog (/admin/carriers):
+  - Admin-only. Manages base carrier records, imports, Lane Engine, feature flags.
+- Carrier Hub (/carrier-hub):
+  - Ops view for carriers (contacts, claimed lanes, proven lanes, outreach history, status).
+  - Reads from the core carrier model (not from ephemeral upload-only entries).
+
+Problem
+Carriers uploaded in Lane Work Queue are not consistently showing up as full carriers in Carrier Hub / Catalog. This makes the tools feel disconnected and prevents the system from learning from those carriers over time.
+
+Desired behavior
+When a user bulk uploads carriers from Lane Work Queue:
+
+1) De-duplicate
+- For each uploaded carrier (by MC/DOT, or fallback to name/email/phone keys):
+  - If it already exists as a Carrier in the core model:
+    - link the upload row to that existing carrierId.
+  - If it does NOT exist:
+    - create a new Carrier record in the core carrier table with:
+      - name (required)
+      - MC/DOT if provided
+      - primary email/phone if provided
+      - status = 'active' by default
+      - source = 'lane_upload' (new field if needed)
+      - createdAt / updatedAt timestamps.
+
+2) Minimal Carrier Hub profile
+- Ensure any new carriers created this way are immediately visible in:
+  - Carrier Hub search/list.
+  - Carrier Catalog (/admin/carriers) for admins.
+- At minimum, Hub should be able to show:
+  - name,
+  - status,
+  - basic contact info (email/phone),
+  - and a flag like “Created from lane upload” so users understand the origin.
+
+3) Lane → Carrier link for outreach and history
+- All outreach activity sent to an uploaded carrier from Lane Work Queue must be associated with the carrierId created/linked above (not just a free-text email).
+- That way:
+  - Carrier Hub Activity/Outreach tab shows those emails.
+  - Proven lanes for that carrier can be incrementally built from lane usage history.
+- If this link is not already stored, introduce a foreign key from the lane-level carrier upload rows to carrierId.
+
+4) Admin visibility / cleanup
+- In Carrier Catalog:
+  - Add a simple filter or badge to identify carriers with source = 'lane_upload'.
+  - This lets admins:
+    - review, merge duplicates if needed,
+    - enrich them with more details (MC/DOT, documents, etc.).
+- Implement safe merge or at least a plan for duplicates:
+  - If a carrier created from lane upload is later imported via Catalog with the same MC/DOT, prefer a “merge into existing” behavior over creating a duplicate.
+  - For this task, you can leave dedupe/merge as a TODO if it’s non-trivial, but document assumptions.
+
+5) No behavior change for users doing uploads
+- From the Lane Work Queue user’s perspective:
+  - the upload UX does not need to change in this task.
+  - they just get the benefit that:
+    - carriers they upload become searchable in Carrier Hub,
+    - outreach history shows up on the carrier profile,
+    - the system can learn from their use over time.
+
+Implementation notes
+
+Backend
+- Identify the table(s) that store:
+  - core carriers (used by Hub/Catalog),
+  - lane-level uploaded carriers (if separate).
+- Implement a sync/promotion step in the lane upload flow:
+  - For each row, perform the de-duplication and create/link carrierId.
+- Introduce a source column on carriers if not present:
+  - ENUM or text: e.g., 'catalog_import', 'manual', 'lane_upload'.
+- Ensure carrier_outreach_logs reference carrierId so Activity tab can show those events.
+
+Frontend
+- Carrier Hub:
+  - New carriers from lane upload must appear in search and list views without extra work (should be automatic if they hit the same API).
+  - Show a small “Uploaded from Lane Work Queue” badge or subtle text in the profile header if source = 'lane_upload'.
+- Carrier Catalog:
+  - Add a filter and/or badge for source = 'lane_upload' so admins can find these easily.
+
+Tests / acceptance criteria
+
+Backend
+- Uploading carriers via Lane Work Queue:
+  - when MC/DOT matches an existing carrier → no duplicate created; upload row links to existing carrierId.
+  - when no match exists → new carrier record is created with source = 'lane_upload'.
+- carrier_outreach_logs entries created via lane outreach to an uploaded carrier:
+  - have a valid carrierId pointing to the core carrier table.
+- Carrier list APIs used by Hub and Catalog return the newly created carrier.
+
+Frontend
+- After uploading a brand-new carrier via Lane Work Queue:
+  - that carrier is searchable/visible in Carrier Hub and in Carrier Catalog.
+  - the Carrier Hub profile shows the origin badge.
+- Outreach sent from Lane Work Queue to that carrier:
+  - appears in the carrier’s Activity tab in Hub.
+
+Out of scope
+- Changing ranking weights or logic.
+- Building a full deduplication UI; small merge/assumption handling is fine.
+- Any visual redesign of Lane Work Queue or upload UX.
+
+Output
+When you implement this, please respond with:
+1) Tables and fields touched.
+2) How de-duplication is implemented (keys used).
+3) Updated lane upload flow (where the promotion happens).
+4) Any tradeoffs or TODOs (especially around dedupe/merge).

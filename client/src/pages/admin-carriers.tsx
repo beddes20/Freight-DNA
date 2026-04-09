@@ -36,6 +36,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Loader2,
   Plus,
   Pencil,
@@ -49,7 +56,25 @@ import {
   Phone,
   Mail,
   MapPin,
+  Filter,
 } from "lucide-react";
+
+const LWQ_SOURCES = ["dat", "loadsmart", "csv_paste", "manual", "other"];
+const LWQ_SOURCE_LABELS: Record<string, string> = {
+  dat: "DAT Load Board",
+  loadsmart: "Loadsmart",
+  csv_paste: "CSV Paste",
+  manual: "Manual Entry",
+  other: "Other Platform",
+};
+
+function getSourceInfo(channel: string | null): { label: string; category: "lwq" | "catalog" | "engine" | "no_source" } {
+  if (!channel) return { label: "Manual Add", category: "no_source" };
+  if (LWQ_SOURCES.includes(channel)) return { label: `Lane Upload · ${LWQ_SOURCE_LABELS[channel] ?? channel}`, category: "lwq" };
+  if (["excel_seed", "import_paste", "import_csv"].includes(channel)) return { label: "Catalog Import", category: "catalog" };
+  if (channel === "engine") return { label: "Engine Discovery", category: "engine" };
+  return { label: channel, category: "no_source" };
+}
 
 interface Carrier {
   id: string;
@@ -65,6 +90,7 @@ interface Carrier {
   primaryEmail: string | null;
   backupEmail: string | null;
   notes: string | null;
+  sourceChannel: string | null;
 }
 
 interface CarrierFormData {
@@ -188,6 +214,7 @@ export default function AdminCarriers() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [search, setSearch] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<"__all__" | "lwq" | "catalog" | "engine" | "no_source">("__all__");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editTarget, setEditTarget] = useState<Carrier | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Carrier | null>(null);
@@ -299,14 +326,22 @@ export default function AdminCarriers() {
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  const filtered = carriers.filter(c =>
-    !search ||
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    (c.payeeCode ?? "").toLowerCase().includes(search.toLowerCase()) ||
-    (c.mcDot ?? "").includes(search) ||
-    (c.primaryEmail ?? "").toLowerCase().includes(search.toLowerCase()) ||
-    (c.phone ?? "").includes(search)
-  );
+  const filtered = carriers.filter(c => {
+    if (search) {
+      const q = search.toLowerCase();
+      const matchesText = c.name.toLowerCase().includes(q) ||
+        (c.payeeCode ?? "").toLowerCase().includes(q) ||
+        (c.mcDot ?? "").includes(q) ||
+        (c.primaryEmail ?? "").toLowerCase().includes(q) ||
+        (c.phone ?? "").includes(q);
+      if (!matchesText) return false;
+    }
+    if (sourceFilter !== "__all__") {
+      const { category } = getSourceInfo(c.sourceChannel);
+      if (category !== sourceFilter) return false;
+    }
+    return true;
+  });
 
   const allFilteredSelected = filtered.length > 0 && filtered.every(c => selected.has(c.id));
   const someFilteredSelected = filtered.some(c => selected.has(c.id));
@@ -395,6 +430,21 @@ export default function AdminCarriers() {
           <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
           <Input placeholder="Search carriers…" value={search} onChange={e => setSearch(e.target.value)} className="pl-8 text-sm h-9" data-testid="input-search-carriers" />
         </div>
+        <div className="flex items-center gap-1.5">
+          <Filter className="w-3.5 h-3.5 text-muted-foreground" />
+          <Select value={sourceFilter} onValueChange={v => setSourceFilter(v as typeof sourceFilter)} data-testid="select-source-filter">
+            <SelectTrigger className="h-9 text-xs w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All Sources</SelectItem>
+              <SelectItem value="lwq">Lane Work Queue Upload</SelectItem>
+              <SelectItem value="catalog">Catalog Import</SelectItem>
+              <SelectItem value="engine">Engine Discovery</SelectItem>
+              <SelectItem value="no_source">Manual Add</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
 
         {selectedCount > 0 && (
           <div className="flex items-center gap-2 bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-1.5">
@@ -430,7 +480,7 @@ export default function AdminCarriers() {
         <div className="flex items-center gap-2 text-muted-foreground text-sm py-8"><Loader2 className="w-4 h-4 animate-spin" />Loading carriers…</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground text-sm">
-          {search ? "No carriers match your search" : "No carriers yet — import your freight file or add one manually"}
+          {search || sourceFilter !== "__all__" ? "No carriers match your filters" : "No carriers yet — import your freight file or add one manually"}
         </div>
       ) : (
         <div className="rounded-xl border border-border overflow-hidden bg-card">
@@ -467,10 +517,26 @@ export default function AdminCarriers() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-foreground">{c.name}</div>
-                      <div className="flex items-center gap-2 mt-0.5">
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         {c.payeeCode && <span className="text-[10px] text-amber-600 dark:text-amber-400">Payee: {c.payeeCode}</span>}
                         {c.mcDot && <span className="text-[10px] text-muted-foreground">MC: {c.mcDot}</span>}
                         {!hasContact && <span className="text-[10px] text-destructive">No contact</span>}
+                        {(() => {
+                          const { label, category } = getSourceInfo(c.sourceChannel);
+                          if (category === "lwq") return (
+                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-sky-500/40 text-sky-600 dark:text-sky-400">{label}</Badge>
+                          );
+                          if (category === "catalog") return (
+                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-green-500/40 text-green-600 dark:text-green-400">{label}</Badge>
+                          );
+                          if (category === "engine") return (
+                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-purple-500/40 text-purple-600 dark:text-purple-400">{label}</Badge>
+                          );
+                          if (c.sourceChannel) return (
+                            <Badge variant="outline" className="text-[9px] py-0 px-1 text-muted-foreground/50">{label}</Badge>
+                          );
+                          return null;
+                        })()}
                       </div>
                     </td>
                     <td className="px-4 py-3 hidden sm:table-cell">
@@ -530,6 +596,7 @@ export default function AdminCarriers() {
         <p className="text-xs text-muted-foreground mt-3">
           {filtered.length} of {carriers.length} carrier{carriers.length !== 1 ? "s" : ""}
           {search && ` matching "${search}"`}
+          {sourceFilter !== "__all__" && ` · filtered by ${sourceFilter === "lwq" ? "Lane Work Queue" : sourceFilter === "catalog" ? "Catalog Import" : sourceFilter === "engine" ? "Engine Discovery" : "Manual Add"}`}
           {selectedCount > 0 && ` · ${selectedCount} selected`}
         </p>
       )}

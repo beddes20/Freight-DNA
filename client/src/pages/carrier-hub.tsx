@@ -25,6 +25,29 @@ import {
   Globe, Loader2, Edit2, Trash2, Shield, History, Zap, ExternalLink,
 } from "lucide-react";
 
+// ── Source channel helpers ─────────────────────────────────────────────────────
+
+const LWQ_SOURCE_LABELS: Record<string, string> = {
+  dat: "DAT Load Board",
+  loadsmart: "Loadsmart",
+  csv_paste: "CSV Paste",
+  manual: "Manual Entry",
+  other: "Other Platform",
+};
+const LWQ_SOURCES = Object.keys(LWQ_SOURCE_LABELS);
+
+function getCarrierSourceLabel(channel: string | null): string | null {
+  if (!channel) return null;
+  if (LWQ_SOURCES.includes(channel)) return `Lane Upload · ${LWQ_SOURCE_LABELS[channel]}`;
+  if (["excel_seed", "import_paste", "import_csv"].includes(channel)) return "Catalog Import";
+  if (channel === "engine") return "Engine Discovery";
+  return channel;
+}
+
+function isLWQSource(channel: string | null): boolean {
+  return !!channel && LWQ_SOURCES.includes(channel);
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const US_STATES = [
@@ -544,7 +567,15 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
               {carrier.mcDot && <span className="font-mono">{carrier.mcDot}</span>}
               {carrier.dotNumber && <span className="font-mono text-muted-foreground/60">DOT: {carrier.dotNumber}</span>}
               {carrier.city && carrier.state && <span><MapPin className="w-3 h-3 inline mr-0.5" />{carrier.city}, {carrier.state}</span>}
-              {carrier.sourceChannel && <Badge variant="outline" className="text-[9px] py-0 px-1 text-muted-foreground/60">via {carrier.sourceChannel}</Badge>}
+              {carrier.sourceChannel && (() => {
+                const label = getCarrierSourceLabel(carrier.sourceChannel);
+                const isLWQ = isLWQSource(carrier.sourceChannel);
+                return (
+                  <Badge variant="outline" className={`text-[9px] py-0 px-1 ${isLWQ ? "border-sky-500/40 text-sky-600 dark:text-sky-400" : "text-muted-foreground/60"}`}>
+                    {label}
+                  </Badge>
+                );
+              })()}
             </div>
           </div>
           <div className="flex gap-1.5 shrink-0">
@@ -653,7 +684,7 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                     { label: "Primary Email", val: carrier.primaryEmail },
                     { label: "Backup Email", val: carrier.backupEmail },
                     { label: "HQ Location", val: [carrier.city, carrier.state].filter(Boolean).join(", ") || null },
-                    { label: "Source", val: carrier.sourceChannel },
+                    { label: "Source", val: getCarrierSourceLabel(carrier.sourceChannel) },
                   ].filter(f => f.val).map(f => (
                     <div key={f.label}>
                       <div className="text-[10px] text-muted-foreground uppercase tracking-wide">{f.label}</div>
