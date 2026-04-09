@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Notification } from "@shared/schema";
+import { formatTimeAgo } from "@/lib/utils";
 
 const TYPE_CONFIG: Record<string, { icon: React.ReactNode; accent: string; label: string }> = {
   task_assigned:   { icon: <ListTodo className="h-4 w-4" />,       accent: "text-blue-500",   label: "Task Assigned" },
@@ -30,13 +31,6 @@ const TYPE_CONFIG: Record<string, { icon: React.ReactNode; accent: string; label
   lane_assigned:        { icon: <Truck className="h-4 w-4" />,   accent: "text-amber-500",  label: "Lane Assigned" },
 };
 
-function timeAgo(dateStr: string) {
-  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
 
 interface ToastCard {
   notif: Notification;
@@ -152,7 +146,7 @@ export function NotificationToasts() {
                     <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{t.notif.body}</p>
                   )}
                   <div className="flex items-center justify-between mt-2">
-                    <span className="text-[10px] text-muted-foreground">{timeAgo(t.notif.createdAt as unknown as string)}</span>
+                    <span className="text-[10px] text-muted-foreground">{formatTimeAgo(t.notif.createdAt as unknown as string)}</span>
                     {t.notif.link && (
                       <button
                         onClick={() => handleView(t)}

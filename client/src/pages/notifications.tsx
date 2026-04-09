@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Notification } from "@shared/schema";
+import { formatTimeAgo } from "@/lib/utils";
 
 const TYPE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
   task_reminder:         { icon: <BellRing className="h-4 w-4" />,      label: "Task Reminder",     color: "text-red-500" },
@@ -35,16 +36,6 @@ const TYPE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color:
 
 const DEFAULT_CONFIG = { icon: <Bell className="h-4 w-4" />, label: "Notification", color: "text-muted-foreground" };
 
-function timeAgo(dateStr: string) {
-  const d = new Date(dateStr);
-  const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  const days = Math.floor(seconds / 86400);
-  if (days < 30) return `${days}d ago`;
-  return d.toLocaleDateString();
-}
 
 const ALL_TYPES = [
   "task_assigned", "task_reminder", "task_comment", "task_completed",
@@ -179,7 +170,7 @@ export default function NotificationsPage() {
                         <span className="h-2 w-2 rounded-full bg-primary shrink-0" />
                       )}
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
-                        {timeAgo(notif.createdAt?.toString() ?? "")}
+                        {formatTimeAgo(notif.createdAt?.toString() ?? "")}
                       </span>
                     </div>
                   </div>

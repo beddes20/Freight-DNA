@@ -10,6 +10,7 @@ import {
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
 import type { Notification } from "@shared/schema";
+import { formatTimeAgo } from "@/lib/utils";
 
 const typeIcon: Record<string, React.ReactNode> = {
   task_reminder: <BellRing className="h-3.5 w-3.5 text-red-500" />,
@@ -32,14 +33,6 @@ const typeIcon: Record<string, React.ReactNode> = {
   lane_assigned: <Truck className="h-3.5 w-3.5 text-amber-500" />,
 };
 
-function timeAgo(dateStr: string) {
-  const d = new Date(dateStr);
-  const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
 
 export function NotificationBell({ navBar }: { navBar?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -128,7 +121,7 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
                 <div className="flex-1 min-w-0">
                   <p className={`text-sm leading-snug ${!notif.read ? "font-medium" : ""}`}>{notif.title}</p>
                   {notif.body && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-4 whitespace-pre-line">{notif.body}</p>}
-                  <p className="text-xs text-muted-foreground mt-1">{timeAgo(notif.createdAt as unknown as string)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{formatTimeAgo(notif.createdAt as unknown as string)}</p>
                 </div>
                 {!notif.read && (
                   <div className="shrink-0 h-2 w-2 rounded-full bg-blue-500 mt-1.5" />

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import type { Callout, CalloutReaction, Contact, Touchpoint, User } from "@shared/schema";
 import type { TouchLogEntry, TaskWithCount } from "../types";
+import { formatTimeAgo } from "@/lib/utils";
 
 const REACTION_EMOJIS = ["👍", "❤️", "🔥", "💡", "✅"];
 
@@ -155,17 +156,6 @@ export function ActivityTab({
     .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
     .slice(0, 20);
 
-  const timeAgo = (iso: string) => {
-    try {
-      const diff = Date.now() - new Date(iso).getTime();
-      const mins = Math.floor(diff / 60000);
-      if (mins < 60) return `${mins}m ago`;
-      const hrs = Math.floor(mins / 60);
-      if (hrs < 24) return `${hrs}h ago`;
-      const days = Math.floor(hrs / 24);
-      return days < 30 ? `${days}d ago` : new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    } catch { return ""; }
-  };
 
   const VIBE_COLORS: Record<string, string> = {
     great:   "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
@@ -215,7 +205,7 @@ export function ActivityTab({
                         )}
                         <p className="text-[10px] text-muted-foreground mt-0.5">
                           {item.who && <span>{item.who} · </span>}
-                          {timeAgo(item.sortKey)}
+                          {formatTimeAgo(item.sortKey)}
                         </p>
                       </div>
                     </div>
