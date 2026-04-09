@@ -19,7 +19,7 @@ import { COVERAGE_THRESHOLDS, shouldUseIncumbentFirstFlow } from "./laneCoverage
 import { cityDistanceMiles } from "./cityCoordinates";
 
 /** Carriers whose historical origin AND destination are within this radius count as "nearby". */
-const NEARBY_RADIUS_MILES = 100;
+const NEARBY_RADIUS_MILES = 75;
 
 /**
  * Raw TMS row from financial upload JSONB.
@@ -429,9 +429,9 @@ export async function rankCarriersForLane(
         fitScore = nearbyFloor;
         const nearbyDays = daysSinceMonth(hist.lastUsedMonth ?? null);
         if (nearbyDays <= 90) {
-          reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 100mi (last 90 days)`);
+          reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 75mi (last 90 days)`);
         } else {
-          reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 100mi of this corridor`);
+          reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 75mi of this corridor`);
         }
       } else if (hist.statePairLoads > 0) {
         // ── Tier 3: Same state-pair corridor ────────────────────────────────
@@ -688,9 +688,9 @@ export async function rankCarriersForLane(
       fitScore = nearbyFloor;
       const nearbyDays = daysSinceMonth(hist.lastUsedMonth ?? null);
       if (nearbyDays <= 90) {
-        reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 100mi (last 90 days)`);
+        reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 75mi (last 90 days)`);
       } else {
-        reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 100mi of this corridor`);
+        reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 75mi of this corridor`);
       }
     } else {
       // ── Tier 3: Same state-pair corridor ──────────────────────────────────

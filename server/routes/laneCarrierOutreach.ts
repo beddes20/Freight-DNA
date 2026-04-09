@@ -1096,7 +1096,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           primarySignal = `Ran this exact lane ${c.loadsOnLane}×`;
           if (c.lastUsedMonth) primarySignal += ` · last ${c.lastUsedMonth}`;
         } else if (hasNearbyHistory) {
-          primarySignal = `Runs nearby corridors within 100mi of this lane (${c.nearbyLaneLoads ?? c.loadsOnLane} loads)`;
+          primarySignal = `Runs nearby corridors within 75mi of this lane (${c.nearbyLaneLoads ?? c.loadsOnLane} loads)`;
         } else if (claimedLaneMatch) {
           primarySignal = "Claims to prefer this lane corridor";
         } else if (hasStatePairHistory) {
