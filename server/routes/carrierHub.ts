@@ -28,7 +28,8 @@ import { eq, and, desc, asc, inArray } from "drizzle-orm";
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 function orgId(req: Express.Request): string {
-  return (req as any).user?.orgId as string;
+  // Session-based auth: organizationId is stored in req.session, not req.user
+  return (req as any).session?.organizationId as string;
 }
 
 // ── register routes ─────────────────────────────────────────────────────────
