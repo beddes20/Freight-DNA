@@ -10,7 +10,7 @@
  * Clicking a row opens CarrierOutreachPanel for immediate action.
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Badge } from "@/components/ui/badge";
@@ -456,6 +456,87 @@ function LaneRow({
   );
 }
 
+// ── Customer Group ─────────────────────────────────────────────────────────────
+
+function CustomerGroup({
+  customerName,
+  items,
+  completionThreshold,
+  onOpen,
+  bucket,
+  teamMembers,
+  defaultExpanded,
+}: {
+  customerName: string;
+  items: LaneItem[];
+  completionThreshold: number;
+  onOpen: (laneId: string) => void;
+  bucket: keyof WorkQueue;
+  teamMembers: TeamMember[];
+  defaultExpanded: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  // Sync when parent triggers "expand all" / "collapse all"
+  useEffect(() => {
+    setExpanded(defaultExpanded);
+  }, [defaultExpanded]);
+
+  const totalLoads = items.reduce((sum, i) => sum + avgLoadsNum(i.lane.avgLoadsPerWeek), 0);
+  const highFreqCount = items.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length;
+  const hasCrmMatch = items.some(i => i.lane.companyId);
+
+  return (
+    <div className="rounded-lg border border-border bg-card overflow-hidden" data-testid={`customer-group-${customerName}`}>
+      {/* Customer header row */}
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/30 transition-colors"
+        onClick={() => setExpanded(v => !v)}
+        data-testid={`customer-group-toggle-${customerName}`}
+      >
+        <ChevronRight className={`w-4 h-4 text-muted-foreground/60 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
+        <Building2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+        <span className="text-sm font-semibold text-foreground flex-1 min-w-0 truncate">
+          {customerName}
+        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          {hasCrmMatch && (
+            <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 bg-blue-500/10">CRM</Badge>
+          )}
+          {highFreqCount > 0 && (
+            <Badge variant="outline" className="text-[10px] py-0 px-1.5 border-amber-500/50 text-amber-400 bg-amber-500/10 gap-0.5">
+              <Zap className="w-2.5 h-2.5" />
+              {highFreqCount} high-freq
+            </Badge>
+          )}
+          <span className="text-[11px] text-muted-foreground">
+            {totalLoads.toFixed(1)} loads/wk avg
+          </span>
+          <Badge variant="secondary" className="text-[10px] h-5 px-1.5">
+            {items.length} lane{items.length !== 1 ? "s" : ""}
+          </Badge>
+        </div>
+      </button>
+
+      {/* Lane rows — shown only when expanded */}
+      {expanded && (
+        <div className="flex flex-col gap-1 px-2 pb-2 pt-0 border-t border-border/50 bg-muted/10">
+          {items.map(item => (
+            <LaneRow
+              key={item.lane.id}
+              item={item}
+              completionThreshold={completionThreshold}
+              onOpen={onOpen}
+              bucket={bucket}
+              teamMembers={teamMembers}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Bucket Section ─────────────────────────────────────────────────────────────
 
 function BucketSection({
@@ -482,6 +563,7 @@ function BucketSection({
   highFreqOnly: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [allCustomersExpanded, setAllCustomersExpanded] = useState(false);
 
   const visibleItems = useMemo(() => {
     const sorted = sortItems(items);
@@ -490,27 +572,64 @@ function BucketSection({
 
   const hiddenCount = items.length - visibleItems.length;
 
+  // Group items by customer — sort customers by total loads/week desc
+  const customerGroups = useMemo(() => {
+    const groupMap = new Map<string, LaneItem[]>();
+    for (const item of visibleItems) {
+      const key = item.lane.companyName?.trim() || "Unknown Customer";
+      if (!groupMap.has(key)) groupMap.set(key, []);
+      groupMap.get(key)!.push(item);
+    }
+    // Sort customers by total loads/week desc
+    return [...groupMap.entries()]
+      .map(([name, lanes]) => ({
+        name,
+        lanes,
+        totalLoads: lanes.reduce((s, i) => s + avgLoadsNum(i.lane.avgLoadsPerWeek), 0),
+      }))
+      .sort((a, b) => b.totalLoads - a.totalLoads);
+  }, [visibleItems]);
+
+  const customerCount = customerGroups.length;
+
   return (
     <section className="mb-6" data-testid={`bucket-${bucket}`}>
-      <button
-        className="w-full flex items-center gap-3 mb-3 text-left"
-        onClick={() => setCollapsed(v => !v)}
-      >
-        <div className={`w-7 h-7 rounded-md flex items-center justify-center ${iconColor}`}>
-          <Icon className="w-4 h-4" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-            <Badge variant="secondary" className="text-[10px] h-5 px-1.5">{visibleItems.length}</Badge>
-            {highFreqOnly && hiddenCount > 0 && (
-              <span className="text-[10px] text-muted-foreground/50">(+{hiddenCount} below 2/wk hidden)</span>
-            )}
+      {/* Bucket header */}
+      <div className="flex items-center gap-3 mb-3">
+        <button
+          className="flex items-center gap-3 flex-1 text-left"
+          onClick={() => setCollapsed(v => !v)}
+        >
+          <div className={`w-7 h-7 rounded-md flex items-center justify-center ${iconColor}`}>
+            <Icon className="w-4 h-4" />
           </div>
-          <p className="text-[11px] text-muted-foreground">{description}</p>
-        </div>
-        <ChevronRight className={`w-4 h-4 text-muted-foreground/50 shrink-0 transition-transform ${collapsed ? "" : "rotate-90"}`} />
-      </button>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+              <Badge variant="secondary" className="text-[10px] h-5 px-1.5">{customerCount} customers</Badge>
+              <Badge variant="outline" className="text-[10px] h-5 px-1.5 text-muted-foreground">{visibleItems.length} lanes</Badge>
+              {highFreqOnly && hiddenCount > 0 && (
+                <span className="text-[10px] text-muted-foreground/50">(+{hiddenCount} below 2/wk hidden)</span>
+              )}
+            </div>
+            <p className="text-[11px] text-muted-foreground">{description}</p>
+          </div>
+          <ChevronRight className={`w-4 h-4 text-muted-foreground/50 shrink-0 transition-transform ${collapsed ? "" : "rotate-90"}`} />
+        </button>
+
+        {/* Expand/collapse all customers toggle */}
+        {!collapsed && customerCount > 1 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-[10px] px-2 text-muted-foreground hover:text-foreground shrink-0"
+            onClick={() => setAllCustomersExpanded(v => !v)}
+            data-testid={`btn-toggle-all-customers-${bucket}`}
+          >
+            {allCustomersExpanded ? "Collapse all" : "Expand all"}
+          </Button>
+        )}
+      </div>
 
       {!collapsed && (
         <div className="flex flex-col gap-2">
@@ -521,14 +640,16 @@ function BucketSection({
                 : "No lanes in this bucket."}
             </p>
           ) : (
-            visibleItems.map(item => (
-              <LaneRow
-                key={item.lane.id}
-                item={item}
+            customerGroups.map(group => (
+              <CustomerGroup
+                key={group.name}
+                customerName={group.name}
+                items={group.lanes}
                 completionThreshold={completionThreshold}
                 onOpen={onOpen}
                 bucket={bucket}
                 teamMembers={teamMembers}
+                defaultExpanded={allCustomersExpanded}
               />
             ))
           )}
