@@ -856,6 +856,13 @@ export default function LaneWorkQueuePage() {
   const [customerFilter, setCustomerFilter] = useState<string>("__all__");
   const [buildLaneOpen, setBuildLaneOpen] = useState(false);
 
+  // Auto-open a specific lane when ?laneId=... is in the URL (cross-link from Carrier Hub)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const lid = params.get("laneId");
+    if (lid) setOpenLaneId(lid);
+  }, []);
+
   const managerRoles = ["admin", "director", "national_account_manager", "logistics_manager"];
   const isManager = managerRoles.includes(user?.role ?? "");
 

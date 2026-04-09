@@ -65,6 +65,8 @@ export interface RankedCarrier {
   priorOutcomeBoost: boolean;          // true if prior bench outcome was positive (available_now/next_week)
   sourceChannel: string | null;        // where this carrier was originally sourced from
   suppressionReasons: string[];        // human-readable negative flags (no email, recently contacted, flagged, etc.)
+  equipmentMatch: boolean;             // carrier equipment overlaps with lane equipment
+  regionMatch: boolean;                // carrier regions overlap with lane origin/dest
 }
 
 function normStr(s: string): string {
@@ -298,8 +300,10 @@ export async function rankCarriersForLane(
     }
 
     // Equipment fit — capped so regional-only stays below exact-history floor
+    let equipmentMatch = false;
     if (laneEquip && carrier.equipmentTypes && carrier.equipmentTypes.length > 0) {
       if (overlaps(carrier.equipmentTypes, laneEquip)) {
+        equipmentMatch = true;
         // Only add if score is in non-history band (cap contribution for pure prospects)
         if (historyMatch === "none" || historyMatch === "region") {
           fitScore += 20;
@@ -430,6 +434,8 @@ export async function rankCarriersForLane(
       priorOutcomeBoost: hadPositiveOutcome,
       sourceChannel: (carrier as any).sourceChannel ?? null,
       suppressionReasons,
+      equipmentMatch,
+      regionMatch: !!regionMatch,
     });
   }
 
@@ -528,6 +534,8 @@ export async function rankCarriersForLane(
       priorOutcomeBoost: hadPositiveOutcomeHist,
       sourceChannel: null,
       suppressionReasons,
+      equipmentMatch: false,
+      regionMatch: false,
     });
   }
 

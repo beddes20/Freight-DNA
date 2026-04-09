@@ -91,6 +91,20 @@ interface TeamMember {
   role: string;
 }
 
+interface WhyThisCarrier {
+  primarySignal: string;
+  fitBand: "strong" | "good" | "moderate" | "low";
+  claimedLaneMatch: boolean;
+  hasExactHistory: boolean;
+  exactHistoryRuns?: number;
+  hasSimilarHistory: boolean;
+  hasCustomerHistory: boolean;
+  customerHistoryLoads?: number;
+  priorPositiveOutreach: boolean;
+  recentlyContacted: boolean;
+  recentlyContactedNote?: string;
+}
+
 interface RankedCarrier {
   carrierId: string | null;
   carrierName: string;
@@ -108,6 +122,7 @@ interface RankedCarrier {
   sourceChannel: string | null;
   suppressionReasons: string[];
   customerHistoryLoads: number;
+  whyThisCarrier?: WhyThisCarrier;
 }
 
 interface SuggestionsResponse {
@@ -1194,8 +1209,25 @@ export function CarrierOutreachPanel({
                               </Badge>
                             )}
                           </div>
-                          {/* Positive fit reason */}
-                          <p className="text-[10px] text-white/50 mt-0.5 line-clamp-2">{c.fitReason}</p>
+                          {/* Why this carrier — primary signal */}
+                          <p className="text-[10px] text-white/55 mt-0.5 line-clamp-2">
+                            {c.whyThisCarrier?.primarySignal ?? c.fitReason}
+                          </p>
+                          {/* Signal badges — claimed lane match / prior positive outreach */}
+                          {(c.whyThisCarrier?.claimedLaneMatch || c.whyThisCarrier?.priorPositiveOutreach) && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {c.whyThisCarrier.claimedLaneMatch && (
+                                <span className="text-[9px] px-1 py-0 rounded border border-teal-500/30 text-teal-400 bg-teal-500/5">
+                                  Claimed lane pref
+                                </span>
+                              )}
+                              {c.whyThisCarrier.priorPositiveOutreach && (
+                                <span className="text-[9px] px-1 py-0 rounded border border-emerald-500/30 text-emerald-400 bg-emerald-500/5">
+                                  Positive prior outreach
+                                </span>
+                              )}
+                            </div>
+                          )}
                           {/* Suppression reasons (negative flags) */}
                           {suppressions.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1">
@@ -1216,6 +1248,19 @@ export function CarrierOutreachPanel({
                             <p className="text-[10px] text-white/30 mt-0.5">
                               {[...c.regions, ...c.equipmentTypes].slice(0, 4).join(" · ")}
                             </p>
+                          )}
+                          {/* View carrier profile link — only for catalog carriers */}
+                          {c.carrierId && (
+                            <a
+                              href={`/carrier-hub?carrierId=${c.carrierId}`}
+                              onClick={e => e.stopPropagation()}
+                              target="_self"
+                              className="inline-flex items-center gap-0.5 text-[9px] text-amber-400/70 hover:text-amber-300 mt-1 transition-colors"
+                              data-testid={`link-carrier-profile-${idx}`}
+                            >
+                              <ExternalLink className="w-2.5 h-2.5" />
+                              View carrier profile
+                            </a>
                           )}
                         </div>
                         <div className="flex flex-col items-end shrink-0">

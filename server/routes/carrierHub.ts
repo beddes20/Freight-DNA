@@ -23,7 +23,7 @@ import {
   insertCarrierContactSchema,
   insertCarrierClaimedLaneSchema,
 } from "@shared/schema";
-import { eq, and, desc, asc } from "drizzle-orm";
+import { eq, and, desc, asc, inArray } from "drizzle-orm";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -146,6 +146,133 @@ export function registerCarrierHubRoutes(app: Express) {
     } catch (err) {
       console.error("[carrier-hub] list error:", err);
       res.status(500).json({ error: "Failed to load carriers" });
+    }
+  });
+
+  // ── BEST LANES FOR CARRIER ────────────────────────────────────────────────
+  app.get("/api/carrier-hub/:id/best-lanes", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const { id } = req.params;
+
+      const [carrier] = await db
+        .select()
+        .from(carriers)
+        .where(and(eq(carriers.id, id), eq(carriers.orgId, org)));
+      if (!carrier) return res.status(404).json({ error: "Carrier not found" });
+
+      // Get all recurring lanes for this org
+      const lanes = await storage.getRecurringLanes(org);
+
+      // Get carrier's preferred claimed lanes (not avoids)
+      const preferredClaimed = await db
+        .select()
+        .from(carrierClaimedLanes)
+        .where(and(eq(carrierClaimedLanes.carrierId, id)));
+      const preferredOnly = preferredClaimed.filter(cl => cl.laneType !== "avoid");
+
+      // Get lanes where this carrier showed positive interest
+      const positiveRows = await storage.pool.query(
+        `SELECT lane_id FROM lane_carrier_interest
+         WHERE carrier_id = $1
+           AND interest_status IN ('available', 'available_next_week')
+         LIMIT 100`,
+        [id]
+      );
+      const positiveLaneIds = new Set<string>(positiveRows.rows.map((r: any) => r.lane_id as string));
+
+      function normLow(s: string | null | undefined): string {
+        return (s ?? "").toLowerCase().trim();
+      }
+
+      function checkClaimedMatchForLane(
+        lane: { originState: string | null; destinationState: string | null; equipmentType: string | null }
+      ): boolean {
+        const lOrig = normLow(lane.originState);
+        const lDest = normLow(lane.destinationState);
+        const lEquip = normLow(lane.equipmentType);
+        return preferredOnly.some(cl => {
+          const origOk = !cl.originState || normLow(cl.originState) === lOrig;
+          const destOk = !cl.destState || normLow(cl.destState) === lDest;
+          const equipOk = !cl.equipment || !lEquip ||
+            normLow(cl.equipment).includes(lEquip) || lEquip.includes(normLow(cl.equipment));
+          return origOk && destOk && equipOk;
+        });
+      }
+
+      const carrierRegions = (carrier.regions ?? []).map(normLow);
+      const carrierStates = (carrier.statesServed ?? []).map(normLow);
+      const allGeoTerms = [...carrierRegions, ...carrierStates];
+      const carrierEquip = (carrier.equipmentTypes ?? []).map(normLow);
+
+      function geoMatch(laneState: string | null): boolean {
+        if (!laneState || allGeoTerms.length === 0) return false;
+        const ls = normLow(laneState);
+        return allGeoTerms.some(g => g.includes(ls) || ls.includes(g));
+      }
+
+      function equipMatch(laneEquip: string | null): boolean {
+        if (!laneEquip || carrierEquip.length === 0) return true; // no filter = assume general fit
+        const le = normLow(laneEquip);
+        return carrierEquip.some(e => e.includes(le) || le.includes(e));
+      }
+
+      const scored = lanes
+        .map(lane => {
+          let score = 0;
+          const signals: string[] = [];
+
+          if (positiveLaneIds.has(lane.id)) {
+            score += 35;
+            signals.push("Showed availability when contacted for this lane");
+          }
+
+          const claimed = checkClaimedMatchForLane(lane);
+          if (claimed) {
+            score += 35;
+            signals.push("Claimed lane preference matches");
+          }
+
+          const equip = equipMatch(lane.equipmentType);
+          const originGeo = geoMatch(lane.originState);
+          const destGeo = geoMatch(lane.destinationState);
+
+          if (equip && lane.equipmentType) { score += 20; signals.push(`Equipment match: ${lane.equipmentType}`); }
+          else if (equip && !lane.equipmentType) { score += 8; }
+
+          if (originGeo || destGeo) {
+            score += 15;
+            signals.push("Operates in this region");
+          }
+
+          if (score === 0) return null;
+
+          const whyThisLane = signals.length > 0
+            ? signals[0] + (signals.length > 1 ? ` · ${signals.slice(1).join(" · ")}` : "")
+            : "Potential match based on catalog profile";
+
+          return {
+            laneId: lane.id,
+            origin: lane.origin,
+            originState: lane.originState,
+            destination: lane.destination,
+            destinationState: lane.destinationState,
+            equipmentType: lane.equipmentType,
+            companyName: lane.companyName,
+            fitScore: Math.min(100, score),
+            whyThisLane,
+            weeklyFrequency: lane.avgLoadsPerWeek ? parseFloat(String(lane.avgLoadsPerWeek)) : null,
+            laneScore: lane.laneScore,
+          };
+        })
+        .filter((l): l is NonNullable<typeof l> => l !== null)
+        .sort((a, b) => b.fitScore - a.fitScore)
+        .slice(0, 10);
+
+      res.json({ lanes: scored });
+    } catch (err) {
+      console.error("[carrier-hub] best-lanes error:", err);
+      res.status(500).json({ error: "Failed to compute best lanes" });
     }
   });
 

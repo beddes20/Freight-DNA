@@ -49,6 +49,7 @@ The application features a modern and responsive user interface built with React
     - **NBA (Next Best Action) Phase 1**: Recommendation engine generating persistent cards for reps based on freight data rules (e.g., Load Decline, Single-Thread Risk, Stale Account).
     - **Lane Carrier Outreach Workflow**: Assignable lane workflow with work queues, carrier contactability, and email sending/tracking.
     - **Carrier Hub (Phase 1)**: Central carrier intelligence layer with contact management, claimed lanes, and activity tracking.
+    - **LWQ ↔ Carrier Hub Cross-Linking**: "Why this carrier" explanations on each ranked carrier suggestion (primary signal, claimed-lane-match badge, prior-positive-outreach badge). "View carrier profile" link on each card navigates to Carrier Hub via `?carrierId=`. Carrier Hub "Lanes" tab includes "Best Lanes Right Now" section (top-10 recommended active lanes scored by equipment/region/claimed-lane fit) with "Open in Lane Work Queue" cross-links (`?laneId=`). Both pages accept URL params to auto-open the relevant drawer.
 
 ## External Dependencies
 - **PostgreSQL**: Primary database and session store.

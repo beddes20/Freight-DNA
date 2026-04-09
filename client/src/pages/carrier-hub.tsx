@@ -6,7 +6,7 @@
  * Right side: expandable profile drawer with tabs
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
@@ -469,6 +469,26 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
     enabled: !!carrierId,
   });
 
+  interface BestLane {
+    laneId: string;
+    origin: string;
+    originState: string | null;
+    destination: string;
+    destinationState: string | null;
+    equipmentType: string | null;
+    companyName: string | null;
+    fitScore: number;
+    whyThisLane: string;
+    weeklyFrequency: number | null;
+    laneScore: number | null;
+  }
+
+  const { data: bestLanesData } = useQuery<{ lanes: BestLane[] }>({
+    queryKey: ["/api/carrier-hub", carrierId, "best-lanes"],
+    queryFn: () => fetch(`/api/carrier-hub/${carrierId}/best-lanes`).then(r => r.json()),
+    enabled: !!carrierId && activeTab === "lanes",
+  });
+
   const updateCarrier = useMutation({
     mutationFn: (updates: Partial<CarrierDetail["carrier"]>) =>
       apiRequest("PATCH", `/api/carrier-hub/${carrierId}`, updates),
@@ -863,6 +883,63 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                 ))}
               </div>
             </div>
+
+            {/* Best Lanes Right Now — recommended active lanes for this carrier */}
+            <div>
+              <div className="mb-2">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Zap className="w-3.5 h-3.5 text-amber-400" />
+                  Best Lanes Right Now
+                </h3>
+                <p className="text-[11px] text-muted-foreground">Active lanes where this carrier is a strong fit based on equipment, regions, and preferences</p>
+              </div>
+
+              {!bestLanesData && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Loading lane matches…
+                </div>
+              )}
+              {bestLanesData && bestLanesData.lanes.length === 0 && (
+                <p className="text-xs text-muted-foreground italic">No matching active lanes found. Add equipment types, regions, or claimed lanes to improve matching.</p>
+              )}
+              {bestLanesData && bestLanesData.lanes.length > 0 && (
+                <div className="space-y-1.5">
+                  {bestLanesData.lanes.map(l => (
+                    <div key={l.laneId} className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2" data-testid={`best-lane-${l.laneId}`}>
+                      <Route className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm text-foreground font-medium">
+                            {l.origin}{l.originState ? `, ${l.originState}` : ""} → {l.destination}{l.destinationState ? `, ${l.destinationState}` : ""}
+                          </span>
+                          {l.equipmentType && (
+                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-muted-foreground/30 text-muted-foreground">{l.equipmentType}</Badge>
+                          )}
+                          <Badge variant="outline" className={`text-[9px] py-0 px-1 ${l.fitScore >= 60 ? "border-emerald-500/30 text-emerald-400" : "border-amber-500/30 text-amber-400"}`}>
+                            {l.fitScore}% fit
+                          </Badge>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">{l.whyThisLane}</p>
+                        {l.companyName && (
+                          <p className="text-[10px] text-muted-foreground/60 mt-0.5">Customer: {l.companyName}</p>
+                        )}
+                        <a
+                          href={`/lane-work-queue?laneId=${l.laneId}`}
+                          className="inline-flex items-center gap-0.5 text-[9px] text-amber-400/80 hover:text-amber-300 mt-1 transition-colors"
+                          data-testid={`link-open-lwq-${l.laneId}`}
+                        >
+                          <ExternalLink className="w-2.5 h-2.5" />
+                          Open in Lane Work Queue
+                        </a>
+                      </div>
+                      {l.weeklyFrequency && (
+                        <span className="text-[10px] text-muted-foreground shrink-0">{l.weeklyFrequency.toFixed(1)}/wk</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </TabsContent>
 
           {/* ── Activity Tab ── */}
@@ -949,6 +1026,13 @@ export default function CarrierHub() {
   const [sort, setSort] = useState("name");
   const [selectedCarrierId, setSelectedCarrierId] = useState<string | null>(null);
   const [addCarrierOpen, setAddCarrierOpen] = useState(false);
+
+  // Auto-open a carrier profile when ?carrierId=... is in the URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const cid = params.get("carrierId");
+    if (cid) setSelectedCarrierId(cid);
+  }, []);
 
   const queryParams = new URLSearchParams({
     ...(search && { q: search }),

@@ -8,13 +8,14 @@
 import type { Express, Response } from "express";
 import multer from "multer";
 import XLSX from "xlsx";
-import { storage } from "../storage";
+import { storage, db } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
 import { rankCarriersForLane } from "../carrierRankingService";
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
-import { insertCarrierSchema, insertLaneCarrierInterestSchema, type InsertCarrier } from "@shared/schema";
+import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, type InsertCarrier } from "@shared/schema";
 import { z } from "zod";
+import { inArray, eq } from "drizzle-orm";
 import { sendEmail } from "../emailService";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -969,8 +970,101 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         paginated = ranked.slice(offset, offset + pageSize);
       }
 
+      // ── whyThisCarrier enrichment ─────────────────────────────────────────
+      // Fetch claimed lanes for catalog carriers in this page (single batch query)
+      const paginatedCarrierIds = paginated
+        .map(c => c.carrierId)
+        .filter((id): id is string => id !== null);
+
+      let claimedLanesMap = new Map<string, Array<{ originState: string | null; destState: string | null; equipment: string | null }>>();
+      if (paginatedCarrierIds.length > 0) {
+        const clRows = await db
+          .select({
+            carrierId: carrierClaimedLanes.carrierId,
+            originState: carrierClaimedLanes.originState,
+            destState: carrierClaimedLanes.destState,
+            equipment: carrierClaimedLanes.equipment,
+            laneType: carrierClaimedLanes.laneType,
+          })
+          .from(carrierClaimedLanes)
+          .where(inArray(carrierClaimedLanes.carrierId, paginatedCarrierIds));
+
+        for (const row of clRows) {
+          if (row.laneType === "avoid") continue;
+          if (!claimedLanesMap.has(row.carrierId)) claimedLanesMap.set(row.carrierId, []);
+          claimedLanesMap.get(row.carrierId)!.push({
+            originState: row.originState,
+            destState: row.destState,
+            equipment: row.equipment,
+          });
+        }
+      }
+
+      function checkClaimedMatch(
+        claimed: Array<{ originState: string | null; destState: string | null; equipment: string | null }>,
+        l: typeof lane
+      ): boolean {
+        const lOrig = (l.originState ?? "").toLowerCase().trim();
+        const lDest = (l.destinationState ?? "").toLowerCase().trim();
+        const lEquip = (l.equipmentType ?? "").toLowerCase().trim();
+        return claimed.some(cl => {
+          const origOk = !cl.originState || cl.originState.toLowerCase().trim() === lOrig;
+          const destOk = !cl.destState || cl.destState.toLowerCase().trim() === lDest;
+          const equipOk = !cl.equipment || !lEquip ||
+            cl.equipment.toLowerCase().includes(lEquip) ||
+            lEquip.includes(cl.equipment.toLowerCase());
+          return origOk && destOk && equipOk;
+        });
+      }
+
+      const carriersWithWhy = paginated.map(c => {
+        const claimed = c.carrierId ? (claimedLanesMap.get(c.carrierId) ?? []) : [];
+        const claimedLaneMatch = claimed.length > 0 ? checkClaimedMatch(claimed, lane) : false;
+        const fitBand =
+          c.fitScore >= 80 ? "strong" :
+          c.fitScore >= 60 ? "good" :
+          c.fitScore >= 35 ? "moderate" : "low";
+        const hasExactHistory = c.historyMatch === "exact";
+        const hasSimilarHistory = c.historyMatch === "similar";
+        const hasCustomerHistory = c.customerHistoryLoads > 0;
+        const recentlyContactedNote = c.suppressionReasons.find(r => r.startsWith("Recently contacted"));
+
+        let primarySignal: string;
+        if (hasExactHistory && c.loadsOnLane > 0) {
+          primarySignal = `Ran this exact lane ${c.loadsOnLane}×`;
+          if (c.lastUsedMonth) primarySignal += ` · last ${c.lastUsedMonth}`;
+        } else if (claimedLaneMatch) {
+          primarySignal = "Claims to prefer this lane corridor";
+        } else if (hasSimilarHistory) {
+          primarySignal = "Runs similar corridors in this region";
+        } else if (hasCustomerHistory) {
+          primarySignal = `Hauled for this customer (${c.customerHistoryLoads} loads)`;
+        } else if (c.priorOutcomeBoost) {
+          primarySignal = "Showed availability in prior outreach for this lane";
+        } else {
+          primarySignal = "Region & equipment profile matches lane";
+        }
+
+        return {
+          ...c,
+          whyThisCarrier: {
+            primarySignal,
+            fitBand,
+            claimedLaneMatch,
+            hasExactHistory,
+            exactHistoryRuns: hasExactHistory ? c.loadsOnLane : undefined,
+            hasSimilarHistory,
+            hasCustomerHistory,
+            customerHistoryLoads: hasCustomerHistory ? c.customerHistoryLoads : undefined,
+            priorPositiveOutreach: c.priorOutcomeBoost,
+            recentlyContacted: !!recentlyContactedNote,
+            recentlyContactedNote: recentlyContactedNote ?? undefined,
+          },
+        };
+      });
+
       res.json({
-        carriers: paginated,
+        carriers: carriersWithWhy,
         totalCount,
         page,
         pageSize: pageSize === 0 ? totalCount : pageSize,
