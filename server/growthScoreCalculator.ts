@@ -1,6 +1,6 @@
 /**
- * Account Growth Score Calculator
- * Returns a 0–100 score with band + top drivers for each customer account.
+ * Account Growth Score Calculator  (UI label: "Momentum Score")
+ * Returns a 0–100 score with band + top drivers + structured breakdown.
  *
  * Positive buckets (max 100 pts):
  *   Touchpoint Health       25 pts  (recency 10, frequency 8, meaningful 7)
@@ -27,12 +27,62 @@ export type GrowthScoreDriver = {
   positive: boolean;
 };
 
+export type MomentumBreakdown = {
+  touchpointHealth: {
+    points: number;
+    max: number;
+    recency: { points: number; max: number; daysSinceLastTouch: number | null };
+    frequency30d: { points: number; max: number; count: number };
+    meaningful30d: { points: number; max: number; count: number };
+  };
+  momentum: {
+    points: number;
+    max: number;
+    recent30: number;
+    prior30: number;
+    trendLabel: "up" | "flat" | "down" | "reengaging";
+  };
+  relationshipDepth: {
+    points: number;
+    max: number;
+    hasHomeRun: boolean;
+    hasThirdBase: boolean;
+    multiBaseContacts: number;
+    totalContacts: number;
+  };
+  volumeSignal: {
+    points: number;
+    max: number;
+    hasFinancialData: boolean;
+    ytdLoads: number;
+  };
+  laneBreadth: {
+    points: number;
+    max: number;
+    corridorCount: number;
+  };
+  rfpOpportunity: {
+    points: number;
+    max: number;
+    hasActiveRfp: boolean;
+    rfpTitle: string | null;
+  };
+  penalties: {
+    totalPenalty: number;
+    noTouch45Days: number;
+    noMeaningfulConversation90Days: number;
+    noThirdOrHomeRun: number;
+    overdueTask: number;
+  };
+};
+
 export type GrowthScoreResult = {
   score: number;
   band: "at_risk" | "stable" | "growth_ready" | "high_expansion";
   bandLabel: string;
   bandColor: "red" | "amber" | "blue" | "green";
   drivers: GrowthScoreDriver[];
+  breakdown: MomentumBreakdown;
 };
 
 function normalizeName(s: string) {
@@ -71,6 +121,18 @@ const BAND_COLORS: Record<GrowthScoreResult["band"], GrowthScoreResult["bandColo
   stable:         "amber",
   at_risk:        "red",
 };
+
+function emptyBreakdown(): MomentumBreakdown {
+  return {
+    touchpointHealth: { points: 0, max: 25, recency: { points: 0, max: 10, daysSinceLastTouch: null }, frequency30d: { points: 0, max: 8, count: 0 }, meaningful30d: { points: 0, max: 7, count: 0 } },
+    momentum: { points: 4, max: 8, recent30: 0, prior30: 0, trendLabel: "flat" },
+    relationshipDepth: { points: 0, max: 20, hasHomeRun: false, hasThirdBase: false, multiBaseContacts: 0, totalContacts: 0 },
+    volumeSignal: { points: 0, max: 20, hasFinancialData: false, ytdLoads: 0 },
+    laneBreadth: { points: 0, max: 15, corridorCount: 0 },
+    rfpOpportunity: { points: 0, max: 5, hasActiveRfp: false, rfpTitle: null },
+    penalties: { totalPenalty: 0, noTouch45Days: 0, noMeaningfulConversation90Days: 0, noThirdOrHomeRun: 0, overdueTask: 0 },
+  };
+}
 
 export async function computeGrowthScore(
   companyId: string,
@@ -111,7 +173,13 @@ export async function computeGrowthScore(
 
   if (!company) {
     const band = "stable" as const;
-    return { score: 40, band, bandLabel: BAND_LABELS[band], bandColor: BAND_COLORS[band], drivers: [{ label: "New account — score will fill in over time", points: 40, positive: true }] };
+    const bd = emptyBreakdown();
+    bd.touchpointHealth.points = 25;
+    return {
+      score: 40, band, bandLabel: BAND_LABELS[band], bandColor: BAND_COLORS[band],
+      drivers: [{ label: "New account — score will fill in over time", points: 40, positive: true }],
+      breakdown: bd,
+    };
   }
 
   const drivers: GrowthScoreDriver[] = [];
@@ -124,8 +192,10 @@ export async function computeGrowthScore(
 
   // Recency (max 10)
   let recencyPts = 0;
+  let daysSinceLastTouch: number | null = null;
   if (lastTp) {
-    const daysSince = Math.floor((now.getTime() - new Date(lastTp.date + "T12:00:00").getTime()) / 86400000);
+    daysSinceLastTouch = Math.floor((now.getTime() - new Date(lastTp.date + "T12:00:00").getTime()) / 86400000);
+    const daysSince = daysSinceLastTouch;
     if      (daysSince <= 7)  { recencyPts = 10; drivers.push({ label: `Last touch ${daysSince === 0 ? "today" : `${daysSince}d ago`}`, points: 10, positive: true }); }
     else if (daysSince <= 14) { recencyPts = 6;  drivers.push({ label: `Last touch ${daysSince}d ago`, points: 6, positive: true }); }
     else if (daysSince <= 30) { recencyPts = 3;  drivers.push({ label: `Last touch ${daysSince}d ago`, points: 3, positive: true }); }
@@ -228,14 +298,20 @@ export async function computeGrowthScore(
   // ── Bucket 6: Momentum (8 pts) ────────────────────────────────────────────
   const prior30  = touchpoints.filter(t => t.date >= d60AgoStr && t.date < d30AgoStr);
   let momentumPts = 4; // default flat
+  let momentumTrendLabel: MomentumBreakdown["momentum"]["trendLabel"] = "flat";
+
   if (recent30.length > 0 && prior30.length === 0) {
     momentumPts = 8;
+    momentumTrendLabel = "reengaging";
     drivers.push({ label: "New engagement — re-engaging this period", points: 8, positive: true });
   } else if (recent30.length > 0 && prior30.length > 0) {
     const pct = (recent30.length - prior30.length) / prior30.length;
-    if      (pct >= 0.2)  { momentumPts = 8; drivers.push({ label: `Touchpoints up ${Math.round(pct * 100)}% vs prior month`, points: 8, positive: true }); }
-    else if (pct >= -0.1) { momentumPts = 4; }
-    else                  { momentumPts = 0; drivers.push({ label: `Touchpoints down ${Math.round(Math.abs(pct) * 100)}% vs prior month`, points: 0, positive: false }); }
+    if      (pct >= 0.2)  { momentumPts = 8; momentumTrendLabel = "up"; drivers.push({ label: `Touchpoints up ${Math.round(pct * 100)}% vs prior month`, points: 8, positive: true }); }
+    else if (pct >= -0.1) { momentumPts = 4; momentumTrendLabel = "flat"; }
+    else                  { momentumPts = 0; momentumTrendLabel = "down"; drivers.push({ label: `Touchpoints down ${Math.round(Math.abs(pct) * 100)}% vs prior month`, points: 0, positive: false }); }
+  } else if (recent30.length === 0 && prior30.length > 0) {
+    momentumPts = 0;
+    momentumTrendLabel = "down";
   }
   // max 8
 
@@ -244,12 +320,17 @@ export async function computeGrowthScore(
 
   // ── Risk Penalties ────────────────────────────────────────────────────────
   let penalties = 0;
+  let penNoTouch45 = 0;
+  let penNoMeaningful90 = 0;
+  let penNoThirdOrHR = 0;
+  let penOverdueTask = 0;
 
   // No touch in 45+ days
   if (!lastTp || lastTp.date < d45AgoStr) {
     const daysSince = lastTp
       ? Math.floor((now.getTime() - new Date(lastTp.date + "T12:00:00").getTime()) / 86400000)
       : null;
+    penNoTouch45 = 8;
     penalties += 8;
     drivers.push({ label: daysSince ? `No touch in ${daysSince} days` : "Never contacted", points: -8, positive: false });
   }
@@ -257,12 +338,14 @@ export async function computeGrowthScore(
   // No meaningful conversation in 90 days
   const meaningful90 = touchpoints.filter(t => t.date >= d90AgoStr && t.isMeaningful);
   if (meaningful90.length === 0 && touchpoints.length > 0) {
+    penNoMeaningful90 = 7;
     penalties += 7;
     drivers.push({ label: "No meaningful conversation in 90+ days", points: -7, positive: false });
   }
 
   // No contacts at 3rd base or HR
   if (!hasHr && !has3rd && contacts.length > 0) {
+    penNoThirdOrHR = 5;
     penalties += 5;
     drivers.push({ label: "No contacts at 3rd Base or Home Run level", points: -5, positive: false });
   }
@@ -270,6 +353,7 @@ export async function computeGrowthScore(
   // Overdue open task
   const overdueTasks = tasks.filter(t => t.status === "open" && t.dueDate && t.dueDate < todayStr);
   if (overdueTasks.length > 0) {
+    penOverdueTask = 3;
     penalties += 3;
     drivers.push({ label: `${overdueTasks.length} overdue task${overdueTasks.length > 1 ? "s" : ""}`, points: -3, positive: false });
   }
@@ -284,11 +368,61 @@ export async function computeGrowthScore(
     .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
     .slice(0, 5);
 
+  const breakdown: MomentumBreakdown = {
+    touchpointHealth: {
+      points: tpHealth,
+      max: 25,
+      recency: { points: recencyPts, max: 10, daysSinceLastTouch },
+      frequency30d: { points: freqPts, max: 8, count: recent30.length },
+      meaningful30d: { points: meaningfulPts, max: 7, count: meaningful30.length },
+    },
+    momentum: {
+      points: momentumPts,
+      max: 8,
+      recent30: recent30.length,
+      prior30: prior30.length,
+      trendLabel: momentumTrendLabel,
+    },
+    relationshipDepth: {
+      points: relDepth,
+      max: 20,
+      hasHomeRun: hasHr,
+      hasThirdBase: has3rd,
+      multiBaseContacts: withBase.length,
+      totalContacts: contacts.length,
+    },
+    volumeSignal: {
+      points: volumePts,
+      max: 20,
+      hasFinancialData,
+      ytdLoads: totalLoadsYtd,
+    },
+    laneBreadth: {
+      points: lanePts,
+      max: 15,
+      corridorCount: laneCount,
+    },
+    rfpOpportunity: {
+      points: rfpPts,
+      max: 5,
+      hasActiveRfp: !!activeRfp,
+      rfpTitle: activeRfp?.title ?? null,
+    },
+    penalties: {
+      totalPenalty: -penalties,
+      noTouch45Days: penNoTouch45,
+      noMeaningfulConversation90Days: penNoMeaningful90,
+      noThirdOrHomeRun: penNoThirdOrHR,
+      overdueTask: penOverdueTask,
+    },
+  };
+
   return {
     score,
     band,
     bandLabel: BAND_LABELS[band],
     bandColor: BAND_COLORS[band],
     drivers: rankedDrivers,
+    breakdown,
   };
 }

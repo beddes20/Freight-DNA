@@ -61,19 +61,37 @@ export function GrowthScoreBadge({
   band,
   bandLabel,
   size = "sm",
+  onClick,
 }: {
   score: number;
   band: string;
   bandLabel: string;
   size?: "sm" | "md";
+  onClick?: () => void;
 }) {
   const style = GROWTH_BAND_STYLES[band] ?? GROWTH_BAND_STYLES.stable;
   const textSize = size === "md" ? "text-sm" : "text-xs";
 
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-ring ${textSize} ${style.bg} ${style.text} ${style.border}`}
+        title="Click to see Momentum Score breakdown"
+        aria-label={`Momentum Score: ${score}/100 — ${bandLabel}. Click for breakdown.`}
+        data-testid="badge-growth-score"
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${style.dot} shrink-0`} />
+        {score} · {bandLabel}
+      </button>
+    );
+  }
+
   return (
     <span
       className={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded-full border ${textSize} ${style.bg} ${style.text} ${style.border}`}
-      title={`Account Growth Score: ${score}/100 — ${bandLabel}`}
+      title={`Momentum Score: ${score}/100 — ${bandLabel}`}
       data-testid="badge-growth-score"
     >
       <span className={`h-1.5 w-1.5 rounded-full ${style.dot} shrink-0`} />

@@ -72,6 +72,8 @@ import { TrendsDialog } from "./company-detail/components/TrendsDialog";
 import { ImportContactsDialog } from "./company-detail/components/ImportContactsDialog";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 import { GrowthScoreBadge } from "@/components/account-growth-portlet";
+import { MomentumScoreDrawer } from "@/components/momentum-score-drawer";
+import type { MomentumBreakdown } from "@/components/momentum-score-drawer";
 import type {
   TouchLogEntry, MonthBucket, HealthScore, SharedRepEntry, TaskWithCount, AccountPerf,
 } from "./company-detail/types";
@@ -111,6 +113,7 @@ export default function CompanyDetail() {
   const [preCallOpen, setPreCallOpen] = useState(false);
   const [oppLogOpen, setOppLogOpen] = useState(false);
   const [touchLogCollapsed, setTouchLogCollapsed] = useState(false);
+  const [momentumDrawerOpen, setMomentumDrawerOpen] = useState(false);
   const [selectedTouchpoint, setSelectedTouchpoint] = useState<TouchLogEntry | null>(null);
   const [detailTab, setDetailTab] = useState<string>(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -195,8 +198,8 @@ export default function CompanyDetail() {
     staleTime: 60_000,
   });
 
-  type GrowthScore = { score: number; band: string; bandLabel: string; bandColor: string; drivers: { label: string; points: number; positive: boolean }[] };
-  const { data: growthScore } = useQuery<GrowthScore>({
+  type GrowthScore = { score: number; band: string; bandLabel: string; bandColor: string; drivers: { label: string; points: number; positive: boolean }[]; breakdown?: MomentumBreakdown; calculatedAt?: string };
+  const { data: growthScore, isLoading: growthScoreLoading } = useQuery<GrowthScore>({
     queryKey: ["/api/companies", companyId, "growth-score"],
     staleTime: 6 * 60 * 60 * 1000, // 6h — matches server cache window
   });
