@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -76,6 +76,11 @@ const laneToolItems: NavItem[] = [
   { title: "Lane Research",       url: "/research-tasks",      icon: ClipboardList },
   { title: "RFP Lane Search",     url: "/rfp-lane-search",     icon: MapPin        },
   { title: "Carrier Lane Search", url: "/carrier-lane-search", icon: Truck         },
+  {
+    title: "My Procurement",
+    url: "/my-procurement",
+    icon: Briefcase,
+  },
   {
     title: "Lane Work Queue",
     url: "/lanes/work-queue",
