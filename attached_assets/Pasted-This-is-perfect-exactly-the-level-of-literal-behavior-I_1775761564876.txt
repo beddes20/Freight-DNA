@@ -1,0 +1,56 @@
+This is perfect — exactly the level of literal behavior I needed. Given that everything is now wired and verified, here’s how I’m going to summarize and lock this in as the “official spec” for future work:
+
+1. Canonical matching rule (new tasks)
+   - For award tasks created after the April 2026 upgrade, a deep link to a specific LWQ lane is considered safe only when ALL of the following match:
+     - origin: normalized by lowercasing, trimming, collapsing internal spaces, and standardizing commas (e.g., "Memphis,  TN" → "memphis, tn")
+     - destination: same normalization rule as origin
+     - equipment type: using normalizeEquipmentType() on both the task’s stored equipmentType and the recurring lane’s equipment_type
+   - If any one of those three fails, matchedLaneId is null, we show “No lane match”, and we send the rep to LWQ home with a noMatch toast instead of guessing.
+
+2. Legacy behavior boundary
+   - Tasks created before the upgrade (no attachedLaneData.equipmentType) intentionally use the old behavior:
+     - O/D-only match, most recently assigned lane wins.
+   - This preserves existing workflows at the cost of a bounded, known risk:
+     - if multiple equipment types exist for one O/D, a legacy task can still open the wrong equipment lane.
+   - The mitigation is explicit:
+     - equipment is prominent in the LWQ workspace header,
+     - reps can immediately recognize and back out,
+     - recreating the procurement task upgrades it into the safe, equipment-aware path.
+
+3. No-match UX contract
+   - When we cannot safely match a lane (new tasks or legacy), the UI must follow this pattern:
+     - badges: “Award” + “No lane match”
+     - primary CTA: still “Open in LWQ”
+     - navigation: `/lanes/work-queue?noMatch=<encoded O/D>`
+     - LWQ behavior: no lane panel opens; a single-fire toast explains exactly which lane we were trying to open and instructs the rep to use the list/search.
+   - The toast is:
+     - triggered once on mount when `?noMatch=` is present,
+     - not re-triggered on rerenders,
+     - gone when the user navigates without that param.
+
+4. Creation-time equipment source (current vs. future)
+   - Today:
+     - award tasks get equipmentType from a DB lookup on recurring_lanes at creation time (`ORDER BY assigned_at DESC LIMIT 1`).
+     - this is safe when:
+       - the recurring lane set is correct,
+       - and only one relevant equipment type actually exists.
+   - Known edge:
+     - if the DB’s “most recent” lane equipment doesn’t match what the award should be (because the lane string doesn’t encode equipment), we can store a mismatched equipmentType and then faithfully match it later.
+   - Future tightening (if/when we decide to do it):
+     - parse equipment from the award lane string itself,
+     - prefer that over DB heuristics,
+     - and only fall back to the DB when the string is ambiguous.
+
+5. Operator-facing explanation (what we’ll tell the team)
+   - “For new award tasks, the system will only jump you directly into a lane’s LWQ workspace when the origin, destination, and equipment all match what’s in the work queue. We ignore case and extra spaces, but we don’t guess on city/state or equipment — if we’re not sure, you’ll see ‘No lane match’ and land on LWQ home with a hint for what to search for.”
+
+6. Safety guarantees (new tasks)
+   - A newly created award task will NEVER:
+     - open a completely different O/D lane, or
+     - open a lane with a different normalized equipment type,
+     - without at least one of the following being true:
+       - it’s a legacy task,
+       - or the award itself provided ambiguous equipment that we mirrored.
+   - In all other uncertain cases, we choose “No lane match” over a wrong match.
+
+If you implement future features that touch lane matching or procurement tasks, please treat these six points as the non-negotiable contract. Any behavior that violates them should be considered a regression, not a new interpretation.
