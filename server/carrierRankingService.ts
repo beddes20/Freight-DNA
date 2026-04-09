@@ -303,8 +303,15 @@ export async function rankCarriersForLane(
         fitScore = Math.max(exactFloor, exactFloor + extraPts - 10);
         // Always at least the floor
         fitScore = Math.max(exactFloor, fitScore);
-        reasons.push(`Ran this exact lane ${exactLoad}×`);
-        if (hist.lastUsedMonth) reasons.push(`last used ${hist.lastUsedMonth}`);
+        // Determine recency window for reason label
+        const exactDays = daysSinceMonth(hist.lastUsedMonth ?? null);
+        if (exactDays <= 90) {
+          reasons.push(`Ran this exact lane ${exactLoad}× in last 90 days`);
+        } else if (exactDays <= 180) {
+          reasons.push(`Ran this exact lane ${exactLoad}× (last ~${Math.round(exactDays / 30)} months ago)`);
+        } else {
+          reasons.push(`Ran this exact lane ${exactLoad}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
+        }
       } else if (hist.bestMatchTier === "city") {
         // Similar corridor (city-level prefix match) — 50–64 band
         historyMatch = "similar";
@@ -318,24 +325,24 @@ export async function rankCarriersForLane(
       }
     }
 
-    // Equipment fit — capped so regional-only stays below exact-history floor
+    // Equipment fit — reduced weights; pure tie-breaker territory
     let equipmentMatch = false;
     if (laneEquip && carrier.equipmentTypes && carrier.equipmentTypes.length > 0) {
       if (overlaps(carrier.equipmentTypes, laneEquip)) {
         equipmentMatch = true;
-        // Only add if score is in non-history band (cap contribution for pure prospects)
+        // Reduced from +20/+5 to +12/+3
         if (historyMatch === "none" || historyMatch === "region") {
-          fitScore += 20;
+          fitScore += 12;
         } else {
-          fitScore += 5; // smaller bonus when history already gives the edge
+          fitScore += 3; // smaller bonus when history already gives the edge
         }
         reasons.push(`Equipment match: ${laneEquip}`);
       }
     } else {
-      fitScore += 10; // no equipment filter = assume general fit
+      fitScore += 6; // no equipment filter = assume general fit (reduced from 10)
     }
 
-    // Region fit
+    // Region fit — reduced weights; pure tie-breaker territory
     const carrierRegions = carrier.regions ?? [];
     const regionMatch =
       (laneOriginState && overlaps(carrierRegions, laneOriginState)) ||
@@ -344,20 +351,44 @@ export async function rankCarriersForLane(
       overlaps(carrierRegions, laneDest);
     if (regionMatch) {
       if (historyMatch === "none") historyMatch = "region";
-      // Cap region bonus so pure regional prospect stays below 50
+      // Reduced from +15/+5 to +8/+3 — pure tie-breaker, cannot force top rank
       if (historyMatch === "region") {
-        fitScore += 15;
+        fitScore += 8;
       } else {
-        fitScore += 5;
+        fitScore += 3;
       }
-      reasons.push("Operates in this region");
+      // Region catalog is now a secondary signal, not pushed as primary reason
     }
 
-    // Recency bonus
-    if (hist?.lastUsedMonth) {
-      const monthsAgo = monthDiff(hist.lastUsedMonth);
-      if (monthsAgo <= 3) { fitScore += 10; reasons.push("Active in last 3 months"); }
-      else if (monthsAgo <= 6) { fitScore += 5; reasons.push("Active in last 6 months"); }
+    // Capture the pre-decay signal baseline.
+    // Used for the visibility guard below: any carrier with at least one positive signal
+    // (history, region, equipment) should remain visible even after staleness penalty.
+    const preDecayBaseline = fitScore;
+
+    // Recency decay signal — applied to ALL carriers regardless of history.
+    // Carriers with no executed loads at all are treated as 365+ days stale (-25).
+    // This demotes generic catalog carriers that have no proven freight record.
+    {
+      // lastUsedMonth from history, or null if carrier has no history at all
+      const lastMonth = hist?.lastUsedMonth ?? null;
+      const decay = recencyDecayScore(lastMonth);
+      fitScore += decay.score;
+
+      const days = daysSinceMonth(lastMonth);
+      // Show explicit staleness/recency reason when it matters to the operator:
+      //   - No history at all → stale fallback
+      //   - 181+ days stale → fallback warning
+      //   - ≤ 90 days → positive recency credit (only if carrier has lane history)
+      if (!hist) {
+        // No lane history at all — active carrier, but purely a prospect
+        reasons.push("No executed loads on record — shown as fallback");
+      } else if (days >= 181) {
+        reasons.push(decay.reason);
+      } else if (days <= 90 && historyMatch !== "none") {
+        // Recency credit only when there's matching history to credit
+        reasons.push(decay.reason);
+      }
+      // 91–180 days: neutral — omit from reason list to keep it clean
     }
 
     // On-time % bonus from financial rows
@@ -372,28 +403,35 @@ export async function rankCarriersForLane(
       if (avgMargin >= 500) { fitScore += 5; reasons.push(`Avg margin contribution: $${avgMargin.toFixed(0)}`); }
     }
 
-    // Notes / email present bonus
-    if (carrier.primaryEmail) fitScore += 5;
+    // "Has email" is no longer a score signal — removed per recency fix (Task #162)
 
     // Customer history signal: carrier has run freight for this same customer before
+    // Increased cap from +15 to +20; base from +8 to +12
     const custLoads = extractCustomerHistoryLoads(uploads, carrier.name, customerName);
     if (custLoads > 0) {
-      fitScore += Math.min(15, 8 + custLoads * 2);
+      fitScore += Math.min(20, 12 + custLoads * 2);
       reasons.push(`Hauled for ${customerName} (${custLoads} loads)`);
     }
 
     // Prior outreach outcome signal: carrier responded positively on a previous bench
+    // Increased from +10 to +12
     const hadPositiveOutcome =
       positiveOutcomeCarrierKeys.has(carrier.id) ||
       positiveOutcomeCarrierKeys.has(carrierNorm);
     if (hadPositiveOutcome) {
-      fitScore += 10;
+      fitScore += 12;
       reasons.push("Showed availability in prior outreach");
     }
 
-    fitScore = Math.min(100, fitScore);
+    // Clamp score to [0, 100] — negative raw scores are possible after staleness penalty;
+    // clamp before display so the UI never shows negative numbers.
+    fitScore = Math.max(0, Math.min(100, fitScore));
 
-    if (fitScore === 0 && historyMatch === "none" && !regionMatch) continue; // skip zero-fit unknown carriers
+    // Skip carriers with zero pre-decay signal: no history, no region, no equipment affinity.
+    // The pre-decay baseline (rather than the post-penalty score) is the right signal here:
+    // a carrier with region or equipment match should remain visible as a fallback even if
+    // staleness drives their final score to 0.
+    if (preDecayBaseline === 0 && historyMatch === "none" && !regionMatch) continue;
 
     // Build suppression reasons
     const suppressionReasons: string[] = [];
@@ -425,10 +463,14 @@ export async function rankCarriersForLane(
       suppressionReasons.push("Marked Inactive in Carrier Hub");
     }
     if (hist?.lastUsedMonth) {
-      const monthsAgo = monthDiff(hist.lastUsedMonth);
-      if (monthsAgo >= 12) {
-        suppressionReasons.push(`No recent activity (${monthsAgo} months ago)`);
+      const staleDays = daysSinceMonth(hist.lastUsedMonth);
+      if (staleDays >= 181) {
+        suppressionReasons.push(`No executed loads in ${staleDays} days — shown as fallback`);
       }
+    } else {
+      // hist is undefined (no history at all) OR hist exists but has no month data
+      // Both cases are treated as "no executed loads on record"
+      suppressionReasons.push("No executed loads on record — shown as fallback");
     }
 
     // Incumbent boost: if lane is stable and carrier is an incumbent, apply score floor
@@ -491,13 +533,34 @@ export async function rankCarriersForLane(
     const reasons: string[] = [];
     if (exactLoad >= 10) {
       fitScore = 80;
-      reasons.push(`Ran this exact lane ${exactLoad}× from financial history`);
+      const histDays = daysSinceMonth(hist.lastUsedMonth ?? null);
+      if (histDays <= 90) {
+        reasons.push(`Ran this exact lane ${exactLoad}× in last 90 days`);
+      } else if (histDays <= 180) {
+        reasons.push(`Ran this exact lane ${exactLoad}× (last ~${Math.round(histDays / 30)} months ago)`);
+      } else {
+        reasons.push(`Ran this exact lane ${exactLoad}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
+      }
     } else if (exactLoad >= 5) {
       fitScore = 70;
-      reasons.push(`Ran this exact lane ${exactLoad}× from financial history`);
+      const histDays = daysSinceMonth(hist.lastUsedMonth ?? null);
+      if (histDays <= 90) {
+        reasons.push(`Ran this exact lane ${exactLoad}× in last 90 days`);
+      } else if (histDays <= 180) {
+        reasons.push(`Ran this exact lane ${exactLoad}× (last ~${Math.round(histDays / 30)} months ago)`);
+      } else {
+        reasons.push(`Ran this exact lane ${exactLoad}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
+      }
     } else if (exactLoad > 0) {
       fitScore = 55;
-      reasons.push(`Ran this exact lane ${exactLoad}× from financial history`);
+      const histDays = daysSinceMonth(hist.lastUsedMonth ?? null);
+      if (histDays <= 90) {
+        reasons.push(`Ran this exact lane ${exactLoad}× in last 90 days`);
+      } else if (histDays <= 180) {
+        reasons.push(`Ran this exact lane ${exactLoad}× (last ~${Math.round(histDays / 30)} months ago)`);
+      } else {
+        reasons.push(`Ran this exact lane ${exactLoad}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
+      }
     } else if (hist.bestMatchTier === "city") {
       fitScore = Math.min(64, 50 + Math.min(14, hist.loads * 2));
       reasons.push(`${hist.loads} loads on similar corridors`);
@@ -507,8 +570,17 @@ export async function rankCarriersForLane(
       reasons.push(`Runs ${(lane.originState ?? "origin state").toUpperCase()} → ${(lane.destinationState ?? "dest state").toUpperCase()} lanes (${hist.loads} loads, financial data)`);
     }
 
-    fitScore = Math.min(100, fitScore);
-    if (hist.lastUsedMonth) reasons.push(`last used ${hist.lastUsedMonth}`);
+    // Apply recency decay to history-only carriers as well
+    const histDecay = recencyDecayScore(hist.lastUsedMonth ?? null);
+    fitScore = Math.max(0, Math.min(100, fitScore + histDecay.score));
+    // Add staleness reason for any stale history-only carrier (exact or non-exact)
+    {
+      const histDecayDays = daysSinceMonth(hist.lastUsedMonth ?? null);
+      if (histDecayDays >= 181) {
+        reasons.push(histDecay.reason);
+      }
+      // Recent carriers (≤ 90 days) already carry the load count + recency label above
+    }
 
     // On-time % from financial rows
     if (hist.avgOnTimePct !== null && hist.avgOnTimePct !== undefined) {
@@ -517,16 +589,18 @@ export async function rankCarriersForLane(
     }
 
     // Customer history signal for TMS-only carriers
+    // Increased cap from +15 to +20; base from +8 to +12
     const custLoadsHist = extractCustomerHistoryLoads(uploads, carrierNorm, customerName);
     if (custLoadsHist > 0) {
-      fitScore = Math.min(100, fitScore + Math.min(15, 8 + custLoadsHist * 2));
+      fitScore = Math.min(100, fitScore + Math.min(20, 12 + custLoadsHist * 2));
       reasons.push(`Hauled for ${customerName} (${custLoadsHist} loads)`);
     }
 
     // Outreach outcome signal for TMS-only carriers
+    // Increased from +10 to +12
     const hadPositiveOutcomeHist = positiveOutcomeCarrierKeys.has(carrierNorm);
     if (hadPositiveOutcomeHist) {
-      fitScore = Math.min(100, fitScore + 10);
+      fitScore = Math.min(100, fitScore + 12);
       reasons.push("Showed availability in prior outreach");
     }
 
@@ -544,9 +618,9 @@ export async function rankCarriersForLane(
       }
     }
     if (hist.lastUsedMonth) {
-      const monthsAgo = monthDiff(hist.lastUsedMonth);
-      if (monthsAgo >= 12) {
-        suppressionReasons.push(`No recent activity (${monthsAgo} months ago)`);
+      const staleDaysHist = daysSinceMonth(hist.lastUsedMonth);
+      if (staleDaysHist >= 181) {
+        suppressionReasons.push(`No executed loads in ${staleDaysHist} days — shown as fallback`);
       }
     }
 
@@ -590,12 +664,14 @@ export async function rankCarriersForLane(
     });
   }
 
-  // Sort: historyMatch exact first, then by fitScore desc
+  // Sort by fitScore descending — scores encode history quality + recency + all signals,
+  // so score-first ordering correctly demotes stale exact-lane carriers below fresher proven ones.
+  // historyMatch is a secondary tiebreaker only when scores are exactly equal.
   ranked.sort((a, b) => {
+    const scoreDiff = b.fitScore - a.fitScore;
+    if (scoreDiff !== 0) return scoreDiff;
     const matchRank = { exact: 0, similar: 1, region: 2, none: 3 };
-    const md = matchRank[a.historyMatch] - matchRank[b.historyMatch];
-    if (md !== 0) return md;
-    return b.fitScore - a.fitScore;
+    return matchRank[a.historyMatch] - matchRank[b.historyMatch];
   });
 
   // AI enrichment: enrich fitReason strings for top-5 rule-scored candidates only.
@@ -708,4 +784,42 @@ function monthDiff(monthKey: string): number {
   const [y, m] = monthKey.split("-").map(Number);
   const now = new Date();
   return (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - m);
+}
+
+/**
+ * Convert a lastUsedMonth string ("YYYY-MM") to approximate days since last executed load.
+ * Treats as the last day of the given month to be conservative.
+ */
+function daysSinceMonth(monthKey: string | null): number {
+  if (!monthKey) return Infinity;
+  const [y, m] = monthKey.split("-").map(Number);
+  if (!y || !m) return Infinity;
+  // Use the last day of that month as the estimate (conservative — benefits recent carriers)
+  // new Date(y, m, 0) = day 0 of month m → last calendar day of month m-1 (JS zero-indexed months)
+  // Example: new Date(2025, 4, 0) = April 30, 2025 ✓
+  const lastDay = new Date(y, m, 0);
+  // Clamp to 0 — current-month data produces a negative raw value, which is "very recent" = 0 days
+  return Math.max(0, Math.floor((Date.now() - lastDay.getTime()) / (1000 * 60 * 60 * 24)));
+}
+
+/**
+ * Compute a recency decay score based on days since last executed load.
+ * 0–30 days: +15 (strong positive)
+ * 31–90 days: +10 (moderate positive)
+ * 91–180 days: +3 (neutral/small)
+ * 181–364 days: -10 (penalty)
+ * 365+ days or never: -25 (severe penalty)
+ *
+ * Returns { score, reason } — reason is null when no load history exists.
+ */
+function recencyDecayScore(lastUsedMonth: string | null): { score: number; reason: string } {
+  const days = daysSinceMonth(lastUsedMonth);
+  if (days === Infinity) {
+    return { score: -25, reason: "No executed loads on record — shown as fallback" };
+  }
+  if (days <= 30) return { score: 15, reason: `Last executed load ${days} day${days === 1 ? "" : "s"} ago` };
+  if (days <= 90) return { score: 10, reason: `Last executed load ${days} days ago` };
+  if (days <= 180) return { score: 3, reason: `Last executed load ${days} days ago` };
+  if (days < 365) return { score: -10, reason: `No executed loads in ${days} days — shown as fallback` };
+  return { score: -25, reason: `No executed loads in ${days} days — shown as fallback` };
 }
