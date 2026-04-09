@@ -296,7 +296,8 @@ export default function Customers() {
   type GrowthScoreRow = { companyId: string; score: number; band: string; bandLabel: string };
   const { data: growthScores = [] } = useQuery<GrowthScoreRow[]>({
     queryKey: ["/api/growth-scores"],
-    staleTime: 10 * 60 * 1000,
+    staleTime: 90 * 1000,
+    refetchInterval: 90 * 1000,
   });
   const growthScoreMap = useMemo(() => new Map(growthScores.map(r => [r.companyId, r])), [growthScores]);
 

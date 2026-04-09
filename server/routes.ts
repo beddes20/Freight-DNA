@@ -5075,7 +5075,10 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const staleIds = cached
         .filter(s => !s.calculatedAt || s.calculatedAt < staleCutoff)
         .map(s => s.companyId);
-      const toRecompute = [...new Set([...unscoredIds, ...staleIds])].slice(0, 20);
+      // No cap on unscored companies — every company that has never had a score must
+      // be seeded so the Customers page can show a badge. Stale (but already-scored)
+      // companies are capped at 30 per request to bound background work.
+      const toRecompute = [...new Set([...unscoredIds, ...staleIds.slice(0, 30)])];
       if (toRecompute.length > 0) {
         (async () => {
           for (const cid of toRecompute) {
