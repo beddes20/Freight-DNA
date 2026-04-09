@@ -29,9 +29,9 @@ export function CoverageGapsPortlet() {
 
   if (isLoading) {
     return (
-      <Card className="bg-gray-900 border-gray-700">
+      <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
+          <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-400" />
             RFP Coverage Gaps
           </CardTitle>
@@ -39,7 +39,7 @@ export function CoverageGapsPortlet() {
         <CardContent>
           <div className="space-y-2">
             {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-10 bg-gray-800 rounded animate-pulse" />
+              <div key={i} className="h-10 bg-muted rounded animate-pulse" />
             ))}
           </div>
         </CardContent>
@@ -50,22 +50,21 @@ export function CoverageGapsPortlet() {
   if (gaps.length === 0) return null;
 
   const handleClick = (companyId: string) => {
-    // Pre-select the RFP tab so the rep lands in the right context
     localStorage.setItem("cd_tab", "rfp");
     navigate(`/companies/${companyId}`);
   };
 
   return (
-    <Card className="bg-gray-900 border-gray-700" data-testid="coverage-gaps-portlet">
+    <Card data-testid="coverage-gaps-portlet">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
+          <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-400" />
             RFP Coverage Gaps
           </CardTitle>
-          <span className="text-xs text-gray-400">{gaps.length} uncovered site{gaps.length !== 1 ? "s" : ""}</span>
+          <span className="text-xs text-muted-foreground">{gaps.length} uncovered site{gaps.length !== 1 ? "s" : ""}</span>
         </div>
-        <p className="text-xs text-gray-400 mt-1">
+        <p className="text-xs text-muted-foreground mt-1">
           High-volume RFP locations with no contact assigned — click to review lane coverage.
         </p>
       </CardHeader>
@@ -77,16 +76,16 @@ export function CoverageGapsPortlet() {
               <div
                 key={`${gap.companyId}-${gap.facilityName}-${gap.state}`}
                 data-testid={`coverage-gap-row-${idx}`}
-                className="flex items-center justify-between gap-3 bg-gray-800/60 rounded-lg px-3 py-2 hover:bg-gray-800 cursor-pointer transition-colors group"
+                className="flex items-center justify-between gap-3 bg-muted/50 rounded-lg px-3 py-2 hover:bg-muted cursor-pointer transition-colors group"
                 onClick={() => handleClick(gap.companyId)}
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <MapPin className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                   <div className="min-w-0">
-                    <p className="text-xs font-medium text-white truncate">{label}</p>
+                    <p className="text-xs font-medium text-foreground truncate">{label}</p>
                     <div className="flex items-center gap-1 mt-0.5">
-                      <Building2 className="w-3 h-3 text-gray-500 shrink-0" />
-                      <span className="text-xs text-gray-400 truncate group-hover:text-gray-300 transition-colors">
+                      <Building2 className="w-3 h-3 text-muted-foreground shrink-0" />
+                      <span className="text-xs text-muted-foreground truncate transition-colors">
                         {gap.companyName}
                       </span>
                     </div>
@@ -100,7 +99,7 @@ export function CoverageGapsPortlet() {
                     <TrendingUp className="w-2.5 h-2.5 mr-1" />
                     {gap.totalVolume.toLocaleString()}
                   </Badge>
-                  <Badge variant="outline" className="text-xs px-1.5 py-0 text-gray-400 border-gray-600">
+                  <Badge variant="outline" className="text-xs px-1.5 py-0 text-muted-foreground">
                     <Layers className="w-2.5 h-2.5 mr-1" />
                     ×{gap.laneCount}
                   </Badge>
@@ -109,7 +108,7 @@ export function CoverageGapsPortlet() {
             );
           })}
         </div>
-        <p className="text-xs text-gray-500 mt-3 text-center">
+        <p className="text-xs text-muted-foreground mt-3 text-center">
           Volume = loads/yr · ×N = lanes in RFP · Opens RFP & Lanes tab
         </p>
       </CardContent>
