@@ -543,16 +543,12 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     res.json(lanes);
   });
 
-  // ── Lane Work Queue (manager/admin view) — must be before /:id ─────────────
+  // ── Lane Work Queue (all authenticated users) — must be before /:id ────────
 
   app.get("/api/recurring-lanes/work-queue", async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const managerRoles = ["admin", "director", "national_account_manager", "logistics_manager"];
-    if (!managerRoles.includes(user.role)) {
-      return res.status(403).json({ error: "Manager role required" });
-    }
     try {
       const { visibleUserIds, canSeeUnassigned, scopeLabel } = await storage.resolveVisibleUserIds(
         user.id, user.organizationId, user.role

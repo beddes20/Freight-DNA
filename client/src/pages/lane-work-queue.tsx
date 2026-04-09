@@ -1,5 +1,5 @@
 /**
- * Lane Work Queue — Manager / Director / Admin view
+ * Lane Work Queue — accessible to all roles
  *
  * Shows eligible recurring lanes bucketed into four operational states:
  *   1. Unassigned        — no owner yet
@@ -7,6 +7,7 @@
  *   3. Assigned Untouched — assigned + contactable, 0 contacted so far
  *   4. In Progress       — 1+ contacted, not yet complete
  *
+ * Managers see their full team-level view; other users see only their own lanes.
  * Clicking a row opens CarrierOutreachPanel for immediate action.
  */
 
@@ -863,9 +864,6 @@ export default function LaneWorkQueuePage() {
     if (lid) setOpenLaneId(lid);
   }, []);
 
-  const managerRoles = ["admin", "director", "national_account_manager", "logistics_manager"];
-  const isManager = managerRoles.includes(user?.role ?? "");
-
   const runEngineMutation = useMutation({
     mutationFn: () =>
       apiRequest("POST", "/api/recurring-lanes/run-engine", {}).then(r => r.json()),
@@ -882,7 +880,6 @@ export default function LaneWorkQueuePage() {
   const { data: queue, isLoading, refetch } = useQuery<WorkQueue>({
     queryKey: ["/api/recurring-lanes/work-queue"],
     queryFn: () => fetch("/api/recurring-lanes/work-queue").then(r => r.json()),
-    enabled: isManager,
   });
 
   const { data: outreachConfig } = useQuery<{ completionCarriersContacted: number }>({
@@ -953,17 +950,6 @@ export default function LaneWorkQueuePage() {
       queue.inProgress.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length
     );
   }, [queue]);
-
-  if (!isManager) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <AlertCircle className="w-8 h-8 text-orange-400 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">Manager access required to view the Lane Work Queue.</p>
-        </div>
-      </div>
-    );
-  }
 
   const totalLanes = (queue?.unassigned.length ?? 0) +
     (queue?.noContactable.length ?? 0) +

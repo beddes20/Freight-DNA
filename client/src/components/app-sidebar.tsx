@@ -80,7 +80,6 @@ const laneToolItems: NavItem[] = [
     title: "Lane Work Queue",
     url: "/lanes/work-queue",
     icon: ListFilter,
-    roles: ["admin", "director", "national_account_manager", "logistics_manager"],
   },
   {
     title: "Carrier Hub",
@@ -277,19 +276,21 @@ export function AppSidebar() {
           </SidebarGroup>
         )}
 
-        {/* ── Lane Tools (hidden for LM/LC roles) ── */}
-        {SALES_ROLES.includes(user?.role ?? "") && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Lane Tools</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {laneToolItems
-                  .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
-                  .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+        {/* ── Lane Tools ── */}
+        {(() => {
+          const visibleLaneTools = laneToolItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
+          if (visibleLaneTools.length === 0) return null;
+          return (
+            <SidebarGroup>
+              <SidebarGroupLabel>Lane Tools</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {visibleLaneTools.map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          );
+        })()}
 
         {/* ── Tools ── */}
         <SidebarGroup>
