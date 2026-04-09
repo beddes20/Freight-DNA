@@ -15,9 +15,10 @@ import type { FinancialUpload } from "@shared/schema";
 
 export const LANE_CONFIG = {
   // ── Eligibility thresholds ─────────────────────────────────────────────────
-  minLoadsPerWeek: 2,          // minimum loads/week to count a week as "active"
-  requiredWeeks: 3,            // how many of the lookback weeks must be active
-  lookbackWeeks: 4,            // rolling window width
+  minLoadsPerWeek: 1,          // minimum loads/week to count a week as "active" (lowered from 2)
+  requiredWeeks: 2,            // how many of the lookback weeks must be active (lowered from 3)
+  lookbackWeeks: 8,            // rolling window width — 2 months so monthly uploads are covered (up from 4)
+  minTotalLoads: 2,            // alternative floor: qualify if total loads >= this, even if weeks spread out
   completionCarriersContacted: 3,  // number of carriers to contact before card resolves
   snoozeAfterResolveDays: 30,  // days before re-evaluating a resolved lane
 
@@ -161,10 +162,10 @@ export async function identifyRecurringLanes(
   const latestUpload = sorted[0];
   if (!latestUpload) return { lanes: [], meta: emptyMeta };
 
-  // Use rows from the most recent upload (or merge last 2 uploads for coverage)
+  // Use rows from the most recent uploads — up to 4 to give 2+ months of coverage
   const rowSources: any[][] = [];
   const consumedUploads: typeof sorted = [];
-  for (let i = 0; i < Math.min(2, sorted.length); i++) {
+  for (let i = 0; i < Math.min(4, sorted.length); i++) {
     const rows = (sorted[i].rows as any[]) ?? [];
     if (rows.length > 0) {
       rowSources.push(rows);
@@ -317,15 +318,18 @@ export async function identifyRecurringLanes(
       totalLoads += count;
     }
 
-    if (weeksActive < LANE_CONFIG.requiredWeeks) continue;
+    // Qualify if: (a) enough weeks were "active", OR (b) total loads meet the floor
+    const meetsWeeks = weeksActive >= LANE_CONFIG.requiredWeeks;
+    const meetsTotalLoads = totalLoads >= LANE_CONFIG.minTotalLoads;
+    if (!meetsWeeks && !meetsTotalLoads) continue;
 
     const avgLoadsPerWeek = totalLoads / LANE_CONFIG.lookbackWeeks;
 
     // Determine confidence
     let eligibilityConfidence: "high" | "medium" | "borderline" = "borderline";
-    if (weeksActive === LANE_CONFIG.lookbackWeeks && avgLoadsPerWeek >= 3) {
+    if (weeksActive >= 4 && avgLoadsPerWeek >= 2) {
       eligibilityConfidence = "high";
-    } else if (weeksActive >= LANE_CONFIG.requiredWeeks && avgLoadsPerWeek >= LANE_CONFIG.minLoadsPerWeek) {
+    } else if (meetsWeeks && avgLoadsPerWeek >= 1) {
       eligibilityConfidence = "medium";
     }
 
