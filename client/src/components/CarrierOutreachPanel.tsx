@@ -12,7 +12,7 @@
  *   7. Switch between "Lane-Building" and "Immediate + Lane" outreach modes
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { formatLaneDisplay, formatWeeklyLoadRange } from "@shared/laneFormatters";
@@ -114,6 +114,7 @@ interface WhyThisCarrier {
 interface RankedCarrier {
   carrierId: string | null;
   carrierName: string;
+  mcDot: string | null;
   primaryEmail: string | null;
   backupEmail: string | null;
   fitScore: number;
@@ -392,6 +393,23 @@ export function CarrierOutreachPanel({
     enabled: !!laneId && open,
   });
 
+  // Pre-populate capturedEmails from carrier primaryEmail so the email input
+  // auto-fills with the saved address on subsequent panel opens.
+  useEffect(() => {
+    if (!suggestionsData?.carriers) return;
+    setCapturedEmails(prev => {
+      const next = { ...prev };
+      for (const c of suggestionsData.carriers) {
+        const key = c.carrierId ?? c.carrierName;
+        // Only pre-fill if the user hasn't already typed something into the field
+        if (c.primaryEmail && !next[key]) {
+          next[key] = c.primaryEmail;
+        }
+      }
+      return next;
+    });
+  }, [suggestionsData]);
+
   const { data: bench = [], refetch: refetchBench } = useQuery<CarrierInterest[]>({
     queryKey: ["/api/lanes", laneId, "carrier-bench"],
     queryFn: () => fetch(`/api/lanes/${laneId}/carrier-bench`).then(r => r.json()),
@@ -432,6 +450,8 @@ export function CarrierOutreachPanel({
       queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "carrier-bench"] });
       queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "followup-suggestions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/nba/cards"] });
+      // Invalidate carrier suggestions so updated primaryEmail values are reflected next load
+      queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "carrier-suggestions"] });
       setSelectedCarriers(new Set());
       setEmailDrafts([]);
       setShowEmails(false);
@@ -509,6 +529,14 @@ export function CarrierOutreachPanel({
       queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "carrier-bench"] });
       queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "outreach-history"] });
       queryClient.invalidateQueries({ queryKey: ["/api/nba/cards"] });
+      // Invalidate carrier suggestions so updated primaryEmail values are reflected next load
+      queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "carrier-suggestions"] });
+      // Invalidate carrier hub profiles for any carriers whose emails were persisted
+      for (const draft of emailDrafts) {
+        if (draft.carrierId) {
+          queryClient.invalidateQueries({ queryKey: ["/api/carrier-hub", draft.carrierId] });
+        }
+      }
       refetchBench();
       if (data.resolved) {
         onCarriersContacted?.();
@@ -1406,6 +1434,15 @@ export function CarrierOutreachPanel({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs font-semibold text-white truncate">{c.carrierName}</span>
+                            {c.mcDot && (
+                              <span
+                                className="text-[9px] px-1.5 py-0 rounded border border-slate-500/40 text-slate-400 bg-slate-500/10 font-mono shrink-0"
+                                data-testid={`text-mc-number-${idx}`}
+                                title="MC Number"
+                              >
+                                MC {c.mcDot.replace(/^MC[-#\s]?/i, "")}
+                              </span>
+                            )}
                             {c.historyMatch === "exact" && c.loadsOnLane > 0 && (
                               <Badge variant="outline" className="text-[9px] py-0 px-1 border-amber-500/50 text-amber-300 bg-amber-500/10">
                                 Ran lane {c.loadsOnLane}×
@@ -1493,23 +1530,21 @@ export function CarrierOutreachPanel({
                     {/* Inline email affordances — shown when carrier is selected */}
                     {isSelected && (
                       <div className="ml-3 mr-0 -mt-1 bg-amber-500/5 border border-amber-500/15 border-t-0 rounded-b-lg px-3 pb-2 pt-2 flex flex-col gap-2">
-                        {/* Add email capture when no email on file */}
-                        {!c.primaryEmail && (
-                          <div>
-                            <p className="text-[9px] text-orange-400/70 mb-1 uppercase tracking-wide flex items-center gap-1">
-                              <Mail className="w-2.5 h-2.5" />
-                              Add carrier email
-                            </p>
-                            <input
-                              type="email"
-                              value={capturedEmails[key] ?? ""}
-                              onChange={e => setCapturedEmails(prev => ({ ...prev, [key]: e.target.value }))}
-                              placeholder={`email@${c.carrierName.toLowerCase().replace(/\s+/g, "")}.com`}
-                              className="w-full text-[11px] text-white/70 bg-white/5 border border-white/10 rounded px-2 py-1 placeholder:text-white/20 focus:outline-none focus:border-orange-400/40"
-                              data-testid={`add-email-input-${idx}`}
-                            />
-                          </div>
-                        )}
+                        {/* Email input — pre-filled from saved profile when available */}
+                        <div>
+                          <p className="text-[9px] mb-1 uppercase tracking-wide flex items-center gap-1 text-orange-400/70">
+                            <Mail className="w-2.5 h-2.5" />
+                            {c.primaryEmail ? "Carrier email (saved)" : "Add carrier email"}
+                          </p>
+                          <input
+                            type="email"
+                            value={capturedEmails[key] ?? c.primaryEmail ?? ""}
+                            onChange={e => setCapturedEmails(prev => ({ ...prev, [key]: e.target.value }))}
+                            placeholder={`email@${c.carrierName.toLowerCase().replace(/\s+/g, "")}.com`}
+                            className="w-full text-[11px] text-white/70 bg-white/5 border border-white/10 rounded px-2 py-1 placeholder:text-white/20 focus:outline-none focus:border-orange-400/40"
+                            data-testid={`add-email-input-${idx}`}
+                          />
+                        </div>
                         <div>
                           <p className="text-[9px] text-amber-300/60 mb-1 uppercase tracking-wide">Custom email note (optional)</p>
                           <Textarea
