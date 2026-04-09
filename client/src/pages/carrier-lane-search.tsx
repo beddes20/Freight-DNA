@@ -299,7 +299,7 @@ export default function CarrierLaneSearchPage() {
   const [originInput, setOriginInput] = useState("");
   const [destInput, setDestInput] = useState("");
   const [radiusInput, setRadiusInput] = useState("75");
-  const [minLoadsInput, setMinLoadsInput] = useState("5");
+  const [minLoadsInput, setMinLoadsInput] = useState("2");
   const [modeFilter, setModeFilter] = useState("all");
   const [searchParams, setSearchParams] = useState<{ origin: string; dest: string; radius: number; minLoads: number } | null>(null);
 
@@ -310,7 +310,7 @@ export default function CarrierLaneSearchPage() {
       if (searchParams?.origin) params.set("origin", searchParams.origin);
       if (searchParams?.dest)   params.set("destination", searchParams.dest);
       params.set("radius", String(searchParams?.radius ?? 75));
-      params.set("minLoadsPerMonth", String(searchParams?.minLoads ?? 5));
+      params.set("minLoadsPerMonth", String(searchParams?.minLoads ?? 2));
       const res = await fetch(`/api/carriers/lane-search?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
@@ -322,7 +322,7 @@ export default function CarrierLaneSearchPage() {
     const o = originInput.trim();
     const d = destInput.trim();
     if (!o && !d) return;
-    setSearchParams({ origin: o, dest: d, radius: Math.max(1, parseInt(radiusInput) || 75), minLoads: Math.max(1, parseFloat(minLoadsInput) || 5) });
+    setSearchParams({ origin: o, dest: d, radius: Math.max(1, parseInt(radiusInput) || 75), minLoads: Math.max(1, parseFloat(minLoadsInput) || 2) });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === "Enter") handleSearch(); };
@@ -398,7 +398,7 @@ export default function CarrierLaneSearchPage() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground mt-3">
-            Results are grouped by mode. Lanes with no mode on record are excluded. Only corridors averaging <strong>{minLoadsInput || "5"}+ loads/month</strong> are shown.
+            Results are grouped by mode. Lanes with no mode on record are excluded. Only corridors averaging <strong>{minLoadsInput || "2"}+ loads/month</strong> are shown.
           </p>
         </CardContent>
       </Card>
