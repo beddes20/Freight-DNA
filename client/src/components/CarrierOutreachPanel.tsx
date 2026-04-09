@@ -1,15 +1,13 @@
 /**
- * CarrierOutreachPanel
+ * CarrierOutreachPanel — Lane-level carrier outreach workspace
  *
- * Side panel for the "Lock In Capacity on [Origin → Destination]" NBA card.
- * Lets NAMs/AMs/LMs:
- *   1. See the lane details + lane score
- *   2. Browse AI-ranked carrier suggestions
+ * Workflow:
+ *   1. Select a recurring lane from the Lane Work Queue
+ *   2. Review ranked carrier suggestions
  *   3. Draft lane-building outreach emails
- *   4. Mark carriers as contacted (triggers outreach log)
- *   5. Classify carrier replies
+ *   4. Send or log outreach
+ *   5. Track responses on the bench
  *   6. Receive follow-up suggestions
- *   7. Switch between "Lane-Building" and "Immediate + Lane" outreach modes
  */
 
 import { useState, useEffect } from "react";
@@ -20,7 +18,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Sheet,
@@ -37,64 +34,57 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  ArrowRight,
   Truck,
-  Star,
   Mail,
+  Send,
   CheckCircle2,
-  RefreshCw,
-  Lightbulb,
-  ClipboardCheck,
-  ChevronDown,
-  ChevronUp,
   AlertCircle,
   Loader2,
   User,
-  UserCheck,
   UserX,
-  Send,
-  XCircle,
-  Clock,
+  UserCheck,
   History,
-  Copy,
-  Upload,
+  ChevronDown,
+  ChevronUp,
   Plus,
+  Copy,
+  XCircle,
+  ClipboardCheck,
+  Upload,
   ExternalLink,
-  Shield,
-  TrendingUp,
+  Lightbulb,
+  Search,
   ShieldCheck,
   ShieldAlert,
-  Search,
+  TrendingUp,
+  Star,
+  Clock,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface RecurringLane {
-  id: string;
-  origin: string;
-  originState: string | null;
-  destination: string;
-  destinationState: string | null;
-  equipmentType: string | null;
-  avgLoadsPerWeek: string | null;
-  weeksActive: number | null;
-  lookbackWeeks: number | null;
-  laneScore: number | null;
-  eligibilityConfidence: string;
-  companyId: string | null;
-  companyName: string | null;
-  carriersContactedCount: number | null;
-  hasPreferredCarrierProgram: boolean;
-  resolvedAt: string | null;
-  ownerUserId: string | null;
-  overseerUserId: string | null;
-}
 
 interface TeamMember {
   id: string;
   name: string;
   role: string;
+}
+
+interface RecurringLane {
+  id: string;
+  companyId: string;
+  origin: string;
+  originState: string;
+  destination: string;
+  destinationState: string;
+  equipmentType: string | null;
+  avgLoadsPerWeek: number | null;
+  weeksActive: number | null;
+  lookbackWeeks: number | null;
+  laneScore: number | null;
+  eligibilityConfidence: string | null;
+  carriersContactedCount: number;
+  resolvedAt: string | null;
+  hasPreferredCarrierProgram: boolean;
+  ownerUserId: string | null;
+  overseerUserId: string | null;
 }
 
 interface WhyThisCarrier {
@@ -293,34 +283,30 @@ export function CarrierOutreachPanel({
   onClose,
   onCarriersContacted,
 }: CarrierOutreachPanelProps) {
-  // If no laneId given, resolve it from the company's best recurring lane
   const { data: companyLanes } = useQuery<RecurringLane[]>({
     queryKey: ["/api/recurring-lanes"],
-    queryFn: () => fetch("/api/recurring-lanes").then(r => r.json()),
-    enabled: !laneIdProp && !!companyId && open,
+    enabled: !laneIdProp && open,
   });
 
   const laneId = laneIdProp ?? (
-    companyId
-      ? (companyLanes ?? [])
+    companyLanes
           // IMPORTANT: filter by companyId to avoid showing outreach for wrong account
           .filter(l => l.companyId === companyId && !l.resolvedAt && !l.hasPreferredCarrierProgram)
           .sort((a, b) => (b.laneScore ?? 0) - (a.laneScore ?? 0))[0]?.id ?? null
-      : null
   );
 
   const { data: outreachConfig } = useQuery<{ completionCarriersContacted: number }>({
-    queryKey: ["/api/lane-outreach-config"],
-    queryFn: () => fetch("/api/lane-outreach-config").then(r => r.json()),
-    staleTime: 5 * 60 * 1000,
+    queryKey: ["/api/outreach-config"],
+    enabled: open,
   });
+
   const completionThreshold = outreachConfig?.completionCarriersContacted ?? 3;
 
   const { data: teamMembers = [] } = useQuery<TeamMember[]>({
     queryKey: ["/api/team-members"],
-    queryFn: () => fetch("/api/team-members").then(r => r.json()),
     enabled: open,
   });
+
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { user: currentUser } = useAuth();
@@ -333,7 +319,7 @@ export function CarrierOutreachPanel({
   const [showEmails, setShowEmails] = useState(false);
   const [replyInputs, setReplyInputs] = useState<Record<string, string>>({});
   const [expandedReply, setExpandedReply] = useState<string | null>(null);
-  // Per-draft send status (keyed by index)
+
   const [draftSendStatus, setDraftSendStatus] = useState<Record<number, PerDraftSendStatus>>({});
   const [sendOverallStatus, setSendOverallStatus] = useState<"idle" | "sending" | "done">("idle");
   // Carrier suggestion filters
@@ -352,6 +338,10 @@ export function CarrierOutreachPanel({
   // Confirmation dialog state for bulk send
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
   const [sendConfirmOverride, setSendConfirmOverride] = useState(false);
+  // ── Redesign: step-based navigation ────────────────────────────────────────
+  const [activeMainTab, setActiveMainTab] = useState<"carriers" | "message" | "followup" | "history">("carriers");
+  const [activeCarriersSubTab, setActiveCarriersSubTab] = useState<"ranked" | "bench" | "import">("ranked");
+  const [showRefineFilters, setShowRefineFilters] = useState(false);
   // Inline email notes per carrier (keyed by carrierId ?? carrierName)
   const [inlineEmails, setInlineEmails] = useState<Record<string, string>>({});
   // User-entered email addresses for carriers that have no primaryEmail in the catalog
@@ -366,6 +356,8 @@ export function CarrierOutreachPanel({
   // ── Ad-hoc email paste state ───────────────────────────────────────────────
   const [adHocEmailPasteText, setAdHocEmailPasteText] = useState("");
   const [adHocEmailsExpanded, setAdHocEmailsExpanded] = useState(false);
+  // ── Coverage tab expanded detail ───────────────────────────────────────────
+  const [coverageExpanded, setCoverageExpanded] = useState(false);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -471,7 +463,7 @@ export function CarrierOutreachPanel({
     mutationFn: (body: { replyText: string; carrierId: string | null; carrierName: string; interestId?: string }) =>
       apiRequest("POST", `/api/lanes/${laneId}/classify-reply`, body).then(r => r.json()),
     onSuccess: () => {
-      refetchBench();
+      queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "carrier-bench"] });
       queryClient.invalidateQueries({ queryKey: ["/api/lanes", laneId, "followup-suggestions"] });
       toast({ title: "Reply classified" });
     },
@@ -740,6 +732,7 @@ export function CarrierOutreachPanel({
       }));
       setEmailDrafts([...carrierDrafts, ...adHocDrafts]);
       setShowEmails(true);
+      setActiveMainTab("message");
       return;
     }
 
@@ -755,6 +748,7 @@ export function CarrierOutreachPanel({
           onSuccess: (data: { emails: EmailDraft[] }) => {
             setEmailDrafts([...(data.emails ?? []), ...adHocDrafts]);
             setShowEmails(true);
+            setActiveMainTab("message");
           },
         }
       );
@@ -762,6 +756,7 @@ export function CarrierOutreachPanel({
       // Only ad-hoc emails — show them directly
       setEmailDrafts(adHocDrafts);
       setShowEmails(true);
+      setActiveMainTab("message");
     }
   }
 
@@ -842,64 +837,49 @@ export function CarrierOutreachPanel({
     <Sheet open={open} onOpenChange={v => { if (!v) onClose(); }}>
       <SheetContent
         side="right"
-        className="w-full sm:max-w-xl bg-background border-border text-foreground overflow-y-auto p-0"
+        className="w-full sm:max-w-2xl bg-background border-border text-foreground overflow-hidden p-0 flex flex-col"
         data-testid="carrier-outreach-panel"
       >
-        {/* Header */}
-        <SheetHeader className="px-5 pt-5 pb-3 border-b border-border">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-md bg-amber-500/20 flex items-center justify-center">
-              <Truck className="w-4 h-4 text-amber-400" />
+        {/* ── COMPACT HEADER ─────────────────────────────────────────────── */}
+        <SheetHeader className="px-5 pt-4 pb-3 border-b border-border shrink-0">
+          {/* Title row */}
+          <div className="flex items-center gap-2.5">
+            <div className="w-6 h-6 rounded bg-amber-500/20 flex items-center justify-center shrink-0">
+              <Truck className="w-3.5 h-3.5 text-amber-400" />
             </div>
-            <div>
+            <div className="flex-1 min-w-0">
               <SheetTitle className="text-sm font-semibold text-foreground leading-tight">
-                Lock In Capacity
+                {laneLoading ? "Loading…" : lane ? laneLabel(lane) : "Lock In Capacity"}
               </SheetTitle>
               {lane && (
-                <SheetDescription className="text-xs text-muted-foreground mt-0.5">
-                  {laneLabel(lane)} · {lane.equipmentType ?? "Any Equipment"}
+                <SheetDescription className="text-[10px] text-muted-foreground mt-0 leading-tight">
+                  {lane.equipmentType ?? "Any Equipment"}
+                  {lane.eligibilityConfidence && (
+                    <span className={`ml-2 capitalize ${
+                      lane.eligibilityConfidence === "high" ? "text-emerald-400" :
+                      lane.eligibilityConfidence === "medium" ? "text-amber-400" : "text-muted-foreground"
+                    }`}>· {lane.eligibilityConfidence} confidence</span>
+                  )}
                 </SheetDescription>
               )}
             </div>
           </div>
 
-          {/* Lane stats */}
-          {lane && (
-            <div className="flex gap-3 mt-3 flex-wrap">
-              <div className="flex flex-col">
-                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Avg Loads/Week</span>
-                <span className="text-sm font-semibold text-foreground">{lane.avgLoadsPerWeek ?? "—"}</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Weeks Active</span>
-                <span className="text-sm font-semibold text-foreground">{lane.weeksActive ?? "—"}/{lane.lookbackWeeks ?? 4}</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Lane Score</span>
-                <span className="text-sm font-semibold text-foreground">{lane.laneScore ?? "—"}</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Confidence</span>
-                <Badge variant="outline" className={`text-[10px] py-0 px-1.5 capitalize
-                  ${lane.eligibilityConfidence === "high" ? "border-emerald-500/40 text-emerald-300" :
-                    lane.eligibilityConfidence === "medium" ? "border-amber-500/40 text-amber-300" :
-                    "border-border text-foreground"}`}>
-                  {lane.eligibilityConfidence}
-                </Badge>
-              </div>
-            </div>
-          )}
-
-          {/* Outreach progress */}
+          {/* Compact stat strip + progress */}
           {lane && (
             <div className="mt-2">
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-[10px] text-muted-foreground">Carriers Contacted</span>
-                <span className="text-[10px] text-muted-foreground">{contactedCount}/{completionThreshold}</span>
+              <div className="flex items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground flex-wrap">
+                <span>Avg <span className="text-foreground font-medium">{lane.avgLoadsPerWeek ?? "—"}</span>/wk</span>
+                <span className="text-muted-foreground/30">·</span>
+                <span>Active <span className="text-foreground font-medium">{lane.weeksActive ?? "—"}/{lane.lookbackWeeks ?? 4}</span> wks</span>
+                <span className="text-muted-foreground/30">·</span>
+                <span>Score <span className="text-foreground font-medium">{lane.laneScore ?? "—"}</span></span>
+                <span className="text-muted-foreground/30">·</span>
+                <span>Contacted <span className={`font-medium ${contactedCount >= completionThreshold ? "text-emerald-400" : "text-foreground"}`}>{contactedCount}/{completionThreshold}</span></span>
               </div>
-              <div className="h-1.5 rounded-full bg-muted/40">
+              <div className="mt-1.5 h-1 rounded-full bg-muted/40">
                 <div
-                  className="h-1.5 rounded-full bg-amber-400 transition-all"
+                  className="h-1 rounded-full bg-amber-400 transition-all"
                   style={{ width: `${progressPct}%` }}
                   data-testid="outreach-progress-bar"
                 />
@@ -907,38 +887,26 @@ export function CarrierOutreachPanel({
             </div>
           )}
 
-          {/* Contactability warning — no carriers with phone/email */}
-          {lane && bench.length > 0 && bench.every(b => !b.isContactable) && (
-            <div className="mt-2 flex items-center gap-2 bg-orange-500/10 border border-orange-500/20 rounded-md px-3 py-2"
-              data-testid="no-contactable-carriers-warning">
-              <AlertCircle className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-              <p className="text-[11px] text-orange-300">
-                No carriers on this bench have a phone or email on file.
-                Add contact details in the Carriers catalog to enable outreach.
-              </p>
-            </div>
-          )}
-
-          {/* Owner / Overseer chips */}
+          {/* Owner / Overseer chips + outreach mode */}
           {lane && (
-            <div className="flex items-center gap-2 mt-2 flex-wrap">
-              {/* Unassigned state — show assign button for managers */}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              {/* Unassigned state */}
               {!lane.ownerUserId && isManager && (
-                <div className="flex items-center gap-1.5" data-testid="chip-lane-unassigned">
-                  <span className="text-[11px] text-muted-foreground italic">No owner assigned</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-[9px] text-muted-foreground italic">No owner</span>
                   {currentUser && (
                     <button
                       onClick={() => assignLaneMutation.mutate(currentUser.id)}
                       disabled={assignLaneMutation.isPending}
-                      className="text-[10px] px-2 py-0.5 rounded-full border border-blue-400/30 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 transition-colors"
+                      className="text-[9px] px-1.5 py-0.5 rounded-full border border-blue-400/30 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 transition-colors"
                       data-testid="btn-assign-to-me"
                     >
-                      {assignLaneMutation.isPending ? "Assigning…" : "Assign to me"}
+                      Assign to me
                     </button>
                   )}
                   {isDirectorOrAdmin && (
                     <Select onValueChange={v => assignLaneMutation.mutate(v)}>
-                      <SelectTrigger className="h-6 w-auto text-[10px] bg-muted/20 border-border text-muted-foreground" data-testid="btn-assign-select">
+                      <SelectTrigger className="h-5 w-auto text-[9px] bg-muted/20 border-border text-muted-foreground" data-testid="btn-assign-select">
                         <SelectValue placeholder="Assign to…" />
                       </SelectTrigger>
                       <SelectContent>
@@ -954,18 +922,13 @@ export function CarrierOutreachPanel({
                 const owner = teamMembers.find(m => m.id === lane.ownerUserId);
                 const canUnassign = isManager || lane.ownerUserId === currentUser?.id;
                 return (
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <div className="flex items-center gap-1 bg-muted/20 border border-border rounded-full px-2 py-0.5"
-                      data-testid="chip-lane-owner">
-                      <User className="w-3 h-3 text-blue-300" />
-                      <span className="text-[11px] text-foreground/70">Owner: {owner?.name ?? lane.ownerUserId}</span>
+                  <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 bg-muted/20 border border-border rounded-full px-1.5 py-0.5" data-testid="chip-lane-owner">
+                      <User className="w-2.5 h-2.5 text-blue-300" />
+                      <span className="text-[9px] text-foreground/70">{owner?.name ?? "Owner"}</span>
                       {isDirectorOrAdmin && (
-                        <Select
-                          value={lane.ownerUserId}
-                          onValueChange={v => reassignMutation.mutate({ ownerUserId: v })}
-                        >
-                          <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-muted-foreground hover:text-foreground/80"
-                            data-testid="btn-reassign-owner">
+                        <Select value={lane.ownerUserId} onValueChange={v => reassignMutation.mutate({ ownerUserId: v })}>
+                          <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-muted-foreground hover:text-foreground/80" data-testid="btn-reassign-owner">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -980,11 +943,11 @@ export function CarrierOutreachPanel({
                       <button
                         onClick={() => assignLaneMutation.mutate(null)}
                         disabled={assignLaneMutation.isPending}
-                        className="text-[10px] px-2 py-0.5 rounded-full border border-red-400/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-colors flex items-center gap-1 disabled:opacity-50"
+                        className="text-[9px] p-0.5 rounded border border-red-400/20 bg-red-500/8 text-red-300 hover:bg-red-500/15 transition-colors disabled:opacity-50"
                         data-testid="btn-unassign-lane"
+                        title="Unassign lane"
                       >
-                        <UserX className="w-3 h-3" />
-                        {assignLaneMutation.isPending ? "Unassigning…" : "Unassign"}
+                        <UserX className="w-2.5 h-2.5" />
                       </button>
                     )}
                   </div>
@@ -993,17 +956,12 @@ export function CarrierOutreachPanel({
               {lane.overseerUserId && lane.overseerUserId !== lane.ownerUserId && (() => {
                 const overseer = teamMembers.find(m => m.id === lane.overseerUserId);
                 return (
-                  <div className="flex items-center gap-1 bg-muted/20 border border-border rounded-full px-2 py-0.5"
-                    data-testid="chip-lane-overseer">
-                    <UserCheck className="w-3 h-3 text-violet-300" />
-                    <span className="text-[11px] text-foreground/70">Overseer: {overseer?.name ?? lane.overseerUserId}</span>
+                  <div className="flex items-center gap-1 bg-muted/20 border border-border rounded-full px-1.5 py-0.5" data-testid="chip-lane-overseer">
+                    <UserCheck className="w-2.5 h-2.5 text-violet-300" />
+                    <span className="text-[9px] text-foreground/70">{overseer?.name ?? "Overseer"}</span>
                     {isDirectorOrAdmin && (
-                      <Select
-                        value={lane.overseerUserId ?? ""}
-                        onValueChange={v => reassignMutation.mutate({ overseerUserId: v })}
-                      >
-                        <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-muted-foreground hover:text-foreground/80"
-                          data-testid="btn-reassign-overseer">
+                      <Select value={lane.overseerUserId ?? ""} onValueChange={v => reassignMutation.mutate({ overseerUserId: v })}>
+                        <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-muted-foreground hover:text-foreground/80" data-testid="btn-reassign-overseer">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1016,719 +974,1284 @@ export function CarrierOutreachPanel({
                   </div>
                 );
               })()}
+              {/* Outreach mode — compact, pushed right */}
+              <div className="ml-auto">
+                <Select value={outreachMode} onValueChange={(v: "lane_building" | "immediate_plus_lane") => setOutreachMode(v)}>
+                  <SelectTrigger className="h-6 w-auto text-[9px] bg-muted/20 border-border text-foreground/70 pr-1.5" data-testid="outreach-mode-select">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-card border-border text-foreground">
+                    <SelectItem value="lane_building" className="text-xs">Lane-Building</SelectItem>
+                    <SelectItem value="immediate_plus_lane" className="text-xs">Immediate + Lane</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           )}
-
-          {/* Mode selector */}
-          <div className="flex items-center gap-2 mt-3">
-            <span className="text-[10px] text-muted-foreground shrink-0">Outreach Mode:</span>
-            <Select
-              value={outreachMode}
-              onValueChange={(v: "lane_building" | "immediate_plus_lane") => setOutreachMode(v)}
-            >
-              <SelectTrigger
-                className="h-7 text-xs bg-muted/20 border-border text-foreground/80 flex-1"
-                data-testid="outreach-mode-select"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-card border-border text-foreground">
-                <SelectItem value="lane_building" className="text-xs">Lane-Building (recurring framing)</SelectItem>
-                <SelectItem value="immediate_plus_lane" className="text-xs">Immediate Load + Lane Building</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
         </SheetHeader>
 
-        {/* Body */}
-        <Tabs defaultValue="carriers" className="flex flex-col flex-1">
-          <TabsList className="w-full rounded-none bg-muted/10 border-b border-border h-9 px-5 gap-0 justify-start">
-            <TabsTrigger value="carriers" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-carriers">
-              Carrier Suggestions
-            </TabsTrigger>
-            <TabsTrigger value="bench" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-bench">
-              Bench {bench.length > 0 ? `(${bench.length})` : ""}
-            </TabsTrigger>
-            <TabsTrigger value="import" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-import">
-              <Upload className="w-3 h-3 mr-1" />
-              Import
-            </TabsTrigger>
-            <TabsTrigger value="followup" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-followup">
-              Follow-up
-            </TabsTrigger>
-            <TabsTrigger value="history" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-history">
-              History {outreachHistory.length > 0 ? `(${outreachHistory.length})` : ""}
-            </TabsTrigger>
-            <TabsTrigger value="coverage" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground flex items-center gap-1" data-testid="tab-coverage">
-              <Shield className="w-3 h-3" />
-              Coverage
-              {coverageData?.profile && (
-                <span className={`text-[9px] rounded px-0.5 ml-0.5 ${
-                  (coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus) === "stable"
-                    ? "text-emerald-400"
-                    : (coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus) === "watch"
-                      ? "text-amber-400"
-                      : "text-muted-foreground"
-                }`}>
-                  {(coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus).charAt(0).toUpperCase() + (coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus).slice(1)}
-                </span>
-              )}
-            </TabsTrigger>
-          </TabsList>
+        {/* ── BODY ───────────────────────────────────────────────────────── */}
+        <div className="flex flex-col flex-1 overflow-hidden">
 
-          {/* ── Carrier Suggestions Tab ─────────────────────────────────── */}
-          <TabsContent value="carriers" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
-            {/* ── Stable Coverage section (shown above suggestions when profile exists) */}
-            {coverageData?.profile && (() => {
-              const profile = coverageData.profile;
-              const carriers = coverageData.carriers ?? [];
-              const effectiveStatus = profile.manualOverrideStatus ?? profile.coverageStatus;
-              const isStable = effectiveStatus === "stable";
-              const isWatch = effectiveStatus === "watch";
+          {/* Main tab navigation */}
+          <div className="flex border-b border-border bg-muted/5 px-4 shrink-0">
+            {(["carriers", "message", "followup", "history"] as const).map(tab => {
+              const labels: Record<string, string> = {
+                carriers: "Carriers",
+                message: "Message",
+                followup: "Follow-up",
+                history: "History",
+              };
               return (
-                <div className={`mb-4 rounded-lg border p-3 ${
-                  isStable ? "border-emerald-500/30 bg-emerald-500/8" :
-                  isWatch  ? "border-amber-500/20 bg-amber-500/5" :
-                             "border-border bg-muted/15"
-                }`} data-testid="coverage-section-inline">
-                  <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      {isStable ? (
-                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                      ) : isWatch ? (
-                        <TrendingUp className="w-4 h-4 text-amber-400 shrink-0" />
-                      ) : (
-                        <ShieldAlert className="w-4 h-4 text-muted-foreground shrink-0" />
-                      )}
-                      <span className={`text-xs font-semibold ${
-                        isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-muted-foreground"
-                      }`}>
-                        {isStable ? "Stable Coverage" : isWatch ? "Coverage Watch" : "Unstable Coverage"}
-                        {profile.manualOverrideStatus && (
-                          <span className="ml-1.5 text-[9px] text-violet-400 font-normal">(override)</span>
+                <button
+                  key={tab}
+                  onClick={() => setActiveMainTab(tab)}
+                  className={`relative text-xs py-2.5 px-3 border-b-2 transition-colors shrink-0 ${
+                    activeMainTab === tab
+                      ? "border-amber-400 text-foreground font-medium"
+                      : "border-transparent text-muted-foreground hover:text-foreground/70"
+                  }`}
+                  data-testid={`tab-${tab}`}
+                >
+                  {labels[tab]}
+                  {tab === "message" && selectedCarriers.size > 0 && (
+                    <span className="ml-1 inline-flex items-center justify-center min-w-[16px] h-4 px-0.5 text-[9px] rounded-full bg-amber-500/20 text-amber-300 font-medium">
+                      {selectedCarriers.size}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {/* CARRIERS TAB                                                  */}
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {activeMainTab === "carriers" && (
+            <div className="flex flex-col flex-1 overflow-hidden">
+              {/* Sub-tab nav: Ranked | Bench | Import */}
+              <div className="flex border-b border-border/40 bg-background px-4 shrink-0">
+                {(["ranked", "bench", "import"] as const).map(st => {
+                  const subLabels: Record<string, string> = {
+                    ranked: filteredCarriers.length > 0 ? `Ranked (${filteredCarriers.length})` : "Ranked",
+                    bench: bench.length > 0 ? `Bench (${bench.length})` : "Bench",
+                    import: "Import",
+                  };
+                  return (
+                    <button
+                      key={st}
+                      onClick={() => setActiveCarriersSubTab(st)}
+                      className={`text-[11px] py-1.5 px-3 border-b-2 transition-colors ${
+                        activeCarriersSubTab === st
+                          ? "border-foreground/50 text-foreground/90 font-medium"
+                          : "border-transparent text-muted-foreground hover:text-foreground/60"
+                      }`}
+                      data-testid={`subtab-${st}`}
+                    >
+                      {subLabels[st]}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* ── RANKED SUB-TAB ─────────────────────────────────────── */}
+              {activeCarriersSubTab === "ranked" && (
+                <div className="flex-1 px-5 pt-3 pb-24 overflow-y-auto" data-testid="tab-carriers">
+
+                  {/* Stable Coverage inline section */}
+                  {coverageData?.profile && (() => {
+                    const profile = coverageData.profile;
+                    const coverCarriers = coverageData.carriers ?? [];
+                    const effectiveStatus = profile.manualOverrideStatus ?? profile.coverageStatus;
+                    const isStable = effectiveStatus === "stable";
+                    const isWatch = effectiveStatus === "watch";
+                    const coverShare = profile.topCarrierCoverageShare ? (parseFloat(profile.topCarrierCoverageShare) * 100).toFixed(0) : null;
+                    return (
+                      <div className={`mb-3 rounded-lg border overflow-hidden ${
+                        isStable ? "border-emerald-500/30 bg-emerald-500/5" :
+                        isWatch  ? "border-amber-500/20 bg-amber-500/5" :
+                                   "border-border bg-muted/10"
+                      }`} data-testid="coverage-section-inline">
+                        {/* Coverage header row */}
+                        <div className="flex items-center justify-between gap-2 px-3 py-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {isStable ? <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> :
+                             isWatch  ? <TrendingUp className="w-3.5 h-3.5 text-amber-400 shrink-0" /> :
+                                        <ShieldAlert className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+                            <span className={`text-[11px] font-semibold ${
+                              isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-muted-foreground"
+                            }`}>
+                              {isStable ? "Stable Coverage" : isWatch ? "Coverage Watch" : "Unstable Coverage"}
+                              {profile.manualOverrideStatus && <span className="ml-1 text-[9px] text-violet-400 font-normal">(override)</span>}
+                            </span>
+                            {coverCarriers.length > 0 && (
+                              <span className="text-[9px] text-muted-foreground">{coverCarriers.length} incumbent{coverCarriers.length !== 1 ? "s" : ""} · {profile.sampleSize} loads</span>
+                            )}
+                            {profile.broadenSearchActive && (
+                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400">
+                                <Search className="w-2.5 h-2.5 mr-0.5" /> Broaden on
+                              </Badge>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => setCoverageExpanded(v => !v)}
+                            className="text-[9px] text-muted-foreground hover:text-foreground/60 flex items-center gap-0.5 shrink-0"
+                          >
+                            {coverageExpanded ? "Less" : "Details"}
+                            {coverageExpanded ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
+                          </button>
+                        </div>
+                        {/* Incumbent carrier chips */}
+                        {coverCarriers.length > 0 && (
+                          <div className="flex flex-wrap gap-1 px-3 pb-2">
+                            {coverCarriers.map((c, i) => (
+                              <span key={i} className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                                c.isCurrentPrimary
+                                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                                  : "border-border bg-muted/10 text-muted-foreground"
+                              }`} data-testid={`coverage-inline-carrier-${i}`}>
+                                #{c.incumbentRank} {c.carrierName}
+                              </span>
+                            ))}
+                          </div>
                         )}
+                        {/* Action buttons */}
+                        <div className="flex items-center gap-1.5 flex-wrap px-3 pb-2">
+                          {isStable && !profile.broadenSearchActive && (
+                            <Button size="sm" variant="outline" className="h-6 text-[9px] px-2 border-emerald-500/30 text-emerald-400" data-testid="button-use-incumbent-flow" title="Incumbent flow active">
+                              <ShieldCheck className="w-2.5 h-2.5 mr-1" /> Incumbent Flow Active
+                            </Button>
+                          )}
+                          {!isStable && (
+                            <Button size="sm" variant="outline"
+                              className="h-6 text-[9px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                              data-testid="button-confirm-stable-inline"
+                              onClick={async () => {
+                                try {
+                                  await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, { status: "stable", reason: "Manually confirmed stable by user" });
+                                  await refetchCoverage();
+                                  toast({ title: "Coverage marked as stable" });
+                                } catch { toast({ title: "Failed to confirm stable status", variant: "destructive" }); }
+                              }}
+                            >
+                              <ShieldCheck className="w-2.5 h-2.5 mr-1" /> Confirm Stable
+                            </Button>
+                          )}
+                          <Button size="sm" variant="outline"
+                            className={`h-6 text-[9px] px-2 ${profile.broadenSearchActive ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/10" : "border-border text-muted-foreground hover:bg-muted/40"}`}
+                            data-testid="button-broaden-search-inline"
+                            onClick={async () => {
+                              try {
+                                await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/broaden`, { active: !profile.broadenSearchActive });
+                                await refetchCoverage();
+                                toast({ title: profile.broadenSearchActive ? "Broaden search disabled" : "Broaden search enabled" });
+                              } catch { toast({ title: "Failed to toggle broaden search", variant: "destructive" }); }
+                            }}
+                          >
+                            <Search className="w-2.5 h-2.5 mr-1" /> {profile.broadenSearchActive ? "Disable Broaden" : "Broaden Search"}
+                          </Button>
+                          {isStable && (
+                            <Button size="sm" variant="outline"
+                              className="h-6 text-[9px] px-2 border-border text-muted-foreground hover:text-red-400 hover:border-red-400/30"
+                              data-testid="button-remove-stable-status"
+                              onClick={async () => {
+                                try {
+                                  await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, { status: "watch", reason: "Stable status removed by user" });
+                                  await refetchCoverage();
+                                  toast({ title: "Stable status removed" });
+                                } catch { toast({ title: "Failed to remove stable status", variant: "destructive" }); }
+                              }}
+                            >
+                              Remove Stable
+                            </Button>
+                          )}
+                        </div>
+                        {/* Expanded coverage detail */}
+                        {coverageExpanded && (
+                          <div className="px-3 pb-3 pt-1 border-t border-border/40 bg-muted/5">
+                            {/* Stats grid */}
+                            <div className="grid grid-cols-3 gap-3 mb-3">
+                              <div className="flex flex-col">
+                                <span className="text-[9px] text-muted-foreground uppercase tracking-wide">Sample Size</span>
+                                <span className="text-base font-bold text-foreground" data-testid="coverage-sample-size">{profile.sampleSize}</span>
+                                <span className="text-[9px] text-muted-foreground">total loads</span>
+                              </div>
+                              <div className="flex flex-col">
+                                <span className="text-[9px] text-muted-foreground uppercase tracking-wide">Qualified</span>
+                                <span className="text-base font-bold text-foreground" data-testid="coverage-carrier-count">{profile.qualifiedCarrierCount}</span>
+                                <span className="text-[9px] text-muted-foreground">carriers w/ history</span>
+                              </div>
+                              {coverShare && (
+                                <div className="flex flex-col">
+                                  <span className="text-[9px] text-muted-foreground uppercase tracking-wide">Top Share</span>
+                                  <span className="text-base font-bold text-foreground">{coverShare}%</span>
+                                  <span className="text-[9px] text-muted-foreground">of recent loads</span>
+                                </div>
+                              )}
+                            </div>
+                            {/* Override controls */}
+                            <div className="flex gap-1.5 mb-2">
+                              {(["stable", "watch", "unstable"] as const).map(s => (
+                                <Button key={s} size="sm" variant="outline"
+                                  className={`flex-1 text-[10px] ${
+                                    s === "stable" ? "border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10" :
+                                    s === "watch"  ? "border-amber-500/30 text-amber-400 hover:bg-amber-500/10" :
+                                                    "border-border text-muted-foreground hover:bg-muted/40"
+                                  } ${effectiveStatus === s ? "bg-muted/40 font-bold" : ""}`}
+                                  data-testid={`button-override-${s}`}
+                                  onClick={async () => {
+                                    if (effectiveStatus === s) return;
+                                    try {
+                                      await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, { status: s, reason: `Manually set to ${s} by user` });
+                                      await refetchCoverage();
+                                      toast({ title: `Coverage set to ${s}` });
+                                    } catch { toast({ title: "Failed to set override", variant: "destructive" }); }
+                                  }}
+                                >
+                                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                                </Button>
+                              ))}
+                            </div>
+                            {/* Incumbent detail list */}
+                            {coverCarriers.length > 0 && (
+                              <div className="flex flex-col gap-1.5">
+                                <p className="text-[9px] text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                                  <Star className="w-2.5 h-2.5 text-amber-400" /> Incumbent Carriers
+                                </p>
+                                {coverCarriers.map((c, idx) => {
+                                  const pct = c.coverageShare ? (parseFloat(c.coverageShare) * 100).toFixed(0) : null;
+                                  return (
+                                    <div key={c.id ?? idx} className="flex items-center justify-between gap-2 bg-muted/10 border border-border rounded px-2 py-1.5" data-testid={`coverage-carrier-${idx}`}>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className={`text-[9px] font-bold rounded px-1 ${c.incumbentRank === 1 ? "bg-amber-400/20 text-amber-400" : "bg-muted/30 text-muted-foreground"}`}>#{c.incumbentRank}</span>
+                                        <span className="text-[10px] font-medium text-foreground" data-testid={`coverage-carrier-name-${idx}`}>{c.carrierName}</span>
+                                        {c.isCurrentPrimary && <Badge variant="outline" className="text-[9px] py-0 px-1 border-emerald-500/40 text-emerald-400">Primary</Badge>}
+                                      </div>
+                                      <div className="flex items-center gap-2 text-[9px] text-muted-foreground">
+                                        {pct && <span>{pct}%</span>}
+                                        <span>{c.successfulLoadCount} loads</span>
+                                        {c.lastUsedAt && <span>Last {new Date(c.lastUsedAt).toLocaleDateString()}</span>}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {profile.manualOverrideReason && (
+                              <p className="mt-2 text-[9px] text-muted-foreground italic">Override reason: {profile.manualOverrideReason}</p>
+                            )}
+                            {profile.updatedAt && (
+                              <p className="text-[9px] text-muted-foreground mt-0.5">Updated {new Date(profile.updatedAt).toLocaleString()}</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* ── Filter row: Sort + primary chips + Refine toggle ── */}
+                  <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                    <Select value={sortOption} onValueChange={v => { setSortOption(v); setCurrentPage(1); }}>
+                      <SelectTrigger className="h-7 w-auto text-[10px] bg-muted/20 border-border text-foreground/70 min-w-[130px]" data-testid="select-sort-carriers">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-card border-border text-foreground">
+                        <SelectItem value="recommended" className="text-xs">Recommended</SelectItem>
+                        <SelectItem value="loadsDesc" className="text-xs">Exact Loads ↓</SelectItem>
+                        <SelectItem value="recency" className="text-xs">Recency</SelectItem>
+                        <SelectItem value="customerHistory" className="text-xs">Customer History</SelectItem>
+                        <SelectItem value="outreachReadiness" className="text-xs">Outreach Readiness</SelectItem>
+                        <SelectItem value="alpha" className="text-xs">A–Z</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {/* Primary filters always visible */}
+                    <button
+                      onClick={() => { setFilterExactOnly(v => !v); setCurrentPage(1); }}
+                      className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
+                        filterExactOnly ? "bg-amber-500/20 border-amber-400/40 text-amber-300" : "bg-muted/10 border-border text-muted-foreground hover:border-muted-foreground/30"
+                      }`}
+                      data-testid="filter-exact-only"
+                    >
+                      Exact history
+                    </button>
+                    <button
+                      onClick={() => { setFilterHasEmail(v => !v); setCurrentPage(1); }}
+                      className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
+                        filterHasEmail ? "bg-emerald-500/20 border-emerald-400/40 text-emerald-300" : "bg-muted/10 border-border text-muted-foreground hover:border-muted-foreground/30"
+                      }`}
+                      data-testid="filter-has-email"
+                    >
+                      Has email
+                    </button>
+                    {/* Refine toggle */}
+                    {(() => {
+                      const refineActive = filterNotRecentlyContacted || activeOnly || !filterIncludeNewProspects || excludeServiceFlags;
+                      const refineCount = [filterNotRecentlyContacted, activeOnly, !filterIncludeNewProspects, excludeServiceFlags].filter(Boolean).length;
+                      return (
+                        <button
+                          onClick={() => setShowRefineFilters(v => !v)}
+                          className={`text-[10px] px-2 py-1 rounded-full border transition-colors flex items-center gap-1 ${
+                            refineActive
+                              ? "bg-violet-500/20 border-violet-400/40 text-violet-300"
+                              : showRefineFilters
+                                ? "bg-muted/30 border-muted-foreground/30 text-foreground/70"
+                                : "bg-muted/10 border-border text-muted-foreground hover:border-muted-foreground/30"
+                          }`}
+                          data-testid="toggle-refine-filters"
+                        >
+                          Refine{refineCount > 0 ? ` (${refineCount})` : ""}
+                          {showRefineFilters ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
+                        </button>
+                      );
+                    })()}
+                    {totalCount > 0 && (
+                      <span className="text-[10px] text-muted-foreground ml-auto" data-testid="text-results-count">
+                        {filteredCarriers.length}/{totalCount}
                       </span>
-                      {carriers.length > 0 && (
-                        <span className="text-[10px] text-muted-foreground">
-                          {carriers.length} incumbent{carriers.length !== 1 ? "s" : ""} · {profile.sampleSize} loads
-                        </span>
-                      )}
-                      {profile.broadenSearchActive && (
-                        <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400">
-                          <Search className="w-2.5 h-2.5 mr-0.5" />
-                          Broaden on
-                        </Badge>
+                    )}
+                  </div>
+
+                  {/* Refine panel (collapsible) */}
+                  {showRefineFilters && (
+                    <div className="mb-3 p-2.5 rounded-lg border border-border bg-muted/10 flex flex-wrap gap-1.5 items-center">
+                      <button
+                        onClick={() => { setFilterNotRecentlyContacted(v => !v); setCurrentPage(1); }}
+                        className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${filterNotRecentlyContacted ? "bg-violet-500/20 border-violet-400/40 text-violet-300" : "bg-muted/10 border-border text-muted-foreground"}`}
+                        data-testid="filter-not-recently-contacted"
+                      >
+                        Not recent
+                      </button>
+                      <button
+                        onClick={() => { setActiveOnly(v => !v); setCurrentPage(1); }}
+                        className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${activeOnly ? "bg-blue-500/20 border-blue-400/40 text-blue-300" : "bg-muted/10 border-border text-muted-foreground"}`}
+                        data-testid="toggle-active-90-days"
+                      >
+                        Active (90d)
+                      </button>
+                      <button
+                        onClick={() => { setFilterIncludeNewProspects(v => !v); setCurrentPage(1); }}
+                        className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${!filterIncludeNewProspects ? "bg-muted/50 border-border text-foreground" : "bg-muted/10 border-border text-muted-foreground"}`}
+                        data-testid="filter-include-new-prospects"
+                      >
+                        {filterIncludeNewProspects ? "Incl. prospects" : "No prospects"}
+                      </button>
+                      <button
+                        onClick={() => setExcludeServiceFlags(v => !v)}
+                        className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${excludeServiceFlags ? "bg-red-500/20 border-red-400/40 text-red-300" : "bg-muted/10 border-border text-muted-foreground"}`}
+                        data-testid="toggle-exclude-service-flags"
+                      >
+                        Excl. flagged
+                      </button>
+                      <Select value={String(pageSize)} onValueChange={v => { setPageSize(Number(v)); setCurrentPage(1); }}>
+                        <SelectTrigger className="h-6 w-auto text-[10px] bg-muted/20 border-border text-foreground/70" data-testid="select-page-size">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-card border-border text-foreground">
+                          <SelectItem value="20" className="text-xs">Show 20</SelectItem>
+                          <SelectItem value="50" className="text-xs">Show 50</SelectItem>
+                          <SelectItem value="100" className="text-xs">Show 100</SelectItem>
+                          <SelectItem value="0" className="text-xs">Show All</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Bulk selection controls */}
+                  {filteredCarriers.length > 0 && (
+                    <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+                      <button onClick={selectAllFiltered} className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors" data-testid="btn-select-all-filtered">
+                        All
+                      </button>
+                      <button onClick={() => selectTopN(20)} className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors" data-testid="btn-select-top-20">
+                        Top 20
+                      </button>
+                      <button onClick={() => selectTopN(50)} className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors" data-testid="btn-select-top-50">
+                        Top 50
+                      </button>
+                      {selectedCarriers.size > 0 && (
+                        <>
+                          <button onClick={clearSelection} className="text-[10px] px-2 py-0.5 rounded-full border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors" data-testid="btn-clear-selection">
+                            Clear ({selectedCarriers.size})
+                          </button>
+                          <span className="text-[10px] text-amber-300 font-medium">{selectedCarriers.size} selected</span>
+                        </>
                       )}
                     </div>
-                  </div>
-                  {/* Incumbent carrier chips */}
-                  {carriers.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mb-2">
-                      {carriers.map((c, i) => (
-                        <span key={i} className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                          c.isCurrentPrimary
-                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
-                            : "border-border bg-muted/10 text-muted-foreground"
-                        }`} data-testid={`coverage-inline-carrier-${i}`}>
-                          #{c.incumbentRank} {c.carrierName}
-                        </span>
+                  )}
+
+                  {/* Loading state */}
+                  {suggestionsLoading && (
+                    <div className="flex flex-col gap-2">
+                      {[1,2,3,4,5].map(i => (
+                        <div key={i} className="h-16 rounded-lg bg-muted/20 border border-border animate-pulse" />
                       ))}
                     </div>
                   )}
-                  {/* Action row */}
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {/* Use Incumbent Flow — enable incumbent-first (only when stable & not broadened) */}
-                    {isStable && !profile.broadenSearchActive && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-6 text-[10px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                        data-testid="button-use-incumbent-flow"
-                        title="Incumbent carriers are already ranked first when stable coverage is active"
-                      >
-                        <ShieldCheck className="w-3 h-3 mr-1" />
-                        Incumbent Flow Active
-                      </Button>
-                    )}
-                    {/* Confirm Stable — show when watch/unstable and concentration warrants it */}
-                    {!isStable && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-6 text-[10px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                        data-testid="button-confirm-stable-inline"
-                        onClick={async () => {
-                          try {
-                            await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, {
-                              status: "stable",
-                              reason: "Manually confirmed stable by user",
-                            });
-                            await refetchCoverage();
-                            toast({ title: "Coverage marked as stable" });
-                          } catch {
-                            toast({ title: "Failed to confirm stable status", variant: "destructive" });
-                          }
-                        }}
-                      >
-                        <ShieldCheck className="w-3 h-3 mr-1" />
-                        Confirm Stable
-                      </Button>
-                    )}
-                    {/* Broaden Search toggle */}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className={`h-6 text-[10px] px-2 ${
-                        profile.broadenSearchActive
-                          ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
-                          : "border-border text-muted-foreground hover:bg-muted/40"
-                      }`}
-                      data-testid="button-broaden-search-inline"
-                      onClick={async () => {
-                        try {
-                          await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/broaden`, {
-                            active: !profile.broadenSearchActive,
-                          });
-                          await refetchCoverage();
-                          toast({
-                            title: profile.broadenSearchActive
-                              ? "Broaden search disabled"
-                              : "Broaden search enabled — open procurement mode active",
-                          });
-                        } catch {
-                          toast({ title: "Failed to toggle broaden search", variant: "destructive" });
-                        }
-                      }}
-                    >
-                      <Search className="w-3 h-3 mr-1" />
-                      {profile.broadenSearchActive ? "Disable Broaden" : "Broaden Search"}
-                    </Button>
-                    {/* Remove Stable Status — only when stable */}
-                    {isStable && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-6 text-[10px] px-2 border-border text-muted-foreground hover:bg-muted/40 hover:text-red-400 hover:border-red-400/30"
-                        data-testid="button-remove-stable-status"
-                        onClick={async () => {
-                          try {
-                            await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, {
-                              status: "watch",
-                              reason: "Stable status removed by user",
-                            });
-                            await refetchCoverage();
-                            toast({ title: "Stable status removed" });
-                          } catch {
-                            toast({ title: "Failed to remove stable status", variant: "destructive" });
-                          }
-                        }}
-                      >
-                        Remove Stable Status
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })()}
 
-            {/* Sort + Page Size controls */}
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
-              <Select value={sortOption} onValueChange={v => { setSortOption(v); setCurrentPage(1); }}>
-                <SelectTrigger className="h-7 w-auto text-[10px] bg-muted/20 border-border text-foreground/70 min-w-[140px]" data-testid="select-sort-carriers">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-card border-border text-foreground">
-                  <SelectItem value="recommended" className="text-xs">Recommended</SelectItem>
-                  <SelectItem value="loadsDesc" className="text-xs">Exact Lane Loads ↓</SelectItem>
-                  <SelectItem value="recency" className="text-xs">Recency</SelectItem>
-                  <SelectItem value="customerHistory" className="text-xs">Customer History</SelectItem>
-                  <SelectItem value="outreachReadiness" className="text-xs">Outreach Readiness</SelectItem>
-                  <SelectItem value="alpha" className="text-xs">A–Z</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={String(pageSize)} onValueChange={v => { setPageSize(Number(v)); setCurrentPage(1); }}>
-                <SelectTrigger className="h-7 w-auto text-[10px] bg-muted/20 border-border text-foreground/70 min-w-[80px]" data-testid="select-page-size">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-card border-border text-foreground">
-                  <SelectItem value="20" className="text-xs">20</SelectItem>
-                  <SelectItem value="50" className="text-xs">50</SelectItem>
-                  <SelectItem value="100" className="text-xs">100</SelectItem>
-                  <SelectItem value="0" className="text-xs">All</SelectItem>
-                </SelectContent>
-              </Select>
-              {totalCount > 0 && (
-                <span className="text-[10px] text-muted-foreground ml-auto" data-testid="text-results-count">
-                  Showing {filteredCarriers.length} of {totalCount} carriers
-                </span>
-              )}
-            </div>
-
-            {/* Filter chips */}
-            <div className="flex items-center gap-1.5 mb-3 flex-wrap">
-              <button
-                onClick={() => { setFilterExactOnly(v => !v); setCurrentPage(1); }}
-                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  filterExactOnly ? "bg-amber-500/20 border-amber-400/40 text-amber-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
-                }`}
-                data-testid="filter-exact-only"
-              >
-                Exact history
-              </button>
-              <button
-                onClick={() => { setFilterHasEmail(v => !v); setCurrentPage(1); }}
-                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  filterHasEmail ? "bg-emerald-500/20 border-emerald-400/40 text-emerald-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
-                }`}
-                data-testid="filter-has-email"
-              >
-                Has email
-              </button>
-              <button
-                onClick={() => { setFilterNotRecentlyContacted(v => !v); setCurrentPage(1); }}
-                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  filterNotRecentlyContacted ? "bg-violet-500/20 border-violet-400/40 text-violet-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
-                }`}
-                data-testid="filter-not-recently-contacted"
-              >
-                Not recent
-              </button>
-              <button
-                onClick={() => { setActiveOnly(v => !v); setCurrentPage(1); }}
-                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  activeOnly ? "bg-blue-500/20 border-blue-400/40 text-blue-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
-                }`}
-                data-testid="toggle-active-90-days"
-              >
-                Active (90d)
-              </button>
-              <button
-                onClick={() => { setFilterIncludeNewProspects(v => !v); setCurrentPage(1); }}
-                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  !filterIncludeNewProspects ? "bg-muted/50 border-border text-foreground" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
-                }`}
-                data-testid="filter-include-new-prospects"
-              >
-                {filterIncludeNewProspects ? "Incl. prospects" : "No prospects"}
-              </button>
-              <button
-                onClick={() => setExcludeServiceFlags(v => !v)}
-                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  excludeServiceFlags ? "bg-red-500/20 border-red-400/40 text-red-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
-                }`}
-                data-testid="toggle-exclude-service-flags"
-              >
-                Excl. flagged
-              </button>
-            </div>
-
-            {/* Bulk selection controls */}
-            {filteredCarriers.length > 0 && (
-              <div className="flex items-center gap-2 mb-3 flex-wrap">
-                <button
-                  onClick={selectAllFiltered}
-                  className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors"
-                  data-testid="btn-select-all-filtered"
-                >
-                  Select All ({filteredCarriers.length})
-                </button>
-                <button
-                  onClick={() => selectTopN(20)}
-                  className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors"
-                  data-testid="btn-select-top-20"
-                >
-                  Top 20
-                </button>
-                <button
-                  onClick={() => selectTopN(50)}
-                  className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors"
-                  data-testid="btn-select-top-50"
-                >
-                  Top 50
-                </button>
-                {selectedCarriers.size > 0 && (
-                  <button
-                    onClick={clearSelection}
-                    className="text-[10px] px-2 py-0.5 rounded-full border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
-                    data-testid="btn-clear-selection"
-                  >
-                    Clear ({selectedCarriers.size})
-                  </button>
-                )}
-              </div>
-            )}
-
-            {suggestionsLoading && (
-              <div className="flex items-center gap-2 text-muted-foreground text-xs py-4">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                Loading carrier suggestions…
-              </div>
-            )}
-
-            {!suggestionsLoading && filteredCarriers.length === 0 && (
-              <div className="text-xs text-muted-foreground py-4">
-                {rankedCarriers.length === 0
-                  ? "No carriers in catalog yet. Add carriers in the Carriers admin tab to get AI rankings."
-                  : "No carriers match the active filters."}
-              </div>
-            )}
-
-            {/* Historical Carriers Callout — carriers from lane history not yet in catalog */}
-            {!suggestionsLoading && historicalCarriers.length > 0 && (
-              <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden" data-testid="historical-carriers-callout">
-                <button
-                  className="w-full flex items-center justify-between px-3 py-2 text-left"
-                  onClick={() => setHistoricalSectionCollapsed(v => !v)}
-                >
-                  <div className="flex items-center gap-2">
-                    <History className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <span className="text-xs font-semibold text-amber-300">
-                      {historicalCarriers.length} Historical Carrier{historicalCarriers.length !== 1 ? "s" : ""} — Not Yet in Catalog
-                    </span>
-                  </div>
-                  {historicalSectionCollapsed ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronUp className="w-3 h-3 text-muted-foreground" />}
-                </button>
-                {!historicalSectionCollapsed && (
-                  <div className="px-3 pb-3 flex flex-col gap-1.5">
-                    <p className="text-[10px] text-amber-200/60 mb-1">
-                      These carriers ran this exact lane but are not in your carrier catalog. Add them to enable outreach.
-                    </p>
-                    {historicalCarriers.map((c, i) => (
-                      <div key={c.carrierName} className="flex items-center justify-between gap-2 bg-muted/10 border border-border rounded px-2 py-1.5">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs text-foreground font-medium truncate">{c.carrierName}</p>
-                          <p className="text-[9px] text-muted-foreground">{c.loadsOnLane} loads{c.lastUsedMonth ? ` · last ${c.lastUsedMonth}` : ""}</p>
-                        </div>
-                        <a
-                          href="/admin/carriers"
-                          className="shrink-0 text-[9px] px-1.5 py-0.5 rounded border border-amber-400/30 text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 flex items-center gap-0.5 transition-colors"
-                          data-testid={`btn-add-to-catalog-${i}`}
-                        >
-                          <Plus className="w-2.5 h-2.5" />
-                          Add to Catalog
-                        </a>
+                  {/* Empty state */}
+                  {!suggestionsLoading && filteredCarriers.length === 0 && (
+                    <div className="text-center py-8">
+                      <div className="w-10 h-10 rounded-full bg-muted/20 border border-border flex items-center justify-center mx-auto mb-3">
+                        <Truck className="w-5 h-5 text-muted-foreground" />
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+                      <p className="text-xs text-muted-foreground">
+                        {rankedCarriers.length === 0
+                          ? "No carriers in catalog yet. Add carriers to get ranked suggestions."
+                          : "No carriers match the active filters."}
+                      </p>
+                    </div>
+                  )}
 
-            <div className="flex flex-col gap-2">
-              {filteredCarriers.map((c, idx) => {
-                const key = c.carrierId ?? c.carrierName;
-                const isSelected = selectedCarriers.has(key);
-                const suppressions = c.suppressionReasons ?? [];
-                return (
-                  <div key={key} className="flex flex-col">
-                    <button
-                      onClick={() => toggleCarrier(c)}
-                      className={`text-left p-3 rounded-lg border transition-colors ${
-                        isSelected
-                          ? "bg-amber-500/10 border-amber-500/30"
-                          : "bg-muted/15 border-border hover:bg-muted/30"
-                      }`}
-                      data-testid={`carrier-suggestion-${idx}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-semibold text-foreground truncate">{c.carrierName}</span>
-                            {c.mcDot && (
-                              <span
-                                className="text-[9px] px-1.5 py-0 rounded border border-border text-muted-foreground bg-muted/20 font-mono shrink-0"
-                                data-testid={`text-mc-number-${idx}`}
-                                title="MC Number"
-                              >
-                                MC {c.mcDot.replace(/^MC[-#\s]?/i, "")}
-                              </span>
-                            )}
-                            {c.historyMatch === "exact" && c.loadsOnLane > 0 && (
-                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-amber-500/50 text-amber-300 bg-amber-500/10">
-                                Ran lane {c.loadsOnLane}×
-                              </Badge>
-                            )}
-                            {c.isNewProspect && (
-                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-border text-muted-foreground">New Prospect</Badge>
-                            )}
-                            {!c.historyMatch || c.historyMatch === "none" || c.historyMatch === "region" ? (
-                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-border text-muted-foreground">
-                                {HISTORY_MATCH_LABELS[c.historyMatch] ?? c.historyMatch}
-                              </Badge>
-                            ) : null}
-                            {c.sourceChannel && SOURCE_LABELS[c.sourceChannel] && (
-                              <Badge variant="outline" className={`text-[9px] py-0 px-1 ${SOURCE_COLORS[c.sourceChannel] ?? "border-border text-muted-foreground"}`}>
-                                {SOURCE_LABELS[c.sourceChannel]}
-                              </Badge>
-                            )}
-                          </div>
-                          {/* Why this carrier — primary signal */}
-                          <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">
-                            {c.whyThisCarrier?.primarySignal ?? c.fitReason}
-                          </p>
-                          {/* Signal badges — claimed lane match / prior positive outreach */}
-                          {(c.whyThisCarrier?.claimedLaneMatch || c.whyThisCarrier?.priorPositiveOutreach) && (
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {c.whyThisCarrier.claimedLaneMatch && (
-                                <span className="text-[9px] px-1 py-0 rounded border border-teal-500/30 text-teal-400 bg-teal-500/5">
-                                  Claimed lane pref
-                                </span>
-                              )}
-                              {c.whyThisCarrier.priorPositiveOutreach && (
-                                <span className="text-[9px] px-1 py-0 rounded border border-emerald-500/30 text-emerald-400 bg-emerald-500/5">
-                                  Positive prior outreach
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {/* Suppression reasons (negative flags) */}
-                          {suppressions.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {suppressions.map((r, ri) => (
-                                <span key={ri} className="text-[9px] px-1 py-0 rounded border border-red-500/30 text-red-400 bg-red-500/5 flex items-center gap-0.5">
-                                  <AlertCircle className="w-2 h-2 shrink-0" />
-                                  {r}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                          {(capturedEmails[key] || c.primaryEmail || c.backupEmail) && (
-                            <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                              {capturedEmails[key] || c.primaryEmail || c.backupEmail}
-                            </p>
-                          )}
-                          {(c.regions.length > 0 || c.equipmentTypes.length > 0) && (
-                            <p className="text-[10px] text-muted-foreground mt-0.5">
-                              {[...c.regions, ...c.equipmentTypes].slice(0, 4).join(" · ")}
-                            </p>
-                          )}
-                          {/* View carrier profile link — only for catalog carriers */}
-                          {c.carrierId && (
-                            <a
-                              href={`/carrier-hub?carrierId=${c.carrierId}`}
-                              onClick={e => e.stopPropagation()}
-                              target="_self"
-                              className="inline-flex items-center gap-0.5 text-[9px] text-amber-400/70 hover:text-amber-300 mt-1 transition-colors"
-                              data-testid={`link-carrier-profile-${idx}`}
-                            >
-                              <ExternalLink className="w-2.5 h-2.5" />
-                              View carrier profile
-                            </a>
-                          )}
+                  {/* Historical Carriers Callout */}
+                  {!suggestionsLoading && historicalCarriers.length > 0 && (
+                    <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden" data-testid="historical-carriers-callout">
+                      <button
+                        className="w-full flex items-center justify-between px-3 py-2 text-left"
+                        onClick={() => setHistoricalSectionCollapsed(v => !v)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <History className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span className="text-[11px] font-semibold text-amber-300">
+                            {historicalCarriers.length} Historical Carrier{historicalCarriers.length !== 1 ? "s" : ""} — Not in Catalog
+                          </span>
                         </div>
-                        <div className="flex flex-col items-end shrink-0">
-                          <div className={`text-xs font-bold ${c.fitScore >= 70 ? "text-emerald-400" : c.fitScore >= 45 ? "text-amber-400" : "text-muted-foreground"}`}>
-                            {c.fitScore}
-                          </div>
-                          <div className="text-[9px] text-muted-foreground">fit</div>
+                        {historicalSectionCollapsed ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronUp className="w-3 h-3 text-muted-foreground" />}
+                      </button>
+                      {!historicalSectionCollapsed && (
+                        <div className="px-3 pb-3 flex flex-col gap-1.5">
+                          <p className="text-[9px] text-amber-200/60 mb-1">These carriers ran this exact lane but are not in your catalog. Add them to enable outreach.</p>
+                          {historicalCarriers.map((c, i) => (
+                            <div key={c.carrierName} className="flex items-center justify-between gap-2 bg-muted/10 border border-border rounded px-2 py-1.5">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs text-foreground font-medium truncate">{c.carrierName}</p>
+                                <p className="text-[9px] text-muted-foreground">{c.loadsOnLane} loads{c.lastUsedMonth ? ` · last ${c.lastUsedMonth}` : ""}</p>
+                              </div>
+                              <a href="/admin/carriers" className="shrink-0 text-[9px] px-1.5 py-0.5 rounded border border-amber-400/30 text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 flex items-center gap-0.5 transition-colors" data-testid={`btn-add-to-catalog-${i}`}>
+                                <Plus className="w-2.5 h-2.5" /> Add to Catalog
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Carrier List — improved cards ── */}
+                  <div className="flex flex-col gap-2">
+                    {filteredCarriers.map((c, idx) => {
+                      const key = c.carrierId ?? c.carrierName;
+                      const isSelected = selectedCarriers.has(key);
+                      const suppressions = c.suppressionReasons ?? [];
+
+                      // Tier badge config (locked ranking tiers)
+                      const tierConfig: Record<string, { label: string; color: string }> = {
+                        exact:      { label: "Exact Match",    color: "border-amber-500/50 text-amber-300 bg-amber-500/10" },
+                        nearby:     { label: "Nearby Lane",    color: "border-blue-500/40 text-blue-300 bg-blue-500/10" },
+                        state_pair: { label: "Same Corridor",  color: "border-violet-500/40 text-violet-300 bg-violet-500/10" },
+                        similar:    { label: "Similar Lane",   color: "border-indigo-500/40 text-indigo-300 bg-indigo-500/10" },
+                        region:     { label: "Region Match",   color: "border-border text-muted-foreground bg-muted/10" },
+                        none:       { label: "No History",     color: "border-border/60 text-muted-foreground/60 bg-muted/5" },
+                      };
+                      const tier = tierConfig[c.historyMatch] ?? tierConfig.none;
+
+                      // Concise signal tags
+                      const signals: string[] = [];
+                      if (c.historyMatch === "exact" && c.loadsOnLane > 0) signals.push(`${c.loadsOnLane} exact load${c.loadsOnLane !== 1 ? "s" : ""}`);
+                      else if (c.historyMatch === "nearby" && c.loadsOnLane > 0) signals.push(`${c.loadsOnLane} nearby load${c.loadsOnLane !== 1 ? "s" : ""}`);
+                      else if (c.historyMatch === "state_pair" && c.loadsOnLane > 0) signals.push(`${c.loadsOnLane} corridor load${c.loadsOnLane !== 1 ? "s" : ""}`);
+                      if (c.lastUsedMonth) signals.push(`Last ${c.lastUsedMonth}`);
+                      if (c.primaryEmail || c.backupEmail || capturedEmails[key]) signals.push("Has email");
+                      if (c.whyThisCarrier?.claimedLaneMatch) signals.push("Claimed lane");
+                      if (c.whyThisCarrier?.priorPositiveOutreach) signals.push("Prior positive");
+
+                      return (
+                        <div key={key} className="flex flex-col">
+                          <button
+                            onClick={() => toggleCarrier(c)}
+                            className={`text-left p-3 rounded-lg border transition-all ${
+                              isSelected
+                                ? "bg-amber-500/10 border-amber-500/30 shadow-sm"
+                                : "bg-muted/10 border-border hover:bg-muted/20"
+                            }`}
+                            data-testid={`carrier-suggestion-${idx}`}
+                          >
+                            <div className="flex items-start gap-3">
+                              {/* Selection checkbox */}
+                              <div className={`mt-0.5 w-4 h-4 rounded border shrink-0 flex items-center justify-center transition-colors ${
+                                isSelected ? "border-amber-400 bg-amber-500/20" : "border-border bg-muted/20"
+                              }`}>
+                                {isSelected && <CheckCircle2 className="w-3 h-3 text-amber-400" />}
+                              </div>
+                              {/* Main content */}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                                  <span className="text-xs font-semibold text-foreground">{c.carrierName}</span>
+                                  {c.mcDot && (
+                                    <span className="text-[9px] px-1 py-0 rounded border border-border text-muted-foreground bg-muted/20 font-mono" title="MC Number" data-testid={`text-mc-number-${idx}`}>
+                                      MC {c.mcDot.replace(/^MC[-#\s]?/i, "")}
+                                    </span>
+                                  )}
+                                </div>
+                                {/* Tier badge + signals */}
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className={`text-[9px] px-1.5 py-0.5 rounded border font-medium ${tier.color}`}>
+                                    {tier.label}
+                                  </span>
+                                  {signals.length > 0 && (
+                                    <span className="text-[9px] text-muted-foreground">
+                                      {signals.join(" · ")}
+                                    </span>
+                                  )}
+                                </div>
+                                {/* Source / prospect badges */}
+                                {(c.isNewProspect || (c.sourceChannel && SOURCE_LABELS[c.sourceChannel])) && (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {c.isNewProspect && (
+                                      <Badge variant="outline" className="text-[9px] py-0 px-1 border-border text-muted-foreground">New Prospect</Badge>
+                                    )}
+                                    {c.sourceChannel && SOURCE_LABELS[c.sourceChannel] && (
+                                      <Badge variant="outline" className={`text-[9px] py-0 px-1 ${SOURCE_COLORS[c.sourceChannel] ?? "border-border text-muted-foreground"}`}>
+                                        {SOURCE_LABELS[c.sourceChannel]}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                )}
+                                {/* Suppression reasons */}
+                                {suppressions.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {suppressions.map((r, ri) => (
+                                      <span key={ri} className="text-[9px] px-1 py-0 rounded border border-red-500/30 text-red-400 bg-red-500/5 flex items-center gap-0.5">
+                                        <AlertCircle className="w-2 h-2 shrink-0" />{r}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {/* View carrier profile link */}
+                                {c.carrierId && (
+                                  <a
+                                    href={`/carrier-hub?carrierId=${c.carrierId}`}
+                                    onClick={e => e.stopPropagation()}
+                                    className="inline-flex items-center gap-0.5 text-[9px] text-amber-400/60 hover:text-amber-300 mt-1 transition-colors"
+                                    data-testid={`link-carrier-profile-${idx}`}
+                                  >
+                                    <ExternalLink className="w-2.5 h-2.5" /> View profile
+                                  </a>
+                                )}
+                              </div>
+                              {/* Score bubble */}
+                              <div className={`w-9 h-9 rounded-full flex items-center justify-center border-2 text-xs font-bold shrink-0 ${
+                                c.fitScore >= 70 ? "border-emerald-500/60 text-emerald-300 bg-emerald-500/10" :
+                                c.fitScore >= 45 ? "border-amber-500/60 text-amber-300 bg-amber-500/10" :
+                                c.fitScore >= 1  ? "border-border text-muted-foreground bg-muted/20" :
+                                                   "border-border/30 text-muted-foreground/40 bg-muted/10"
+                              }`}>
+                                {c.fitScore}
+                              </div>
+                            </div>
+                          </button>
+                          {/* Inline email affordances — shown when selected */}
                           {isSelected && (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 mt-1" />
+                            <div className="ml-3 mr-0 -mt-1 bg-amber-500/5 border border-amber-500/15 border-t-0 rounded-b-lg px-3 pb-2 pt-2 flex flex-col gap-2">
+                              <div>
+                                <p className="text-[9px] mb-1 uppercase tracking-wide flex items-center gap-1 text-orange-400/70">
+                                  <Mail className="w-2.5 h-2.5" />
+                                  {c.primaryEmail ? "Carrier email (saved)" : "Add carrier email"}
+                                </p>
+                                <input
+                                  type="email"
+                                  value={capturedEmails[key] ?? c.primaryEmail ?? ""}
+                                  onChange={e => setCapturedEmails(prev => ({ ...prev, [key]: e.target.value }))}
+                                  placeholder={`email@${c.carrierName.toLowerCase().replace(/\s+/g, "")}.com`}
+                                  className="w-full text-[11px] text-foreground/70 bg-muted/20 border border-border rounded px-2 py-1 placeholder:text-muted-foreground/30 focus:outline-none focus:border-orange-400/40"
+                                  data-testid={`add-email-input-${idx}`}
+                                />
+                              </div>
+                              <div>
+                                <p className="text-[9px] text-amber-300/60 mb-1 uppercase tracking-wide">Custom note (optional)</p>
+                                <Textarea
+                                  value={inlineEmails[key] ?? ""}
+                                  onChange={e => setInlineEmails(prev => ({ ...prev, [key]: e.target.value }))}
+                                  placeholder={`Add a personalized note for ${c.carrierName}…`}
+                                  className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[50px] placeholder:text-muted-foreground/30"
+                                  data-testid={`inline-email-${idx}`}
+                                />
+                              </div>
+                            </div>
                           )}
                         </div>
-                      </div>
-                    </button>
-                    {/* Inline email affordances — shown when carrier is selected */}
-                    {isSelected && (
-                      <div className="ml-3 mr-0 -mt-1 bg-amber-500/5 border border-amber-500/15 border-t-0 rounded-b-lg px-3 pb-2 pt-2 flex flex-col gap-2">
-                        {/* Email input — pre-filled from saved profile when available */}
-                        <div>
-                          <p className="text-[9px] mb-1 uppercase tracking-wide flex items-center gap-1 text-orange-400/70">
-                            <Mail className="w-2.5 h-2.5" />
-                            {c.primaryEmail ? "Carrier email (saved)" : "Add carrier email"}
-                          </p>
-                          <input
-                            type="email"
-                            value={capturedEmails[key] ?? c.primaryEmail ?? ""}
-                            onChange={e => setCapturedEmails(prev => ({ ...prev, [key]: e.target.value }))}
-                            placeholder={`email@${c.carrierName.toLowerCase().replace(/\s+/g, "")}.com`}
-                            className="w-full text-[11px] text-foreground/70 bg-muted/20 border border-border rounded px-2 py-1 placeholder:text-muted-foreground/30 focus:outline-none focus:border-orange-400/40"
-                            data-testid={`add-email-input-${idx}`}
-                          />
-                        </div>
-                        <div>
-                          <p className="text-[9px] text-amber-300/60 mb-1 uppercase tracking-wide">Custom email note (optional)</p>
-                          <Textarea
-                            value={inlineEmails[key] ?? ""}
-                            onChange={e => setInlineEmails(prev => ({ ...prev, [key]: e.target.value }))}
-                            placeholder={`Add a personalized note for ${c.carrierName}…`}
-                            className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[60px] placeholder:text-muted-foreground/30"
-                            data-testid={`inline-email-${idx}`}
-                          />
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })}
                   </div>
-                );
-              })}
-            </div>
 
-            {/* Pagination controls */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-center gap-2 mt-4" data-testid="pagination-controls">
-                <button
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage <= 1}
-                  className="text-[10px] px-2 py-1 rounded border border-border text-muted-foreground bg-muted/20 hover:bg-muted/40 disabled:opacity-40 transition-colors"
-                  data-testid="btn-prev-page"
-                >
-                  ← Prev
-                </button>
-                <span className="text-[10px] text-muted-foreground">
-                  Page {currentPage} of {totalPages}
-                </span>
-                <button
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                  className="text-[10px] px-2 py-1 rounded border border-border text-muted-foreground bg-muted/20 hover:bg-muted/40 disabled:opacity-40 transition-colors"
-                  data-testid="btn-next-page"
-                >
-                  Next →
-                </button>
-              </div>
-            )}
-
-            {/* Shared Template Editor — shown when carriers are selected */}
-            {selectedCarriers.size > 0 && (
-              <div className="mt-4 bg-muted/40 rounded-lg border border-border p-3">
-                <div className="flex items-center justify-between mb-1.5">
-                  <p className="text-[10px] font-semibold text-foreground/70 uppercase tracking-wide">
-                    Shared Template (applies to all selected carriers)
-                  </p>
-                  {sharedTemplate.trim() && (
-                    <button
-                      onClick={() => setSharedTemplate("")}
-                      className="text-[9px] text-muted-foreground hover:text-foreground/50"
-                      data-testid="clear-shared-template"
-                    >
-                      Clear
-                    </button>
+                  {/* Pagination */}
+                  {totalPages > 1 && (
+                    <div className="flex items-center justify-center gap-2 mt-4" data-testid="pagination-controls">
+                      <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1} className="text-[10px] px-2 py-1 rounded border border-border text-muted-foreground bg-muted/20 hover:bg-muted/40 disabled:opacity-40 transition-colors" data-testid="btn-prev-page">← Prev</button>
+                      <span className="text-[10px] text-muted-foreground">Page {currentPage} of {totalPages}</span>
+                      <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages} className="text-[10px] px-2 py-1 rounded border border-border text-muted-foreground bg-muted/20 hover:bg-muted/40 disabled:opacity-40 transition-colors" data-testid="btn-next-page">Next →</button>
+                    </div>
                   )}
                 </div>
-                <p className="text-[9px] text-muted-foreground mb-1.5">
-                  Enter a shared body for all selected carriers. Leave blank to let AI draft individual emails.
-                </p>
-                <Textarea
-                  value={sharedTemplate}
-                  onChange={e => setSharedTemplate(e.target.value)}
-                  placeholder={`Hi [Carrier Name], I wanted to reach out about a recurring lane we run consistently…`}
-                  className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[80px] placeholder:text-muted-foreground/30"
-                  data-testid="shared-template-editor"
-                />
-                {sharedTemplate.trim() && (
-                  <p className="text-[9px] text-emerald-400/70 mt-1 flex items-center gap-1">
-                    <CheckCircle2 className="w-2.5 h-2.5" />
-                    This template will be applied to {selectedCarriers.size} carrier(s) instead of AI drafting
-                  </p>
-                )}
-              </div>
-            )}
+              )}
 
-            {/* Email Drafts Section */}
-            {showEmails && emailDrafts.length > 0 && (
-              <div className="mt-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs font-semibold text-foreground/80">Drafted Emails ({emailDrafts.length})</p>
-                    {sendOverallStatus === "done" && (
-                      <span className="text-[9px] text-emerald-400 flex items-center gap-0.5">
-                        <CheckCircle2 className="w-2.5 h-2.5" /> Sent
+              {/* ── BENCH SUB-TAB ──────────────────────────────────────── */}
+              {activeCarriersSubTab === "bench" && (
+                <div className="flex-1 px-5 pt-3 pb-24 overflow-y-auto">
+                  {/* Contactability warning */}
+                  {bench.length > 0 && bench.every(b => !b.isContactable) && (
+                    <div className="mb-3 flex items-center gap-2 bg-orange-500/10 border border-orange-500/20 rounded-md px-3 py-2" data-testid="no-contactable-carriers-warning">
+                      <AlertCircle className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                      <p className="text-[11px] text-orange-300">No carriers on this bench have a phone or email on file. Add contact details in the Carriers catalog.</p>
+                    </div>
+                  )}
+                  {bench.length === 0 ? (
+                    <div className="text-center py-8">
+                      <div className="w-10 h-10 rounded-full bg-muted/20 border border-border flex items-center justify-center mx-auto mb-3">
+                        <Truck className="w-5 h-5 text-muted-foreground" />
+                      </div>
+                      <p className="text-xs text-muted-foreground">No carriers on the bench yet.</p>
+                      <p className="text-[10px] text-muted-foreground/60 mt-1">Select carriers from Ranked and mark them as contacted.</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {/* Historical carrier callout */}
+                      {(() => {
+                        const historicalMissingContact = bench.filter(b => b.sourceType === "historical" && !b.isContactable);
+                        if (historicalMissingContact.length === 0) return null;
+                        return (
+                          <div className="bg-blue-500/8 border border-blue-500/20 rounded-lg p-3 flex items-start gap-2 mb-1" data-testid="historical-carriers-callout">
+                            <Truck className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="text-[11px] font-semibold text-blue-300">{historicalMissingContact.length} historical carrier{historicalMissingContact.length > 1 ? "s" : ""} missing contact info</p>
+                              <p className="text-[10px] text-blue-300/60 mt-0.5">Add phone or email in the Carrier catalog to enable outreach.</p>
+                              <p className="text-[10px] text-muted-foreground mt-1">{historicalMissingContact.map(b => b.carrierName).join(", ")}</p>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                      {bench.map(interest => {
+                        const statusConfig = INTEREST_STATUS_LABELS[interest.interestStatus] ?? INTEREST_STATUS_LABELS.needs_follow_up;
+                        const isExpanded = expandedReply === interest.id;
+                        return (
+                          <div key={interest.id} className="bg-muted/10 rounded-lg border border-border p-3" data-testid={`bench-item-${interest.id}`}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <p className="text-xs font-semibold text-foreground truncate">{interest.carrierName}</p>
+                                  {interest.sourceType === "historical" && (
+                                    <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400">Ran this lane</Badge>
+                                  )}
+                                  {!interest.isContactable && (
+                                    <Badge variant="outline" className="text-[9px] py-0 px-1 border-orange-500/30 text-orange-400 flex items-center gap-0.5">
+                                      <Mail className="w-2.5 h-2.5" /> No contact info
+                                    </Badge>
+                                  )}
+                                </div>
+                                {interest.outreachSentAt && (
+                                  <p className="text-[10px] text-muted-foreground mt-0.5">Contacted {new Date(interest.outreachSentAt).toLocaleDateString()}</p>
+                                )}
+                                {interest.lastReplySnippet && (
+                                  <p className="text-[10px] text-muted-foreground italic mt-0.5 line-clamp-2">"{interest.lastReplySnippet}"</p>
+                                )}
+                              </div>
+                              <Badge variant="outline" className={`text-[9px] py-0 px-1.5 shrink-0 ${statusConfig.color}`}>{statusConfig.label}</Badge>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {([
+                                { value: "available_now", label: "Avail. Now" },
+                                { value: "available_next_week", label: "Next Wk" },
+                                { value: "future_interest", label: "Future" },
+                                { value: "not_fit", label: "Not a Fit" },
+                              ] as const).map(opt => (
+                                <button
+                                  key={opt.value}
+                                  onClick={() => setInterestStatusMutation.mutate({ carrierId: interest.carrierId ?? null, carrierName: interest.carrierName, interestStatus: opt.value })}
+                                  disabled={setInterestStatusMutation.isPending}
+                                  className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
+                                    interest.interestStatus === opt.value
+                                      ? "border-blue-400/60 bg-blue-500/20 text-blue-300"
+                                      : "border-border bg-muted/20 text-muted-foreground hover:text-foreground/60"
+                                  }`}
+                                  data-testid={`status-${opt.value}-${interest.id}`}
+                                >
+                                  {interest.interestStatus === opt.value ? "✓ " : ""}{opt.label}
+                                </button>
+                              ))}
+                            </div>
+                            <button
+                              onClick={() => setExpandedReply(isExpanded ? null : interest.id)}
+                              className="mt-2 flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground/60"
+                              data-testid={`classify-toggle-${interest.id}`}
+                            >
+                              <Mail className="w-3 h-3" /> Classify reply
+                              {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                            </button>
+                            {isExpanded && (
+                              <div className="mt-2 flex flex-col gap-2">
+                                <Textarea
+                                  placeholder="Paste carrier reply here…"
+                                  value={replyInputs[interest.id] ?? ""}
+                                  onChange={e => setReplyInputs(prev => ({ ...prev, [interest.id]: e.target.value }))}
+                                  className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[60px]"
+                                  data-testid={`reply-input-${interest.id}`}
+                                />
+                                <Button size="sm" onClick={() => handleClassifyReply(interest)}
+                                  disabled={classifyReplyMutation.isPending || !(replyInputs[interest.id] ?? "").trim()}
+                                  className="h-7 text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 self-end"
+                                  data-testid={`classify-submit-${interest.id}`}
+                                >
+                                  {classifyReplyMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Classify"}
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── IMPORT SUB-TAB ─────────────────────────────────────── */}
+              {activeCarriersSubTab === "import" && (
+                <div className="flex-1 px-5 pt-3 pb-24 overflow-y-auto" data-testid="tab-content-import">
+                  {/* Paste Emails (Ad-hoc outreach) */}
+                  <div className="mb-5">
+                    <button
+                      onClick={() => setAdHocEmailsExpanded(v => !v)}
+                      className="w-full flex items-center justify-between gap-2 py-2 text-left"
+                      data-testid="btn-toggle-paste-emails"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="w-5 h-5 rounded bg-blue-500/20 flex items-center justify-center shrink-0">
+                          <Mail className="w-3 h-3 text-blue-400" />
+                        </div>
+                        <span className="text-xs font-semibold text-foreground/80">Paste Email Addresses</span>
+                        {adHocParsed.valid.length > 0 && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-300">{adHocParsed.valid.length} ready</span>
+                        )}
+                      </div>
+                      {adHocEmailsExpanded ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+                    </button>
+                    {adHocEmailsExpanded && (
+                      <div className="flex flex-col gap-3 mt-2 p-3 bg-muted/15 border border-border rounded-lg">
+                        <p className="text-[10px] text-muted-foreground">Paste email addresses for carriers not in the catalog — from DAT, broker groups, etc. No carrier records are created.</p>
+                        <Textarea
+                          value={adHocEmailPasteText}
+                          onChange={e => setAdHocEmailPasteText(e.target.value)}
+                          placeholder={"carrier@example.com, dispatcher@trucking.com\nops@freightco.com"}
+                          className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[80px] placeholder:text-muted-foreground/30 font-mono"
+                          data-testid="textarea-adhoc-emails"
+                        />
+                        {adHocEmailPasteText.trim() && (
+                          <div className="flex flex-col gap-1.5">
+                            {adHocParsed.valid.length > 0 && (
+                              <div className="flex items-center gap-1.5">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                                <span className="text-[10px] text-emerald-300 font-medium">{adHocParsed.valid.length} valid address{adHocParsed.valid.length !== 1 ? "es" : ""} found</span>
+                              </div>
+                            )}
+                            {adHocParsed.invalid.length > 0 && (
+                              <div className="flex items-start gap-1.5">
+                                <AlertCircle className="w-3 h-3 text-orange-400 shrink-0 mt-0.5" />
+                                <div>
+                                  <span className="text-[10px] text-orange-300">{adHocParsed.invalid.length} invalid (will be skipped):</span>
+                                  <span className="text-[10px] text-orange-400/70 ml-1 break-all">{adHocParsed.invalid.join(", ")}</span>
+                                </div>
+                              </div>
+                            )}
+                            {adHocParsed.valid.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {adHocParsed.valid.map((email, i) => (
+                                  <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-300 font-mono">{email}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {adHocEmailPasteText.trim() && (
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={() => setAdHocEmailPasteText("")} variant="outline" className="h-7 text-[10px] border-border text-muted-foreground hover:bg-muted/20" data-testid="btn-clear-adhoc-emails">Clear</Button>
+                            {adHocParsed.valid.length > 0 && (
+                              <p className="text-[10px] text-blue-400/70 flex items-center gap-1 flex-1">
+                                <Mail className="w-2.5 h-2.5" /> These will be included in outreach from the Message tab
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="border-t border-border mb-4" />
+                  {importResults ? (
+                    <div className="flex flex-col gap-4">
+                      <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <div>
+                          <p className="text-xs font-semibold text-emerald-300">{importResults.filter(r => r.status === "new").length} new carriers imported</p>
+                          {importResults.filter(r => r.status === "matched").length > 0 && (
+                            <p className="text-[10px] text-muted-foreground">{importResults.filter(r => r.status === "matched").length} matched existing catalog records</p>
+                          )}
+                          <p className="text-[10px] text-muted-foreground">All carriers added to lane bench</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        {importResults.map((r, idx) => (
+                          <div key={idx} className="flex items-center gap-2 p-2 bg-muted/15 rounded border border-border">
+                            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.status === "new" ? "bg-emerald-400" : "bg-amber-400"}`} />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs text-foreground truncate">{r.carrier.name}</p>
+                              {r.carrier.primaryEmail && <p className="text-[10px] text-muted-foreground truncate">{r.carrier.primaryEmail}</p>}
+                            </div>
+                            <Badge variant="outline" className={`text-[9px] py-0 px-1 shrink-0 ${r.status === "new" ? "border-emerald-500/40 text-emerald-400" : "border-amber-500/40 text-amber-400"}`}>
+                              {r.status === "new" ? "New" : r.matchType === "email_exact" ? "Email match" : r.matchType === "mc_exact" ? "MC match" : "Name match"}
+                            </Badge>
+                            <a href={`/carrier-hub?carrierId=${r.carrier.id}`} target="_blank" rel="noopener noreferrer" className="p-0.5 text-muted-foreground hover:text-foreground/80 transition-colors shrink-0" data-testid={`link-hub-import-result-${r.carrier.id}`}>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => { setImportResults(null); setParsedImportCarriers(null); setImportPasteText(""); }} className="w-full text-xs border-border text-muted-foreground hover:bg-muted/30" data-testid="btn-import-again">
+                        <Upload className="w-3 h-3 mr-1" /> Import More Carriers
+                      </Button>
+                    </div>
+                  ) : parsedImportCarriers ? (
+                    <div className="flex flex-col gap-4">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-foreground">{parsedImportCarriers.length} carriers parsed</p>
+                        <button onClick={() => setParsedImportCarriers(null)} className="text-[10px] text-muted-foreground hover:text-foreground/60" data-testid="btn-import-back">← Edit</button>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="grid grid-cols-12 gap-2 px-2 py-1 text-[9px] uppercase tracking-wide text-muted-foreground">
+                          <span className="col-span-5">Name</span>
+                          <span className="col-span-4">Email</span>
+                          <span className="col-span-3">MC#</span>
+                        </div>
+                        {parsedImportCarriers.map((c, idx) => (
+                          <div key={idx} className="grid grid-cols-12 gap-2 px-2 py-1.5 bg-muted/15 rounded border border-border">
+                            <span className="col-span-5 text-[10px] text-foreground truncate">{c.name}</span>
+                            <span className="col-span-4 text-[10px] text-muted-foreground truncate">{c.email ?? "—"}</span>
+                            <span className="col-span-3 text-[10px] text-muted-foreground truncate">{c.mcDot ?? "—"}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <Button size="sm"
+                        onClick={() => importCarriersMutation.mutate({ carriers: parsedImportCarriers, source: importSource, rawInput: importPasteText })}
+                        disabled={importCarriersMutation.isPending}
+                        className="w-full text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+                        data-testid="btn-confirm-import"
+                      >
+                        {importCarriersMutation.isPending
+                          ? <><Loader2 className="w-3 h-3 animate-spin mr-1" />Importing…</>
+                          : <><Plus className="w-3 h-3 mr-1" />Import & Add {parsedImportCarriers.length} to Bench</>
+                        }
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-4">
+                      <p className="text-xs text-muted-foreground">Paste carrier contacts from DAT, Loadsmart, or any other platform. Supports tab-delimited, CSV, or plain name + email format.</p>
+                      <div className="text-[9px] text-muted-foreground font-mono bg-muted/15 border border-border rounded px-2 py-1.5 space-y-0.5">
+                        <div className="text-muted-foreground mb-1">Supported formats (one per line):</div>
+                        <div>ABC Transport Inc, abc@transport.com, MC123456</div>
+                        <div>XYZ Logistics | xyz@logistics.com</div>
+                        <div>Smith Trucking LLC {"  "} MC789012</div>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-muted-foreground uppercase tracking-wide mb-1.5">Source Platform</p>
+                        <Select value={importSource} onValueChange={setImportSource}>
+                          <SelectTrigger className="h-8 text-xs bg-muted/20 border-border text-foreground/80" data-testid="select-import-source">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="dat">DAT Load Board</SelectItem>
+                            <SelectItem value="loadsmart">Loadsmart</SelectItem>
+                            <SelectItem value="csv_paste">CSV / Spreadsheet Paste</SelectItem>
+                            <SelectItem value="manual">Manual Entry</SelectItem>
+                            <SelectItem value="other">Other Platform</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-muted-foreground uppercase tracking-wide mb-1.5">Carrier List</p>
+                        <Textarea
+                          value={importPasteText}
+                          onChange={e => setImportPasteText(e.target.value)}
+                          placeholder={"ABC Transport Inc, abc@transport.com, MC123456\nXYZ Logistics, xyz@example.com\nSmith Trucking LLC"}
+                          className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[160px] placeholder:text-muted-foreground/30 font-mono"
+                          data-testid="textarea-import-paste"
+                        />
+                        {importPasteText && (
+                          <p className="text-[9px] text-muted-foreground mt-1">{importPasteText.split("\n").filter(l => l.trim().length > 2).length} lines detected</p>
+                        )}
+                      </div>
+                      <Button size="sm"
+                        onClick={() => {
+                          const parsed = parseImportText(importPasteText);
+                          if (parsed.length === 0) {
+                            toast({ title: "No carriers parsed", description: "Check format and try again.", variant: "destructive" });
+                            return;
+                          }
+                          setParsedImportCarriers(parsed);
+                        }}
+                        disabled={!importPasteText.trim()}
+                        className="w-full text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+                        data-testid="btn-parse-import"
+                      >
+                        <ExternalLink className="w-3 h-3 mr-1" /> Parse & Preview
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {/* MESSAGE TAB                                                   */}
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {activeMainTab === "message" && (
+            <div className="flex-1 px-5 pt-4 pb-24 overflow-y-auto">
+              {/* Selected recipients summary */}
+              {selectedCarriers.size > 0 ? (
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">
+                      Recipients ({selectedCarriers.size}{adHocParsed.valid.length > 0 ? ` + ${adHocParsed.valid.length} ad-hoc` : ""})
+                    </p>
+                    <button onClick={() => setActiveMainTab("carriers")} className="text-[10px] text-amber-400/70 hover:text-amber-300 transition-colors">
+                      ← Edit selection
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {filteredCarriers.filter(c => selectedCarriers.has(c.carrierId ?? c.carrierName)).map((c, i) => (
+                      <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-muted/20 border border-border text-foreground/70 flex items-center gap-1">
+                        {c.carrierName}
+                        <button onClick={() => toggleCarrier(c)} className="text-muted-foreground hover:text-red-400 transition-colors leading-none" data-testid={`remove-recipient-${i}`}>×</button>
+                      </span>
+                    ))}
+                    {adHocParsed.valid.length > 0 && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-300">
+                        +{adHocParsed.valid.length} ad-hoc email{adHocParsed.valid.length !== 1 ? "s" : ""}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => navigator.clipboard.writeText(emailDrafts.map(d => `To: ${d.carrierName}\nSubject: ${d.subject}\n\n${d.body}`).join("\n\n---\n\n"))}
-                      className="text-[10px] text-muted-foreground hover:text-foreground/60 flex items-center gap-0.5"
-                      data-testid="btn-copy-all-drafts"
-                      title="Copy all drafts to clipboard"
-                    >
-                      <Copy className="w-2.5 h-2.5" /> Copy all
-                    </button>
-                    <button
-                      onClick={() => setShowEmails(false)}
-                      className="text-[10px] text-muted-foreground hover:text-foreground/60"
-                    >
-                      Hide
-                    </button>
-                  </div>
                 </div>
-                <div className="flex flex-col gap-3">
-                  {emailDrafts.map((draft, i) => {
-                    const status = draftSendStatus[i];
-                    return (
-                      <div key={i} className={`rounded-lg border p-3 ${
-                        status === "sent" ? "bg-emerald-500/5 border-emerald-500/20" :
-                        status === "failed" ? "bg-red-500/5 border-red-500/20" :
-                        status === "no_email" ? "bg-orange-500/5 border-orange-500/20" :
-                        "bg-muted/10 border-border"
-                      }`}>
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-[10px] font-semibold text-amber-300">{draft.carrierName}</p>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => navigator.clipboard.writeText(draft.body)}
-                              className="text-[9px] text-muted-foreground hover:text-foreground/60"
-                              title="Copy body"
-                              data-testid={`btn-copy-draft-${i}`}
-                            >
-                              <Copy className="w-2.5 h-2.5" />
-                            </button>
-                            {status === "sent" && (
-                              <span className="text-[9px] text-emerald-400 flex items-center gap-0.5" data-testid={`draft-status-sent-${i}`}>
-                                <CheckCircle2 className="w-2.5 h-2.5" /> Sent
-                              </span>
-                            )}
-                            {status === "failed" && (
-                              <span className="text-[9px] text-red-400 flex items-center gap-0.5" data-testid={`draft-status-failed-${i}`}>
-                                <XCircle className="w-2.5 h-2.5" /> Failed
-                              </span>
-                            )}
-                            {status === "no_email" && (
-                              <span className="text-[9px] text-orange-400 flex items-center gap-0.5" data-testid={`draft-status-no-email-${i}`}>
-                                <AlertCircle className="w-2.5 h-2.5" /> No email
-                              </span>
-                            )}
-                            {status === "sending" && (
-                              <span className="text-[9px] text-blue-400 flex items-center gap-0.5" data-testid={`draft-status-sending-${i}`}>
-                                <Loader2 className="w-2.5 h-2.5 animate-spin" /> Sending
-                              </span>
-                            )}
+              ) : adHocParsed.valid.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="w-10 h-10 rounded-full bg-muted/20 border border-border flex items-center justify-center mx-auto mb-3">
+                    <Mail className="w-5 h-5 text-muted-foreground" />
+                  </div>
+                  <p className="text-xs text-muted-foreground">No carriers selected yet.</p>
+                  <button onClick={() => setActiveMainTab("carriers")} className="mt-2 text-[11px] text-amber-400/70 hover:text-amber-300 transition-colors">
+                    ← Go to Carriers to select
+                  </button>
+                </div>
+              ) : null}
+
+              {/* Shared template + outreach mode — shown when no drafts yet */}
+              {(selectedCarriers.size > 0 || adHocParsed.valid.length > 0) && !showEmails && (
+                <>
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">
+                        Shared Template <span className="normal-case font-normal text-muted-foreground/60">(optional — leave blank for AI drafts)</span>
+                      </p>
+                      {sharedTemplate.trim() && (
+                        <button onClick={() => setSharedTemplate("")} className="text-[9px] text-muted-foreground hover:text-foreground/50" data-testid="clear-shared-template">Clear</button>
+                      )}
+                    </div>
+                    <Textarea
+                      value={sharedTemplate}
+                      onChange={e => setSharedTemplate(e.target.value)}
+                      placeholder={`Hi [Carrier Name], I wanted to reach out about a recurring lane we run consistently…`}
+                      className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[120px] placeholder:text-muted-foreground/30"
+                      data-testid="shared-template-editor"
+                    />
+                    {sharedTemplate.trim() && (
+                      <p className="text-[9px] text-emerald-400/70 mt-1 flex items-center gap-1">
+                        <CheckCircle2 className="w-2.5 h-2.5" />
+                        This template will be sent to {selectedCarriers.size + adHocParsed.valid.length} recipient(s) instead of AI drafting
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="text-[10px] text-muted-foreground shrink-0">Outreach mode:</span>
+                    <Select value={outreachMode} onValueChange={(v: "lane_building" | "immediate_plus_lane") => setOutreachMode(v)}>
+                      <SelectTrigger className="h-7 text-xs bg-muted/20 border-border text-foreground/80 flex-1" data-testid="outreach-mode-select-message">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-card border-border text-foreground">
+                        <SelectItem value="lane_building" className="text-xs">Lane-Building (recurring framing)</SelectItem>
+                        <SelectItem value="immediate_plus_lane" className="text-xs">Immediate Load + Lane Building</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
+
+              {/* Email drafts — main editing area */}
+              {showEmails && emailDrafts.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-semibold text-foreground/80">Drafted Emails ({emailDrafts.length})</p>
+                      {sendOverallStatus === "done" && (
+                        <span className="text-[9px] text-emerald-400 flex items-center gap-0.5"><CheckCircle2 className="w-2.5 h-2.5" /> Sent</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => navigator.clipboard.writeText(emailDrafts.map(d => `To: ${d.carrierName}\nSubject: ${d.subject}\n\n${d.body}`).join("\n\n---\n\n"))}
+                        className="text-[10px] text-muted-foreground hover:text-foreground/60 flex items-center gap-0.5"
+                        data-testid="btn-copy-all-drafts"
+                        title="Copy all drafts to clipboard"
+                      >
+                        <Copy className="w-2.5 h-2.5" /> Copy all
+                      </button>
+                      <button
+                        onClick={() => { setShowEmails(false); setEmailDrafts([]); setSendOverallStatus("idle"); setDraftSendStatus({}); }}
+                        className="text-[10px] text-muted-foreground hover:text-foreground/60"
+                      >
+                        Discard
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-4">
+                    {emailDrafts.map((draft, i) => {
+                      const status = draftSendStatus[i];
+                      return (
+                        <div key={i} className={`rounded-lg border p-3 ${
+                          status === "sent" ? "bg-emerald-500/5 border-emerald-500/20" :
+                          status === "failed" ? "bg-red-500/5 border-red-500/20" :
+                          status === "no_email" ? "bg-orange-500/5 border-orange-500/20" :
+                          "bg-muted/10 border-border"
+                        }`}>
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-[10px] font-semibold text-amber-300">{draft.carrierName}</p>
+                            <div className="flex items-center gap-1.5">
+                              <button onClick={() => navigator.clipboard.writeText(draft.body)} className="text-[9px] text-muted-foreground hover:text-foreground/60" title="Copy body" data-testid={`btn-copy-draft-${i}`}>
+                                <Copy className="w-2.5 h-2.5" />
+                              </button>
+                              {status === "sent" && <span className="text-[9px] text-emerald-400 flex items-center gap-0.5" data-testid={`draft-status-sent-${i}`}><CheckCircle2 className="w-2.5 h-2.5" /> Sent</span>}
+                              {status === "failed" && <span className="text-[9px] text-red-400 flex items-center gap-0.5" data-testid={`draft-status-failed-${i}`}><XCircle className="w-2.5 h-2.5" /> Failed</span>}
+                              {status === "no_email" && <span className="text-[9px] text-orange-400 flex items-center gap-0.5" data-testid={`draft-status-no-email-${i}`}><AlertCircle className="w-2.5 h-2.5" /> No email</span>}
+                              {status === "sending" && <span className="text-[9px] text-blue-400 flex items-center gap-0.5" data-testid={`draft-status-sending-${i}`}><Loader2 className="w-2.5 h-2.5 animate-spin" /> Sending</span>}
+                            </div>
                           </div>
-                        </div>
-                        <div className="flex items-center gap-1 mb-1">
-                          <span className="text-[10px] text-muted-foreground shrink-0">Subject:</span>
-                          <input
-                            type="text"
-                            value={draft.subject}
-                            onChange={e => setEmailDrafts(prev => {
-                              const next = [...prev];
-                              next[i] = { ...next[i], subject: e.target.value };
-                              return next;
-                            })}
+                          <div className="flex items-center gap-1 mb-2">
+                            <span className="text-[10px] text-muted-foreground shrink-0">Subject:</span>
+                            <input
+                              type="text"
+                              value={draft.subject}
+                              onChange={e => setEmailDrafts(prev => { const next = [...prev]; next[i] = { ...next[i], subject: e.target.value }; return next; })}
+                              disabled={sendOverallStatus !== "idle"}
+                              className="flex-1 text-[11px] text-foreground/70 bg-muted/20 border border-border rounded px-2 py-0.5 focus:outline-none focus:border-amber-400/40 disabled:opacity-60 placeholder:text-muted-foreground/30"
+                              data-testid={`email-subject-${i}`}
+                            />
+                          </div>
+                          <Textarea
+                            value={draft.body}
+                            onChange={e => setEmailDrafts(prev => { const next = [...prev]; next[i] = { ...next[i], body: e.target.value }; return next; })}
                             disabled={sendOverallStatus !== "idle"}
-                            className="flex-1 text-[10px] text-foreground/70 bg-muted/20 border border-border rounded px-2 py-0.5 focus:outline-none focus:border-amber-400/40 disabled:opacity-60 placeholder:text-muted-foreground/30"
-                            data-testid={`email-subject-${i}`}
+                            className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[140px] disabled:opacity-60"
+                            data-testid={`email-draft-${i}`}
                           />
                         </div>
-                        <Textarea
-                          value={draft.body}
-                          onChange={e => setEmailDrafts(prev => {
-                            const next = [...prev];
-                            next[i] = { ...next[i], body: e.target.value };
-                            return next;
-                          })}
-                          disabled={sendOverallStatus !== "idle"}
-                          className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[100px] disabled:opacity-60"
-                          data-testid={`email-draft-${i}`}
-                        />
+                      );
+                    })}
+                  </div>
+                  {sendOverallStatus === "done" && (
+                    <p className="mt-3 text-[10px] text-emerald-400/70 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Emails sent and logged. Check the History tab for details.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {/* FOLLOW-UP TAB                                                 */}
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {activeMainTab === "followup" && (
+            <div className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
+              {followupLoading ? (
+                <div className="flex items-center gap-2 text-muted-foreground text-xs py-4">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Loading suggestions…
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {(followupData?.suggestions ?? []).length === 0 && (
+                    <div className="text-center py-8">
+                      <div className="w-10 h-10 rounded-full bg-muted/20 border border-border flex items-center justify-center mx-auto mb-3">
+                        <Lightbulb className="w-5 h-5 text-muted-foreground" />
+                      </div>
+                      <p className="text-xs text-muted-foreground">No follow-up suggestions yet.</p>
+                      <p className="text-[10px] text-muted-foreground/60 mt-1">Contact some carriers first to get follow-up guidance.</p>
+                    </div>
+                  )}
+                  {(followupData?.suggestions ?? []).map((s, i) => (
+                    <div
+                      key={i}
+                      className={`p-3 rounded-lg border flex items-start gap-2 ${
+                        s.priority === "high" ? "bg-amber-500/8 border-amber-500/20" :
+                        s.priority === "medium" ? "bg-muted/10 border-border" :
+                        "bg-muted/10 border-border/60"
+                      }`}
+                      data-testid={`followup-suggestion-${i}`}
+                    >
+                      <Lightbulb className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
+                        s.priority === "high" ? "text-amber-400" :
+                        s.priority === "medium" ? "text-muted-foreground" : "text-foreground/30"
+                      }`} />
+                      <p className="text-xs text-foreground/70">{s.message}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {/* HISTORY TAB                                                   */}
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {activeMainTab === "history" && (
+            <div className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
+              {isHistoryLoading ? (
+                <div className="flex flex-col gap-3 animate-pulse" data-testid="history-loading">
+                  {[1, 2, 3].map(i => <div key={i} className="h-16 rounded-lg bg-muted/30 border border-border" />)}
+                </div>
+              ) : isHistoryError ? (
+                <div className="flex flex-col items-center gap-2 py-6 text-center" data-testid="history-error">
+                  <XCircle className="w-5 h-5 text-red-400" />
+                  <p className="text-xs text-red-400 font-medium">Could not load outreach history</p>
+                  <p className="text-[10px] text-muted-foreground">Contact support if this persists</p>
+                  <button onClick={() => refetchHistory()} className="mt-1 text-[10px] text-muted-foreground underline hover:text-foreground/70" data-testid="history-retry">Try again</button>
+                </div>
+              ) : outreachHistory.length === 0 ? (
+                <div className="text-center py-8" data-testid="history-empty">
+                  <div className="w-10 h-10 rounded-full bg-muted/20 border border-border flex items-center justify-center mx-auto mb-3">
+                    <History className="w-5 h-5 text-muted-foreground" />
+                  </div>
+                  <p className="text-xs text-muted-foreground">No outreach history yet for this lane.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {outreachHistory.map(log => {
+                    const status = log.deliveryStatus ?? "draft";
+                    const statusConfig = {
+                      sent:    { label: "Sent",   color: "text-emerald-400", icon: <CheckCircle2 className="w-3 h-3" /> },
+                      partial: { label: "Partial", color: "text-amber-400",  icon: <AlertCircle className="w-3 h-3" /> },
+                      failed:  { label: "Failed",  color: "text-red-400",    icon: <XCircle className="w-3 h-3" /> },
+                      draft:   { label: "Logged",  color: "text-muted-foreground", icon: <ClipboardCheck className="w-3 h-3" /> },
+                    }[status] ?? { label: status, color: "text-muted-foreground", icon: <Clock className="w-3 h-3" /> };
+                    return (
+                      <div key={log.id} className="bg-muted/10 rounded-lg border border-border p-3" data-testid={`outreach-log-${log.id}`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`flex items-center gap-1 text-[10px] font-semibold ${statusConfig.color}`}>
+                                {statusConfig.icon} {statusConfig.label}
+                              </span>
+                              <span className="text-[9px] text-muted-foreground">·</span>
+                              <span className="text-[9px] text-muted-foreground">{log.outreachMode === "immediate_plus_lane" ? "Immediate + Lane" : "Lane-Building"}</span>
+                            </div>
+                            <p className="text-[10px] text-foreground/70 mt-1 font-medium">{log.carrierNames.join(", ")}</p>
+                            {log.sentAt && <p className="text-[9px] text-muted-foreground mt-0.5">Sent {new Date(log.sentAt).toLocaleString()}</p>}
+                            {!log.sentAt && <p className="text-[9px] text-muted-foreground mt-0.5">Logged {new Date(log.timestamp).toLocaleString()}</p>}
+                            {log.failureReason && <p className="text-[9px] text-red-400/70 mt-0.5">Error: {log.failureReason}</p>}
+                          </div>
+                          <span className="text-[9px] text-muted-foreground shrink-0">{log.carrierNames.length} carrier{log.carrierNames.length !== 1 ? "s" : ""}</span>
+                        </div>
+                        {log.recipients && log.recipients.length > 0 && (
+                          <div className="mt-2 flex flex-col gap-1">
+                            {log.recipients.map((r, ri) => {
+                              const isAdHoc = r.carrierId === null && r.carrierName.startsWith("Ad-hoc:");
+                              const displayName = isAdHoc ? (r.email ?? r.carrierName) : r.carrierName;
+                              return (
+                                <div key={ri} className="flex items-center gap-2 text-[9px] flex-wrap">
+                                  {isAdHoc && <span className="px-1 py-0.5 rounded bg-blue-500/15 border border-blue-500/25 text-blue-400">Ad-hoc</span>}
+                                  <span className="text-muted-foreground">{displayName}</span>
+                                  {r.status === "sent" && <span className="text-emerald-400 flex items-center gap-0.5"><CheckCircle2 className="w-2 h-2" /> sent</span>}
+                                  {r.status === "failed" && <span className="text-red-400 flex items-center gap-0.5"><XCircle className="w-2 h-2" /> {r.error ?? "failed"}</span>}
+                                  {r.status === "no_email" && <span className="text-orange-400">no email on file</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {log.emailDrafts && log.emailDrafts.length > 0 && (
+                          <div className="mt-2 flex flex-col gap-0.5">
+                            {log.emailDrafts.map((d, di) => (
+                              <p key={di} className="text-[9px] text-muted-foreground truncate">
+                                <span className="text-muted-foreground/30">Subject:</span> {d.subject}
+                              </p>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
                 </div>
+              )}
+            </div>
+          )}
+        </div>
 
-                {/* Send / Log actions inside the drafts block */}
-                {sendOverallStatus === "idle" && (
-                  <div className="mt-3 flex gap-2">
+        {/* ── CONTEXT-AWARE STICKY FOOTER ──────────────────────────────── */}
+        {(activeMainTab === "carriers" || activeMainTab === "message") && (
+          <div className="fixed bottom-0 right-0 w-full sm:max-w-2xl bg-background/95 backdrop-blur border-t border-border px-5 py-3 flex gap-2 z-50">
+
+            {/* Carriers / Ranked footer */}
+            {activeMainTab === "carriers" && activeCarriersSubTab === "ranked" && (
+              <>
+                <Button
+                  size="sm"
+                  onClick={handleGenerateOutreach}
+                  disabled={(selectedCarriers.size === 0 && adHocParsed.valid.length === 0) || draftEmailsMutation.isPending}
+                  className="flex-1 h-9 text-sm bg-amber-500 hover:bg-amber-400 text-black font-semibold disabled:opacity-50"
+                  data-testid="btn-generate-outreach"
+                >
+                  {draftEmailsMutation.isPending ? (
+                    <><Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />Generating drafts…</>
+                  ) : (selectedCarriers.size > 0 || adHocParsed.valid.length > 0) ? (
+                    <><Mail className="w-3.5 h-3.5 mr-1.5" />Review Message ({selectedCarriers.size + adHocParsed.valid.length} selected) →</>
+                  ) : (
+                    <><Mail className="w-3.5 h-3.5 mr-1.5" />Select Carriers to Continue</>
+                  )}
+                </Button>
+                {selectedCarriers.size > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleLogOutreach}
+                    disabled={outreachLogMutation.isPending}
+                    className="h-9 text-xs border-border text-muted-foreground hover:bg-muted/20"
+                    data-testid="btn-mark-contacted"
+                  >
+                    {outreachLogMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ClipboardCheck className="w-3.5 h-3.5" />}
+                    <span className="ml-1.5">Log Only</span>
+                  </Button>
+                )}
+              </>
+            )}
+
+            {/* Carriers / Bench or Import footer — informational */}
+            {activeMainTab === "carriers" && activeCarriersSubTab !== "ranked" && (
+              <p className="text-[10px] text-muted-foreground w-full text-center">
+                {activeCarriersSubTab === "bench"
+                  ? "Bench tracks carriers contacted on this lane."
+                  : "Import carriers to add them to the bench."}
+              </p>
+            )}
+
+            {/* Message tab footer */}
+            {activeMainTab === "message" && (
+              <>
+                {showEmails && emailDrafts.length > 0 && sendOverallStatus === "idle" && (
+                  <>
                     <Button
                       size="sm"
                       onClick={() => {
@@ -1740,10 +2263,10 @@ export function CarrierOutreachPanel({
                         }
                       }}
                       disabled={sendOutreachMutation.isPending}
-                      className="flex-1 h-8 text-xs bg-blue-600 hover:bg-blue-500 text-foreground font-semibold"
+                      className="flex-1 h-9 text-sm bg-blue-600 hover:bg-blue-500 text-foreground font-semibold"
                       data-testid="btn-send-emails"
                     >
-                      {sendOutreachMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Send className="w-3 h-3 mr-1" />}
+                      {sendOutreachMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Send className="w-3.5 h-3.5 mr-1.5" />}
                       Send Emails ({emailDrafts.length})
                     </Button>
                     <Button
@@ -1751,867 +2274,42 @@ export function CarrierOutreachPanel({
                       size="sm"
                       onClick={handleLogOutreach}
                       disabled={outreachLogMutation.isPending}
-                      className="flex-1 h-8 text-xs border-border text-muted-foreground hover:bg-muted/20"
+                      className="h-9 text-xs border-border text-muted-foreground hover:bg-muted/20"
                       data-testid="btn-log-without-sending"
                     >
-                      {outreachLogMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <ClipboardCheck className="w-3 h-3 mr-1" />}
-                      Log Only
+                      {outreachLogMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ClipboardCheck className="w-3.5 h-3.5" />}
+                      <span className="ml-1.5">Log Only</span>
                     </Button>
-                  </div>
+                  </>
+                )}
+                {!showEmails && (selectedCarriers.size > 0 || adHocParsed.valid.length > 0) && (
+                  <Button
+                    size="sm"
+                    onClick={handleGenerateOutreach}
+                    disabled={draftEmailsMutation.isPending}
+                    className="flex-1 h-9 text-sm bg-amber-500 hover:bg-amber-400 text-black font-semibold"
+                    data-testid="btn-generate-outreach"
+                  >
+                    {draftEmailsMutation.isPending ? (
+                      <><Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />Generating…</>
+                    ) : (
+                      <><Mail className="w-3.5 h-3.5 mr-1.5" />Generate Drafts ({selectedCarriers.size + adHocParsed.valid.length})</>
+                    )}
+                  </Button>
+                )}
+                {!showEmails && selectedCarriers.size === 0 && adHocParsed.valid.length === 0 && (
+                  <p className="text-[10px] text-muted-foreground w-full text-center">Select carriers first to generate outreach drafts.</p>
                 )}
                 {sendOverallStatus === "done" && (
-                  <p className="mt-2 text-[10px] text-emerald-400/70 flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3" />
-                    Emails sent and logged to lane history. View the History tab for details.
-                  </p>
+                  <div className="flex-1 flex items-center justify-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span className="text-sm text-emerald-400 font-medium">Outreach complete</span>
+                  </div>
                 )}
-              </div>
+              </>
             )}
-          </TabsContent>
-
-          {/* ── Import Tab ──────────────────────────────────────────────── */}
-          <TabsContent value="import" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto" data-testid="tab-content-import">
-
-            {/* ── Paste Emails (Ad-hoc outreach) ─────────────────────────── */}
-            <div className="mb-5">
-              <button
-                onClick={() => setAdHocEmailsExpanded(v => !v)}
-                className="w-full flex items-center justify-between gap-2 py-2 text-left"
-                data-testid="btn-toggle-paste-emails"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded bg-blue-500/20 flex items-center justify-center shrink-0">
-                    <Mail className="w-3 h-3 text-blue-400" />
-                  </div>
-                  <span className="text-xs font-semibold text-foreground/80">Paste Email Addresses</span>
-                  {adHocParsed.valid.length > 0 && (
-                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-300">
-                      {adHocParsed.valid.length} ready
-                    </span>
-                  )}
-                </div>
-                {adHocEmailsExpanded ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
-              </button>
-
-              {adHocEmailsExpanded && (
-                <div className="flex flex-col gap-3 mt-2 p-3 bg-muted/15 border border-border rounded-lg">
-                  <p className="text-[10px] text-muted-foreground">
-                    Paste email addresses for carriers not in the catalog — from DAT, broker groups, etc. These will be included when you send outreach. No carrier records are created.
-                  </p>
-                  <Textarea
-                    value={adHocEmailPasteText}
-                    onChange={e => setAdHocEmailPasteText(e.target.value)}
-                    placeholder={"carrier@example.com, dispatcher@trucking.com\nops@freightco.com"}
-                    className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[80px] placeholder:text-muted-foreground/30 font-mono"
-                    data-testid="textarea-adhoc-emails"
-                  />
-
-                  {/* Parsed result display */}
-                  {adHocEmailPasteText.trim() && (
-                    <div className="flex flex-col gap-1.5">
-                      {adHocParsed.valid.length > 0 && (
-                        <div className="flex items-center gap-1.5">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                          <span className="text-[10px] text-emerald-300 font-medium">
-                            {adHocParsed.valid.length} valid address{adHocParsed.valid.length !== 1 ? "es" : ""} found
-                          </span>
-                        </div>
-                      )}
-                      {adHocParsed.invalid.length > 0 && (
-                        <div className="flex items-start gap-1.5">
-                          <AlertCircle className="w-3 h-3 text-orange-400 shrink-0 mt-0.5" />
-                          <div>
-                            <span className="text-[10px] text-orange-300">
-                              {adHocParsed.invalid.length} invalid (will be skipped):
-                            </span>
-                            <span className="text-[10px] text-orange-400/70 ml-1 break-all">
-                              {adHocParsed.invalid.join(", ")}
-                            </span>
-                          </div>
-                        </div>
-                      )}
-                      {adHocParsed.valid.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {adHocParsed.valid.map((email, i) => (
-                            <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-300 font-mono">
-                              {email}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {adHocEmailPasteText.trim() && (
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() => setAdHocEmailPasteText("")}
-                        variant="outline"
-                        className="h-7 text-[10px] border-border text-muted-foreground hover:bg-muted/20"
-                        data-testid="btn-clear-adhoc-emails"
-                      >
-                        Clear
-                      </Button>
-                      {adHocParsed.valid.length > 0 && (
-                        <p className="text-[10px] text-blue-400/70 flex items-center gap-1 flex-1">
-                          <Mail className="w-2.5 h-2.5" />
-                          These will be included when you generate &amp; send outreach from the Carriers tab
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="border-t border-border mb-4" />
-
-            {importResults ? (
-              /* Success state — show import results */
-              <div className="flex flex-col gap-4">
-                <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <div>
-                    <p className="text-xs font-semibold text-emerald-300">
-                      {importResults.filter(r => r.status === "new").length} new carriers imported
-                    </p>
-                    {importResults.filter(r => r.status === "matched").length > 0 && (
-                      <p className="text-[10px] text-muted-foreground">
-                        {importResults.filter(r => r.status === "matched").length} matched existing catalog records
-                      </p>
-                    )}
-                    <p className="text-[10px] text-muted-foreground">All carriers added to lane bench</p>
-                  </div>
-                </div>
-
-                {/* Result list */}
-                <div className="flex flex-col gap-1.5">
-                  {importResults.map((r, idx) => (
-                    <div key={idx} className="flex items-center gap-2 p-2 bg-muted/15 rounded border border-border">
-                      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.status === "new" ? "bg-emerald-400" : "bg-amber-400"}`} />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-foreground truncate">{r.carrier.name}</p>
-                        {r.carrier.primaryEmail && (
-                          <p className="text-[10px] text-muted-foreground truncate">{r.carrier.primaryEmail}</p>
-                        )}
-                      </div>
-                      <Badge variant="outline" className={`text-[9px] py-0 px-1 shrink-0 ${
-                        r.status === "new" ? "border-emerald-500/40 text-emerald-400" : "border-amber-500/40 text-amber-400"
-                      }`}>
-                        {r.status === "new" ? "New" : r.matchType === "email_exact" ? "Email match" : r.matchType === "mc_exact" ? "MC match" : "Name match"}
-                      </Badge>
-                      <a
-                        href={`/carrier-hub?carrierId=${r.carrier.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-0.5 text-muted-foreground hover:text-foreground/80 transition-colors shrink-0"
-                        data-testid={`link-hub-import-result-${r.carrier.id}`}
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  ))}
-                </div>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setImportResults(null);
-                    setParsedImportCarriers(null);
-                    setImportPasteText("");
-                  }}
-                  className="w-full text-xs border-border text-muted-foreground hover:bg-muted/30"
-                  data-testid="btn-import-again"
-                >
-                  <Upload className="w-3 h-3 mr-1" />
-                  Import More Carriers
-                </Button>
-              </div>
-            ) : parsedImportCarriers ? (
-              /* Preview state — show parsed carriers before confirm */
-              <div className="flex flex-col gap-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-foreground">{parsedImportCarriers.length} carriers parsed</p>
-                  <button
-                    onClick={() => setParsedImportCarriers(null)}
-                    className="text-[10px] text-muted-foreground hover:text-foreground/60"
-                    data-testid="btn-import-back"
-                  >
-                    ← Edit
-                  </button>
-                </div>
-
-                {/* Preview table */}
-                <div className="flex flex-col gap-1">
-                  <div className="grid grid-cols-12 gap-2 px-2 py-1 text-[9px] uppercase tracking-wide text-muted-foreground">
-                    <span className="col-span-5">Name</span>
-                    <span className="col-span-4">Email</span>
-                    <span className="col-span-3">MC#</span>
-                  </div>
-                  {parsedImportCarriers.map((c, idx) => (
-                    <div key={idx} className="grid grid-cols-12 gap-2 px-2 py-1.5 bg-muted/15 rounded border border-border">
-                      <span className="col-span-5 text-[10px] text-foreground truncate">{c.name}</span>
-                      <span className="col-span-4 text-[10px] text-muted-foreground truncate">{c.email ?? "—"}</span>
-                      <span className="col-span-3 text-[10px] text-muted-foreground truncate">{c.mcDot ?? "—"}</span>
-                    </div>
-                  ))}
-                </div>
-
-                <Button
-                  size="sm"
-                  onClick={() => importCarriersMutation.mutate({
-                    carriers: parsedImportCarriers,
-                    source: importSource,
-                    rawInput: importPasteText,
-                  })}
-                  disabled={importCarriersMutation.isPending}
-                  className="w-full text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold"
-                  data-testid="btn-confirm-import"
-                >
-                  {importCarriersMutation.isPending
-                    ? <><Loader2 className="w-3 h-3 animate-spin mr-1" />Importing…</>
-                    : <><Plus className="w-3 h-3 mr-1" />Import & Add {parsedImportCarriers.length} to Bench</>
-                  }
-                </Button>
-              </div>
-            ) : (
-              /* Input state — paste textarea */
-              <div className="flex flex-col gap-4">
-                <div>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    Paste carrier contacts from DAT, Loadsmart, or any other platform. Supports tab-delimited, CSV, or plain name + email format.
-                  </p>
-                  <div className="text-[9px] text-muted-foreground mb-2 font-mono bg-muted/15 border border-border rounded px-2 py-1.5 space-y-0.5">
-                    <div className="text-muted-foreground mb-1">Supported formats (one per line):</div>
-                    <div>ABC Transport Inc, abc@transport.com, MC123456</div>
-                    <div>XYZ Logistics | xyz@logistics.com</div>
-                    <div>Smith Trucking LLC {"  "} MC789012</div>
-                    <div>John's Hauling Co (paste name only if no email)</div>
-                  </div>
-                </div>
-
-                {/* Source selector */}
-                <div>
-                  <p className="text-[9px] text-muted-foreground uppercase tracking-wide mb-1.5">Source Platform</p>
-                  <Select value={importSource} onValueChange={setImportSource}>
-                    <SelectTrigger className="h-8 text-xs bg-muted/20 border-border text-foreground/80" data-testid="select-import-source">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="dat">DAT Load Board</SelectItem>
-                      <SelectItem value="loadsmart">Loadsmart</SelectItem>
-                      <SelectItem value="csv_paste">CSV / Spreadsheet Paste</SelectItem>
-                      <SelectItem value="manual">Manual Entry</SelectItem>
-                      <SelectItem value="other">Other Platform</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Paste area */}
-                <div>
-                  <p className="text-[9px] text-muted-foreground uppercase tracking-wide mb-1.5">Carrier List</p>
-                  <Textarea
-                    value={importPasteText}
-                    onChange={e => setImportPasteText(e.target.value)}
-                    placeholder={"ABC Transport Inc, abc@transport.com, MC123456\nXYZ Logistics, xyz@example.com\nSmith Trucking LLC"}
-                    className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[160px] placeholder:text-muted-foreground/30 font-mono"
-                    data-testid="textarea-import-paste"
-                  />
-                  {importPasteText && (
-                    <p className="text-[9px] text-muted-foreground mt-1">
-                      {importPasteText.split("\n").filter(l => l.trim().length > 2).length} lines detected
-                    </p>
-                  )}
-                </div>
-
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    const parsed = parseImportText(importPasteText);
-                    if (parsed.length === 0) {
-                      toast({ title: "No carriers parsed", description: "Check format and try again.", variant: "destructive" });
-                      return;
-                    }
-                    setParsedImportCarriers(parsed);
-                  }}
-                  disabled={!importPasteText.trim()}
-                  className="w-full text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold"
-                  data-testid="btn-parse-import"
-                >
-                  <ExternalLink className="w-3 h-3 mr-1" />
-                  Parse & Preview
-                </Button>
-              </div>
-            )}
-          </TabsContent>
-
-          {/* ── Bench Tab ───────────────────────────────────────────────── */}
-          <TabsContent value="bench" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
-            {bench.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-4">
-                No carriers tracked yet. Select carriers from the Suggestions tab and mark them as contacted.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {/* Historical carrier callout */}
-                {(() => {
-                  const historicalMissingContact = bench.filter(b => b.sourceType === "historical" && !b.isContactable);
-                  if (historicalMissingContact.length === 0) return null;
-                  return (
-                    <div className="bg-blue-500/8 border border-blue-500/20 rounded-lg p-3 flex items-start gap-2 mb-1"
-                      data-testid="historical-carriers-callout">
-                      <Truck className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="text-[11px] font-semibold text-blue-300">
-                          {historicalMissingContact.length} historical carrier{historicalMissingContact.length > 1 ? "s" : ""} missing contact info
-                        </p>
-                        <p className="text-[10px] text-blue-300/60 mt-0.5">
-                          These carriers have hauled this lane before. Add their phone or email in the Carrier catalog to enable outreach.
-                        </p>
-                        <p className="text-[10px] text-muted-foreground mt-1">{historicalMissingContact.map(b => b.carrierName).join(", ")}</p>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {bench.map(interest => {
-                  const statusConfig = INTEREST_STATUS_LABELS[interest.interestStatus] ?? INTEREST_STATUS_LABELS.needs_follow_up;
-                  const isExpanded = expandedReply === interest.id;
-                  return (
-                    <div
-                      key={interest.id}
-                      className="bg-muted/10 rounded-lg border border-border p-3"
-                      data-testid={`bench-item-${interest.id}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                          <p className="text-xs font-semibold text-foreground truncate">{interest.carrierName}</p>
-                          {interest.sourceType === "historical" && (
-                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400">
-                              Ran this lane
-                            </Badge>
-                          )}
-                          {!interest.isContactable && (
-                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-orange-500/30 text-orange-400 flex items-center gap-0.5">
-                              <Mail className="w-2.5 h-2.5" />
-                              No contact info
-                            </Badge>
-                          )}
-                          </div>
-                          {interest.outreachSentAt && (
-                            <p className="text-[10px] text-muted-foreground mt-0.5">
-                              Contacted {new Date(interest.outreachSentAt).toLocaleDateString()}
-                            </p>
-                          )}
-                          {interest.lastReplySnippet && (
-                            <p className="text-[10px] text-muted-foreground italic mt-0.5 line-clamp-2">
-                              "{interest.lastReplySnippet}"
-                            </p>
-                          )}
-                        </div>
-                        <Badge variant="outline" className={`text-[9px] py-0 px-1.5 shrink-0 ${statusConfig.color}`}>
-                          {statusConfig.label}
-                        </Badge>
-                      </div>
-
-                      {/* Manual interest status override */}
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {([
-                          { value: "available_now", label: "Avail. Now" },
-                          { value: "available_next_week", label: "Next Wk" },
-                          { value: "future_interest", label: "Future" },
-                          { value: "not_fit", label: "Not a Fit" },
-                        ] as const).map(opt => (
-                          <button
-                            key={opt.value}
-                            onClick={() => setInterestStatusMutation.mutate({
-                              carrierId: interest.carrierId ?? null,
-                              carrierName: interest.carrierName,
-                              interestStatus: opt.value,
-                            })}
-                            disabled={setInterestStatusMutation.isPending}
-                            className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
-                              interest.interestStatus === opt.value
-                                ? "border-blue-400/60 bg-blue-500/20 text-blue-300"
-                                : "border-border bg-muted/20 text-muted-foreground hover:text-foreground/60 hover:border-border"
-                            }`}
-                            data-testid={`status-${opt.value}-${interest.id}`}
-                          >
-                            {opt.value === interest.interestStatus ? "✓ " : ""}{opt.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Reply classify toggle */}
-                      <button
-                        onClick={() => setExpandedReply(isExpanded ? null : interest.id)}
-                        className="mt-2 flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground/60"
-                        data-testid={`classify-toggle-${interest.id}`}
-                      >
-                        <Mail className="w-3 h-3" />
-                        Classify reply
-                        {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                      </button>
-
-                      {isExpanded && (
-                        <div className="mt-2 flex flex-col gap-2">
-                          <Textarea
-                            placeholder="Paste carrier reply here…"
-                            value={replyInputs[interest.id] ?? ""}
-                            onChange={e => setReplyInputs(prev => ({ ...prev, [interest.id]: e.target.value }))}
-                            className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[60px]"
-                            data-testid={`reply-input-${interest.id}`}
-                          />
-                          <Button
-                            size="sm"
-                            onClick={() => handleClassifyReply(interest)}
-                            disabled={classifyReplyMutation.isPending || !(replyInputs[interest.id] ?? "").trim()}
-                            className="h-7 text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 self-end"
-                            data-testid={`classify-submit-${interest.id}`}
-                          >
-                            {classifyReplyMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Classify"}
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </TabsContent>
-
-          {/* ── Follow-up Tab ────────────────────────────────────────────── */}
-          <TabsContent value="followup" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
-            {followupLoading ? (
-              <div className="flex items-center gap-2 text-muted-foreground text-xs py-4">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                Loading suggestions…
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {(followupData?.suggestions ?? []).length === 0 && (
-                  <p className="text-xs text-muted-foreground py-4">
-                    No follow-up suggestions yet — contact some carriers first.
-                  </p>
-                )}
-                {(followupData?.suggestions ?? []).map((s, i) => (
-                  <div
-                    key={i}
-                    className={`p-3 rounded-lg border flex items-start gap-2 ${
-                      s.priority === "high" ? "bg-amber-500/8 border-amber-500/20" :
-                      s.priority === "medium" ? "bg-muted/10 border-border" :
-                      "bg-muted/10 border-border/60"
-                    }`}
-                    data-testid={`followup-suggestion-${i}`}
-                  >
-                    <Lightbulb className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
-                      s.priority === "high" ? "text-amber-400" :
-                      s.priority === "medium" ? "text-muted-foreground" : "text-foreground/30"
-                    }`} />
-                    <p className="text-xs text-foreground/70">{s.message}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </TabsContent>
-
-          {/* ── History Tab ──────────────────────────────────────────────── */}
-          <TabsContent value="history" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
-            {isHistoryLoading ? (
-              <div className="flex flex-col gap-3 animate-pulse" data-testid="history-loading">
-                {[1, 2, 3].map(i => (
-                  <div key={i} className="h-16 rounded-lg bg-muted/30 border border-border" />
-                ))}
-              </div>
-            ) : isHistoryError ? (
-              <div className="flex flex-col items-center gap-2 py-6 text-center" data-testid="history-error">
-                <XCircle className="w-5 h-5 text-red-400" />
-                <p className="text-xs text-red-400 font-medium">Could not load outreach history</p>
-                <p className="text-[10px] text-muted-foreground">Contact support if this persists</p>
-                <button
-                  onClick={() => refetchHistory()}
-                  className="mt-1 text-[10px] text-muted-foreground underline hover:text-foreground/70"
-                  data-testid="history-retry"
-                >
-                  Try again
-                </button>
-              </div>
-            ) : outreachHistory.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-4" data-testid="history-empty">
-                No outreach history yet for this lane.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {outreachHistory.map(log => {
-                  const status = log.deliveryStatus ?? "draft";
-                  const statusConfig = {
-                    sent: { label: "Sent", color: "text-emerald-400", icon: <CheckCircle2 className="w-3 h-3" /> },
-                    partial: { label: "Partial", color: "text-amber-400", icon: <AlertCircle className="w-3 h-3" /> },
-                    failed: { label: "Failed", color: "text-red-400", icon: <XCircle className="w-3 h-3" /> },
-                    draft: { label: "Logged", color: "text-muted-foreground", icon: <ClipboardCheck className="w-3 h-3" /> },
-                  }[status] ?? { label: status, color: "text-muted-foreground", icon: <Clock className="w-3 h-3" /> };
-                  return (
-                    <div key={log.id} className="bg-muted/10 rounded-lg border border-border p-3" data-testid={`outreach-log-${log.id}`}>
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className={`flex items-center gap-1 text-[10px] font-semibold ${statusConfig.color}`}>
-                              {statusConfig.icon}
-                              {statusConfig.label}
-                            </span>
-                            <span className="text-[9px] text-muted-foreground">·</span>
-                            <span className="text-[9px] text-muted-foreground">
-                              {log.outreachMode === "immediate_plus_lane" ? "Immediate + Lane" : "Lane-Building"}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-foreground/70 mt-1 font-medium">
-                            {log.carrierNames.join(", ")}
-                          </p>
-                          {log.sentAt && (
-                            <p className="text-[9px] text-muted-foreground mt-0.5">
-                              Sent {new Date(log.sentAt).toLocaleString()}
-                            </p>
-                          )}
-                          {!log.sentAt && (
-                            <p className="text-[9px] text-muted-foreground mt-0.5">
-                              Logged {new Date(log.timestamp).toLocaleString()}
-                            </p>
-                          )}
-                          {log.failureReason && (
-                            <p className="text-[9px] text-red-400/70 mt-0.5">Error: {log.failureReason}</p>
-                          )}
-                        </div>
-                        <span className="text-[9px] text-muted-foreground shrink-0">
-                          {log.carrierNames.length} carrier{log.carrierNames.length !== 1 ? "s" : ""}
-                        </span>
-                      </div>
-
-                      {/* Per-recipient breakdown */}
-                      {log.recipients && log.recipients.length > 0 && (
-                        <div className="mt-2 flex flex-col gap-1">
-                          {log.recipients.map((r, ri) => {
-                            const isAdHoc = r.carrierId === null && r.carrierName.startsWith("Ad-hoc:");
-                            const displayName = isAdHoc ? (r.email ?? r.carrierName) : r.carrierName;
-                            return (
-                              <div key={ri} className="flex items-center gap-2 text-[9px] flex-wrap">
-                                {isAdHoc && (
-                                  <span className="px-1 py-0.5 rounded bg-blue-500/15 border border-blue-500/25 text-blue-400">Ad-hoc</span>
-                                )}
-                                <span className="text-muted-foreground">{displayName}</span>
-                                {r.status === "sent" && <span className="text-emerald-400 flex items-center gap-0.5"><CheckCircle2 className="w-2 h-2" /> sent</span>}
-                                {r.status === "failed" && <span className="text-red-400 flex items-center gap-0.5"><XCircle className="w-2 h-2" /> {r.error ?? "failed"}</span>}
-                                {r.status === "no_email" && <span className="text-orange-400">no email on file</span>}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Show drafted email subjects */}
-                      {log.emailDrafts && log.emailDrafts.length > 0 && (
-                        <div className="mt-2 flex flex-col gap-0.5">
-                          {log.emailDrafts.map((d, di) => (
-                            <p key={di} className="text-[9px] text-muted-foreground truncate">
-                              <span className="text-muted-foreground/30">Subject:</span> {d.subject}
-                            </p>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </TabsContent>
-
-          {/* ── Stable Coverage Tab ──────────────────────────────────────── */}
-          <TabsContent value="coverage" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto" data-testid="tab-content-coverage">
-            {coverageLoading ? (
-              <div className="flex items-center gap-2 text-muted-foreground py-6">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="text-xs">Computing coverage profile…</span>
-              </div>
-            ) : !coverageData?.profile ? (
-              <div className="py-6">
-                <p className="text-xs text-muted-foreground">
-                  Coverage data not available for this lane yet. Coverage profiles are built once a lane has sufficient TMS history.
-                </p>
-              </div>
-            ) : (() => {
-              const profile = coverageData.profile;
-              const carriers = coverageData.carriers ?? [];
-              const effectiveStatus = profile.manualOverrideStatus ?? profile.coverageStatus;
-              const isStable = effectiveStatus === "stable";
-              const isWatch = effectiveStatus === "watch";
-              const share = profile.topCarrierCoverageShare ? (parseFloat(profile.topCarrierCoverageShare) * 100).toFixed(0) : null;
-
-              return (
-                <div className="flex flex-col gap-5">
-                  {/* Status header */}
-                  <div className={`rounded-lg border p-4 ${
-                    isStable ? "border-emerald-500/30 bg-emerald-500/8" :
-                    isWatch  ? "border-amber-500/30 bg-amber-500/8" :
-                               "border-border bg-muted/10"
-                  }`} data-testid="coverage-status-header">
-                    <div className="flex items-center gap-2 mb-2">
-                      {isStable ? (
-                        <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                      ) : isWatch ? (
-                        <TrendingUp className="w-5 h-5 text-amber-400" />
-                      ) : (
-                        <ShieldAlert className="w-5 h-5 text-muted-foreground" />
-                      )}
-                      <span className={`text-sm font-semibold ${
-                        isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-muted-foreground"
-                      }`} data-testid="coverage-status-label">
-                        {isStable ? "Stable Coverage" : isWatch ? "Coverage Watch" : "Unstable Coverage"}
-                      </span>
-                      {profile.manualOverrideStatus && (
-                        <Badge variant="outline" className="text-[9px] py-0 px-1 border-violet-500/30 text-violet-400 ml-1">
-                          Manual override
-                        </Badge>
-                      )}
-                      {profile.broadenSearchActive && (
-                        <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 ml-1">
-                          <Search className="w-2.5 h-2.5 mr-0.5" />
-                          Broaden mode
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-3 gap-3 mt-3">
-                      <div className="flex flex-col">
-                        <span className="text-[10px] text-muted-foreground">Sample Size</span>
-                        <span className="text-lg font-bold text-foreground" data-testid="coverage-sample-size">{profile.sampleSize}</span>
-                        <span className="text-[9px] text-muted-foreground">total loads</span>
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-[10px] text-muted-foreground">Qualified Carriers</span>
-                        <span className="text-lg font-bold text-foreground" data-testid="coverage-carrier-count">{profile.qualifiedCarrierCount}</span>
-                        <span className="text-[9px] text-muted-foreground">with load history</span>
-                      </div>
-                      {share && (
-                        <div className="flex flex-col">
-                          <span className="text-[10px] text-muted-foreground">Coverage Share</span>
-                          <span className="text-lg font-bold text-foreground">{share}%</span>
-                          <span className="text-[9px] text-muted-foreground">of recent loads</span>
-                        </div>
-                      )}
-                    </div>
-                    {profile.manualOverrideReason && (
-                      <p className="mt-2 text-[10px] text-muted-foreground italic">
-                        Override reason: {profile.manualOverrideReason}
-                      </p>
-                    )}
-                    {profile.manuallyConfirmedAt && (
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        Confirmed {new Date(profile.manuallyConfirmedAt).toLocaleDateString()}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Incumbent carriers list */}
-                  {carriers.length > 0 && (
-                    <div>
-                      <h3 className="text-xs font-semibold text-foreground/70 mb-2 flex items-center gap-1.5">
-                        <Star className="w-3 h-3 text-amber-400" />
-                        Incumbent Carriers
-                      </h3>
-                      <div className="flex flex-col gap-2">
-                        {carriers.map((c, idx) => {
-                          const coveragePct = c.coverageShare ? (parseFloat(c.coverageShare) * 100).toFixed(0) : null;
-                          return (
-                            <div
-                              key={c.id ?? idx}
-                              className="bg-muted/10 border border-border rounded-lg p-3"
-                              data-testid={`coverage-carrier-${idx}`}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2">
-                                  <span className={`text-[10px] font-bold rounded px-1 py-0.5 ${
-                                    c.incumbentRank === 1 ? "bg-amber-400/20 text-amber-400" : "bg-muted/40 text-muted-foreground"
-                                  }`}>#{c.incumbentRank}</span>
-                                  <span className="text-xs font-medium text-foreground" data-testid={`coverage-carrier-name-${idx}`}>
-                                    {c.carrierName}
-                                  </span>
-                                  {c.isCurrentPrimary && (
-                                    <Badge variant="outline" className="text-[9px] py-0 px-1 border-emerald-500/40 text-emerald-400">
-                                      Primary
-                                    </Badge>
-                                  )}
-                                </div>
-                                {coveragePct && (
-                                  <span className="text-[10px] text-muted-foreground">{coveragePct}%</span>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                                <span className="text-[10px] text-muted-foreground">
-                                  {c.successfulLoadCount} loads
-                                </span>
-                                {c.recentLoadCount > 0 && (
-                                  <span className="text-[10px] text-muted-foreground">
-                                    {c.recentLoadCount} recent
-                                  </span>
-                                )}
-                                {c.lastUsedAt && (
-                                  <span className="text-[10px] text-muted-foreground">
-                                    Last: {new Date(c.lastUsedAt).toLocaleDateString()}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Action buttons */}
-                  <div className="flex flex-col gap-2">
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Actions</h3>
-
-                    {/* Confirm stable (only shown if system says stable but not yet confirmed) */}
-                    {isStable && !profile.manuallyConfirmedAt && !profile.manualOverrideStatus && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="w-full text-xs justify-start border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                        data-testid="button-confirm-stable"
-                        onClick={async () => {
-                          try {
-                            await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/confirm`, {});
-                            await refetchCoverage();
-                            toast({ title: "Coverage confirmed stable" });
-                          } catch {
-                            toast({ title: "Failed to confirm coverage", variant: "destructive" });
-                          }
-                        }}
-                      >
-                        <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />
-                        Confirm Stable Coverage
-                      </Button>
-                    )}
-
-                    {/* Broaden search toggle */}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className={`w-full text-xs justify-start ${
-                        profile.broadenSearchActive
-                          ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
-                          : "border-border text-muted-foreground hover:bg-muted/40"
-                      }`}
-                      data-testid="button-toggle-broaden"
-                      onClick={async () => {
-                        try {
-                          await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/broaden`, {
-                            active: !profile.broadenSearchActive,
-                          });
-                          await refetchCoverage();
-                          toast({
-                            title: profile.broadenSearchActive
-                              ? "Broaden search disabled — incumbent-first flow restored"
-                              : "Broaden search enabled — open procurement mode active",
-                          });
-                        } catch {
-                          toast({ title: "Failed to update broaden flag", variant: "destructive" });
-                        }
-                      }}
-                    >
-                      <Search className="w-3.5 h-3.5 mr-1.5" />
-                      {profile.broadenSearchActive ? "Disable Broaden Search" : "Enable Broaden Search"}
-                    </Button>
-
-                    {/* Override status */}
-                    <div className="flex gap-2">
-                      {(["stable", "watch", "unstable"] as const).map(s => (
-                        <Button
-                          key={s}
-                          size="sm"
-                          variant="outline"
-                          className={`flex-1 text-[11px] ${
-                            s === "stable" ? "border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10" :
-                            s === "watch"  ? "border-amber-500/30 text-amber-400 hover:bg-amber-500/10" :
-                                            "border-border text-muted-foreground hover:bg-muted/40"
-                          } ${effectiveStatus === s ? "bg-muted/40 font-bold" : ""}`}
-                          data-testid={`button-override-${s}`}
-                          onClick={async () => {
-                            if (effectiveStatus === s) return;
-                            try {
-                              await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, {
-                                status: s,
-                                reason: `Manually set to ${s} by user`,
-                              });
-                              await refetchCoverage();
-                              toast({ title: `Coverage override set to ${s}` });
-                            } catch {
-                              toast({ title: "Failed to set override", variant: "destructive" });
-                            }
-                          }}
-                        >
-                          {s === "stable" ? <ShieldCheck className="w-3 h-3 mr-1" /> :
-                           s === "watch"  ? <TrendingUp className="w-3 h-3 mr-1" /> :
-                                           <ShieldAlert className="w-3 h-3 mr-1" />}
-                          {s.charAt(0).toUpperCase() + s.slice(1)}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {profile.updatedAt && (
-                    <p className="text-[10px] text-muted-foreground">
-                      Profile last updated {new Date(profile.updatedAt).toLocaleString()}
-                    </p>
-                  )}
-                </div>
-              );
-            })()}
-          </TabsContent>
-        </Tabs>
-
-        {/* Sticky action bar */}
-        <div className="fixed bottom-0 right-0 w-full sm:max-w-xl bg-background/95 backdrop-blur border-t border-border px-5 py-3 flex gap-2 z-50">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleGenerateOutreach}
-            disabled={(selectedCarriers.size === 0 && adHocParsed.valid.length === 0) || draftEmailsMutation.isPending}
-            className="flex-1 h-8 text-xs border-amber-500/30 text-amber-300 hover:bg-amber-500/10"
-            data-testid="btn-generate-outreach"
-          >
-            {draftEmailsMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Mail className="w-3 h-3 mr-1" />}
-            Generate Outreach ({selectedCarriers.size + adHocParsed.valid.length})
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => {
-              if (showEmails && emailDrafts.length > 0) {
-                if (emailDrafts.length >= 50) {
-                  setSendConfirmOpen(true);
-                  setSendConfirmOverride(false);
-                } else {
-                  handleSendOutreach();
-                }
-              } else {
-                handleLogOutreach();
-              }
-            }}
-            disabled={(selectedCarriers.size === 0 && emailDrafts.length === 0) || outreachLogMutation.isPending || sendOutreachMutation.isPending}
-            className="flex-1 h-8 text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold"
-            data-testid="btn-mark-contacted"
-          >
-            {(outreachLogMutation.isPending || sendOutreachMutation.isPending) ? (
-              <Loader2 className="w-3 h-3 animate-spin mr-1" />
-            ) : showEmails && emailDrafts.length > 0 ? (
-              <Send className="w-3 h-3 mr-1" />
-            ) : (
-              <CheckCircle2 className="w-3 h-3 mr-1" />
-            )}
-            {showEmails && emailDrafts.length > 0 ? `Send Emails (${emailDrafts.length})` : `Mark Contacted (${selectedCarriers.size})`}
-          </Button>
-        </div>
+          </div>
+        )}
 
         {/* Bulk send confirmation dialog (50+ carriers warning) */}
         {sendConfirmOpen && (
@@ -2622,11 +2320,8 @@ export function CarrierOutreachPanel({
                 <p className="text-sm font-semibold text-foreground">Send to {emailDrafts.length} carriers?</p>
               </div>
               <p className="text-xs text-muted-foreground mb-4">
-                You are about to send outreach emails to <span className="text-orange-300 font-medium">{emailDrafts.length} carriers</span>. 
-                This is a large batch — confirm you want to proceed.
+                You are about to send outreach emails to <span className="text-orange-300 font-medium">{emailDrafts.length} carriers</span>. This is a large batch — confirm you want to proceed.
               </p>
-
-              {/* Override recently-contacted toggle */}
               <div className="flex items-center gap-2 mb-4 p-2 bg-muted/20 border border-border rounded-lg">
                 <input
                   type="checkbox"
@@ -2640,31 +2335,20 @@ export function CarrierOutreachPanel({
                   Include recently-contacted carriers (override 14-day suppression)
                 </label>
               </div>
-
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSendConfirmOpen(false)}
-                  className="flex-1 h-8 text-xs border-border text-muted-foreground hover:bg-muted/20"
-                  data-testid="btn-cancel-bulk-send"
-                >
+                <Button variant="outline" size="sm" onClick={() => setSendConfirmOpen(false)} className="flex-1 h-8 text-xs border-border text-muted-foreground hover:bg-muted/20" data-testid="btn-cancel-bulk-send">
                   Cancel
                 </Button>
-                <Button
-                  size="sm"
+                <Button size="sm"
                   onClick={() => {
                     setSendConfirmOpen(false);
-                    if (sendConfirmOverride) {
-                      setOverrideRecentlyContacted(true);
-                    }
+                    if (sendConfirmOverride) setOverrideRecentlyContacted(true);
                     handleSendOutreach();
                   }}
                   className="flex-1 h-8 text-xs bg-blue-600 hover:bg-blue-500 text-foreground font-semibold"
                   data-testid="btn-confirm-bulk-send"
                 >
-                  <Send className="w-3 h-3 mr-1" />
-                  Confirm Send
+                  <Send className="w-3 h-3 mr-1" /> Confirm Send
                 </Button>
               </div>
             </div>
