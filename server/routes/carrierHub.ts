@@ -105,8 +105,11 @@ export function registerCarrierHubRoutes(app: Express) {
           ${statusFilter ? `AND c.status = '${statusFilter.replace(/'/g, "''")}'` : ""}
           ${hasEmail === "true" ? `AND c.primary_email IS NOT NULL` : ""}
           ${hasPhone === "true" ? `AND c.phone IS NOT NULL` : ""}
+          ${equipFilter ? `AND EXISTS (SELECT 1 FROM unnest(c.equipment_types) et WHERE et ILIKE '%${equipFilter.replace(/'/g, "''")}%')` : ""}
         GROUP BY c.id
-        ${hasProvenHistory === "true" ? `HAVING COUNT(DISTINCT lci.id) FILTER (WHERE lci.carrier_id = c.id) > 0` : ""}
+        HAVING 1=1
+          ${hasProvenHistory === "true" ? `AND COUNT(DISTINCT lci.id) FILTER (WHERE lci.carrier_id = c.id) > 0` : ""}
+          ${hasClaimedLanes === "true" ? `AND COUNT(DISTINCT ccl.id) > 0` : ""}
         ORDER BY ${
           sort === "loads" ? "total_loads DESC, c.name ASC" :
           sort === "last_used" ? "last_used DESC NULLS LAST, c.name ASC" :
@@ -119,23 +122,32 @@ export function registerCarrierHubRoutes(app: Express) {
         q ? [org, `%${q}%`, limitNum, offset] : [org, limitNum, offset]
       );
 
-      // Filter by equipment client-side after (simpler than PG array contains)
-      let rows = result.rows;
-      if (equipFilter) {
-        rows = rows.filter(r =>
-          r.equipment_types?.some(e => e.toLowerCase().includes(equipFilter.toLowerCase()))
-        );
-      }
-      if (hasClaimedLanes === "true") {
-        rows = rows.filter(r => parseInt(r.claimed_lane_count) > 0);
-      }
+      const rows = result.rows;
 
-      // Get total count for pagination
-      const totalResult = await storage.pool.query(
-        `SELECT COUNT(*) FROM carriers WHERE org_id = $1 ${q ? "AND (name ILIKE $2 OR mc_dot ILIKE $2 OR primary_email ILIKE $2)" : ""}`,
+      // Get total count — use identical filters as the main list query
+      const countResult = await storage.pool.query(
+        `
+        SELECT COUNT(*) FROM (
+          SELECT c.id
+          FROM carriers c
+          LEFT JOIN lane_carrier_interest lci ON lci.carrier_id = c.id
+          LEFT JOIN carrier_contacts cc ON cc.carrier_id = c.id AND cc.is_active = true
+          LEFT JOIN carrier_claimed_lanes ccl ON ccl.carrier_id = c.id
+          WHERE c.org_id = $1
+            ${q ? `AND (c.name ILIKE $2 OR c.mc_dot ILIKE $2 OR c.dot_number ILIKE $2 OR c.primary_email ILIKE $2 OR c.phone ILIKE $2)` : ""}
+            ${statusFilter ? `AND c.status = '${statusFilter.replace(/'/g, "''")}'` : ""}
+            ${hasEmail === "true" ? `AND c.primary_email IS NOT NULL` : ""}
+            ${hasPhone === "true" ? `AND c.phone IS NOT NULL` : ""}
+            ${equipFilter ? `AND EXISTS (SELECT 1 FROM unnest(c.equipment_types) et WHERE et ILIKE '%${equipFilter.replace(/'/g, "''")}%')` : ""}
+          GROUP BY c.id
+          HAVING 1=1
+            ${hasProvenHistory === "true" ? `AND COUNT(DISTINCT lci.id) FILTER (WHERE lci.carrier_id = c.id) > 0` : ""}
+            ${hasClaimedLanes === "true" ? `AND COUNT(DISTINCT ccl.id) > 0` : ""}
+        ) subq
+        `,
         q ? [org, `%${q}%`] : [org]
       );
-      const total = parseInt(totalResult.rows[0].count);
+      const total = parseInt(countResult.rows[0].count);
 
       res.json({
         carriers: rows,
@@ -278,6 +290,7 @@ export function registerCarrierHubRoutes(app: Express) {
   });
 
   // ── DETAIL ────────────────────────────────────────────────────────────────
+  // Fast path: base profile + contacts + claimed lanes only
   app.get("/api/carrier-hub/:id", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
@@ -305,6 +318,47 @@ export function registerCarrierHubRoutes(app: Express) {
         .where(eq(carrierClaimedLanes.carrierId, id))
         .orderBy(asc(carrierClaimedLanes.laneType), asc(carrierClaimedLanes.originState));
 
+      const contactReadiness = contacts.length > 0 && contacts.some(c => c.email || c.phone)
+        ? "ready"
+        : carrier.primaryEmail || carrier.phone
+        ? "partial"
+        : "missing";
+
+      res.json({
+        carrier,
+        contacts,
+        claimedLanes,
+        // Include empty arrays so the frontend doesn't need to guard against undefined
+        provenHistory: [],
+        outreachActivity: [],
+        stats: {
+          provenLaneCount: 0,
+          outreachSentCount: 0,
+          positiveOutcomes: 0,
+          lastUsed: null,
+          contactReadiness,
+        },
+      });
+    } catch (err) {
+      console.error("[carrier-hub] detail error:", err);
+      res.status(500).json({ error: "Failed to load carrier detail" });
+    }
+  });
+
+  // ── ACTIVITY (lazy) ───────────────────────────────────────────────────────
+  // Heavy sub-queries loaded on demand: proven history + outreach logs
+  app.get("/api/carrier-hub/:id/activity", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const { id } = req.params;
+
+      // Verify org ownership first with a lightweight check
+      const [c] = await db
+        .select({ id: carriers.id })
+        .from(carriers)
+        .where(and(eq(carriers.id, id), eq(carriers.orgId, org)));
+      if (!c) return res.status(404).json({ error: "Carrier not found" });
+
       // Proven lane history from lane_carrier_interest (read-only, system-derived)
       const provenHistory = await storage.pool.query(
         `
@@ -329,7 +383,7 @@ export function registerCarrierHubRoutes(app: Express) {
         [id]
       );
 
-      // Outreach activity
+      // Outreach activity — can be slow on large carrier_outreach_logs tables
       const outreachActivity = await storage.pool.query(
         `
         SELECT
@@ -346,26 +400,23 @@ export function registerCarrierHubRoutes(app: Express) {
         [id]
       );
 
-      // Aggregate stats
       const stats = {
         provenLaneCount: provenHistory.rows.length,
         outreachSentCount: outreachActivity.rows.length,
-        positiveOutcomes: provenHistory.rows.filter(r => r.interest_status === "available" || r.interest_status === "available_next_week").length,
+        positiveOutcomes: provenHistory.rows.filter(
+          r => r.interest_status === "available" || r.interest_status === "available_next_week"
+        ).length,
         lastUsed: provenHistory.rows[0]?.updated_at ?? null,
-        contactReadiness: contacts.length > 0 && contacts.some(c => c.email || c.phone) ? "ready" : carrier.primaryEmail || carrier.phone ? "partial" : "missing",
       };
 
       res.json({
-        carrier,
-        contacts,
-        claimedLanes,
         provenHistory: provenHistory.rows,
         outreachActivity: outreachActivity.rows,
         stats,
       });
     } catch (err) {
-      console.error("[carrier-hub] detail error:", err);
-      res.status(500).json({ error: "Failed to load carrier detail" });
+      console.error("[carrier-hub] activity error:", err);
+      res.status(500).json({ error: "Failed to load carrier activity" });
     }
   });
 

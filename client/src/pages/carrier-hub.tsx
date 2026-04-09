@@ -24,6 +24,7 @@ import {
   Truck, Building2, Phone, Mail, MapPin, Search, Plus, X, ChevronRight,
   AlertTriangle, CheckCircle2, Star, User, Route, Activity, Settings,
   Globe, Loader2, Edit2, Trash2, Shield, History, Zap, ExternalLink,
+  HelpCircle,
 } from "lucide-react";
 
 // ── Source channel helpers ─────────────────────────────────────────────────────
@@ -488,8 +489,29 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
 
   const { data, isLoading } = useQuery<CarrierDetail>({
     queryKey: ["/api/carrier-hub", carrierId],
-    queryFn: () => fetch(`/api/carrier-hub/${carrierId}`).then(r => r.json()),
+    queryFn: async () => {
+      const r = await fetch(`/api/carrier-hub/${carrierId}`);
+      if (!r.ok) throw new Error(`Failed to load carrier (${r.status})`);
+      return r.json();
+    },
     enabled: !!carrierId,
+  });
+
+  // Lazy-load activity (proven history + outreach) on demand
+  interface ActivityData {
+    provenHistory: ProvenLane[];
+    outreachActivity: any[];
+    stats: { provenLaneCount: number; outreachSentCount: number; positiveOutcomes: number; lastUsed: string | null };
+  }
+  const activityEnabled = (activeTab === "lanes" || activeTab === "activity") && !!carrierId;
+  const { data: activityData, isLoading: activityLoading } = useQuery<ActivityData>({
+    queryKey: ["/api/carrier-hub", carrierId, "activity"],
+    queryFn: async () => {
+      const r = await fetch(`/api/carrier-hub/${carrierId}/activity`);
+      if (!r.ok) throw new Error(`Failed to load activity (${r.status})`);
+      return r.json();
+    },
+    enabled: activityEnabled,
   });
 
   interface BestLane {
@@ -546,8 +568,17 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
 
   if (isLoading || !carrier) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      <div className="flex flex-col h-full overflow-hidden p-6 gap-4" data-testid="drawer-skeleton">
+        <div className="space-y-2">
+          <div className="h-6 w-2/3 rounded-md bg-muted/40 animate-pulse" />
+          <div className="h-4 w-1/2 rounded-md bg-muted/30 animate-pulse" />
+        </div>
+        <div className="grid grid-cols-4 gap-2">
+          {[1,2,3,4].map(i => <div key={i} className="h-16 rounded-lg bg-muted/30 animate-pulse" />)}
+        </div>
+        <div className="space-y-3 mt-2">
+          {[1,2,3].map(i => <div key={i} className="h-10 rounded-lg bg-muted/20 animate-pulse" />)}
+        </div>
       </div>
     );
   }
@@ -600,9 +631,9 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
         {/* Quick stats */}
         <div className="grid grid-cols-4 gap-2 mt-3">
           {[
-            { label: "Proven Lanes", value: data!.stats.provenLaneCount, icon: Route, color: "text-blue-400" },
-            { label: "Outreach Sent", value: data!.stats.outreachSentCount, icon: Mail, color: "text-amber-400" },
-            { label: "Positive Replies", value: data!.stats.positiveOutcomes, icon: CheckCircle2, color: "text-green-400" },
+            { label: "Proven Lanes", value: activityData?.stats.provenLaneCount ?? "—", icon: Route, color: "text-blue-400" },
+            { label: "Outreach Sent", value: activityData?.stats.outreachSentCount ?? "—", icon: Mail, color: "text-amber-400" },
+            { label: "Positive Replies", value: activityData?.stats.positiveOutcomes ?? "—", icon: CheckCircle2, color: "text-green-400" },
             { label: "Contacts", value: data!.contacts.length, icon: User, color: "text-purple-400" },
           ].map(s => (
             <div key={s.label} className="bg-muted/30 rounded-lg p-2 text-center">
@@ -623,7 +654,7 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
           </TabsTrigger>
           <TabsTrigger value="equipment" className="text-xs h-7" data-testid="tab-equipment">Equip & Geo</TabsTrigger>
           <TabsTrigger value="lanes" className="text-xs h-7" data-testid="tab-lanes">
-            Lanes <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{data!.claimedLanes.length + data!.provenHistory.length}</Badge>
+            Lanes <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{data!.claimedLanes.length + (activityData?.provenHistory.length ?? 0)}</Badge>
           </TabsTrigger>
           <TabsTrigger value="activity" className="text-xs h-7" data-testid="tab-activity">Activity</TabsTrigger>
         </TabsList>
@@ -886,12 +917,18 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                 <p className="text-[11px] text-muted-foreground">Lanes the system knows this carrier has actually run</p>
               </div>
 
-              {data!.provenHistory.length === 0 && (
+              {activityLoading && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Loading history…
+                </div>
+              )}
+
+              {!activityLoading && (activityData?.provenHistory ?? []).length === 0 && (
                 <p className="text-xs text-muted-foreground italic">No proven history yet. This populates automatically from financial upload data and lane activity.</p>
               )}
 
               <div className="space-y-1.5">
-                {data!.provenHistory.map(l => (
+                {(activityData?.provenHistory ?? []).map(l => (
                   <div key={l.id} className="flex items-center gap-2 rounded-lg border border-border bg-muted/10 px-3 py-2" data-testid={`proven-lane-${l.id}`}>
                     <History className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                     <div className="flex-1 min-w-0">
@@ -976,11 +1013,16 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
           {/* ── Activity Tab ── */}
           <TabsContent value="activity" className="mt-0">
             <h3 className="text-sm font-semibold mb-2">Outreach History</h3>
-            {data!.outreachActivity.length === 0 && (
+            {activityLoading && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                <Loader2 className="w-3 h-3 animate-spin" /> Loading outreach activity…
+              </div>
+            )}
+            {!activityLoading && (activityData?.outreachActivity ?? []).length === 0 && (
               <p className="text-sm text-muted-foreground italic">No outreach activity recorded yet.</p>
             )}
             <div className="space-y-2">
-              {data!.outreachActivity.map((a: any) => (
+              {(activityData?.outreachActivity ?? []).map((a: any) => (
                 <div key={a.id} className="rounded-lg border border-border bg-muted/10 px-3 py-2 text-sm">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium text-foreground">{laneLabel(a)}</span>
@@ -1072,6 +1114,12 @@ export default function CarrierHub() {
   const statusFilterValue = statusFilter === "__all__" ? "" : statusFilter;
   const equipFilterValue = equipFilter === "__all__" ? "" : equipFilter;
 
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 100;
+
+  // Reset page when filters change
+  useEffect(() => { setPage(1); }, [search, statusFilter, equipFilter, hasEmail, hasPhone, hasProvenHistory, hasClaimedLanes, sort]);
+
   const queryParams = new URLSearchParams({
     ...(search && { q: search }),
     ...(statusFilterValue && { status: statusFilterValue }),
@@ -1081,15 +1129,33 @@ export default function CarrierHub() {
     ...(hasProvenHistory && { hasProvenHistory: "true" }),
     ...(hasClaimedLanes && { hasClaimedLanes: "true" }),
     sort,
-    limit: "500",
+    limit: String(PAGE_SIZE),
+    page: String(page),
   });
 
-  const { data, isLoading } = useQuery<{ carriers: CarrierRow[]; total: number }>({
+  const { data: pageData, isLoading, isFetching } = useQuery<{ carriers: CarrierRow[]; total: number; page: number; pages: number }>({
     queryKey: ["/api/carrier-hub", queryParams.toString()],
     queryFn: () => fetch(`/api/carrier-hub?${queryParams}`).then(r => r.json()),
   });
 
-  const carriers = data?.carriers ?? [];
+  // Accumulate carriers across pages for load-more UX
+  const [allCarriers, setAllCarriers] = useState<CarrierRow[]>([]);
+  useEffect(() => {
+    if (!pageData) return;
+    if (pageData.page === 1) {
+      setAllCarriers(pageData.carriers ?? []);
+    } else {
+      setAllCarriers(prev => {
+        const existingIds = new Set(prev.map(c => c.id));
+        const newOnes = (pageData.carriers ?? []).filter(c => !existingIds.has(c.id));
+        return [...prev, ...newOnes];
+      });
+    }
+  }, [pageData]);
+
+  const carriers = allCarriers;
+  const totalCount = pageData?.total ?? 0;
+  const hasMore = pageData ? page < pageData.pages : false;
 
   const activeFilters = [statusFilterValue, equipFilterValue, hasEmail, hasPhone, hasProvenHistory, hasClaimedLanes].filter(Boolean).length;
 
@@ -1192,9 +1258,22 @@ export default function CarrierHub() {
         {/* Carrier list */}
         <div className={`flex flex-col overflow-hidden transition-all duration-200 ${selectedCarrierId ? "w-[420px] min-w-[420px]" : "flex-1"}`}>
           <div className="px-6 py-2 border-b border-border shrink-0 flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">
-              {isLoading ? "Loading…" : `${carriers.length} carrier${carriers.length !== 1 ? "s" : ""}${data?.total !== carriers.length ? ` of ${data?.total}` : ""}`}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground" data-testid="text-carrier-count">
+                {isLoading
+                  ? "Loading…"
+                  : `Showing ${carriers.length.toLocaleString()}${totalCount > 0 && carriers.length < totalCount ? ` of ${totalCount.toLocaleString()}` : ""} carrier${carriers.length !== 1 ? "s" : ""}`}
+              </span>
+              {!isLoading && totalCount > 0 && (
+                <span
+                  title="Carriers are deduplicated by payee code during Excel/TMS imports — multiple shipment rows for the same carrier are collapsed into a single carrier record. The count shown reflects unique carriers, not raw import rows."
+                  className="text-muted-foreground/40 hover:text-muted-foreground cursor-help"
+                  data-testid="icon-carrier-count-help"
+                >
+                  <HelpCircle className="w-3 h-3" />
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto px-6 py-3 flex flex-col gap-2">
             {isLoading ? (
@@ -1215,14 +1294,31 @@ export default function CarrierHub() {
                 )}
               </div>
             ) : (
-              carriers.map(c => (
-                <CarrierCard
-                  key={c.id}
-                  carrier={c}
-                  selected={selectedCarrierId === c.id}
-                  onClick={() => setSelectedCarrierId(prev => prev === c.id ? null : c.id)}
-                />
-              ))
+              <>
+                {carriers.map(c => (
+                  <CarrierCard
+                    key={c.id}
+                    carrier={c}
+                    selected={selectedCarrierId === c.id}
+                    onClick={() => setSelectedCarrierId(prev => prev === c.id ? null : c.id)}
+                  />
+                ))}
+                {hasMore && (
+                  <div className="py-3 flex justify-center">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs gap-2"
+                      onClick={() => setPage(p => p + 1)}
+                      disabled={isFetching}
+                      data-testid="btn-load-more-carriers"
+                    >
+                      {isFetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                      {isFetching ? "Loading…" : `Load more (${(totalCount - carriers.length).toLocaleString()} remaining)`}
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
