@@ -1984,6 +1984,41 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
+  app.post("/api/rfps/parse-file", requireAuth, upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const allowedExts = [".xlsx", ".xls", ".csv"];
+      const fileExt = req.file.originalname.toLowerCase().replace(/.*(\.[^.]+)$/, "$1");
+      if (!allowedExts.includes(fileExt)) {
+        return res.status(400).json({ error: "Invalid file type. Please upload an Excel (.xlsx, .xls) or CSV file." });
+      }
+
+      let workbook: XLSX.WorkBook;
+      try {
+        workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      } catch {
+        return res.status(400).json({ error: "Could not parse file. Please ensure it is a valid Excel or CSV file." });
+      }
+
+      const result = analyzeRfpSpreadsheet(workbook);
+
+      return res.json({
+        fileName: req.file.originalname,
+        fileData: { rows: result.rows, highVolumeLanes: result.highVolumeLanes, sheetName: result.sheetName },
+        laneCount: result.analysis.laneCount,
+        totalVolume: result.analysis.totalVolume,
+        originStates: result.analysis.originStates,
+        destinationStates: result.analysis.destinationStates,
+      });
+    } catch (error) {
+      console.error("Error parsing RFP file:", error);
+      res.status(500).json({ error: "Failed to parse file" });
+    }
+  });
+
   app.post("/api/rfps/upload", requireAuth, upload.single("file"), async (req, res) => {
     try {
       if (!req.file) {
