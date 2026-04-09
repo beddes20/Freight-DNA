@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import {
   Truck, Building2, Phone, Mail, MapPin, Search, Plus, X, ChevronRight,
   AlertTriangle, CheckCircle2, Star, User, Route, Activity, Settings,
@@ -1045,7 +1046,11 @@ function CarrierCard({ carrier, selected, onClick }: { carrier: CarrierRow; sele
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
+const ADMIN_ROLES = ["admin", "director"];
+
 export default function CarrierHub() {
+  const { user } = useAuth();
+  const isAdmin = !!user && ADMIN_ROLES.includes(user.role);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("__all__");
   const [equipFilter, setEquipFilter] = useState("__all__");
@@ -1226,7 +1231,21 @@ export default function CarrierHub() {
         {selectedCarrierId && (
           <div className="flex-1 border-l border-border overflow-hidden flex flex-col bg-background">
             <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-between">
-              <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Carrier Profile</span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Carrier Profile</span>
+                {isAdmin && (
+                  <a
+                    href="/admin/carriers"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    data-testid="link-open-in-catalog"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    Open in Catalog
+                  </a>
+                )}
+              </div>
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setSelectedCarrierId(null)} data-testid="btn-close-carrier-drawer">
                 <X className="w-4 h-4" />
               </Button>

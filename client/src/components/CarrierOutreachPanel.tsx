@@ -1864,6 +1864,15 @@ export function CarrierOutreachPanel({
                       }`}>
                         {r.status === "new" ? "New" : r.matchType === "email_exact" ? "Email match" : r.matchType === "mc_exact" ? "MC match" : "Name match"}
                       </Badge>
+                      <a
+                        href={`/carrier-hub?carrierId=${r.carrier.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-0.5 text-white/40 hover:text-white/80 transition-colors shrink-0"
+                        data-testid={`link-hub-import-result-${r.carrier.id}`}
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
                     </div>
                   ))}
                 </div>

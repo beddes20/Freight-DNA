@@ -57,6 +57,7 @@ import {
   Mail,
   MapPin,
   Filter,
+  ExternalLink,
 } from "lucide-react";
 
 const LWQ_SOURCES = ["dat", "loadsmart", "csv_paste", "manual", "other"];
@@ -571,6 +572,15 @@ export default function AdminCarriers() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
+                        <a
+                          href={`/carrier-hub?carrierId=${c.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors inline-flex items-center"
+                          data-testid={`link-hub-carrier-${c.id}`}
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
                         <button
                           onClick={() => openEdit(c)}
                           className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
