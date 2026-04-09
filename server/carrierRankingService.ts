@@ -16,6 +16,10 @@
 import type { RecurringLane, Carrier, FinancialUpload, LaneCarrierInterest, LaneCoverageProfile, LaneCoverageProfileCarrier } from "@shared/schema";
 import type { IStorage } from "./storage";
 import { COVERAGE_THRESHOLDS, shouldUseIncumbentFirstFlow } from "./laneCoverageService";
+import { cityDistanceMiles } from "./cityCoordinates";
+
+/** Carriers whose historical origin AND destination are within this radius count as "nearby". */
+const NEARBY_RADIUS_MILES = 100;
 
 /**
  * Raw TMS row from financial upload JSONB.
@@ -116,7 +120,15 @@ export interface RankedCarrier {
   notes: string | null;
   fitScore: number;           // 0–100
   fitReason: string;
-  historyMatch: "exact" | "similar" | "region" | "none";
+  /**
+   * Governing history tier for this carrier on this lane.
+   *   exact      — has loads on this exact city pair
+   *   nearby     — has loads where both endpoints are within NEARBY_RADIUS_MILES of requested lane
+   *   state_pair — has loads on the same origin-state → dest-state corridor (different cities)
+   *   region     — no company history; appears due to catalog region/equipment fit
+   *   none       — no matching signals at all
+   */
+  historyMatch: "exact" | "nearby" | "state_pair" | "region" | "none";
   loadsOnLane: number;
   lastUsedMonth: string | null;
   isNewProspect: boolean;
@@ -131,6 +143,11 @@ export interface RankedCarrier {
   isIncumbent: boolean;                // true if this carrier is an incumbent for a stable lane
   incumbentRank: number | null;        // 1-based rank among incumbents (null if not incumbent)
   isDoNotUse: boolean;                 // true if carrier status is do_not_use or tags include do_not_use/no_use
+  // ── Ranking transparency ──────────────────────────────────────────────────
+  exactLaneLoads: number;              // loads on exact city pair
+  nearbyLaneLoads: number;             // loads within NEARBY_RADIUS_MILES of both lane endpoints
+  statePairLoads: number;              // loads on same state-to-state corridor
+  hasAnyCompanyHistory: boolean;       // true if carrier has ANY loads in our TMS data
 }
 
 function normStr(s: string): string {
@@ -151,7 +168,10 @@ function overlaps(a: string[], b: string): boolean {
  * Returns a map of carrierName (normalized) → { loads, lastUsedMonth }
  */
 interface CarrierHistory {
-  loads: number;
+  loads: number;               // total matched loads (any tier)
+  exactLoads: number;          // loads on the exact city pair
+  nearbyLoads: number;         // loads where both ends are within NEARBY_RADIUS_MILES
+  statePairLoads: number;      // loads on same origin-state → dest-state (different cities)
   lastUsedMonth: string | null;
   /** Average on-time percentage from financial rows (if present) */
   avgOnTimePct: number | null;
@@ -159,7 +179,7 @@ interface CarrierHistory {
   totalMargin: number | null;
   marginRowCount: number;
   /** Best match tier across all matched rows — drives score differentiation */
-  bestMatchTier: "exact" | "city" | "state";
+  bestMatchTier: "exact" | "nearby" | "state_pair";
 }
 
 function extractCarrierHistoryFromUploads(
@@ -169,19 +189,23 @@ function extractCarrierHistoryFromUploads(
   const history = new Map<string, CarrierHistory>();
   const originNorm = normStr(lane.origin);
   const destNorm = normStr(lane.destination);
-  // State-pair matching: cast a wider net by accepting any corridor in the same
-  // origin-state → dest-state direction (like the carrier lane search radius approach)
+
+  // State-pair: same origin-state → dest-state corridor
   const laneOrigStateLower = normStr(lane.originState ?? "");
   const laneDestStateLower = normStr(lane.destinationState ?? "");
 
-  // Sort uploads newest first
+  // Pre-resolve lane endpoint coordinates once (used for all nearby checks)
+  // lane.origin may be "phoenix, az" or "Phoenix, AZ" — getCityCoords handles both
+  const laneOriginCityState = lane.origin;        // already "city, st" format
+  const laneDestCityState = lane.destination;     // already "city, st" format
+
+  // Sort uploads newest first (scan last 3)
   const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
 
   for (const upload of sorted.slice(0, 3)) {
     const rows = (upload.rows as TmsRow[]) ?? [];
     for (const row of rows) {
-      // --- Field extraction: handle both camelCase (legacy exports) and title-case-with-spaces (real TMS) ---
-      // Origin: try dedicated city field first, then extract city from combined "CITY, ST" field
+      // ── Field extraction (title-case TMS and camelCase legacy) ─────────────
       const rawOriginCity = readTmsField(row, "shipperCity", "originCity", "Shipper city", "Origin city");
       const rawOriginFull = readTmsField(row, "origin", "Origin");
       const rowOrigin = normStr(rawOriginCity || extractCity(rawOriginFull));
@@ -190,58 +214,70 @@ function extractCarrierHistoryFromUploads(
       const rawDestFull = readTmsField(row, "destination", "Destination");
       const rowDest = normStr(rawDestCity || extractCity(rawDestFull));
 
-      // State: dedicated state field
       const rowOriginState = normStr(readTmsField(row, "shipperState", "originState", "Shipper state", "Origin state"));
       const rowDestState = normStr(readTmsField(row, "consigneeState", "destinationState", "destState", "Consignee state", "Destination state"));
 
-      // Carrier: strip "PAYCODE - " prefix if present
       const rawCarrierField = readTmsField(row, "carrier", "carrierName", "carrier_name", "Carrier", "Carrier name");
       const carrierRaw = normStr(parseCarrierName(rawCarrierField));
 
-      // Month: normalize "2026 M03" → "2026-03"
       const rawMonth = readTmsField(row, "month", "Month");
       const month = normalizeTmsMonth(rawMonth);
 
-      // On-time % and margin
       const onTimeRaw = readTmsField(row, "onTimePct", "on_time_pct", "On-time %", "On time pct");
       const onTimeParsed = onTimeRaw ? parseFloat(onTimeRaw) : NaN;
       const marginRaw = readTmsField(row, "margin", "marginPct", "Margin $", "Margin %");
       const marginParsed = marginRaw ? parseFloat(marginRaw) : NaN;
 
-      if (!carrierRaw) continue;
+      if (!carrierRaw || !rowOrigin || !rowDest) continue;
 
-      // Skip rows with blank origin or destination — they can't be meaningfully matched
-      if (!rowOrigin || !rowDest) continue;
-
+      // ── Tier 1: Exact city-pair match ──────────────────────────────────────
       const isExact = rowOrigin === originNorm && rowDest === destNorm;
 
-      // Tier 2: city-prefix similarity (requires 4-char match on both sides)
-      const originPrefix = originNorm.slice(0, 4);
-      const destPrefix = destNorm.slice(0, 4);
-      const isSimilarOrigin = originPrefix.length >= 4 && rowOrigin.length >= 4 &&
-        (rowOrigin.includes(originPrefix) || originNorm.includes(rowOrigin.slice(0, 4)));
-      const isSimilarDest = destPrefix.length >= 4 && rowDest.length >= 4 &&
-        (rowDest.includes(destPrefix) || destNorm.includes(rowDest.slice(0, 4)));
-      const isCitySimilar = isSimilarOrigin && isSimilarDest;
+      // ── Tier 2: Nearby — both endpoints within NEARBY_RADIUS_MILES ─────────
+      // Construct a "city, state" string for geo lookup from row data
+      let isNearby = false;
+      if (!isExact) {
+        const rowOriginForGeo = rawOriginFull ||
+          (rawOriginCity && rowOriginState ? `${rawOriginCity}, ${rowOriginState}` : rawOriginCity);
+        const rowDestForGeo = rawDestFull ||
+          (rawDestCity && rowDestState ? `${rawDestCity}, ${rowDestState}` : rawDestCity);
 
-      // Tier 3: wider net — same origin state AND same destination state
-      // (e.g. "Dallas, TX → Memphis, TN" counts for "Laredo, TX → Nashville, TN")
-      const isStatePairMatch = laneOrigStateLower.length >= 2 && laneDestStateLower.length >= 2 &&
+        if (rowOriginForGeo && rowDestForGeo) {
+          const originDist = cityDistanceMiles(rowOriginForGeo, laneOriginCityState);
+          const destDist = cityDistanceMiles(rowDestForGeo, laneDestCityState);
+          isNearby = originDist !== null && destDist !== null &&
+            originDist <= NEARBY_RADIUS_MILES && destDist <= NEARBY_RADIUS_MILES;
+        }
+      }
+
+      // ── Tier 3: Same state-pair corridor ────────────────────────────────────
+      const isStatePairMatch =
+        laneOrigStateLower.length >= 2 && laneDestStateLower.length >= 2 &&
         rowOriginState.length >= 2 && rowDestState.length >= 2 &&
         rowOriginState === laneOrigStateLower && rowDestState === laneDestStateLower;
 
-      if (!isExact && !isCitySimilar && !isStatePairMatch) continue;
+      if (!isExact && !isNearby && !isStatePairMatch) continue;
 
-      const thisTier: CarrierHistory["bestMatchTier"] = isExact ? "exact" : isCitySimilar ? "city" : "state";
+      const thisTier: CarrierHistory["bestMatchTier"] =
+        isExact ? "exact" : isNearby ? "nearby" : "state_pair";
 
-      const existing = history.get(carrierRaw) ?? { loads: 0, lastUsedMonth: null, avgOnTimePct: null, totalMargin: null, marginRowCount: 0, bestMatchTier: thisTier };
+      const existing = history.get(carrierRaw) ?? {
+        loads: 0, exactLoads: 0, nearbyLoads: 0, statePairLoads: 0,
+        lastUsedMonth: null, avgOnTimePct: null, totalMargin: null,
+        marginRowCount: 0, bestMatchTier: thisTier,
+      };
 
-      // Upgrade the stored tier if this row is a better match (exact > city > state)
-      const tierRank = { exact: 0, city: 1, state: 2 } as const;
-      const betterTier = tierRank[thisTier] < tierRank[existing.bestMatchTier] ? thisTier : existing.bestMatchTier;
+      // Upgrade stored tier if this row is a better match (exact > nearby > state_pair)
+      const tierRank = { exact: 0, nearby: 1, state_pair: 2 } as const;
+      const betterTier = tierRank[thisTier] < tierRank[existing.bestMatchTier]
+        ? thisTier
+        : existing.bestMatchTier;
 
       history.set(carrierRaw, {
         loads: existing.loads + 1,
+        exactLoads:     existing.exactLoads     + (isExact ? 1 : 0),
+        nearbyLoads:    existing.nearbyLoads    + (isNearby && !isExact ? 1 : 0),
+        statePairLoads: existing.statePairLoads + (isStatePairMatch && !isExact && !isNearby ? 1 : 0),
         lastUsedMonth: month > (existing.lastUsedMonth ?? "") ? month : existing.lastUsedMonth,
         avgOnTimePct: !isNaN(onTimeParsed)
           ? ((existing.avgOnTimePct ?? onTimeParsed) * existing.loads + onTimeParsed) / (existing.loads + 1)
@@ -363,40 +399,53 @@ export async function rankCarriersForLane(
     const reasons: string[] = [];
     let historyMatch: RankedCarrier["historyMatch"] = "none";
 
-    // Exact history match — use guaranteed floor scores
+    // ── History-based scoring — guaranteed floor bands per tier ───────────
+    // Tier order: exact > nearby > state_pair > region > none
+    // Any tier with real company history beats catalog-region-only carriers.
     if (hist && hist.loads > 0) {
-      const exactLoad = extractExactLaneLoads(uploads, lane, carrier.name);
-      if (exactLoad > 0) {
+      if (hist.exactLoads > 0) {
+        // ── Tier 1: Exact city-pair ─────────────────────────────────────────
         historyMatch = "exact";
-        // Guaranteed floor scores that regional-only carriers can't reach
         let exactFloor: number;
-        if (exactLoad >= 10) exactFloor = 80;
-        else if (exactLoad >= 5) exactFloor = 70;
-        else exactFloor = 55;
-        // Additional incremental bonus per load (up to 10 extra points)
-        const extraPts = Math.min(10, exactLoad * 1);
-        fitScore = Math.max(exactFloor, exactFloor + extraPts - 10);
-        // Always at least the floor
-        fitScore = Math.max(exactFloor, fitScore);
-        // Determine recency window for reason label
+        if (hist.exactLoads >= 10) exactFloor = 85;
+        else if (hist.exactLoads >= 5) exactFloor = 75;
+        else exactFloor = 60;
+        fitScore = exactFloor;
         const exactDays = daysSinceMonth(hist.lastUsedMonth ?? null);
         if (exactDays <= 90) {
-          reasons.push(`Ran this exact lane ${exactLoad}× in last 90 days`);
+          reasons.push(`Ran this exact lane ${hist.exactLoads}× in last 90 days`);
         } else if (exactDays <= 180) {
-          reasons.push(`Ran this exact lane ${exactLoad}× (last ~${Math.round(exactDays / 30)} months ago)`);
+          reasons.push(`Ran this exact lane ${hist.exactLoads}× (last ~${Math.round(exactDays / 30)} months ago)`);
         } else {
-          reasons.push(`Ran this exact lane ${exactLoad}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
+          reasons.push(`Ran this exact lane ${hist.exactLoads}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
         }
-      } else if (hist.bestMatchTier === "city") {
-        // Similar corridor (city-level prefix match) — 50–64 band
-        historyMatch = "similar";
-        fitScore = Math.min(64, 50 + Math.min(14, hist.loads * 2));
-        reasons.push(`Ran similar corridors (${hist.loads} loads in region)`);
-      } else {
-        // State-pair match only — wider net, lower confidence
-        historyMatch = "similar";
-        fitScore += 12;
-        reasons.push(`Runs ${(lane.originState ?? "origin state").toUpperCase()} → ${(lane.destinationState ?? "dest state").toUpperCase()} lanes (${hist.loads} loads)`);
+      } else if (hist.nearbyLoads > 0) {
+        // ── Tier 2: Nearby lane (both endpoints within NEARBY_RADIUS_MILES) ─
+        historyMatch = "nearby";
+        let nearbyFloor: number;
+        if (hist.nearbyLoads >= 10) nearbyFloor = 72;
+        else if (hist.nearbyLoads >= 5) nearbyFloor = 62;
+        else nearbyFloor = 48;
+        fitScore = nearbyFloor;
+        const nearbyDays = daysSinceMonth(hist.lastUsedMonth ?? null);
+        if (nearbyDays <= 90) {
+          reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 100mi (last 90 days)`);
+        } else {
+          reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 100mi of this corridor`);
+        }
+      } else if (hist.statePairLoads > 0) {
+        // ── Tier 3: Same state-pair corridor ────────────────────────────────
+        historyMatch = "state_pair";
+        let spFloor: number;
+        if (hist.statePairLoads >= 10) spFloor = 45;
+        else if (hist.statePairLoads >= 5) spFloor = 40;
+        else spFloor = 35;
+        fitScore = spFloor;
+        reasons.push(
+          `Runs ${(lane.originState ?? "origin state").toUpperCase()} → ` +
+          `${(lane.destinationState ?? "dest state").toUpperCase()} lanes ` +
+          `(${hist.statePairLoads} loads on this state pair)`
+        );
       }
     }
 
@@ -595,6 +644,10 @@ export async function rankCarriersForLane(
       isIncumbent,
       incumbentRank,
       isDoNotUse,
+      exactLaneLoads: hist?.exactLoads ?? 0,
+      nearbyLaneLoads: hist?.nearbyLoads ?? 0,
+      statePairLoads: hist?.statePairLoads ?? 0,
+      hasAnyCompanyHistory: (hist?.loads ?? 0) > 0,
     });
   }
 
@@ -604,49 +657,55 @@ export async function rankCarriersForLane(
     if (alreadyInCatalog) continue;
     if ((hist.loads ?? 0) < 1) continue;
 
-    const exactLoad = extractExactLaneLoads(uploads, lane, carrierNorm);
-    const historyMatch: RankedCarrier["historyMatch"] = exactLoad > 0 ? "exact" : "similar";
-
-    // Apply floor scoring for history-only carriers — same bands as catalog carriers
+    // Determine governing tier from per-tier load counts (same logic as catalog carriers)
+    let historyMatch: RankedCarrier["historyMatch"];
     let fitScore: number;
     const reasons: string[] = [];
-    if (exactLoad >= 10) {
-      fitScore = 80;
+
+    if (hist.exactLoads > 0) {
+      // ── Tier 1: Exact city-pair ───────────────────────────────────────────
+      historyMatch = "exact";
+      let exactFloor: number;
+      if (hist.exactLoads >= 10) exactFloor = 85;
+      else if (hist.exactLoads >= 5) exactFloor = 75;
+      else exactFloor = 60;
+      fitScore = exactFloor;
       const histDays = daysSinceMonth(hist.lastUsedMonth ?? null);
       if (histDays <= 90) {
-        reasons.push(`Ran this exact lane ${exactLoad}× in last 90 days`);
+        reasons.push(`Ran this exact lane ${hist.exactLoads}× in last 90 days`);
       } else if (histDays <= 180) {
-        reasons.push(`Ran this exact lane ${exactLoad}× (last ~${Math.round(histDays / 30)} months ago)`);
+        reasons.push(`Ran this exact lane ${hist.exactLoads}× (last ~${Math.round(histDays / 30)} months ago)`);
       } else {
-        reasons.push(`Ran this exact lane ${exactLoad}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
+        reasons.push(`Ran this exact lane ${hist.exactLoads}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
       }
-    } else if (exactLoad >= 5) {
-      fitScore = 70;
-      const histDays = daysSinceMonth(hist.lastUsedMonth ?? null);
-      if (histDays <= 90) {
-        reasons.push(`Ran this exact lane ${exactLoad}× in last 90 days`);
-      } else if (histDays <= 180) {
-        reasons.push(`Ran this exact lane ${exactLoad}× (last ~${Math.round(histDays / 30)} months ago)`);
+    } else if (hist.nearbyLoads > 0) {
+      // ── Tier 2: Nearby lane (both endpoints within NEARBY_RADIUS_MILES) ───
+      historyMatch = "nearby";
+      let nearbyFloor: number;
+      if (hist.nearbyLoads >= 10) nearbyFloor = 72;
+      else if (hist.nearbyLoads >= 5) nearbyFloor = 62;
+      else nearbyFloor = 48;
+      fitScore = nearbyFloor;
+      const nearbyDays = daysSinceMonth(hist.lastUsedMonth ?? null);
+      if (nearbyDays <= 90) {
+        reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 100mi (last 90 days)`);
       } else {
-        reasons.push(`Ran this exact lane ${exactLoad}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
+        reasons.push(`Ran ${hist.nearbyLoads} nearby lane${hist.nearbyLoads > 1 ? "s" : ""} within 100mi of this corridor`);
       }
-    } else if (exactLoad > 0) {
-      fitScore = 55;
-      const histDays = daysSinceMonth(hist.lastUsedMonth ?? null);
-      if (histDays <= 90) {
-        reasons.push(`Ran this exact lane ${exactLoad}× in last 90 days`);
-      } else if (histDays <= 180) {
-        reasons.push(`Ran this exact lane ${exactLoad}× (last ~${Math.round(histDays / 30)} months ago)`);
-      } else {
-        reasons.push(`Ran this exact lane ${exactLoad}× (last used ${hist.lastUsedMonth ?? "unknown"})`);
-      }
-    } else if (hist.bestMatchTier === "city") {
-      fitScore = Math.min(64, 50 + Math.min(14, hist.loads * 2));
-      reasons.push(`${hist.loads} loads on similar corridors`);
     } else {
-      // State-pair match only — wider net, lower base score
-      fitScore = Math.min(55, 18 + hist.loads * 2);
-      reasons.push(`Runs ${(lane.originState ?? "origin state").toUpperCase()} → ${(lane.destinationState ?? "dest state").toUpperCase()} lanes (${hist.loads} loads, financial data)`);
+      // ── Tier 3: Same state-pair corridor ──────────────────────────────────
+      historyMatch = "state_pair";
+      const spLoads = hist.statePairLoads > 0 ? hist.statePairLoads : hist.loads;
+      let spFloor: number;
+      if (spLoads >= 10) spFloor = 45;
+      else if (spLoads >= 5) spFloor = 40;
+      else spFloor = 35;
+      fitScore = spFloor;
+      reasons.push(
+        `Runs ${(lane.originState ?? "origin state").toUpperCase()} → ` +
+        `${(lane.destinationState ?? "dest state").toUpperCase()} lanes ` +
+        `(${spLoads} loads on this state pair, financial data)`
+      );
     }
 
     // Apply recency decay to history-only carriers as well
@@ -741,17 +800,23 @@ export async function rankCarriersForLane(
       isIncumbent: isIncumbentHist,
       incumbentRank: incumbentRankHist,
       isDoNotUse: false,
+      exactLaneLoads: hist.exactLoads,
+      nearbyLaneLoads: hist.nearbyLoads,
+      statePairLoads: hist.statePairLoads,
+      hasAnyCompanyHistory: true,
     });
   }
 
-  // Sort by fitScore descending — scores encode history quality + recency + all signals,
-  // so score-first ordering correctly demotes stale exact-lane carriers below fresher proven ones.
+  // Sort by fitScore descending — scores encode history quality + recency + all signals.
   // historyMatch is a secondary tiebreaker only when scores are exactly equal.
+  // Tier order: exact > nearby > state_pair > region > none
   ranked.sort((a, b) => {
     const scoreDiff = b.fitScore - a.fitScore;
     if (scoreDiff !== 0) return scoreDiff;
-    const matchRank = { exact: 0, similar: 1, region: 2, none: 3 };
-    return matchRank[a.historyMatch] - matchRank[b.historyMatch];
+    const matchRank: Record<string, number> = {
+      exact: 0, nearby: 1, state_pair: 2, region: 3, none: 4,
+    };
+    return (matchRank[a.historyMatch] ?? 4) - (matchRank[b.historyMatch] ?? 4);
   });
 
   // AI enrichment: enrich fitReason strings for top-5 rule-scored candidates only.
@@ -787,18 +852,23 @@ Respond ONLY with JSON array: [{"name": "<carrier name>", "reason": "<1 sentence
           const carrier = top5.find(c => normStr(c.carrierName) === normStr(aiItem.name));
           if (carrier && typeof aiItem.reason === "string" && typeof aiItem.adjustedScore === "number") {
             carrier.fitReason = aiItem.reason;
-            // Blend rule-based and AI scores (70/30) but enforce history floor
+            // Blend rule-based and AI scores (70/30) but enforce history tier floors.
+            // AI scoring cannot demote a carrier below its history-guaranteed floor.
             const blended = Math.min(100, Math.max(0,
               Math.round(0.7 * carrier.fitScore + 0.3 * aiItem.adjustedScore)
             ));
-            // Never let AI drag an exact-history carrier below its floor
+            let historyFloor = 0;
             if (carrier.historyMatch === "exact") {
-              const exactLoads = carrier.loadsOnLane;
-              const floor = exactLoads >= 10 ? 80 : exactLoads >= 5 ? 70 : 55;
-              carrier.fitScore = Math.max(floor, blended);
-            } else {
-              carrier.fitScore = blended;
+              historyFloor = carrier.exactLaneLoads >= 10 ? 85
+                : carrier.exactLaneLoads >= 5 ? 75 : 60;
+            } else if (carrier.historyMatch === "nearby") {
+              historyFloor = carrier.nearbyLaneLoads >= 10 ? 72
+                : carrier.nearbyLaneLoads >= 5 ? 62 : 48;
+            } else if (carrier.historyMatch === "state_pair") {
+              historyFloor = carrier.statePairLoads >= 10 ? 45
+                : carrier.statePairLoads >= 5 ? 40 : 35;
             }
+            carrier.fitScore = Math.max(historyFloor, blended);
           }
         }
         // Re-sort top-5 after AI score adjustments, then stitch back
@@ -816,57 +886,8 @@ Respond ONLY with JSON array: [{"name": "<carrier name>", "reason": "<1 sentence
   return ranked;
 }
 
-/**
- * Extracts the count of exact-lane loads for a carrier from the last 3 uploads.
- * Uses both strict equality AND city-prefix matching (consistent with extractCarrierHistoryFromUploads).
- */
-function extractExactLaneLoads(uploads: FinancialUpload[], lane: RecurringLane, carrierName: string): number {
-  const originNorm = normStr(lane.origin);
-  const destNorm = normStr(lane.destination);
-  const carrierNorm = normStr(carrierName);
-  let count = 0;
-  // Sort newest first — scan last 3 uploads (same as extractCarrierHistoryFromUploads)
-  const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-  for (const upload of sorted.slice(0, 3)) {
-    const rows = (upload.rows as TmsRow[]) ?? [];
-    for (const row of rows) {
-      // Use the same field-reading logic as extractCarrierHistoryFromUploads
-      const rawOriginCity = readTmsField(row, "shipperCity", "originCity", "Shipper city", "Origin city");
-      const rawOriginFull = readTmsField(row, "origin", "Origin");
-      const rowOrigin = normStr(rawOriginCity || extractCity(rawOriginFull));
-
-      const rawDestCity = readTmsField(row, "consigneeCity", "destinationCity", "Consignee city", "Destination city");
-      const rawDestFull = readTmsField(row, "destination", "Destination");
-      const rowDest = normStr(rawDestCity || extractCity(rawDestFull));
-
-      const rawCarrier = readTmsField(row, "carrier", "carrierName", "carrier_name", "Carrier", "Carrier name");
-      const rowCarrier = normStr(parseCarrierName(rawCarrier));
-
-      if (rowCarrier !== carrierNorm) continue;
-      if (!rowOrigin || !rowDest) continue;
-
-      // Exact city match
-      const isExact = rowOrigin === originNorm && rowDest === destNorm;
-      if (isExact) {
-        count++;
-        continue;
-      }
-
-      // Prefix match (consistent with extractCarrierHistoryFromUploads)
-      const originPrefix = originNorm.slice(0, 4);
-      const destPrefix = destNorm.slice(0, 4);
-      const isPrefixOrigin = originPrefix.length >= 4 && rowOrigin.length >= 4 &&
-        (rowOrigin.includes(originPrefix) || originNorm.includes(rowOrigin.slice(0, 4)));
-      const isPrefixDest = destPrefix.length >= 4 && rowDest.length >= 4 &&
-        (rowDest.includes(destPrefix) || destNorm.includes(rowDest.slice(0, 4)));
-
-      if (isPrefixOrigin && isPrefixDest) {
-        count++;
-      }
-    }
-  }
-  return count;
-}
+// extractExactLaneLoads removed: per-tier load counts are now tracked directly in
+// CarrierHistory (exactLoads, nearbyLoads, statePairLoads) by extractCarrierHistoryFromUploads.
 
 function monthDiff(monthKey: string): number {
   const [y, m] = monthKey.split("-").map(Number);

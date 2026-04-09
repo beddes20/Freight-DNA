@@ -265,10 +265,12 @@ const INTEREST_STATUS_LABELS: Record<string, { label: string; color: string }> =
 };
 
 const HISTORY_MATCH_LABELS: Record<string, string> = {
-  exact:   "Ran this lane",
-  similar: "Similar corridor",
-  region:  "In region",
-  none:    "New prospect",
+  exact:      "Ran this lane",
+  nearby:     "Nearby lane",
+  state_pair: "Same corridor",
+  similar:    "Similar corridor",
+  region:     "In region",
+  none:       "New prospect",
 };
 
 // ── Props ─────────────────────────────────────────────────────────────────────

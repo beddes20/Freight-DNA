@@ -91,16 +91,19 @@ TMS month fields arrive as `"2026 M03"` (year + space + M + zero-padded month). 
 
 All recency scoring and `lastUsedMonth` values must be in canonical `"YYYY-MM"` form.
 
-### Ranking Guarantee
+### Ranking Guarantee (5-tier geo-aware system, locked April 2026)
 
-A carrier that has **confirmed exact-lane TMS history** (same origin city + destination city) **must** receive a higher `fitScore` than a carrier with no TMS history on that lane, regardless of catalog region or equipment attributes. Specifically:
+Carriers with confirmed TMS history **must** outrank catalog-region-only carriers. The five tiers and their guaranteed `fitScore` floor bands are:
 
-- `historyMatch = "exact"` → `fitScore` in the 80–100 range.
-- `historyMatch = "similar"` (same origin/destination state corridor) → `fitScore` in the 50–79 range.
-- `historyMatch = "region"` (catalog region match, no TMS history) → `fitScore` in the 1–49 range.
-- `historyMatch = "none"` → `fitScore = 0`.
+| `historyMatch` | Meaning | Floor band |
+|---|---|---|
+| `"exact"` | Loads on this exact city pair | 60–100 (≥10 loads → 85, ≥5 → 75, >0 → 60) |
+| `"nearby"` | Both endpoints within 100 miles of lane | 48–100 (≥10 loads → 72, ≥5 → 62, >0 → 48) |
+| `"state_pair"` | Same origin-state → dest-state corridor | 35–100 (≥10 loads → 45, ≥5 → 40, >0 → 35) |
+| `"region"` | Catalog region/equipment match, no TMS history | 1–34 |
+| `"none"` | No matching signals | 0 |
 
-This means `exact > similar > region > none` is a hard ordering invariant. No scoring tweak may ever invert it.
+Hard ordering invariant: `exact > nearby > state_pair > region > none`. No scoring tweak may ever invert it.
 
 ### Shared History Source (LWQ ↔ Carrier Hub)
 

@@ -968,7 +968,9 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
       // ── Filtering ────────────────────────────────────────────────────────
       if (exactOnly) {
-        ranked = ranked.filter(c => c.historyMatch === "exact");
+        // Include "nearby" as well — carriers with loads within 100mi of both lane endpoints
+        // are operationally proven on this corridor even if not the exact city pair.
+        ranked = ranked.filter(c => c.historyMatch === "exact" || c.historyMatch === "nearby");
       }
       if (hasEmail) {
         ranked = ranked.filter(c => !!(c.primaryEmail || c.backupEmail));
@@ -1083,7 +1085,9 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           c.fitScore >= 60 ? "good" :
           c.fitScore >= 35 ? "moderate" : "low";
         const hasExactHistory = c.historyMatch === "exact";
-        const hasSimilarHistory = c.historyMatch === "similar";
+        const hasNearbyHistory = c.historyMatch === "nearby";
+        const hasStatePairHistory = c.historyMatch === "state_pair";
+        const hasSimilarHistory = hasNearbyHistory || hasStatePairHistory;
         const hasCustomerHistory = c.customerHistoryLoads > 0;
         const recentlyContactedNote = c.suppressionReasons.find(r => r.startsWith("Recently contacted"));
 
@@ -1091,10 +1095,12 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         if (hasExactHistory && c.loadsOnLane > 0) {
           primarySignal = `Ran this exact lane ${c.loadsOnLane}×`;
           if (c.lastUsedMonth) primarySignal += ` · last ${c.lastUsedMonth}`;
+        } else if (hasNearbyHistory) {
+          primarySignal = `Runs nearby corridors within 100mi of this lane (${c.nearbyLaneLoads ?? c.loadsOnLane} loads)`;
         } else if (claimedLaneMatch) {
           primarySignal = "Claims to prefer this lane corridor";
-        } else if (hasSimilarHistory) {
-          primarySignal = "Runs similar corridors in this region";
+        } else if (hasStatePairHistory) {
+          primarySignal = "Runs this state-pair corridor";
         } else if (hasCustomerHistory) {
           primarySignal = `Hauled for this customer (${c.customerHistoryLoads} loads)`;
         } else if (c.priorOutcomeBoost) {
@@ -1111,6 +1117,9 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
             claimedLaneMatch,
             hasExactHistory,
             exactHistoryRuns: hasExactHistory ? c.loadsOnLane : undefined,
+            hasNearbyHistory,
+            nearbyHistoryRuns: hasNearbyHistory ? (c.nearbyLaneLoads ?? 0) : undefined,
+            hasStatePairHistory,
             hasSimilarHistory,
             hasCustomerHistory,
             customerHistoryLoads: hasCustomerHistory ? c.customerHistoryLoads : undefined,

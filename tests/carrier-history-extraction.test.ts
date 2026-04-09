@@ -314,9 +314,10 @@ try {
   }
 
   if (dhamiEntry) {
+    // Dhami should have a TMS history tier (exact, nearby, or state_pair) — NOT "none" or "region"
     assert(
-      dhamiEntry.historyMatch === "exact" || dhamiEntry.historyMatch === "similar",
-      `Dhami historyMatch is '${dhamiEntry.historyMatch}' (not 'none')`
+      dhamiEntry.historyMatch === "exact" || dhamiEntry.historyMatch === "nearby" || dhamiEntry.historyMatch === "state_pair",
+      `Dhami historyMatch is '${dhamiEntry.historyMatch}' — expected a TMS history tier (not 'none'/'region')`
     );
     assert(
       dhamiEntry.loadsOnLane >= 6,
@@ -330,10 +331,10 @@ try {
 
   if (oneInc) {
     // 1 61 Inc has catalog regions AZ+WA but no TMS history on this lane.
-    // Expected: region-level match (from catalog) but NOT exact/similar history match.
+    // Expected: region-level match (from catalog) but NOT any TMS history tier.
     assert(
-      oneInc.historyMatch !== "exact" && oneInc.historyMatch !== "similar",
-      `1 61 Inc historyMatch is '${oneInc.historyMatch}' — should NOT be exact/similar (no TMS lane history)`
+      oneInc.historyMatch !== "exact" && oneInc.historyMatch !== "nearby" && oneInc.historyMatch !== "state_pair",
+      `1 61 Inc historyMatch is '${oneInc.historyMatch}' — should NOT be a TMS history tier (no TMS lane history)`
     );
   }
 
