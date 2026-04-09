@@ -2541,24 +2541,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         }
       }
 
-      const contactLanes = new Set<string>();
-      const contactRegions = new Set<string>();
-      for (const contact of contacts) {
-        if (contact.lanes) {
-          for (const l of contact.lanes) contactLanes.add(l.toLowerCase());
-        }
-        if (contact.regions) {
-          for (const r of contact.regions) contactRegions.add(r.toLowerCase());
-        }
-      }
-
       const facilities = Array.from(facilityMap.values()).map((f) => {
         const facilityLower = f.facility.toLowerCase();
         const stateLower = f.state.toLowerCase();
         const fullName = f.state ? `${f.facility}, ${f.state}` : f.facility;
         const fullNameLower = fullName.toLowerCase();
 
-        let coveredBy: string | null = null;
+        const coveredBy: { id: string; name: string }[] = [];
         for (const contact of contacts) {
           const lanes = (contact.lanes || []).map(l => l.toLowerCase().trim());
           const regions = (contact.regions || []).map(r => r.toLowerCase().trim());
@@ -2579,15 +2568,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           });
 
           if (laneMatch || regionMatch) {
-            coveredBy = contact.name;
-            break;
+            coveredBy.push({ id: contact.id, name: contact.name });
           }
         }
 
         return {
           ...f,
           fullName,
-          covered: !!coveredBy,
+          covered: coveredBy.length > 0,
           coveredBy,
         };
       });

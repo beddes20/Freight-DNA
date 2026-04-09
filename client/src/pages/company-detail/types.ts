@@ -28,7 +28,7 @@ export interface Facility {
   rfpTitles: string[];
   fullName: string;
   covered: boolean;
-  coveredBy: string | null;
+  coveredBy: { id: string; name: string }[];
 }
 
 export interface FacilityCoverage {

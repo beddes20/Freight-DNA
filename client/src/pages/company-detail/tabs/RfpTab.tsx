@@ -24,7 +24,7 @@ import { ResearchLaneDialog } from "@/components/research-lane-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company, Contact, Rfp, Award, Touchpoint } from "@shared/schema";
-import type { FacilityCoverage, LanePatterns, LaneMatching, ResearchTask, TaskWithCount } from "../types";
+import type { Facility, FacilityCoverage, LanePatterns, LaneMatching, ResearchTask, TaskWithCount } from "../types";
 
 interface RfpTabProps {
   company: Company;
@@ -78,7 +78,7 @@ export function RfpTab({
   const [cdDeleteAwardTarget, setCdDeleteAwardTarget] = useState<Award | null>(null);
 
   // ── Facility planner dialog state ─────────────────────────────────────────
-  const [findPlannerFacility, setFindPlannerFacility] = useState<any>(null);
+  const [findPlannerFacilityKey, setFindPlannerFacilityKey] = useState<string | null>(null);
   const [assignExistingContactId, setAssignExistingContactId] = useState("");
 
   // ── Research lane dialog state ────────────────────────────────────────────
@@ -98,6 +98,14 @@ export function RfpTab({
   const { data: facilityCoverage } = useQuery<FacilityCoverage>({
     queryKey: ["/api/companies", companyId, "facility-coverage"],
   });
+
+  const findPlannerFacility = findPlannerFacilityKey
+    ? (facilityCoverage?.facilities.find(
+        (f) => `${f.fullName}|${f.type}` === findPlannerFacilityKey
+      ) ?? null)
+    : null;
+  const setFindPlannerFacility = (f: Facility | null) =>
+    setFindPlannerFacilityKey(f ? `${f.fullName}|${f.type}` : null);
 
   const { data: lanePatterns } = useQuery<LanePatterns>({
     queryKey: ["/api/companies", companyId, "lane-patterns"],
@@ -160,12 +168,33 @@ export function RfpTab({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
-      setFindPlannerFacility(null);
       setAssignExistingContactId("");
       toast({ title: "Contact assigned to facility", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
     },
     onError: (error: Error) => {
       toast({ title: "Error assigning contact", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const removeContactFromFacilityMutation = useMutation({
+    mutationFn: async ({ contactId, laneToRemove }: { contactId: string; laneToRemove: string }) => {
+      const contact = contacts?.find(c => c.id === contactId);
+      if (!contact) throw new Error("Contact not found");
+      const updatedLanes = (contact.lanes || []).filter(
+        (l) => l.toLowerCase().trim() !== laneToRemove.toLowerCase().trim()
+      );
+      await apiRequest("PATCH", `/api/contacts/${contactId}`, {
+        ...contact,
+        lanes: updatedLanes,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
+      toast({ title: "Contact removed from facility", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error removing contact", description: error.message, variant: "destructive" });
     },
   });
 
@@ -555,10 +584,17 @@ export function RfpTab({
                                       <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
                                       <div className="min-w-0">
                                         <p className="font-medium text-sm">{f.fullName}</p>
-                                        <p className="text-xs text-muted-foreground">{f.totalVolume.toLocaleString()} loads/yr{f.coveredBy ? ` · ${f.coveredBy}` : ""}</p>
+                                        <p className="text-xs text-muted-foreground">{f.totalVolume.toLocaleString()} loads/yr{f.coveredBy && f.coveredBy.length > 0 ? ` · ${f.coveredBy.map(c => c.name).join(", ")}` : ""}</p>
                                       </div>
                                     </div>
-                                    <Badge className="bg-green-500/10 text-green-600 dark:text-green-400 shrink-0"><CheckCircle className="h-3 w-3 mr-1" />Covered</Badge>
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <Badge className="bg-green-500/10 text-green-600 dark:text-green-400"><CheckCircle className="h-3 w-3 mr-1" />Covered</Badge>
+                                      <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]"
+                                        onClick={() => { setAssignExistingContactId(""); setFindPlannerFacility(f); }}
+                                        data-testid={`button-manage-facility-${i}`}>
+                                        Manage
+                                      </Button>
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -1006,9 +1042,9 @@ export function RfpTab({
 
       {/* ── Find Planner / Assign Facility Dialog ────────────────────────── */}
       <Dialog
-        open={!!findPlannerFacility}
+        open={!!findPlannerFacilityKey}
         onOpenChange={(open) => {
-          if (!open) { setFindPlannerFacility(null); setAssignExistingContactId(""); }
+          if (!open) { setFindPlannerFacilityKey(null); setAssignExistingContactId(""); }
         }}
       >
         <DialogContent className="max-w-md">
@@ -1018,22 +1054,51 @@ export function RfpTab({
               {findPlannerFacility?.fullName}
             </DialogTitle>
             <p className="text-sm text-muted-foreground pt-1">
-              Assign an existing contact or create a new one for this facility.
+              Manage contacts assigned to this facility.
             </p>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {findPlannerFacility && findPlannerFacility.coveredBy && findPlannerFacility.coveredBy.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Currently assigned</p>
+                <div className="space-y-1.5">
+                  {findPlannerFacility.coveredBy.map((c) => (
+                    <div key={c.id} className="flex items-center justify-between px-3 py-2 rounded-md border bg-muted/40">
+                      <span className="text-sm">{c.name}</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                        disabled={removeContactFromFacilityMutation.isPending}
+                        onClick={() => {
+                          removeContactFromFacilityMutation.mutate({
+                            contactId: c.id,
+                            laneToRemove: findPlannerFacility.fullName,
+                          });
+                        }}
+                        data-testid={`button-remove-planner-${c.id}`}
+                      >
+                        ×
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
-              <p className="text-sm font-medium">Select existing contact</p>
+              <p className="text-sm font-medium">Add a contact</p>
               <Select value={assignExistingContactId} onValueChange={setAssignExistingContactId}>
                 <SelectTrigger data-testid="select-existing-contact">
                   <SelectValue placeholder="Choose a contact…" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(contacts || []).map(c => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}{c.title ? ` — ${c.title}` : ""}
-                    </SelectItem>
-                  ))}
+                  {(contacts || [])
+                    .filter((c) => !findPlannerFacility?.coveredBy?.some((cb) => cb.id === c.id))
+                    .map(c => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}{c.title ? ` — ${c.title}` : ""}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               <Button
@@ -1049,7 +1114,7 @@ export function RfpTab({
                 }}
                 data-testid="button-assign-existing-contact"
               >
-                {assignContactToFacilityMutation.isPending ? "Assigning…" : "Assign to This Facility"}
+                {assignContactToFacilityMutation.isPending ? "Assigning…" : "Add to This Facility"}
               </Button>
             </div>
             <div className="relative">
@@ -1066,7 +1131,7 @@ export function RfpTab({
                   lane: findPlannerFacility?.fullName,
                   region: findPlannerFacility?.state || undefined,
                 };
-                setFindPlannerFacility(null);
+                setFindPlannerFacilityKey(null);
                 setAssignExistingContactId("");
                 onCreateContactForFacility(defaults);
               }}

@@ -503,7 +503,7 @@ interface Facility {
   rfpTitles: string[];
   fullName: string;
   covered: boolean;
-  coveredBy: string | null;
+  coveredBy: { id: string; name: string }[];
 }
 
 interface FacilityCoverage {
@@ -566,7 +566,6 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
   const [dataViewerCollapsed, setDataViewerCollapsed] = useState(false);
   const [rfpFacilityCoverageCollapsed, setRfpFacilityCoverageCollapsed] = useState(false);
   const [rfpLanePatternsCollapsed, setRfpLanePatternsCollapsed] = useState(false);
-  const [findPlannerFacility, setFindPlannerFacility] = useState<Facility | null>(null);
   const [assignExistingContactId, setAssignExistingContactId] = useState("");
 
   const { data: facilityCoverage } = useQuery<FacilityCoverage>({
@@ -578,6 +577,15 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
     },
     enabled: !!companyId,
   });
+
+  const [findPlannerFacilityKey, setFindPlannerFacilityKey] = useState<string | null>(null);
+  const findPlannerFacility = findPlannerFacilityKey
+    ? (facilityCoverage?.facilities.find(
+        (f) => `${f.fullName}|${f.type}` === findPlannerFacilityKey
+      ) ?? null)
+    : null;
+  const setFindPlannerFacility = (f: Facility | null) =>
+    setFindPlannerFacilityKey(f ? `${f.fullName}|${f.type}` : null);
 
   const { data: lanePatterns } = useQuery<LanePatterns>({
     queryKey: ["/api/companies", companyId, "lane-patterns"],
@@ -606,6 +614,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
       const existingLanes: string[] = contact.lanes || [];
       if (!existingLanes.includes(laneToAdd)) {
         await apiRequest("PATCH", `/api/contacts/${contactId}`, {
+          ...contact,
           lanes: [...existingLanes, laneToAdd],
         });
       }
@@ -613,7 +622,6 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
-      setFindPlannerFacility(null);
       setAssignExistingContactId("");
       toast({
         title: "Contact assigned to facility",
@@ -622,6 +630,31 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
     },
     onError: (error: Error) => {
       toast({ title: "Error assigning contact", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const removeContactFromFacilityMutation = useMutation({
+    mutationFn: async ({ contactId, laneToRemove }: { contactId: string; laneToRemove: string }) => {
+      const contact = contacts?.find((c) => c.id === contactId);
+      if (!contact) throw new Error("Contact not found");
+      const updatedLanes = (contact.lanes || []).filter(
+        (l) => l.toLowerCase().trim() !== laneToRemove.toLowerCase().trim()
+      );
+      await apiRequest("PATCH", `/api/contacts/${contactId}`, {
+        ...contact,
+        lanes: updatedLanes,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
+      toast({
+        title: "Contact removed from facility",
+        className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error removing contact", description: error.message, variant: "destructive" });
     },
   });
 
@@ -1110,21 +1143,35 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                           {f.totalVolume.toLocaleString()} loads/yr
                         </span>
                         <span>{f.laneCount} lane{f.laneCount !== 1 ? "s" : ""}</span>
-                        {f.covered && f.coveredBy && (
+                        {f.covered && f.coveredBy && f.coveredBy.length > 0 && (
                           <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
                             <Users className="h-3 w-3" />
-                            {f.coveredBy}
+                            {f.coveredBy.map(c => c.name).join(", ")}
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
-                  <div className="flex-shrink-0">
+                  <div className="flex-shrink-0 flex items-center gap-1.5">
                     {f.covered ? (
-                      <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
-                        <CheckCircle className="h-3 w-3 mr-1" />
-                        Covered
-                      </Badge>
+                      <>
+                        <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Covered
+                        </Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => {
+                            setAssignExistingContactId("");
+                            setFindPlannerFacility(f);
+                          }}
+                          data-testid={`button-manage-planners-viewer-${i}`}
+                        >
+                          Manage
+                        </Button>
+                      </>
                     ) : (
                       <Button
                         size="sm"
@@ -1375,22 +1422,51 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
               {findPlannerFacility?.fullName}
             </DialogTitle>
             <p className="text-sm text-muted-foreground pt-1">
-              Assign an existing contact or create a new one for this facility.
+              Manage contacts assigned to this facility.
             </p>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {findPlannerFacility && findPlannerFacility.coveredBy && findPlannerFacility.coveredBy.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Currently assigned</p>
+                <div className="space-y-1.5">
+                  {findPlannerFacility.coveredBy.map((c) => (
+                    <div key={c.id} className="flex items-center justify-between px-3 py-2 rounded-md border bg-muted/40">
+                      <span className="text-sm">{c.name}</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                        disabled={removeContactFromFacilityMutation.isPending}
+                        onClick={() => {
+                          removeContactFromFacilityMutation.mutate({
+                            contactId: c.id,
+                            laneToRemove: findPlannerFacility.fullName,
+                          });
+                        }}
+                        data-testid={`button-remove-planner-${c.id}`}
+                      >
+                        ×
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
-              <p className="text-sm font-medium">Select existing contact</p>
+              <p className="text-sm font-medium">Add a contact</p>
               <Select value={assignExistingContactId} onValueChange={setAssignExistingContactId}>
-                <SelectTrigger>
+                <SelectTrigger data-testid="select-assign-contact">
                   <SelectValue placeholder="Choose a contact…" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(contacts || []).map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}{c.title ? ` — ${c.title}` : ""}
-                    </SelectItem>
-                  ))}
+                  {(contacts || [])
+                    .filter((c) => !findPlannerFacility?.coveredBy?.some((cb) => cb.id === c.id))
+                    .map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}{c.title ? ` — ${c.title}` : ""}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               <Button
@@ -1404,17 +1480,10 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                     });
                   }
                 }}
+                data-testid="button-assign-contact"
               >
-                {assignContactToFacilityMutation.isPending ? "Assigning…" : "Assign to This Facility"}
+                {assignContactToFacilityMutation.isPending ? "Assigning…" : "Add to This Facility"}
               </Button>
-            </div>
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">or</span>
-              </div>
             </div>
             <p className="text-xs text-muted-foreground text-center">
               To create a new contact, visit the account page from the Customers tab.
