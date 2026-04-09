@@ -1,0 +1,226 @@
+You are updating the Lane Work Queue in the Value Truck app to make lane presentation cleaner and procurement outreach feel more natural, more freight-native, and more useful.
+
+This is an in-place product refinement, not a redesign.
+
+Goals
+1. Clean up how lanes are displayed in Lane Work Queue.
+2. Improve default AI-generated outreach copy so it sounds like a freight broker, not a stiff template.
+3. Reduce repetitive/system-generated phrasing.
+4. Make recurring-lane outreach easier to send with less manual cleanup.
+
+Current problems
+- Lane text is not normalized/capitalized correctly.
+- Some lanes show duplicate state values, e.g. “marietta, pa, pa” or “macon, ga, ga”.
+- The default email sounds too formal and robotic.
+- “carrier bench” is not good wording and should be removed.
+- Average loads are shown as decimals like 5.10 instead of a human-friendly range.
+- Copy should use more freight lingo and feel more natural.
+
+Examples of bad current output
+- macon, ga, ga → marietta, pa, pa
+- averaging 5.10 loads per week
+- we value our relationship
+- building our carrier bench for this corridor
+
+Part 1: Lane formatting cleanup
+
+Implement a centralized lane/location formatter used by:
+- Lane Work Queue list rows
+- Lane Work Queue right-side drawer/header
+- AI email generation context
+- fallback email templates
+- any lane preview text shown in follow-up/history if applicable
+
+Formatting rules
+- City and state should be title-cased / uppercased correctly:
+  - Macon, GA
+  - Marietta, PA
+- Never show duplicated state values.
+- If city/state parsing produces a duplicate like “Macon, GA, GA”, collapse it to “Macon, GA”.
+- Use a single canonical formatter everywhere instead of duplicating string cleanup in multiple components.
+- Preserve other useful location info only when it adds value and is clean.
+
+Acceptance examples
+- “macon, ga, ga” -> “Macon, GA”
+- “marietta, pa, pa” -> “Marietta, PA”
+- “marietta, pa” stays “Marietta, PA”
+
+Part 2: Load volume phrasing cleanup
+
+Do not use raw decimals like:
+- averaging 5.10 loads per week
+
+Instead, convert weekly load averages into human-friendly language for outreach copy.
+
+Preferred rules
+- Round to an integer or small range.
+- For recurring lanes, prefer language like:
+  - usually 5–7 loads a week
+  - around 4–6 a week
+  - typically 2–3 a week
+  - usually 1–2 a week
+
+Suggested logic
+- Use the average as the center.
+- Convert to a soft range rather than a decimal exact number.
+- Keep it simple and believable.
+- If volume is very low, say:
+  - a couple loads a week
+  - around 1–2 a week
+- If volume is higher, still keep it natural:
+  - usually 8–10 a week
+  - around 10+ a week
+
+Create a helper for this so the same phrasing is reused consistently.
+
+Part 3: Outreach voice and wording improvements
+
+Update the AI prompt and fallback recurring-lane template so outreach sounds:
+- less formal
+- more direct
+- more broker/freight-native
+- more conversational
+- less corporate/template-like
+
+Tone rules
+- Write like a broker reaching out about freight.
+- Keep it concise.
+- Use freight language naturally, but do not overdo slang.
+- Avoid sounding stiff or overly polished.
+- Avoid phrases like:
+  - we value our relationship
+  - building our carrier bench
+  - ongoing coverage
+  - connect about future opportunities
+- Prefer phrases like:
+  - wanted to see if this lane fits your network
+  - looking for coverage on this lane
+  - seeing if you have trucks in the area
+  - trying to line up regular coverage
+  - want to get you in the mix on this lane
+  - if this week is tight, I can keep you in mind for the next one
+
+Do not use “carrier bench” anywhere in recurring lane outreach.
+Replace it with one of:
+- carrier network
+- regular coverage
+- core carriers on this lane
+- coverage on this lane
+- trucks for this lane
+Choose based on context, but keep it natural.
+
+Part 4: Better recurring lane email structure
+
+For recurring lane emails, prefer a structure like:
+
+1. Short greeting
+2. Quick reason for reaching out
+3. Clean lane string
+4. Human volume phrasing
+5. Direct ask
+6. Light close that keeps future freight open
+
+Good structure example
+“Hey [carrier/team] —
+We’ve got regular freight on [lane] and usually see about [range] a week.
+Wanted to see if this lane fits your network and if you’d be interested in covering some of it.
+If this week’s tight, no worries — happy to keep you in the mix for upcoming loads.”
+
+Bad structure example
+- long intro
+- relationship boilerplate
+- exact decimals
+- vague ask
+- “carrier bench” wording
+
+Part 5: AI prompt tightening
+
+Update the AI-generated procurement email prompt so it explicitly instructs the model to:
+- clean and normalize lane strings before writing them
+- never repeat state abbreviations
+- never use decimal weekly load averages in prose
+- convert weekly averages into simple natural ranges
+- use freight-native, conversational language
+- avoid formal/corporate filler
+- avoid “carrier bench”
+- keep the email short and scannable
+- mention prior relationship/history only when it is true and actually useful
+- vary copy slightly so multiple drafts do not all sound identical
+
+Prompt guidance to encode
+- If carrier has prior load history on the lane, mention that naturally.
+- If no history exists, do not pretend there is one.
+- If contact data is weak or confidence is low, keep the email simpler.
+- Prefer plain English over polished sales language.
+
+Part 6: Fallback template rewrite
+
+If AI is unavailable, replace the current fallback template with something closer to this tone:
+
+Example fallback template:
+“Hey [carrier name] team,
+
+We’ve got regular freight on [formatted lane] and usually see about [weekly load phrase].
+
+Wanted to check if this lane fits your network and if you’d have interest in covering it.
+
+If this week’s tight, no problem — happy to keep you in mind for the next load on it.”
+
+Do not use:
+- value our relationship
+- recurring lane we run consistently
+- averaging X.XX loads per week
+- building our carrier bench
+
+Part 7: Optional workflow cleanup if easy
+
+If it is easy and low-risk, improve the right-side drawer workflow by:
+- showing the cleaned formatted lane everywhere in the panel header
+- making the lane summary easier to scan
+- using the rounded/ranged weekly volume text in the outreach preview
+- keeping the default mode focused on “generate useful drafts quickly”
+
+Do not redesign the whole drawer.
+
+Engineering requirements
+- Keep changes contained.
+- Reuse existing send/draft endpoints and draft flow.
+- Centralize formatting helpers instead of duplicating string cleanup.
+- Do not break ranking, history, or outreach logging.
+- If AI prompt text lives in one place, update it there rather than layering hacks in the UI.
+
+Recommended helpers
+- formatLaneLocation(...)
+- formatLaneDisplay(...)
+- formatWeeklyLoadRange(...)
+- buildRecurringLaneOutreachContext(...)
+
+Tests
+Add or update tests for:
+- duplicate state cleanup:
+  - “macon, ga, ga” -> “Macon, GA”
+  - “marietta, pa, pa” -> “Marietta, PA”
+- capitalization formatting
+- weekly load phrase generation:
+  - 5.10 -> “usually 5–7 a week” or equivalent
+  - 2.2 -> “around 2–3 a week”
+  - 0.9 -> “around 1–2 a week” or “about 1 a week”
+- fallback template does not contain banned phrases
+- AI prompt includes the new tone/wording constraints if prompt tests exist
+- recurring lane outreach preview uses cleaned lane formatting
+
+Deliverables
+When done, return:
+1. Exact files changed
+2. New helper functions added
+3. The updated fallback recurring-lane template
+4. The updated AI prompt instructions
+5. Any assumptions made about how lane strings are stored/parsing works
+
+Important
+Do not redesign the whole Lane Work Queue.
+Keep this focused on:
+- lane formatting cleanup
+- better recurring lane wording
+- AI/fallback draft quality
+- a cleaner, more freight-native outreach experience

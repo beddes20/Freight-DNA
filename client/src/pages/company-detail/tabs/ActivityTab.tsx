@@ -544,7 +544,7 @@ export function ActivityTab({
                               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`touch-log-notes-${tp.id}`}>{tp.notes}</p>
                             ) : null}
                             <p className="text-xs text-muted-foreground mt-1">
-                              {tp.loggedByName} · {timeAgo(tp.createdAt || tp.date)}
+                              {tp.loggedByName} · {formatTimeAgo(tp.createdAt || tp.date)}
                             </p>
                           </div>
                         </div>
