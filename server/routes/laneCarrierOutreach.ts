@@ -662,18 +662,35 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    // Only directors/admins may update lane records (includes reassignment of owner/overseer)
-    if (!ADMIN_ROLES.includes(user.role)) {
-      return res.status(403).json({ error: "Director or Admin role required to update lane records" });
-    }
+
     const lane = await storage.getRecurringLane(req.params.id);
     if (!lane || lane.orgId !== user.organizationId) return res.status(404).json({ error: "Lane not found" });
 
-    // Strict allowlist — never allow orgId, id, timestamps, or system fields to be mutated
-    const LANE_MUTABLE_FIELDS = ["ownerUserId", "overseerUserId", "hasPreferredCarrierProgram"] as const;
+    const isManagerRole = ADMIN_ROLES.includes(user.role) ||
+      ["national_account_manager", "logistics_manager"].includes(user.role);
+    const isOwner = lane.ownerUserId === user.id;
+
+    if (!isManagerRole && !isOwner) {
+      return res.status(403).json({ error: "Only managers, admins, or the lane owner can edit a lane" });
+    }
+
+    // Admin/manager-only fields: ownership reassignment and system flags
+    const ADMIN_MUTABLE_FIELDS = ["ownerUserId", "overseerUserId", "hasPreferredCarrierProgram"] as const;
+    // Fields editable by managers and lane owners alike
+    const OWNER_MUTABLE_FIELDS = ["origin", "originState", "destination", "destinationState", "equipmentType", "avgLoadsPerWeek", "companyName"] as const;
+
     const updates: Record<string, unknown> = {};
-    for (const field of LANE_MUTABLE_FIELDS) {
-      if (field in req.body) updates[field] = req.body[field];
+
+    // Owner-editable fields — available to managers and owners
+    for (const field of OWNER_MUTABLE_FIELDS) {
+      if (field in req.body) updates[field] = req.body[field] ?? null;
+    }
+
+    // Admin-only fields — silently ignored for non-managers
+    if (isManagerRole) {
+      for (const field of ADMIN_MUTABLE_FIELDS) {
+        if (field in req.body) updates[field] = req.body[field];
+      }
     }
 
     // Validate reassigned user IDs belong to the same org — prevent cross-tenant assignment
@@ -728,6 +745,32 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
 
     res.json(updated);
+  });
+
+  // ── Lane Delete ────────────────────────────────────────────────────────────
+
+  app.delete("/api/recurring-lanes/:id", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const lane = await storage.getRecurringLane(req.params.id);
+    if (!lane || lane.orgId !== user.organizationId) {
+      return res.status(404).json({ error: "Lane not found" });
+    }
+
+    const isManager = ADMIN_ROLES.includes(user.role) ||
+      ["national_account_manager", "logistics_manager"].includes(user.role);
+    const isOwner = lane.ownerUserId === user.id;
+
+    if (!isManager && !isOwner) {
+      return res.status(403).json({ error: "Only managers, admins, or the lane owner can delete a lane" });
+    }
+
+    const deleted = await storage.deleteRecurringLane(req.params.id);
+    if (!deleted) return res.status(404).json({ error: "Lane not found" });
+
+    res.status(204).end();
   });
 
   // ── Lane Assignment ────────────────────────────────────────────────────────

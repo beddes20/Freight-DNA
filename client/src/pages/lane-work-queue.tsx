@@ -30,6 +30,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -56,7 +57,19 @@ import {
   PlusCircle,
   Shield,
   TrendingUp,
+  Trash2,
+  Pencil,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -364,6 +377,17 @@ function LaneRow({
   const { toast } = useToast();
   const { user: currentUser } = useAuth();
   const isManager = MANAGER_ROLES.includes(currentUser?.role ?? "");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editForm, setEditForm] = useState({
+    origin: item.lane.origin ?? "",
+    originState: item.lane.originState ?? "",
+    destination: item.lane.destination ?? "",
+    destinationState: item.lane.destinationState ?? "",
+    equipmentType: item.lane.equipmentType ?? "",
+    avgLoadsPerWeek: item.lane.avgLoadsPerWeek ?? "",
+    companyName: item.lane.companyName ?? "",
+  });
 
   const selfAssignMutation = useMutation({
     mutationFn: (ownerUserId: string | null) =>
@@ -377,6 +401,37 @@ function LaneRow({
 
   const canUnassign = item.lane.ownerUserId &&
     (isManager || item.lane.ownerUserId === currentUser?.id);
+
+  const canDelete = isManager || item.lane.ownerUserId === currentUser?.id;
+
+  const deleteMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/recurring-lanes/${item.lane.id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+      toast({ title: "Lane deleted" });
+      setDeleteDialogOpen(false);
+    },
+    onError: () => toast({ title: "Failed to delete lane", variant: "destructive" }),
+  });
+
+  const editMutation = useMutation({
+    mutationFn: (data: typeof editForm) =>
+      apiRequest("PATCH", `/api/recurring-lanes/${item.lane.id}`, {
+        origin: data.origin.trim() || undefined,
+        originState: data.originState.trim() || null,
+        destination: data.destination.trim() || undefined,
+        destinationState: data.destinationState.trim() || null,
+        equipmentType: data.equipmentType.trim() || null,
+        avgLoadsPerWeek: data.avgLoadsPerWeek !== "" ? data.avgLoadsPerWeek : null,
+        companyName: data.companyName.trim() || null,
+      }).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+      toast({ title: "Lane updated" });
+      setEditDialogOpen(false);
+    },
+    onError: () => toast({ title: "Failed to update lane", variant: "destructive" }),
+  });
 
   const { data: coverageData } = useQuery<{ profile: CoverageProfile; carriers: CoverageProfileCarrier[] }>({
     queryKey: ["/api/lanes", item.lane.id, "coverage-profile"],
@@ -554,9 +609,162 @@ function LaneRow({
           </div>
         </div>
 
-        {/* Right caret */}
-        <ChevronRight className="w-4 h-4 text-muted-foreground/40 shrink-0 mt-1 group-hover:text-amber-400 transition-colors" />
+        {/* Right side actions */}
+        <div className="flex flex-col items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {canDelete && (
+              <button
+                className="p-1 rounded hover:bg-amber-500/10 text-muted-foreground hover:text-amber-400"
+                onClick={e => { e.stopPropagation(); setEditForm({ origin: item.lane.origin ?? "", originState: item.lane.originState ?? "", destination: item.lane.destination ?? "", destinationState: item.lane.destinationState ?? "", equipmentType: item.lane.equipmentType ?? "", avgLoadsPerWeek: item.lane.avgLoadsPerWeek ?? "", companyName: item.lane.companyName ?? "" }); setEditDialogOpen(true); }}
+                data-testid={`btn-edit-lane-${item.lane.id}`}
+                title="Edit lane"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {canDelete && (
+              <button
+                className="p-1 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400"
+                onClick={e => { e.stopPropagation(); setDeleteDialogOpen(true); }}
+                data-testid={`btn-delete-lane-${item.lane.id}`}
+                title="Delete lane"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          <ChevronRight className="w-4 h-4 text-muted-foreground/40 group-hover:text-amber-400 transition-colors" />
+        </div>
       </div>
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent onClick={e => e.stopPropagation()}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete lane?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove <strong>{laneLabel(item.lane)}</strong> from the work queue along with all carrier interest records. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid={`btn-delete-lane-cancel-${item.lane.id}`}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              data-testid={`btn-delete-lane-confirm-${item.lane.id}`}
+            >
+              {deleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete lane"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Edit lane dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent className="max-w-lg" onClick={e => e.stopPropagation()}>
+          <DialogHeader>
+            <DialogTitle>Edit lane</DialogTitle>
+            <DialogDescription>Update the details for this lane.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor={`edit-origin-${item.lane.id}`}>Origin city</Label>
+                <Input
+                  id={`edit-origin-${item.lane.id}`}
+                  value={editForm.origin}
+                  onChange={e => setEditForm(f => ({ ...f, origin: e.target.value }))}
+                  placeholder="e.g. Chicago"
+                  data-testid={`input-edit-origin-${item.lane.id}`}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={`edit-origin-state-${item.lane.id}`}>Origin state</Label>
+                <Input
+                  id={`edit-origin-state-${item.lane.id}`}
+                  value={editForm.originState}
+                  onChange={e => setEditForm(f => ({ ...f, originState: e.target.value }))}
+                  placeholder="e.g. IL"
+                  maxLength={2}
+                  data-testid={`input-edit-origin-state-${item.lane.id}`}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor={`edit-destination-${item.lane.id}`}>Destination city</Label>
+                <Input
+                  id={`edit-destination-${item.lane.id}`}
+                  value={editForm.destination}
+                  onChange={e => setEditForm(f => ({ ...f, destination: e.target.value }))}
+                  placeholder="e.g. Dallas"
+                  data-testid={`input-edit-destination-${item.lane.id}`}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={`edit-destination-state-${item.lane.id}`}>Destination state</Label>
+                <Input
+                  id={`edit-destination-state-${item.lane.id}`}
+                  value={editForm.destinationState}
+                  onChange={e => setEditForm(f => ({ ...f, destinationState: e.target.value }))}
+                  placeholder="e.g. TX"
+                  maxLength={2}
+                  data-testid={`input-edit-destination-state-${item.lane.id}`}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor={`edit-equipment-${item.lane.id}`}>Equipment type</Label>
+                <Input
+                  id={`edit-equipment-${item.lane.id}`}
+                  value={editForm.equipmentType}
+                  onChange={e => setEditForm(f => ({ ...f, equipmentType: e.target.value }))}
+                  placeholder="e.g. Dry Van"
+                  data-testid={`input-edit-equipment-${item.lane.id}`}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={`edit-loads-${item.lane.id}`}>Avg loads/week</Label>
+                <Input
+                  id={`edit-loads-${item.lane.id}`}
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={editForm.avgLoadsPerWeek}
+                  onChange={e => setEditForm(f => ({ ...f, avgLoadsPerWeek: e.target.value }))}
+                  placeholder="e.g. 3.5"
+                  data-testid={`input-edit-loads-${item.lane.id}`}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`edit-company-${item.lane.id}`}>Customer name</Label>
+              <Input
+                id={`edit-company-${item.lane.id}`}
+                value={editForm.companyName}
+                onChange={e => setEditForm(f => ({ ...f, companyName: e.target.value }))}
+                placeholder="e.g. Acme Corp"
+                data-testid={`input-edit-company-${item.lane.id}`}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)} data-testid={`btn-edit-cancel-${item.lane.id}`}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => editMutation.mutate(editForm)}
+              disabled={editMutation.isPending || !editForm.origin.trim() || !editForm.destination.trim()}
+              data-testid={`btn-edit-save-${item.lane.id}`}
+            >
+              {editMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
