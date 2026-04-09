@@ -15,6 +15,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { formatLaneDisplay, formatWeeklyLoadRange } from "@shared/laneFormatters";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -679,12 +680,12 @@ export function CarrierOutreachPanel({
       toast({ title: "Select at least one carrier or paste email addresses first" });
       return;
     }
-    const origin = lane ? `${lane.origin}${lane.originState ? ", " + lane.originState : ""}` : "";
-    const dest = lane ? `${lane.destination}${lane.destinationState ? ", " + lane.destinationState : ""}` : "";
+    const laneDisplay = lane ? formatLaneDisplay(lane.origin, lane.originState, lane.destination, lane.destinationState) : "";
     const equipment = lane?.equipmentType ?? "dry van";
-    const subject = `Lane-Building Opportunity: ${origin} → ${dest} (${equipment})`;
+    const subject = `Lane-Building Opportunity: ${laneDisplay} (${equipment})`;
 
-    const fallbackBody = `Hi,\n\nI wanted to reach out about a recurring lane we run consistently on the ${origin} → ${dest} corridor. We're looking to build capacity with reliable carriers for this lane.\n\nWould you be interested in discussing a partnership? Even if you don't have a truck available this week, I'd love to connect for future coverage.\n\nLet me know — thanks!`;
+    const loadRange = formatWeeklyLoadRange(lane?.avgLoadsPerWeek);
+    const fallbackBody = `Hi,\n\nI'm with Value Truck, a freight brokerage, and wanted to reach out about a lane we move regularly. We run ${equipment} freight on the ${laneDisplay} corridor ${loadRange} and are looking for reliable carriers to run it with us.\n\nEven if you don't have a truck available this week, I'd love to connect — this lane runs consistently and I'd want you top of mind. Worth a quick call?`;
 
     // Build ad-hoc drafts for pasted email addresses, embedding the recipient email directly
     const adHocDrafts: EmailDraft[] = adHocParsed.valid.map(email => ({
@@ -798,9 +799,7 @@ export function CarrierOutreachPanel({
 
   function laneLabel(l: RecurringLane | undefined) {
     if (!l) return "";
-    const origin = `${l.origin}${l.originState ? ", " + l.originState : ""}`;
-    const dest = `${l.destination}${l.destinationState ? ", " + l.destinationState : ""}`;
-    return `${origin} → ${dest}`;
+    return formatLaneDisplay(l.origin, l.originState, l.destination, l.destinationState);
   }
 
   const contactedCount = lane?.carriersContactedCount ?? 0;

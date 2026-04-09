@@ -14,6 +14,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
+import { formatLaneDisplay, formatWeeklyLoadRange } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -136,9 +137,7 @@ interface TeamMember {
 const HIGH_FREQ_THRESHOLD = 2; // loads/week — main procurement priority
 
 function laneLabel(item: LaneItem["lane"]) {
-  const origin = `${item.origin}${item.originState ? ", " + item.originState : ""}`;
-  const dest = `${item.destination}${item.destinationState ? ", " + item.destinationState : ""}`;
-  return `${origin} → ${dest}`;
+  return formatLaneDisplay(item.origin, item.originState, item.destination, item.destinationState);
 }
 
 function confidenceColor(c: string) {
@@ -158,6 +157,7 @@ function parseLoadsPerWeek(val: string | null | undefined): number | null {
 function FrequencyBadge({ val }: { val: string | null | undefined }) {
   const n = parseLoadsPerWeek(val);
   if (n === null) return null;
+  const rangeLabel = formatWeeklyLoadRange(n);
   if (n >= 3) {
     return (
       <Badge
@@ -166,7 +166,7 @@ function FrequencyBadge({ val }: { val: string | null | undefined }) {
         data-testid="freq-badge-high"
       >
         <Zap className="w-2.5 h-2.5" />
-        {n.toFixed(1)}/wk
+        {rangeLabel}
       </Badge>
     );
   }
@@ -178,7 +178,7 @@ function FrequencyBadge({ val }: { val: string | null | undefined }) {
         data-testid="freq-badge-medium"
       >
         <Zap className="w-2.5 h-2.5" />
-        {n.toFixed(1)}/wk
+        {rangeLabel}
       </Badge>
     );
   }
@@ -188,7 +188,7 @@ function FrequencyBadge({ val }: { val: string | null | undefined }) {
       className="text-[10px] py-0 px-1.5 border-slate-500/30 text-muted-foreground"
       data-testid="freq-badge-low"
     >
-      {n.toFixed(1)}/wk
+      {rangeLabel}
     </Badge>
   );
 }
