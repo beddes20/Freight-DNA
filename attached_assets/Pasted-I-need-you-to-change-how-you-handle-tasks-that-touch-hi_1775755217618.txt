@@ -1,0 +1,142 @@
+I need you to change how you handle tasks that touch high-traffic files I’m actively editing, based on what happened over the last 3 days.
+
+Context / What happened
+Over the last 3 days we had multiple task merges and my own direct commits. Net result is good (everything is now clean and tested), but we hit a clear pattern of risk where task agents overwrote my work in shared files without realizing it.
+
+Chronological picture (simplified):
+
+Clean task merges (no conflict with my work):
+- #158 – Fix Relative Timestamp Formatter
+  - Renamed timeAgo → formatTimeAgo across 6 files, added tests.
+- #159 – Open LWQ to all roles
+  - Removed role gates from sidebar and route.
+- #157 – Stable Coverage System
+  - Large feature: coverage profiles, incumbent tracking, Coverage tab.
+- #162 – Lane Carrier Ranking Recency Fix
+  - Fixed staleness in ranking service.
+- #164 – Carrier Cross-Navigation
+  - Added Catalog↔Hub↔LWQ nav links.
+- #165 – Hard-filter Do Not Use carriers
+  - Added isDoNotUse flag + hard filter.
+
+Merges that conflicted with my direct work:
+
+1) Task #158 – Missed call site → runtime crash
+- Problem:
+  - timeAgo was renamed to formatTimeAgo across files, but one call site deep in ActivityTab.tsx (line ~547) was missed.
+  - That caused ReferenceError on Activity tab open (“Something went wrong”) because formatTimeAgo was undefined there.
+- My fix:
+  - Commit f91bc34 patched the missed call site to use formatTimeAgo.
+- Lesson:
+  - A refactor that touches multiple files must verify all call sites via tests/smoke runs, especially deeply nested sections like touchpoint history.
+
+2) Task #166 – Overwrote my prompt/fallback work across multiple paths
+- My earlier commits:
+  - b441d18: rewrote recurring-lane AI prompt + fallback to house style.
+  - 0aff74a: fixed adverb duplication (“usually usually 5–7”).
+- What Task #166 did when it merged:
+  - Introduced server/laneOutreachEmailBuilder.ts with a fallback that still included all banned phrases.
+  - Replaced the route handler’s email section with a version that:
+    - still used “corridor” twice,
+    - used “I’d love to be on your radar” in the AI example (which the model was copying),
+    - made false relationship claims keyed off isKnown = !!carrierId.
+  - Left CarrierOutreachPanel.tsx with a second, independent fallbackBody containing all the same banned phrases.
+  - Left dead-code copies of my local helpers (formatLaneDisplay, humanLoadVolume, buildFallbackEmail) at the bottom of the route file, in conflict with the new import.
+- My fix:
+  - Commit edbaed9 did a full 4-path audit:
+    - Cleaned server/laneOutreachEmailBuilder.ts fallback (all banned phrases removed).
+    - Cleaned route prompt and subject; removed “corridor”, “I’d love to be on your radar”, and false “we’ve run freight together” instructions.
+    - Replaced isKnown = !!carrierId with hasVerifiedHistory = !!carrier.payeeCode.
+    - Removed dead local helper duplicates from the route.
+    - Replaced client-side fallbackBody in CarrierOutreachPanel.tsx with the new template.
+    - Added normalizeEquipmentType() (e.g. “po” → “dry van”) and fixed bare 2-letter state codes (“ga” → “GA”).
+    - Expanded tests from 36 to 84, including integration-style tests for both AI and fallback paths.
+- Lesson:
+  - When a task generates new helpers / files in an area I’ve recently edited, it must reconcile with my existing work instead of blindly overwriting it.
+
+My direct commits that must be treated as the source of truth:
+- e76975a – Fixed Carrier Hub render crash.
+- d62f4d6 – Added source filter dropdown + color-coded source badges to Admin Catalog; friendly source labels in Carrier Hub.
+- 6a44860 – Fixed History tab in CarrierOutreachPanel (was silently blank).
+- ec770ca – Moved Momentum Score to customer card header (top-right pill).
+- f91bc34 – Fixed ActivityTab crash from Task #158’s missed call site.
+- b441d18 – Rewrote recurring-lane AI prompt and fallback to house style.
+- 0aff74a – Fixed adverb duplication in fallback.
+- edbaed9 – Full 4-path outreach audit after Task #166, all banned phrases removed, hasVerifiedHistory logic, equipment/state formatting, 84 tests.
+
+Current state (what’s working and must remain intact):
+- Source visibility (Admin Catalog filter + badges; Carrier Hub labels) – OK, survived #164.
+- History tab in CarrierOutreachPanel – OK, survived #164 and #166.
+- Momentum score on customer cards – OK, untouched by tasks.
+- Email generation – Clean across AI + fallback + client; 84 tests passing.
+- Activity tab – Crash fixed.
+
+What I want you to change going forward
+
+1) Treat certain files as “high-risk shared surfaces”
+Specifically:
+- server/routes/laneCarrierOutreach.ts
+- server/laneOutreachEmailBuilder.ts
+- client/src/components/CarrierOutreachPanel.tsx
+- ActivityTab.tsx / activity-related components
+- any shared formatter modules used by both server and client (e.g., shared/laneFormatters.ts)
+
+Behavioral rule:
+- If a task is going to edit any of these files AND my recent commits touched them (as listed above), the task must:
+  - Diff against my latest commits,
+  - Explicitly preserve or re-incorporate my logic instead of overwriting,
+  - Or, if it has to change my behavior, call that out clearly in its summary.
+
+2) For refactors, prove every call site
+Any global rename or shared helper change (like timeAgo → formatTimeAgo) must:
+- Run tests and also manually exercise UI surfaces that use the changed helper, especially:
+  - ActivityTab history section,
+  - CarrierOutreachPanel History tab,
+  - Carrier Hub views that use shared formatters.
+- If there is a helper used in multiple places, do at least one manual click-path through each major usage type.
+
+3) For outreach prompt / fallback work, never overwrite my house-style changes blindly
+When a task touches:
+- laneCarrierOutreach.ts (prompt logic),
+- laneOutreachEmailBuilder.ts (fallback),
+- CarrierOutreachPanel.tsx (client-side usage),
+
+It must:
+- Read my latest commits (b441d18, 0aff74a, edbaed9) and treat them as canonical examples of:
+  - tone,
+  - phrase bans,
+  - relationship logic (hasVerifiedHistory via payeeCode),
+  - and formatting behavior (equipment, lane, location).
+- Either build on that behavior or explicitly justify and document any deviation.
+
+4) Always run an end-to-end behavior check on:
+- Activity tab (so we don’t repeat the ReferenceError issue from #158),
+- CarrierOutreachPanel History tab (so we don’t regress the “blank tab” fix from 6a44860),
+- Lane outreach draft generation (both AI and fallback paths, so we don’t reintroduce banned phrasing or false claims).
+
+What I want from you
+
+1) Codify these guardrails in your own process
+- Update whatever internal prompts / constraints you use for tasks so that:
+  - High-traffic files above are treated as shared surfaces with extra care.
+  - My listed commits are assumed to be the current “truth” until superseded intentionally, not accidentally.
+  - You do not create new parallel fallbacks or helpers that conflict with the shared implementation.
+
+2) Confirm how you’ll enforce this
+Return:
+- A short explanation of how you will detect when a task is touching one of these high-risk files.
+- How you will ensure you diff against my latest changes before overwriting behavior.
+- How you will guarantee end-to-end behavior checks for:
+  - ActivityTab,
+  - CarrierOutreachPanel (including History tab),
+  - Lane outreach generation (AI + fallback).
+
+3) Optional: Add tests where they are currently thin
+If you see any remaining blind spots where tests don’t cover these flows, propose and/or add:
+- Specific tests to catch refactor-missed call sites (like the timeAgo → formatTimeAgo case).
+- Specific tests around email generation behavior, verifying both AI and fallback paths use the shared implementation.
+
+Important:
+- Do not re-open or redesign features I’ve already stabilized.
+- Focus on codifying process/guardrails so we don’t repeat the last 3 days’ overwrite pattern.
+- Be explicit about any assumptions you make.

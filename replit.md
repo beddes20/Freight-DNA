@@ -52,6 +52,75 @@ The application features a modern and responsive user interface built with React
     - **Carrier Hub (Phase 1)**: Central carrier intelligence layer with contact management, claimed lanes, and activity tracking.
     - **LWQ ↔ Carrier Hub Cross-Linking**: "Why this carrier" explanations on each ranked carrier suggestion (primary signal, claimed-lane-match badge, prior-positive-outreach badge). "View carrier profile" link on each card navigates to Carrier Hub via `?carrierId=`. Carrier Hub "Lanes" tab includes "Best Lanes Right Now" section (top-10 recommended active lanes scored by equipment/region/claimed-lane fit) with "Open in Lane Work Queue" cross-links (`?laneId=`). Both pages accept URL params to auto-open the relevant drawer.
 
+## Development Guardrails
+
+### High-Risk Shared Surfaces
+The following files are high-traffic and have had documented merge conflicts. Any task or agent that touches them must diff against the most recent main-branch state before making changes, and must NOT create a parallel implementation that shadows the existing one.
+
+| File | Why it's high-risk | Canonical commit |
+|------|-------------------|------------------|
+| `server/routes/laneCarrierOutreach.ts` | Email prompt logic; multiple tasks have overwritten house-style prompt changes | `edbaed9` |
+| `server/laneOutreachEmailBuilder.ts` | Shared fallback email builder; task #166 shipped it with all banned phrases intact | `edbaed9` |
+| `client/src/components/CarrierOutreachPanel.tsx` | Has its own local fallbackBody; must not diverge from server fallback tone | `edbaed9` |
+| `client/src/pages/company-detail/tabs/ActivityTab.tsx` | Deep component with touchpoint history section; missed refactor call site caused crash | `f91bc34` |
+| `shared/laneFormatters.ts` | Used by both server and client; normalization logic must stay in sync | `edbaed9` |
+
+### Lane Outreach Email Generation — Canonical Behavior
+The following rules are the source of truth and must be preserved by all future tasks that touch email generation:
+
+**Relationship history gate (`hasVerifiedHistory`)**
+- `hasVerifiedHistory = !!carrier.payeeCode` — set only for carriers sourced from TMS financial data
+- `!!carrierId` alone is NOT sufficient — being in the carrier catalog does not imply prior business
+- Do NOT generate "we've run freight together" copy unless `hasVerifiedHistory` is true
+
+**Banned phrases — must never appear in AI prompt output or fallback text**
+- `carrier bench`, `we value our relationship`, `ongoing coverage`, `reaching out about`
+- `love to connect`, `I'd love to`, `would love to`, `top of mind`
+- `lane runs consistently`, `this lane runs consistently`, `keep you in mind`
+- `corridor` (do not append "corridor" after a lane display string)
+- Decimal load averages like `5.10 loads/week` (use `formatWeeklyLoadRange()` instead)
+
+**Equipment normalization**
+- Always pass `lane.equipmentType` through `normalizeEquipmentType()` before including in any prompt or email body
+- Short unknown codes (e.g. `"po"`, `"dv"`, `"rf"`) must be mapped to human-readable terms
+
+**Lane formatting**
+- Always use `formatLaneDisplay(origin, originState, destination, destinationState)` from `shared/laneFormatters.ts`
+- Do NOT concatenate raw city/state strings directly into prompts or email bodies
+
+**Fallback path**
+- Server fallback: `buildFallbackEmail()` in `server/laneOutreachEmailBuilder.ts` — single canonical implementation
+- Client fallback: `fallbackBody` in `CarrierOutreachPanel.tsx` — must match the same tone as server fallback
+- Never create a third parallel fallback implementation
+
+**Tests**
+- `tests/lane-formatters.test.ts` — 84 tests covering formatters, equipment normalization, and fallback email generation including banned-phrase audit
+- `tests/guardrails.test.ts` — static analysis that checks actual source files for banned phrases, stale function calls, and implementation divergence
+- Both must pass before any merge that touches the above files
+
+### Refactor Safety Rules
+Any global rename of a shared helper (e.g. `timeAgo` → `formatTimeAgo`) must:
+1. Search for ALL call sites with `grep` before and after the change
+2. Verify results include the deep/nested sections: ActivityTab touchpoint history, CarrierOutreachPanel History tab, Carrier Hub views
+3. Add or update a test that would fail if the old name were called anywhere
+
+### End-to-End Smoke Check Requirements
+Before merging any task that touches the high-risk files above, verify:
+- **Activity tab**: Open a company → click Activity tab → no "Something went wrong" error
+- **CarrierOutreachPanel History tab**: Open LWQ → open a lane → click History tab → records visible (not blank)
+- **Lane outreach generation**: Generate at least one draft email → verify no banned phrases in subject or body
+
+### Source Visibility (Carrier Catalog / Hub)
+- Admin Catalog (`/admin/carriers`) has a Source filter dropdown and color-coded source badges — implemented in `d62f4d6`
+- Carrier Hub drawer shows friendly source labels (`Lane Upload · DAT Load Board`) instead of raw channel codes — implemented in `d62f4d6`
+- These must survive any future task that touches `admin-carriers.tsx` or `carrier-hub.tsx`
+
+### Momentum Score (Customer Cards)
+- Customers page shows a Momentum Score pill in the top-right of each card header — implemented in `ec770ca`
+- Uses `GROWTH_BAND_STYLES` from `account-growth-portlet.tsx`
+- `data-testid="badge-momentum-header-{companyId}"` — hidden when no score
+- Must survive any future task that touches `customers.tsx`
+
 ## External Dependencies
 - **PostgreSQL**: Primary database and session store.
 - **xlsx (SheetJS)**: For Excel and CSV parsing.
