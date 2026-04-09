@@ -352,53 +352,58 @@ export function registerCarrierHubRoutes(app: Express) {
       const org = orgId(req);
       const { id } = req.params;
 
-      // Verify org ownership first with a lightweight check
+      // Get full carrier record (need name + payeeCode for TMS history lookup)
       const [c] = await db
-        .select({ id: carriers.id })
+        .select({ id: carriers.id, name: carriers.name, payeeCode: carriers.payeeCode })
         .from(carriers)
         .where(and(eq(carriers.id, id), eq(carriers.orgId, org)));
       if (!c) return res.status(404).json({ error: "Carrier not found" });
 
       // Proven lane history from lane_carrier_interest (read-only, system-derived)
-      const provenHistory = await storage.pool.query(
-        `
-        SELECT
-          lci.id,
-          lci.lane_id,
-          lci.carrier_name,
-          lci.fit_score,
-          lci.interest_status,
-          lci.source_type,
-          lci.updated_at,
-          rl.origin_city, rl.origin_state, rl.dest_city, rl.dest_state,
-          rl.equipment_type, rl.avg_loads_per_week, rl.weeks_active,
-          rl.company_name,
-          rl.resolved_at
-        FROM lane_carrier_interest lci
-        JOIN recurring_lanes rl ON rl.id = lci.lane_id
-        WHERE lci.carrier_id = $1
-        ORDER BY lci.updated_at DESC
-        LIMIT 50
-        `,
-        [id]
-      );
+      const [provenHistory, outreachActivity] = await Promise.all([
+        storage.pool.query(
+          `
+          SELECT
+            lci.id,
+            lci.lane_id,
+            lci.carrier_name,
+            lci.fit_score,
+            lci.interest_status,
+            lci.source_type,
+            lci.updated_at,
+            rl.origin_city, rl.origin_state, rl.dest_city, rl.dest_state,
+            rl.equipment_type, rl.avg_loads_per_week, rl.weeks_active,
+            rl.company_name,
+            rl.resolved_at
+          FROM lane_carrier_interest lci
+          JOIN recurring_lanes rl ON rl.id = lci.lane_id
+          WHERE lci.carrier_id = $1
+          ORDER BY lci.updated_at DESC
+          LIMIT 50
+          `,
+          [id]
+        ),
+        // Outreach activity — can be slow on large carrier_outreach_logs tables
+        storage.pool.query(
+          `
+          SELECT
+            col.id, col.lane_id, col.timestamp, col.delivery_status,
+            col.sent_at, col.recipients,
+            rl.origin_city, rl.origin_state, rl.dest_city, rl.dest_state,
+            rl.company_name
+          FROM carrier_outreach_logs col
+          JOIN recurring_lanes rl ON rl.id = col.lane_id
+          WHERE $1 = ANY(col.carrier_ids)
+          ORDER BY col.timestamp DESC
+          LIMIT 30
+          `,
+          [id]
+        ),
+      ]);
 
-      // Outreach activity — can be slow on large carrier_outreach_logs tables
-      const outreachActivity = await storage.pool.query(
-        `
-        SELECT
-          col.id, col.lane_id, col.timestamp, col.delivery_status,
-          col.sent_at, col.recipients,
-          rl.origin_city, rl.origin_state, rl.dest_city, rl.dest_state,
-          rl.company_name
-        FROM carrier_outreach_logs col
-        JOIN recurring_lanes rl ON rl.id = col.lane_id
-        WHERE $1 = ANY(col.carrier_ids)
-        ORDER BY col.timestamp DESC
-        LIMIT 30
-        `,
-        [id]
-      );
+      // TMS history: pull from financial uploads for this carrier by payee code or name.
+      // This surfaces historical load data that predates the Carrier Hub catalog.
+      const tmsLaneSummary = await buildCarrierTmsHistory(org, c.payeeCode, c.name);
 
       const stats = {
         provenLaneCount: provenHistory.rows.length,
@@ -407,11 +412,14 @@ export function registerCarrierHubRoutes(app: Express) {
           r => r.interest_status === "available" || r.interest_status === "available_next_week"
         ).length,
         lastUsed: provenHistory.rows[0]?.updated_at ?? null,
+        tmsLaneCount: tmsLaneSummary.length,
+        tmsTotalLoads: tmsLaneSummary.reduce((sum, l) => sum + l.loads, 0),
       };
 
       res.json({
         provenHistory: provenHistory.rows,
         outreachActivity: outreachActivity.rows,
+        tmsHistory: tmsLaneSummary,
         stats,
       });
     } catch (err) {
@@ -419,6 +427,108 @@ export function registerCarrierHubRoutes(app: Express) {
       res.status(500).json({ error: "Failed to load carrier activity" });
     }
   });
+
+  /**
+   * Aggregate TMS lane history for a carrier from financial uploads.
+   * Matches by payee code (most reliable) or carrier name (fallback).
+   * Returns top lanes sorted by load count descending.
+   */
+  async function buildCarrierTmsHistory(
+    orgId: string,
+    payeeCode: string | null,
+    carrierName: string,
+  ): Promise<Array<{
+    origin: string;
+    destination: string;
+    originState: string;
+    destState: string;
+    loads: number;
+    lastMonth: string | null;
+  }>> {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(orgId);
+      if (!uploads.length) return [];
+
+      const normStr = (s: string) => (s ?? "").trim().toLowerCase();
+      const carrierNorm = normStr(carrierName);
+      const payeeNorm = payeeCode ? payeeCode.toLowerCase() : null;
+
+      /** Parse clean carrier name from "PAYCODE - NAME" TMS format */
+      function parseName(raw: string): string {
+        const match = raw.trim().match(/^[A-Z0-9]{2,12}\s+-\s+(.+)$/i);
+        return match ? match[1].trim() : raw.trim();
+      }
+      /** Extract payee code from "PAYCODE - NAME" TMS format */
+      function parsePayee(raw: string): string | null {
+        const match = raw.trim().match(/^([A-Z0-9]{2,12})\s+-\s+.+$/i);
+        return match ? match[1].toUpperCase() : null;
+      }
+      /** Normalize month "2026 M03" → "2026-03" */
+      function normMonth(raw: string): string {
+        const m = raw.trim().match(/^(\d{4})\s+M(\d{1,2})$/i);
+        if (m) return `${m[1]}-${m[2].padStart(2, "0")}`;
+        if (/^\d{4}-\d{2}/.test(raw)) return raw.slice(0, 7);
+        return raw.slice(0, 7);
+      }
+      /** Extract city from "CITY, ST" format */
+      function extractCity(raw: string): string {
+        const ci = raw.lastIndexOf(",");
+        return ci > 0 ? raw.slice(0, ci).trim() : raw.trim();
+      }
+      function readField(row: Record<string, unknown>, ...keys: string[]): string {
+        for (const k of keys) {
+          const v = row[k];
+          if (v !== undefined && v !== null && v !== "") return String(v);
+        }
+        return "";
+      }
+
+      const laneSummary = new Map<string, { origin: string; destination: string; originState: string; destState: string; loads: number; lastMonth: string | null }>();
+
+      const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+      for (const upload of sorted.slice(0, 3)) {
+        const rows = (upload.rows as Record<string, unknown>[]) ?? [];
+        for (const row of rows) {
+          const rawCarrier = readField(row, "carrier", "carrierName", "carrier_name", "Carrier", "Carrier name");
+          if (!rawCarrier) continue;
+
+          // Match by payee code (preferred) or by normalized carrier name (fallback)
+          const rowPayee = parsePayee(rawCarrier);
+          const rowNameNorm = normStr(parseName(rawCarrier));
+          const matches = (payeeNorm && rowPayee && rowPayee.toLowerCase() === payeeNorm) ||
+                          rowNameNorm === carrierNorm;
+          if (!matches) continue;
+
+          const rawOriginCity = readField(row, "shipperCity", "originCity", "Shipper city", "Origin city");
+          const rawOriginFull = readField(row, "origin", "Origin");
+          const origin = extractCity(rawOriginCity || rawOriginFull).toUpperCase() || "(unknown)";
+          const originState = readField(row, "shipperState", "originState", "Shipper state", "Origin state").toUpperCase();
+
+          const rawDestCity = readField(row, "consigneeCity", "destinationCity", "Consignee city", "Destination city");
+          const rawDestFull = readField(row, "destination", "Destination");
+          const dest = extractCity(rawDestCity || rawDestFull).toUpperCase() || "(unknown)";
+          const destState = readField(row, "consigneeState", "destinationState", "destState", "Consignee state", "Destination state").toUpperCase();
+
+          const month = normMonth(readField(row, "month", "Month"));
+          const laneKey = `${origin}|${originState}|${dest}|${destState}`;
+
+          const existing = laneSummary.get(laneKey);
+          if (existing) {
+            existing.loads++;
+            if (month > (existing.lastMonth ?? "")) existing.lastMonth = month;
+          } else {
+            laneSummary.set(laneKey, { origin, destination: dest, originState, destState, loads: 1, lastMonth: month || null });
+          }
+        }
+      }
+
+      return Array.from(laneSummary.values())
+        .sort((a, b) => b.loads - a.loads)
+        .slice(0, 50);
+    } catch {
+      return [];
+    }
+  }
 
   // ── CREATE ────────────────────────────────────────────────────────────────
   app.post("/api/carrier-hub", requireAuth, async (req, res) => {

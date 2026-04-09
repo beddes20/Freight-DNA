@@ -1074,6 +1074,13 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
             priorPositiveOutreach: c.priorOutcomeBoost,
             recentlyContacted: !!recentlyContactedNote,
             recentlyContactedNote: recentlyContactedNote ?? undefined,
+            finalScore: c.fitScore,
+            historyMatchTier: c.historyMatch,
+            lastUsedMonth: c.lastUsedMonth ?? null,
+            regionMatch: c.regionMatch,
+            equipmentMatch: c.equipmentMatch,
+            isIncumbent: c.isIncumbent,
+            suppressionReasons: c.suppressionReasons,
           },
         };
       });

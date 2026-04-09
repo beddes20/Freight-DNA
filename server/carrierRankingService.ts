@@ -17,31 +17,91 @@ import type { RecurringLane, Carrier, FinancialUpload, LaneCarrierInterest, Lane
 import type { IStorage } from "./storage";
 import { COVERAGE_THRESHOLDS, shouldUseIncumbentFirstFlow } from "./laneCoverageService";
 
-/** Typed shape of TMS rows from financial upload JSONB */
-interface TmsRow {
-  shipperCity?: string;
-  originCity?: string;
-  origin?: string;
-  shipperState?: string;
-  originState?: string;
-  consigneeCity?: string;
-  destinationCity?: string;
-  destination?: string;
-  consigneeState?: string;
-  destinationState?: string;
-  destState?: string;
-  carrier?: string;
-  carrierName?: string;
-  carrier_name?: string;
-  month?: string | number;
-  equipmentType?: string;
-  mode?: string;
-  customerName?: string;
-  /** Margin fields (may be absent) */
-  margin?: number | string;
-  marginPct?: number | string;
-  onTimePct?: number | string;
-  on_time_pct?: number | string;
+/**
+ * Raw TMS row from financial upload JSONB.
+ * Keys may be camelCase OR title-case-with-spaces depending on the source TMS file.
+ * Always use readTmsField() to access values — never access properties directly.
+ */
+type TmsRow = Record<string, unknown>;
+
+/**
+ * Read a field from a raw TMS JSONB row, trying each candidate key in order.
+ * Handles both camelCase variants (old exports) and space-separated title-case variants
+ * (e.g. real TMS exports that preserve spreadsheet column names verbatim).
+ * Returns the first non-empty string value found, or "" if none.
+ * Exported for unit testing.
+ */
+export function readTmsField(row: TmsRow, ...keys: string[]): string {
+  for (const key of keys) {
+    const val = row[key];
+    if (val !== undefined && val !== null && val !== "") return String(val);
+  }
+  return "";
+}
+
+/**
+ * Parse a clean carrier name from a raw TMS carrier field.
+ * Handles the "PAYCODE - CARRIER NAME" format used in many TMS exports
+ * (e.g. "DHAMLIAZ - DHAMI CARRIER LLC" → "DHAMI CARRIER LLC").
+ * If no payee-code prefix is detected, returns the raw value as-is.
+ * Exported for unit testing.
+ */
+export function parseCarrierName(raw: string): string {
+  if (!raw) return "";
+  const trimmed = raw.trim();
+  // Pattern: up to ~10 alphanum chars, a space-dash-space, then the real name
+  const match = trimmed.match(/^[A-Z0-9]{2,12}\s+-\s+(.+)$/i);
+  if (match) return match[1].trim();
+  return trimmed;
+}
+
+/**
+ * Extract the payee code from a "PAYCODE - CARRIER NAME" TMS carrier string.
+ * Returns null if the format doesn't match.
+ * Exported for unit testing.
+ */
+export function parsePayeeCode(raw: string): string | null {
+  if (!raw) return null;
+  const match = raw.trim().match(/^([A-Z0-9]{2,12})\s+-\s+.+$/i);
+  return match ? match[1].toUpperCase() : null;
+}
+
+/**
+ * Convert a raw TMS month value to canonical "YYYY-MM" format.
+ * Handles:
+ *   "2026 M03"  → "2026-03"   (real TMS format)
+ *   "2025 M10"  → "2025-10"
+ *   "2025-10"   → "2025-10"   (already canonical)
+ *   "2025-10-01"→ "2025-10"   (ISO date, truncated)
+ *   number      → "" (unrecognized)
+ */
+export function normalizeTmsMonth(raw: string | number | undefined | null): string {
+  if (raw === undefined || raw === null || raw === "") return "";
+  const s = String(raw).trim();
+  // Format: "2025 M10" or "2025 M9"
+  const mSpaceMatch = s.match(/^(\d{4})\s+M(\d{1,2})$/i);
+  if (mSpaceMatch) return `${mSpaceMatch[1]}-${mSpaceMatch[2].padStart(2, "0")}`;
+  // Already "YYYY-MM" or starts with "YYYY-MM-..."
+  if (/^\d{4}-\d{2}/.test(s)) return s.slice(0, 7);
+  // Slash variant "YYYY/MM"
+  const slashMatch = s.match(/^(\d{4})\/(\d{1,2})/);
+  if (slashMatch) return `${slashMatch[1]}-${slashMatch[2].padStart(2, "0")}`;
+  return "";
+}
+
+/**
+ * Extract the city portion from a combined "CITY, ST" or "CITY, STATE" origin/destination string.
+ * Returns the full string unchanged if no comma is found (already city-only).
+ * Examples:
+ *   "PHOENIX, AZ"      → "phoenix"
+ *   "South Salt Lake, UT" → "south salt lake"
+ *   "phoenix"          → "phoenix"
+ */
+export function extractCity(raw: string): string {
+  if (!raw) return "";
+  const commaIdx = raw.lastIndexOf(",");
+  if (commaIdx > 0) return raw.slice(0, commaIdx).trim().toLowerCase();
+  return raw.trim().toLowerCase();
 }
 
 export interface RankedCarrier {
@@ -120,12 +180,33 @@ function extractCarrierHistoryFromUploads(
   for (const upload of sorted.slice(0, 3)) {
     const rows = (upload.rows as TmsRow[]) ?? [];
     for (const row of rows) {
-      const rowOrigin = normStr(row.shipperCity ?? row.originCity ?? row.origin ?? "");
-      const rowDest = normStr(row.consigneeCity ?? row.destinationCity ?? row.destination ?? "");
-      const rowOriginState = normStr(row.shipperState ?? row.originState ?? "");
-      const rowDestState = normStr(row.consigneeState ?? row.destinationState ?? row.destState ?? "");
-      const carrierRaw = normStr(row.carrier ?? row.carrierName ?? row.carrier_name ?? "");
-      const month = String(row.month ?? "").slice(0, 7);
+      // --- Field extraction: handle both camelCase (legacy exports) and title-case-with-spaces (real TMS) ---
+      // Origin: try dedicated city field first, then extract city from combined "CITY, ST" field
+      const rawOriginCity = readTmsField(row, "shipperCity", "originCity", "Shipper city", "Origin city");
+      const rawOriginFull = readTmsField(row, "origin", "Origin");
+      const rowOrigin = normStr(rawOriginCity || extractCity(rawOriginFull));
+
+      const rawDestCity = readTmsField(row, "consigneeCity", "destinationCity", "Consignee city", "Destination city");
+      const rawDestFull = readTmsField(row, "destination", "Destination");
+      const rowDest = normStr(rawDestCity || extractCity(rawDestFull));
+
+      // State: dedicated state field
+      const rowOriginState = normStr(readTmsField(row, "shipperState", "originState", "Shipper state", "Origin state"));
+      const rowDestState = normStr(readTmsField(row, "consigneeState", "destinationState", "destState", "Consignee state", "Destination state"));
+
+      // Carrier: strip "PAYCODE - " prefix if present
+      const rawCarrierField = readTmsField(row, "carrier", "carrierName", "carrier_name", "Carrier", "Carrier name");
+      const carrierRaw = normStr(parseCarrierName(rawCarrierField));
+
+      // Month: normalize "2026 M03" → "2026-03"
+      const rawMonth = readTmsField(row, "month", "Month");
+      const month = normalizeTmsMonth(rawMonth);
+
+      // On-time % and margin
+      const onTimeRaw = readTmsField(row, "onTimePct", "on_time_pct", "On-time %", "On time pct");
+      const onTimeParsed = onTimeRaw ? parseFloat(onTimeRaw) : NaN;
+      const marginRaw = readTmsField(row, "margin", "marginPct", "Margin $", "Margin %");
+      const marginParsed = marginRaw ? parseFloat(marginRaw) : NaN;
 
       if (!carrierRaw) continue;
 
@@ -154,14 +235,6 @@ function extractCarrierHistoryFromUploads(
       const thisTier: CarrierHistory["bestMatchTier"] = isExact ? "exact" : isCitySimilar ? "city" : "state";
 
       const existing = history.get(carrierRaw) ?? { loads: 0, lastUsedMonth: null, avgOnTimePct: null, totalMargin: null, marginRowCount: 0, bestMatchTier: thisTier };
-
-      // Extract on-time % if present
-      const onTimeRaw = row.onTimePct ?? row.on_time_pct;
-      const onTimeParsed = onTimeRaw !== undefined ? parseFloat(String(onTimeRaw)) : NaN;
-
-      // Extract margin if present
-      const marginRaw = row.margin ?? row.marginPct;
-      const marginParsed = marginRaw !== undefined ? parseFloat(String(marginRaw)) : NaN;
 
       // Upgrade the stored tier if this row is a better match (exact > city > state)
       const tierRank = { exact: 0, city: 1, state: 2 } as const;
@@ -203,8 +276,9 @@ function extractCustomerHistoryLoads(
   for (const upload of sorted.slice(0, 3)) {
     const rows = (upload.rows as TmsRow[]) ?? [];
     for (const row of rows) {
-      const rowCarrier = normStr(row.carrier ?? row.carrierName ?? row.carrier_name ?? "");
-      const rowCustomer = normStr(row.customerName ?? "");
+      const rawCarrier = readTmsField(row, "carrier", "carrierName", "carrier_name", "Carrier", "Carrier name");
+      const rowCarrier = normStr(parseCarrierName(rawCarrier));
+      const rowCustomer = normStr(readTmsField(row, "customerName", "Customer", "customer", "customer_name"));
       if (!rowCarrier || !rowCustomer) continue;
       if (rowCarrier === carrierNorm && rowCustomer.includes(customerNorm.slice(0, 6))) count++;
     }
@@ -756,9 +830,17 @@ function extractExactLaneLoads(uploads: FinancialUpload[], lane: RecurringLane, 
   for (const upload of sorted.slice(0, 3)) {
     const rows = (upload.rows as TmsRow[]) ?? [];
     for (const row of rows) {
-      const rowOrigin = normStr(row.shipperCity ?? row.originCity ?? row.origin ?? "");
-      const rowDest = normStr(row.consigneeCity ?? row.destinationCity ?? row.destination ?? "");
-      const rowCarrier = normStr(row.carrier ?? row.carrierName ?? row.carrier_name ?? "");
+      // Use the same field-reading logic as extractCarrierHistoryFromUploads
+      const rawOriginCity = readTmsField(row, "shipperCity", "originCity", "Shipper city", "Origin city");
+      const rawOriginFull = readTmsField(row, "origin", "Origin");
+      const rowOrigin = normStr(rawOriginCity || extractCity(rawOriginFull));
+
+      const rawDestCity = readTmsField(row, "consigneeCity", "destinationCity", "Consignee city", "Destination city");
+      const rawDestFull = readTmsField(row, "destination", "Destination");
+      const rowDest = normStr(rawDestCity || extractCity(rawDestFull));
+
+      const rawCarrier = readTmsField(row, "carrier", "carrierName", "carrier_name", "Carrier", "Carrier name");
+      const rowCarrier = normStr(parseCarrierName(rawCarrier));
 
       if (rowCarrier !== carrierNorm) continue;
       if (!rowOrigin || !rowDest) continue;
