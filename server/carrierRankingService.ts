@@ -393,6 +393,14 @@ export async function rankCarriersForLane(
     if ((carrier.tags ?? []).some(t => flagTags.includes(normStr(t)))) {
       suppressionReasons.push("Flagged / do not use");
     }
+    // Suppress carriers whose Carrier Hub status is flagged, inactive, or do_not_use
+    if (carrier.status === "do_not_use") {
+      suppressionReasons.push("Marked Do Not Use in Carrier Hub");
+    } else if (carrier.status === "flagged") {
+      suppressionReasons.push("Flagged in Carrier Hub — verify before use");
+    } else if (carrier.status === "inactive") {
+      suppressionReasons.push("Marked Inactive in Carrier Hub");
+    }
     if (hist?.lastUsedMonth) {
       const monthsAgo = monthDiff(hist.lastUsedMonth);
       if (monthsAgo >= 12) {

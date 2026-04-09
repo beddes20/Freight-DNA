@@ -1,7 +1,7 @@
 # OrgChart CRM - Transportation Brokerage Sales Tool
 
 ## Overview
-OrgChart CRM is a mini CRM application for transportation brokerage sales teams. Its primary purpose is to empower sales representatives to efficiently manage customer accounts, build organizational charts, track contacts, and oversee shipping-related data such as lanes, regions, freight spend, and spot bidding. The system includes dedicated RFP and Award management with Excel upload and analytical capabilities. The overarching goal is to streamline sales workflows, enhance customer relationship management, and ultimately drive increased sales efficiency, strategic account penetration, and revenue growth for transportation brokers. It features robust role-based access control (RBAC) for various management levels.
+OrgChart CRM is a specialized mini CRM application designed for transportation brokerage sales teams. Its core purpose is to streamline sales workflows by enabling efficient management of customer accounts, organizational charts, contacts, and shipping-related data including lanes, regions, freight spend, and spot bidding. The system supports dedicated RFP and Award management with Excel upload and analytical tools. The overarching vision is to enhance customer relationship management, drive sales efficiency, facilitate strategic account penetration, and ultimately increase revenue for transportation brokers. It incorporates robust role-based access control (RBAC) to support various management levels.
 
 ## User Preferences
 I prefer clear and concise information. I like iterative development with regular updates. Please ask for my approval before implementing any major architectural changes or significant feature modifications. I value clean code and well-documented solutions.
@@ -9,54 +9,52 @@ I prefer clear and concise information. I like iterative development with regula
 ## System Architecture
 
 ### UI/UX Decisions
-The application utilizes React, TypeScript, and Tailwind CSS with `shadcn/ui` to deliver a modern and responsive user interface. It incorporates dark/light mode switching, uses blue and green accent colors, features a gradient hero banner, and displays KPI stat cards on the dashboard. Navigation is managed through a responsive sidebar, complemented by interactive elements like confetti animations. The theme predominantly features a black sidebar/header with amber gold accents, specific branding elements like the Value Truck logo, and mantras displayed in the top header.
+The application features a modern and responsive user interface built with React, TypeScript, Tailwind CSS, and `shadcn/ui`. Key design elements include dark/light mode switching, blue and green accent colors, a gradient hero banner, KPI stat cards on the dashboard, and a responsive sidebar for navigation. The theme utilizes a black sidebar/header with amber gold accents, incorporates the Value Truck logo, and displays mantras in the top header.
 
 ### Technical Implementations
-- **Frontend**: Built with React, TypeScript, TanStack Query for data fetching, and Wouter for routing.
-- **Backend**: An Express.js server developed with TypeScript handles API requests, authentication, and file processing.
-- **Database**: PostgreSQL is used as the primary data store, managed with Drizzle ORM.
-- **Authentication**: The system employs session-based authentication using `express-session`, `connect-pg-simple`, and `bcrypt` for secure password hashing. Role-based access control (RBAC) dynamically filters data visibility based on user roles (Admin, Director, National Account Manager, Account Manager, Logistics Manager, Logistics Coordinator).
-- **File Processing**: Excel and CSV parsing are handled by `xlsx` (SheetJS), while `multer` is used for file uploads.
-- **Mapping & Geocoding**: Interactive maps are powered by Leaflet, integrated with custom server-side geocoding and Haversine distance calculations for features like delivery heatmaps.
-- **Data Models**: Core entities include Users, Companies, Contacts, RFPs, Awards, and Tasks, designed to support hierarchical relationships and specific transportation industry data.
-- **Key Features**:
-    - **CRM Capabilities**: Comprehensive CRUD operations for company and contact management, including organizational chart visualization and transportation-specific fields.
-    - **RFP & Award Management**: Modules for managing RFPs and awards, featuring Excel upload with AI-assisted column mapping.
-    - **Analytical Tools**: Includes lane research, facility coverage gap analysis, lane pattern analysis, historical data analysis, top opportunities identification, and a lane matching portlet. Wallet share calculation is dynamically presented based on RFP data or estimated spend.
-    - **User and Team Management**: Tools for user administration, team hierarchy management, and company reassignment, along with features for PTO passoff and account handback.
-    - **Data Integration & Sync**: Global search functionality, OneDrive synchronization for financial data, and a system for attaching files to various entities.
-    - **Communication & Collaboration**: Task assignment and tracking, a shared callouts/trends feed, and 1:1 discussion topics between managers and their reports.
-    - **Goal Setting & Tracking**: A system for National Account Managers (NAMs) to set and track goals for Account Managers (AMs), including automated and manual metrics.
-    - **Customer Interaction Tracking**: Logging of contact touchpoints (calls, emails, texts, site visits) with recency tracking, "Contacts Needing Attention" alerts, and the ability to mark "meaningful" conversations.
-    - **Account Intelligence**: Dedicated fields within company profiles for critical operational and financial details, including portal credentials, tendering processes, and account quirks.
+- **Frontend**: React, TypeScript, TanStack Query for data fetching, and Wouter for routing.
+- **Backend**: Express.js server developed with TypeScript for API requests, authentication, and file processing.
+- **Database**: PostgreSQL with Drizzle ORM.
+- **Authentication**: Session-based authentication using `express-session`, `connect-pg-simple`, and `bcrypt` for password hashing, with dynamic Role-Based Access Control (RBAC) for data visibility.
+- **File Processing**: `xlsx` (SheetJS) for Excel/CSV parsing and `multer` for file uploads.
+- **Mapping & Geocoding**: Leaflet for interactive maps, integrated with custom server-side geocoding and Haversine distance calculations.
+- **Core Features**:
+    - **CRM**: Comprehensive CRUD for companies and contacts, including org chart visualization and transportation-specific fields.
+    - **RFP & Award Management**: Modules for managing RFPs and awards, with AI-assisted Excel upload and column mapping.
+    - **Analytics**: Lane research, facility coverage gap analysis, lane pattern analysis, historical data analysis, and wallet share calculation.
+    - **User & Team Management**: Administration tools, team hierarchy management, and account reassignment.
+    - **Data Integration**: Global search, OneDrive synchronization for financial data, and file attachment capabilities.
+    - **Communication**: Task assignment, shared callouts/trends feed, and 1:1 discussion topics.
+    - **Goal Tracking**: System for National Account Managers to set and track goals for Account Managers.
+    - **Customer Interaction**: Logging of contact touchpoints with recency tracking and "Contacts Needing Attention" alerts.
+    - **Account Intelligence**: Dedicated fields for operational details and portal credentials within company profiles.
     - **Customer Scorecard**: Secure upload and download of customer scorecard documents.
-    - **Dashboard Enhancements**: Contextual alerts for RFP deadlines, goal progress, and pending 1:1 topics, along with specialized dashboard portlets for LMs, AMs, and NAMs, providing role-specific insights and metrics.
-    - **AI-Powered Insights**: AI-generated talking points for lane gap insights, incorporating account context for enhanced daily brief emails and chatbot prompts. Includes: AI health score narrative (2-sentence GPT-4o-mini "why" explanation shown in company detail and pre-call planner), AI touchpoint note summary (auto-summarizes last 5 touchpoint notes in pre-call planner), proactive nudge alerts in DNA Guru chatbot (goals behind, cold contacts, urgent RFPs, tasks due today), and lane gap priority scoring (High/Medium/Low badges on corridor rows ranked by volume, multi-RFP presence, award status, and count).
-    - **DNA Guru Action Execution**: Chatbot supports OpenAI function calling for `log_touchpoint` (call/email/text/site_visit) and `create_task` actions — AI proposes inline confirmation cards, user confirms to execute against the CRM.
-    - **Health and Momentum Scoring**: Automated calculation of company health and momentum scores based on various interaction and activity factors.
-    - **Shipping Mode Management**: Categorization and filtering of companies by shipping modes (LTL, FTL, Drayage, IMDL).
-    - **Relationship Freight Reporting**: `contact_lane_attributions` table lets reps assign lane patterns (origin/dest state+city) to individual contacts. Freight loads from financial uploads are then matched and attributed to each contact's relationship base level (1st/2nd/3rd/Home Run). Portlets appear on the dashboard and on each company's overview tab, showing loads, margin, contracted %, and spot % per level. The `ContactLaneManager` component in contact detail sheets handles add/remove of lane attributions.
-    - **Relationship Advancement History**: `contact_base_history` table tracks every base change (from/to/who/when). History logs on every PATCH /contacts/:id when relationshipBase changes, and is displayed as a timeline in the contact detail sheet.
-    - **Dashboard Consolidation**: Single `/api/dashboard-relationship-summary` endpoint replaces 3 separate relationship API calls on the dashboard. `RelationshipDashboardSection` wrapper passes pre-fetched data to both portlets via props, eliminating redundant queries.
-    - **Greenfield Visibility**: Coverage portlet shows "Unworked Accounts" count — companies with no contacts assigned to any relationship base level.
-    - **Pre-call Planner Relationship Intel**: Contact cards in the pre-call planner now display relationship base badge (1st/2nd/3rd/HR), lane count, loads, and margin sourced from the company's freight summary.
-    - **Feedback Inbox Admin Responses**: Admins can type a response to any feedback submission. Response is saved, displayed in the inbox, and the submitter is notified by email (using their username as the email address).
-    - **Contact Data Completeness Nudge**: Contact cards in the People tab show amber warning badges for missing email, missing phone, or never-contacted status, prompting reps to fill in data gaps.
-    - **Company Activity Timeline**: Unified chronological feed at the top of each company's Activity tab, interleaving touchpoints and tasks sorted newest-first with icon-coded event types.
-    - **RFP & Task Calendar**: Monthly calendar page (`/rfp-calendar`) showing RFP deadlines (red) and task due dates (blue) with an "Upcoming Deadlines" sidebar panel for 60-day lookahead. Accessible to all users from the Pipeline section in the sidebar.
-    - **Rep Scorecard / Director Leaderboard**: Director/admin-only page (`/rep-scorecard`) showing all reps ranked by weekly touchpoints with goal progress bars, breakdown cards per rep, and sortable columns. Backed by `/api/rep-scorecard` endpoint. Accessible from the Pipeline section.
-    - **AI Email Drafting**: "Draft for me" button in the email compose dialog calls `POST /api/ai/draft-email`. Generates a personalized draft using GPT-4o-mini with contact context (title, interests, next steps, relationship level) and recent touchpoint notes.
-    - **Account Growth Score**: 0–100 per-account metric with four band labels (At Risk 0–25 red, Stable 26–50 amber, Growth Ready 51–75 blue, High Expansion 76–100 green). Calculated via `server/growthScoreCalculator.ts` with 6 positive buckets + 4 risk penalties. Persisted in `account_growth_scores` table. Exposed via `GET /api/companies/:id/growth-score` (live compute + cache) and `GET /api/growth-scores` (all cached scores). Frontend: `GrowthScoreBadge` inline pill shown on each customer card and in the company detail header (next to health score). Sort options "Highest Growth Score" and "At Risk First" added to the Customers page. `AccountGrowthPortlet` on the dashboard shows "Needs Attention" and "Primed to Grow" account lists for all non-LM roles.
-    - **NBA Phase 1 Persistent Card System**: Trust-first recommendation engine that generates persistent `nba_cards` for AM/NAM reps. Five rules fire against real freight data: R1 (Load Decline — monthly financial comparison with 20%+ drop trigger), R2 (Single-Thread Risk — 1 contact + stale touchpoint), R3 (Stale Account — 21+ days no touch + active revenue), R5 (Overdue Next Action — task overdue 7+ days with contextual boosters), R7 (Spot-to-Contract — spotLoads > 0 with no awards). Collision logic selects one card per account (Protect > Execute > Grow > Deepen priority). Cards are stored in `nba_cards` table with full analytics separation (fired/shown/actioned/dismissed counts). Frontend: `NbaCard.tsx` (expand, action, snooze 3d, dismiss with reason picker) and `NbaDashboardPanel.tsx` (above Phase 2 portlets for AM/NAM). API: `GET /api/nba/cards`, `PATCH /api/nba/cards/:id/resolve`, `POST /api/nba/cards/:id/link-outcome`, `GET /api/nba/manager-summary`, `GET /api/nba/rule-performance`, `POST /api/nba/run-engine`. Nightly scheduler runs at 3 AM CT via `server/nbaPhase1Scheduler.ts`.
-    - **V1.5 Lane Carrier Outreach — Assignable Lane Workflow**: Schema additions: `sourceType` ('historical'|'suggested'|'manually_added') on `lane_carrier_interest`; `assignedAt` + `assignedByUserId` on `recurring_lanes`. Engine auto-attaches historical carriers (from load rows) to each lane bench as `sourceType='historical'` after each engine run. Work queue API (`GET /api/recurring-lanes/work-queue`) buckets eligible lanes into Unassigned / No Contactable Carriers / Assigned Untouched / In Progress. Assignment endpoint (`POST /api/recurring-lanes/:laneId/assign`) writes `ownerUserId` + `assignedAt`. Carrier bench enriched with `phone`, `primaryEmail`, `isContactable` from catalog. `CarrierOutreachPanel` enhanced with: "Assign to me" button, historical carrier bucket callout in bench tab, contactability warning, per-item `sourceType` + missing-contact-info badges. Lane Work Queue page (`/lanes/work-queue`) visible to admin/director/NAM/LM in Lane Tools sidebar section — shows 4 bucket sections with stat chips, progress bars, quick assign, and click-to-open outreach panel.
-    - **V1.5 Phase 1 Email Send + Tracking**: `carrier_outreach_logs` extended with `sentAt`, `deliveryStatus` (draft|sending|sent|failed|partial), `failureReason`, and `recipients` (JSONB per-recipient breakdown). `POST /api/lanes/:laneId/send-outreach-emails` resolves carrier emails (captured→catalog primary→backup), sends via Resend/SMTP, creates tracking log, stamps `outreachSentAt` on bench entries, auto-resolves lane if threshold reached. `POST /api/lanes/:laneId/draft-outreach-emails` generates GPT-4o-mini drafts with lane+carrier context and falls back to template when AI unavailable. Carrier ranking enhanced with `customerHistoryLoads` signal (loads carrier ran for same customer) and `priorOutcomeBoost` (positive prior bench response). `CarrierOutreachPanel` includes "History" tab with per-recipient delivery breakdown, inline Send/Log Only buttons, and per-draft status badges. Covered by 12-test suite in `tests/carrier-outreach-email.test.ts`.
+    - **Dashboard**: Contextual alerts for deadlines, goal progress, and role-specific insights.
+    - **AI-Powered Insights**: AI-generated talking points for lane gap insights, AI health score narratives, AI touchpoint note summaries, and proactive nudges via a chatbot.
+    - **AI Action Execution**: Chatbot supports OpenAI function calling for `log_touchpoint` and `create_task`.
+    - **Scoring**: Automated company health and momentum scores, and an Account Growth Score with categorization (At Risk, Stable, Growth Ready, High Expansion).
+    - **Shipping Modes**: Categorization and filtering of companies by shipping modes.
+    - **Relationship Freight Reporting**: Attributing freight loads to individual contacts and their relationship base levels.
+    - **Relationship Advancement History**: Tracks changes in contact relationship bases.
+    - **Dashboard Consolidation**: Optimized dashboard data fetching.
+    - **Greenfield Visibility**: Identifies "Unworked Accounts."
+    - **Pre-call Planner**: Displays relationship intelligence on contact cards.
+    - **Feedback Inbox**: Admins can respond to feedback with email notifications.
+    - **Contact Data Completeness**: Nudges for missing contact data.
+    - **Company Activity Timeline**: Unified chronological feed of events.
+    - **Calendar**: RFP deadlines and task due dates calendar.
+    - **Rep Scorecard / Director Leaderboard**: Director/admin-only page for ranking reps by activity.
+    - **AI Email Drafting**: Generates personalized email drafts using GPT-4o-mini.
+    - **NBA (Next Best Action) Phase 1**: Recommendation engine generating persistent cards for reps based on freight data rules (e.g., Load Decline, Single-Thread Risk, Stale Account).
+    - **Lane Carrier Outreach Workflow**: Assignable lane workflow with work queues, carrier contactability, and email sending/tracking.
+    - **Carrier Hub (Phase 1)**: Central carrier intelligence layer with contact management, claimed lanes, and activity tracking.
 
 ## External Dependencies
-- **PostgreSQL**: Used for database management and session storage.
-- **xlsx (SheetJS)**: Employed for parsing Excel and CSV files.
-- **multer**: Handles file uploads.
-- **Leaflet**: Provides interactive mapping capabilities.
-- **OneDrive API (Microsoft Graph API)**: Facilitates synchronization of financial data.
-- **node-cron**: Used for scheduling recurring jobs, such as report generation and daily digest emails.
-- **Resend / GoDaddy SMTP**: For sending transactional and report emails, with Resend as the primary and GoDaddy SMTP as a fallback.
-- **OpenAI (GPT-4o-mini)**: Integrated for AI-assisted features like RFP column mapping suggestions, lane gap insights, and AI-generated "Priority for Today" in daily briefs.
+- **PostgreSQL**: Primary database and session store.
+- **xlsx (SheetJS)**: For Excel and CSV parsing.
+- **multer**: For file uploads.
+- **Leaflet**: For interactive mapping.
+- **OneDrive API (Microsoft Graph API)**: For financial data synchronization.
+- **node-cron**: For scheduling recurring jobs.
+- **Resend / GoDaddy SMTP**: For sending transactional and report emails.
+- **OpenAI (GPT-4o-mini)**: For AI-assisted features like RFP column mapping, lane gap insights, and email drafting.

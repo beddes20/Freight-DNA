@@ -23,6 +23,7 @@ import CompanyDetail from "@/pages/company-detail";
 import RfpAwards from "@/pages/rfp-awards";
 import RfpLaneSearch from "@/pages/rfp-lane-search";
 import CarrierLaneSearch from "@/pages/carrier-lane-search";
+import CarrierHub from "@/pages/carrier-hub";
 import ResearchTasks from "@/pages/research-tasks";
 import Customers from "@/pages/customers";
 import LoginPage from "@/pages/login";
@@ -101,6 +102,7 @@ function Router() {
       <Route path="/rfp-awards" component={RfpAwards} />
       <Route path="/rfp-lane-search" component={RfpLaneSearch} />
       <Route path="/carrier-lane-search" component={CarrierLaneSearch} />
+      <Route path="/carrier-hub" component={CarrierHub} />
       <Route path="/research-tasks" component={ResearchTasks} />
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/carriers" component={AdminCarriers} />

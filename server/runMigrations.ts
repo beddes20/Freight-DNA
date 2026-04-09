@@ -1327,4 +1327,59 @@ export async function runMigrations() {
   } finally {
     clientFlagTable.release();
   }
+
+  // Carrier Hub — new columns on carriers + carrier_contacts + carrier_claimed_lanes tables
+  const clientCarrierHub = await pool.connect();
+  try {
+    // New columns on carriers table
+    await clientCarrierHub.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS legal_name text`);
+    await clientCarrierHub.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS dot_number text`);
+    await clientCarrierHub.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS states_served text[] DEFAULT '{}'::text[]`);
+    await clientCarrierHub.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS metro_areas text[] DEFAULT '{}'::text[]`);
+    await clientCarrierHub.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS equipment_notes text`);
+    await clientCarrierHub.query(`ALTER TABLE carriers ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active'`);
+
+    // carrier_contacts table
+    await clientCarrierHub.query(`
+      CREATE TABLE IF NOT EXISTS carrier_contacts (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        carrier_id varchar NOT NULL REFERENCES carriers(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        role text NOT NULL DEFAULT 'dispatcher',
+        email text,
+        phone text,
+        extension text,
+        preferred_method text,
+        notes text,
+        is_primary boolean NOT NULL DEFAULT false,
+        is_active boolean NOT NULL DEFAULT true,
+        created_at timestamp NOT NULL DEFAULT NOW(),
+        updated_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientCarrierHub.query(`CREATE INDEX IF NOT EXISTS idx_carrier_contacts_carrier ON carrier_contacts(carrier_id)`);
+
+    // carrier_claimed_lanes table
+    await clientCarrierHub.query(`
+      CREATE TABLE IF NOT EXISTS carrier_claimed_lanes (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        carrier_id varchar NOT NULL REFERENCES carriers(id) ON DELETE CASCADE,
+        origin_state text,
+        origin_city text,
+        dest_state text,
+        dest_city text,
+        equipment text,
+        lane_type text NOT NULL DEFAULT 'prefer',
+        notes text,
+        created_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientCarrierHub.query(`CREATE INDEX IF NOT EXISTS idx_carrier_claimed_lanes_carrier ON carrier_claimed_lanes(carrier_id)`);
+
+    console.log("[migrations] carrier hub tables ensured");
+  } catch (err) {
+    console.error("[migrations] carrier hub error:", err);
+  } finally {
+    clientCarrierHub.release();
+  }
 }

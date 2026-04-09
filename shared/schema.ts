@@ -1149,18 +1149,25 @@ export const carriers = pgTable("carriers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
+  legalName: text("legal_name"),
   mcDot: text("mc_dot"),
+  dotNumber: text("dot_number"),
   payeeCode: text("payee_code"),
   phone: text("phone"),
   city: text("city"),
   state: text("state"),
   regions: text("regions").array().default(sql`'{}'::text[]`),
+  statesServed: text("states_served").array().default(sql`'{}'::text[]`),
+  metroAreas: text("metro_areas").array().default(sql`'{}'::text[]`),
   equipmentTypes: text("equipment_types").array().default(sql`'{}'::text[]`),
+  equipmentNotes: text("equipment_notes"),
   tags: text("tags").array().default(sql`'{}'::text[]`),
   primaryEmail: text("primary_email"),
   backupEmail: text("backup_email"),
   lastEmailValidatedAt: text("last_email_validated_at"),
   notes: text("notes"),
+  /** Carrier status: active | inactive | flagged | do_not_use */
+  status: text("status").default("active").notNull(),
   /** Phase 2 sourcing fields */
   sourceChannel: text("source_channel"),
   // 'engine' | 'import_paste' | 'import_csv' | 'excel_seed' | 'dat' | 'manual' | null
@@ -1171,6 +1178,53 @@ export const carriers = pgTable("carriers", {
 export const insertCarrierSchema = createInsertSchema(carriers).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertCarrier = z.infer<typeof insertCarrierSchema>;
 export type Carrier = typeof carriers.$inferSelect;
+
+/**
+ * carrier_contacts — multiple dispatcher/contact records per carrier.
+ * Roles: dispatcher | after_hours | sales | billing | general
+ */
+export const carrierContacts = pgTable("carrier_contacts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carrierId: varchar("carrier_id").notNull().references(() => carriers.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  role: text("role").default("dispatcher").notNull(),
+  // dispatcher | after_hours | sales | billing | general
+  email: text("email"),
+  phone: text("phone"),
+  extension: text("extension"),
+  preferredMethod: text("preferred_method"),
+  // email | phone | text
+  notes: text("notes"),
+  isPrimary: boolean("is_primary").default(false).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertCarrierContactSchema = createInsertSchema(carrierContacts).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertCarrierContact = z.infer<typeof insertCarrierContactSchema>;
+export type CarrierContact = typeof carrierContacts.$inferSelect;
+
+/**
+ * carrier_claimed_lanes — what the carrier SAYS they run (user-maintained, NOT derived).
+ * Distinct from proven history which comes from financial upload data.
+ * laneType: prefer | avoid
+ */
+export const carrierClaimedLanes = pgTable("carrier_claimed_lanes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carrierId: varchar("carrier_id").notNull().references(() => carriers.id, { onDelete: "cascade" }),
+  originState: text("origin_state"),
+  originCity: text("origin_city"),
+  destState: text("dest_state"),
+  destCity: text("dest_city"),
+  equipment: text("equipment"),
+  laneType: text("lane_type").default("prefer").notNull(),
+  // prefer | avoid
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertCarrierClaimedLaneSchema = createInsertSchema(carrierClaimedLanes).omit({ id: true, createdAt: true });
+export type InsertCarrierClaimedLane = z.infer<typeof insertCarrierClaimedLaneSchema>;
+export type CarrierClaimedLane = typeof carrierClaimedLanes.$inferSelect;
 
 /**
  * Carrier import batches — tracks every bulk import event for sourcing analytics.
