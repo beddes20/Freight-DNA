@@ -961,11 +961,28 @@ export default function LaneWorkQueuePage() {
   const [customerFilter, setCustomerFilter] = useState<string>("__all__");
   const [buildLaneOpen, setBuildLaneOpen] = useState(false);
 
-  // Auto-open a specific lane when ?laneId=... is in the URL (cross-link from Carrier Hub)
+  // Auto-open a specific lane when ?laneId=... is in the URL (cross-link from Carrier Hub / My Procurement)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const lid = params.get("laneId");
     if (lid) setOpenLaneId(lid);
+  }, []);
+
+  // Show a one-time hint when arriving from My Procurement with no lane match.
+  // ?noMatch=Ogden%2C%20UT%20%E2%86%92%20Westfield%2C%20MA
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const hint = params.get("noMatch");
+    if (!hint) return;
+    // Defer one tick so the LWQ list has rendered before the toast appears
+    const timer = setTimeout(() => {
+      toast({
+        title: "No lane match found",
+        description: `No work queue lane matched "${decodeURIComponent(hint)}" — use the lane list below to locate or create this lane.`,
+        duration: 8000,
+      });
+    }, 300);
+    return () => clearTimeout(timer);
   }, []);
 
   const runEngineMutation = useMutation({

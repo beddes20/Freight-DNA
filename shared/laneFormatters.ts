@@ -80,6 +80,30 @@ export function formatLaneDisplay(
 }
 
 /**
+ * Normalizes a lane location string for consistent O/D matching.
+ *
+ * Applies deterministic, reversible transformations only — no fuzzy matching:
+ *   1. Lowercase
+ *   2. Trim leading/trailing whitespace
+ *   3. Collapse multiple interior spaces to a single space
+ *   4. Normalize spacing around commas to exactly ", " (one space after, none before)
+ *
+ * Examples:
+ *   "Memphis, TN"   → "memphis, tn"
+ *   "memphis,  tn"  → "memphis, tn"   (extra space after comma)
+ *   "MEMPHIS, TN"   → "memphis, tn"   (uppercase)
+ *   "Memphis ,TN"   → "memphis, tn"   (space before comma)
+ *   "  Ogden,  UT " → "ogden, ut"     (leading/trailing + extra space)
+ */
+export function normalizeLaneLocation(str: string): string {
+  return str
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ")          // collapse multiple interior spaces → single
+    .replace(/\s*,\s*/g, ", ");    // normalize "city,state", "city ,  state" → "city, state"
+}
+
+/**
  * Converts a decimal loads-per-week value into a human-friendly range string.
  *
  * Examples:

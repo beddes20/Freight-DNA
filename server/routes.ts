@@ -21,6 +21,7 @@ import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable } from "@shared/schema";
+import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
 import { isExcludedRow, parseHistoricalRow, isBadSummaryData, computeLoadsForRepGoal, extractSheetsFromWorkbook, toMonthKey } from "./financialHelpers";
@@ -8376,6 +8377,20 @@ Respond with valid JSON only:
           const op = (async () => {
             const existing = await storage.findProcurementTask(awardId, laneName);
             if (existing) return { lane: laneName, taskId: existing.id, created: false };
+            // Resolve equipment type from a matching recurring lane (if one exists)
+            // This enables precise equipment-aware matching in My Procurement later.
+            const normOrigin = normalizeLaneLocation(meta.origin);
+            const normDest = normalizeLaneLocation(meta.destination);
+            const laneEquipRow = await storage.pool.query<{ equipment_type: string | null }>(
+              `SELECT equipment_type FROM recurring_lanes
+               WHERE org_id = $1
+                 AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(origin), '\\s+', ' ', 'g'), '\\s*,\\s*', ', ', 'g')) = $2
+                 AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(destination), '\\s+', ' ', 'g'), '\\s*,\\s*', ', ', 'g')) = $3
+               ORDER BY assigned_at DESC NULLS LAST LIMIT 1`,
+              [user.organizationId, normOrigin, normDest]
+            );
+            const rawEquip = laneEquipRow.rows[0]?.equipment_type ?? null;
+            const equipmentType = rawEquip ? normalizeEquipmentType(rawEquip) : null;
             const task = await storage.createTask({
               title: `Carrier Procurement — ${laneName}`,
               notes: `Procurement workspace for lane: ${laneName}${meta.volume > 0 ? ` (${meta.volume.toLocaleString()} loads/yr)` : ""}. Award ID: ${awardId}. Target 5–10 carrier contacts.`,
@@ -8385,7 +8400,7 @@ Respond with valid JSON only:
               assignedBy: user.id,
               companyId: award.companyId ?? null,
               contactId: null,
-              attachedLaneData: [{ type: "carrier_procurement", lane: laneName, origin: meta.origin, destination: meta.destination, volume: meta.volume, awardId, awardTitle, customerName }],
+              attachedLaneData: [{ type: "carrier_procurement", lane: laneName, origin: meta.origin, destination: meta.destination, volume: meta.volume, awardId, awardTitle, customerName, equipmentType }],
               createdAt: new Date().toISOString(),
             });
             return { lane: laneName, taskId: task.id, created: true };
@@ -8442,6 +8457,19 @@ Respond with valid JSON only:
         await storage.updateTask(existing.id, { assignedTo: assignToUserId, assignedBy: user.id });
         taskId = existing.id;
       } else {
+        // Resolve equipment type from a matching recurring lane for precise My Procurement matching
+        const lmNormOrigin = normalizeLaneLocation(origin);
+        const lmNormDest = normalizeLaneLocation(destination);
+        const lmEquipRow = await storage.pool.query<{ equipment_type: string | null }>(
+          `SELECT equipment_type FROM recurring_lanes
+           WHERE org_id = $1
+             AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(origin), '\\s+', ' ', 'g'), '\\s*,\\s*', ', ', 'g')) = $2
+             AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(destination), '\\s+', ' ', 'g'), '\\s*,\\s*', ', ', 'g')) = $3
+           ORDER BY assigned_at DESC NULLS LAST LIMIT 1`,
+          [user.organizationId, lmNormOrigin, lmNormDest]
+        );
+        const lmRawEquip = lmEquipRow.rows[0]?.equipment_type ?? null;
+        const lmEquipmentType = lmRawEquip ? normalizeEquipmentType(lmRawEquip) : null;
         // Create a new procurement task assigned to the LM
         const task = await storage.createTask({
           title: `Carrier Procurement — ${lane}`,
@@ -8452,7 +8480,7 @@ Respond with valid JSON only:
           assignedBy: user.id,
           companyId: award.companyId ?? null,
           contactId: null,
-          attachedLaneData: [{ type: "carrier_procurement", lane, origin, destination, volume, awardId, awardTitle: lmAwardTitle, customerName: lmCustomerName }],
+          attachedLaneData: [{ type: "carrier_procurement", lane, origin, destination, volume, awardId, awardTitle: lmAwardTitle, customerName: lmCustomerName, equipmentType: lmEquipmentType }],
           createdAt: new Date().toISOString(),
         });
         taskId = task.id;

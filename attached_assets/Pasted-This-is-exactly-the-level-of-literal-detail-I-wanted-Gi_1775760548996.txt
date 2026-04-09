@@ -1,0 +1,71 @@
+This is exactly the level of literal detail I wanted. Given your answers, here’s what I’d like you to do next as a focused follow‑up:
+
+1. Close the equipment-type ambiguity in lane matching
+   - You’ve confirmed that:
+     - award tasks currently do NOT store equipmentType in attachedLaneData
+     - the matching query only uses LOWER(TRIM(origin)) + LOWER(TRIM(destination))
+     - recurring_lanes are per (org, company, origin, destination, equipmentType), so multiple equipment types per O/D pair are possible
+     - in that case, we pick the most recently assigned lane, regardless of equipment
+   - I’d like you to eliminate this ambiguity by:
+     - storing equipmentType (or normalizedEquipmentType) on the award task’s attachedLaneData at creation time
+     - adding equipmentType into the server-side matching WHERE clause
+   - Desired rule:
+     - match on LOWER(TRIM(origin)), LOWER(TRIM(destination)), AND equipmentType
+     - if there is no lane with matching equipment, treat it as “No lane match” (show the badge + LWQ home behavior)
+   - Please update:
+     - the award procurement task creation endpoint/schema to include equipmentType
+     - the recurring lane lookup query to include equipmentType in the match
+     - any affected tests to cover:
+       - same O/D, different equipment → only matching equipment returns matchedLaneId
+       - if no equipment match exists, we fall back to “No lane match” state
+
+2. Normalize punctuation/spacing for safer O/D matching
+   - Right now we normalize case and trim edges, but not internal punctuation/spacing.
+   - This means:
+     - "memphis, tn" ≠ "memphis tn"
+     - "st. louis" ≠ "saint louis"
+   - I don’t want to over-extend scope into full geocoding, but we should at least:
+     - collapse multiple spaces
+     - normalize common arrow separators
+     - be resilient to accidental extra spaces around the comma
+   - Please:
+     - extract a small shared normalization helper used both when storing the award lane strings and when matching against recurring_lanes
+     - keep it deterministic and simple (no fuzzy matching), but remove obvious whitespace sensitivity
+   - Add tests for:
+     - “Memphis, TN” vs “memphis,  tn” vs “MEMPHIS, tn” → all match
+     - still no match for genuinely different cities (“Memphis, TN” vs “Nashville, TN”)
+
+3. Make the “No lane match” state more actionable
+   - The current badge + tooltip are good, but I’d like one small UX improvement:
+     - when we land on LWQ home from a “No lane match” award, we should help the rep find the lane faster.
+   - Minimal behavior I’d accept:
+     - pre-fill the lane search/filter with the origin/destination string from the award
+     - or show a one-time toast like “No lane match found for ‘Ogden, UT → Westfield, MA’ — use search to locate or create this lane.”
+   - Please propose and implement the smallest change that:
+     - uses the award’s O/D string on LWQ home
+     - reduces the cognitive load for the rep arriving from a “No lane match” click
+
+4. Keep the current unified CTA semantics
+   - Do NOT change:
+     - primary label: “Open in LWQ”
+     - source badges: LWQ vs Award (+ No lane match)
+     - auto-open behavior for matched laneId
+   - Just ensure:
+     - with equipment matching and O/D normalization in place, “Open in LWQ” + no “No lane match” badge truly means “this specific lane will open”
+     - the “No lane match” state continues to be explicit when we don’t have a safe match
+
+5. Update tests and send back a concise summary
+   - After the changes, please:
+     - add/adjust tests covering:
+       - equipment-based matching vs non-matching
+       - normalized O/D matching for trivial spacing/case differences
+       - “No lane match” behavior when equipment does not match
+     - confirm that:
+       - 55/55 guardrails still pass
+       - the LWQ auto-open via laneId still works for both LWQ and Award tasks
+   - In your summary back to me, include:
+     - the final SQL WHERE clause for lane matching
+     - one concrete example where, previously, an award could have opened the wrong equipment lane and now correctly falls into “No lane match”
+     - one example where a lane with minor whitespace differences is now correctly matched
+
+If any of this turns out to be riskier than it looks, err on the side of **not** guessing a lane — I’d rather see “No lane match” than open the wrong one for a rep.

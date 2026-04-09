@@ -1,6 +1,14 @@
 import type { Express } from "express";
 import { storage } from "../storage";
 import { getCurrentUser } from "../auth";
+import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
+
+/**
+ * SQL expression that applies the same normalization as normalizeLaneLocation() to a column.
+ * Matches: lowercase, trimmed, single-space collapse, comma-space normalization.
+ */
+const SQL_NORM = (col: string) =>
+  `LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(${col}), '\\s+', ' ', 'g'), '\\s*,\\s*', ', ', 'g'))`;
 
 export function registerMyProcurementRoutes(app: Express) {
   /**
@@ -13,8 +21,9 @@ export function registerMyProcurementRoutes(app: Express) {
    *                    Excludes closed tasks (status != 'open')
    *
    * Each award task includes `matchedLaneId` — the ID of the matching recurring_lane
-   * found by case-insensitive origin/destination lookup — so the client can deep-link
-   * directly to the LWQ procurement workspace for both source types.
+   * found by normalized origin/destination + equipment-type lookup. Equipment type
+   * must match (normalized) when stored on the task; falls back to O/D-only for
+   * legacy tasks that predate equipment-type storage.
    */
   app.get("/api/my-procurement", async (req, res) => {
     try {
@@ -111,7 +120,9 @@ export function registerMyProcurementRoutes(app: Express) {
         [user.id, user.organizationId]
       );
 
-      // Parse award task lane metadata from attachedLaneData JSONB
+      // Parse award task lane metadata from attachedLaneData JSONB.
+      // `equipmentType` is present on tasks created after the Phase 3 upgrade;
+      // legacy tasks (no equipmentType) fall back to O/D-only matching.
       type RawAwardTask = {
         taskId: string;
         title: string;
@@ -126,6 +137,7 @@ export function registerMyProcurementRoutes(app: Express) {
         awardId: string | null;
         awardTitle: string | null;
         customerName: string | null;
+        equipmentType: string | null;
         matchedLaneId: string | null;
       };
 
@@ -148,58 +160,81 @@ export function registerMyProcurementRoutes(app: Express) {
           awardId: (proc["awardId"] as string) ?? null,
           awardTitle: (proc["awardTitle"] as string) ?? null,
           customerName: (proc["customerName"] as string) ?? null,
+          equipmentType: (proc["equipmentType"] as string) ?? null,
           matchedLaneId: null,
         };
       });
 
-      // ── 3. Lane ID lookup — match award task origins/destinations to recurring_lanes ─
-      // Collect unique pairs that have both origin and destination
-      const pairsToLookup = [
-        ...new Map(
-          rawTasks
-            .filter((t) => t.origin && t.destination)
-            .map((t) => [
-              `${t.origin!.toLowerCase().trim()}|${t.destination!.toLowerCase().trim()}`,
-              { origin: t.origin!, destination: t.destination! },
-            ])
-        ).values(),
-      ];
+      // ── 3. Lane ID lookup — match award tasks to recurring_lanes ─────────
+      // Uses full normalization (case + whitespace + comma spacing) on both sides.
+      // Fetches ALL rows per O/D pair so we can apply equipment-type filtering in JS.
+      const tasksWithOD = rawTasks.filter((t) => t.origin && t.destination);
 
-      if (pairsToLookup.length > 0) {
-        // Build a single query using UNNEST to do all lookups in one round-trip
-        // Returns one row per (origin, destination) pair — picks the most recently assigned lane
+      if (tasksWithOD.length > 0) {
+        // Collect unique normalized O/D pairs for the IN clause
+        const pairMap = new Map<string, { normOrigin: string; normDest: string }>();
+        for (const t of tasksWithOD) {
+          const no = normalizeLaneLocation(t.origin!);
+          const nd = normalizeLaneLocation(t.destination!);
+          pairMap.set(`${no}|${nd}`, { normOrigin: no, normDest: nd });
+        }
+        const uniquePairs = [...pairMap.values()];
+
+        // Single batch query — no DISTINCT ON so we get every row per O/D pair.
+        // JS will select the right row based on equipment type.
         const lookupResult = await storage.pool.query<{
           id: string;
           origin_key: string;
           destination_key: string;
+          equipment_type: string | null;
         }>(
-          `SELECT DISTINCT ON (LOWER(TRIM(origin)), LOWER(TRIM(destination)))
+          `SELECT
              id,
-             LOWER(TRIM(origin)) AS origin_key,
-             LOWER(TRIM(destination)) AS destination_key
+             ${SQL_NORM("origin")} AS origin_key,
+             ${SQL_NORM("destination")} AS destination_key,
+             equipment_type
            FROM recurring_lanes
            WHERE org_id = $1
-             AND (LOWER(TRIM(origin)), LOWER(TRIM(destination))) IN (${pairsToLookup
+             AND (${SQL_NORM("origin")}, ${SQL_NORM("destination")}) IN (${uniquePairs
                .map((_, i) => `($${2 + i * 2}, $${3 + i * 2})`)
                .join(", ")})
-           ORDER BY LOWER(TRIM(origin)), LOWER(TRIM(destination)), assigned_at DESC NULLS LAST`,
+           ORDER BY assigned_at DESC NULLS LAST`,
           [
             user.organizationId,
-            ...pairsToLookup.flatMap((p) => [
-              p.origin.toLowerCase().trim(),
-              p.destination.toLowerCase().trim(),
-            ]),
+            ...uniquePairs.flatMap((p) => [p.normOrigin, p.normDest]),
           ]
         );
 
-        const laneByPair = new Map(
-          lookupResult.rows.map((r) => [`${r.origin_key}|${r.destination_key}`, r.id])
-        );
+        // Group lanes by (origin_key, dest_key) — preserves assigned_at DESC order
+        const lanesByPair = new Map<string, Array<{ id: string; equipment_type: string | null }>>();
+        for (const row of lookupResult.rows) {
+          const key = `${row.origin_key}|${row.destination_key}`;
+          if (!lanesByPair.has(key)) lanesByPair.set(key, []);
+          lanesByPair.get(key)!.push({ id: row.id, equipment_type: row.equipment_type });
+        }
 
+        // For each task, find the best matching lane:
+        //   - If task has equipmentType: require normalized equipment match.
+        //     No matching equipment → matchedLaneId stays null ("No lane match").
+        //   - Legacy tasks (no equipmentType stored): accept any lane for this O/D pair
+        //     (backward-compatible; picks the most recently assigned).
         for (const task of rawTasks) {
-          if (task.origin && task.destination) {
-            const key = `${task.origin.toLowerCase().trim()}|${task.destination.toLowerCase().trim()}`;
-            task.matchedLaneId = laneByPair.get(key) ?? null;
+          if (!task.origin || !task.destination) continue;
+          const no = normalizeLaneLocation(task.origin);
+          const nd = normalizeLaneLocation(task.destination);
+          const candidates = lanesByPair.get(`${no}|${nd}`) ?? [];
+          if (candidates.length === 0) continue;
+
+          if (task.equipmentType) {
+            // Equipment-aware matching: both sides normalized through normalizeEquipmentType
+            const targetEquip = normalizeEquipmentType(task.equipmentType);
+            const match = candidates.find(
+              (c) => normalizeEquipmentType(c.equipment_type) === targetEquip
+            );
+            task.matchedLaneId = match?.id ?? null;
+          } else {
+            // Legacy task: O/D-only, pick most recently assigned (first in sorted list)
+            task.matchedLaneId = candidates[0].id;
           }
         }
       }

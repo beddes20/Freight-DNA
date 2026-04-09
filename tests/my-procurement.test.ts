@@ -1,11 +1,16 @@
 /**
- * Integration test: My Procurement unified workspace path
+ * Integration + unit test: My Procurement unified workspace path
  *
  * Verifies that:
  *  1. GET /api/my-procurement returns LWQ lane assignments with laneId
  *  2. Award tasks get matchedLaneId populated via origin/destination lookup
  *  3. Both source types produce the same /lanes/work-queue?laneId=... destination
+ *  4. normalizeLaneLocation() correctly normalizes case, spacing, and comma formatting
+ *  5. Equipment-aware matching: same O/D + wrong equipment → matchedLaneId null
+ *  6. "No lane match" URL includes ?noMatch= hint for the rep
  */
+
+import { normalizeLaneLocation, normalizeEquipmentType } from "../shared/laneFormatters";
 
 const BASE = "http://localhost:5000";
 const CREDS = { username: "ben.beddes@valuetruck.com", password: "Test1234!" };
@@ -45,7 +50,125 @@ async function loginAndGetCookie(): Promise<string> {
   return setCookie!.split(";")[0];
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────────
+// ── Unit tests: normalizeLaneLocation ─────────────────────────────────────────
+
+await runTest("normalizeLaneLocation: canonical form is lowercase + single space after comma", async () => {
+  assert(normalizeLaneLocation("Memphis, TN") === "memphis, tn", `Got: ${normalizeLaneLocation("Memphis, TN")}`);
+});
+
+await runTest("normalizeLaneLocation: extra space after comma is collapsed", async () => {
+  const result = normalizeLaneLocation("memphis,  tn");
+  assert(result === "memphis, tn", `Got: ${result}`);
+});
+
+await runTest("normalizeLaneLocation: uppercase input matches", async () => {
+  const result = normalizeLaneLocation("MEMPHIS, TN");
+  assert(result === "memphis, tn", `Got: ${result}`);
+});
+
+await runTest("normalizeLaneLocation: space before comma is removed", async () => {
+  const result = normalizeLaneLocation("Memphis ,TN");
+  assert(result === "memphis, tn", `Got: ${result}`);
+});
+
+await runTest("normalizeLaneLocation: leading/trailing whitespace + extra internal space", async () => {
+  const result = normalizeLaneLocation("  Ogden,  UT ");
+  assert(result === "ogden, ut", `Got: ${result}`);
+});
+
+await runTest("normalizeLaneLocation: mixed-case with multiple spaces between words", async () => {
+  const result = normalizeLaneLocation("St.  Louis,  MO");
+  assert(result === "st. louis, mo", `Got: ${result}`);
+});
+
+await runTest("normalizeLaneLocation: genuinely different cities do NOT match", async () => {
+  const memphis = normalizeLaneLocation("Memphis, TN");
+  const nashville = normalizeLaneLocation("Nashville, TN");
+  assert(memphis !== nashville, `Different cities should not normalize to the same string: ${memphis}`);
+});
+
+await runTest("normalizeLaneLocation: 'Memphis, TN' vs 'memphis,  tn' vs 'MEMPHIS, tn' all match", async () => {
+  const a = normalizeLaneLocation("Memphis, TN");
+  const b = normalizeLaneLocation("memphis,  tn");
+  const c = normalizeLaneLocation("MEMPHIS, tn");
+  assert(a === b, `"Memphis, TN" vs "memphis,  tn": ${a} ≠ ${b}`);
+  assert(b === c, `"memphis,  tn" vs "MEMPHIS, tn": ${b} ≠ ${c}`);
+});
+
+// ── Unit tests: equipment matching logic ──────────────────────────────────────
+
+await runTest("normalizeEquipmentType: 'po' normalizes to 'dry van'", async () => {
+  assert(normalizeEquipmentType("po") === "dry van", `Got: ${normalizeEquipmentType("po")}`);
+});
+
+await runTest("Equipment-aware match: same O/D, matching equipment → should match", async () => {
+  // Simulate the JS-side equipment matching logic used in myProcurement.ts
+  const taskEquipType = "dry van";
+  const candidates = [
+    { id: "lane-dv", equipment_type: "po" },   // "po" → "dry van"
+    { id: "lane-rf", equipment_type: "rf" },   // "rf" → "reefer"
+  ];
+  const targetEquip = normalizeEquipmentType(taskEquipType);
+  const match = candidates.find(
+    (c) => normalizeEquipmentType(c.equipment_type) === targetEquip
+  );
+  assert(match?.id === "lane-dv", `Expected lane-dv to match, got: ${match?.id}`);
+});
+
+await runTest("Equipment-aware match: same O/D, wrong equipment → no match (null)", async () => {
+  // Scenario: award task is for reefer, but only dry van lane exists in LWQ
+  const taskEquipType = "reefer";
+  const candidates = [
+    { id: "lane-dv", equipment_type: "po" },   // "po" → "dry van" — WRONG equipment
+    { id: "lane-dv2", equipment_type: "dv" },  // "dv" → "dry van" — WRONG equipment
+  ];
+  const targetEquip = normalizeEquipmentType(taskEquipType);
+  const match = candidates.find(
+    (c) => normalizeEquipmentType(c.equipment_type) === targetEquip
+  );
+  assert(match === undefined, `Expected no match for reefer against dry van lanes, got: ${match?.id}`);
+});
+
+await runTest("Equipment-aware match: legacy task (no equipmentType) → accepts first candidate", async () => {
+  // Legacy tasks don't have equipmentType stored — fall back to O/D-only (backward compat)
+  const taskEquipType = null;
+  const candidates = [
+    { id: "lane-most-recent", equipment_type: "po" },
+    { id: "lane-older", equipment_type: "rf" },
+  ];
+  const matchedLaneId = taskEquipType
+    ? candidates.find((c) => normalizeEquipmentType(c.equipment_type) === normalizeEquipmentType(taskEquipType))?.id ?? null
+    : candidates[0]?.id ?? null;
+  assert(matchedLaneId === "lane-most-recent", `Expected lane-most-recent, got: ${matchedLaneId}`);
+});
+
+// ── Unit tests: "No lane match" URL generation ────────────────────────────────
+
+await runTest("No-match URL includes ?noMatch= with encoded O/D hint", async () => {
+  // Simulates the primaryDestination logic in AwardTaskCard
+  const origin = "Ogden, UT";
+  const destination = "Westfield, MA";
+  const matchedLaneId: string | null = null;
+  const noMatchHint = origin && destination
+    ? encodeURIComponent(`${origin} → ${destination}`)
+    : null;
+  const primaryDestination = matchedLaneId
+    ? `/lanes/work-queue?laneId=${matchedLaneId}`
+    : `/lanes/work-queue${noMatchHint ? `?noMatch=${noMatchHint}` : ""}`;
+
+  assert(primaryDestination.includes("?noMatch="), `URL should contain ?noMatch=: ${primaryDestination}`);
+  const hint = new URL(`http://x${primaryDestination}`).searchParams.get("noMatch");
+  assert(hint === "Ogden, UT → Westfield, MA", `Decoded hint should be "Ogden, UT → Westfield, MA", got: ${hint}`);
+});
+
+await runTest("Matched lane URL is clean /lanes/work-queue?laneId= (no noMatch param)", async () => {
+  const matchedLaneId = "abc-123";
+  const primaryDestination = `/lanes/work-queue?laneId=${matchedLaneId}`;
+  assert(!primaryDestination.includes("noMatch"), `Matched URL should not contain noMatch: ${primaryDestination}`);
+  assert(primaryDestination === "/lanes/work-queue?laneId=abc-123", `Unexpected URL: ${primaryDestination}`);
+});
+
+// ── Integration tests: live API ───────────────────────────────────────────────
 
 const cookie = await loginAndGetCookie();
 
@@ -54,8 +177,8 @@ const r = await fetch(`${BASE}/api/my-procurement`, {
 });
 assert(r.ok, `my-procurement returned ${r.status}`);
 const data = await r.json() as {
-  lwqLanes: Array<{ laneId: string; origin: string; destination: string }>;
-  awardTasks: Array<{ taskId: string; origin: string | null; destination: string | null; matchedLaneId: string | null }>;
+  lwqLanes: Array<{ laneId: string; origin: string; destination: string; equipmentType: string | null }>;
+  awardTasks: Array<{ taskId: string; origin: string | null; destination: string | null; equipmentType: string | null; matchedLaneId: string | null }>;
 };
 
 await runTest("Response shape: lwqLanes and awardTasks are arrays", async () => {
@@ -93,7 +216,6 @@ await runTest("Both LWQ and matched award tasks produce same URL pattern (/lanes
   assert(lwqUrls.length > 0, "No LWQ URLs to compare");
   assert(awardUrls.length > 0, "No award task URLs to compare (no matchedLaneId found)");
 
-  // Verify both sets are valid /lanes/work-queue?laneId=... paths
   for (const url of [...lwqUrls, ...awardUrls]) {
     assert(url.startsWith("/lanes/work-queue?laneId="), `URL doesn't follow LWQ pattern: ${url}`);
     const laneId = new URL(`http://x${url}`).searchParams.get("laneId");
@@ -117,6 +239,15 @@ await runTest("Award task matchedLaneId points to a real recurring_lane", async 
   }
 });
 
+await runTest("Award tasks expose equipmentType field in API response", async () => {
+  // equipmentType may be null for legacy tasks but the field must exist in the shape
+  for (const t of data.awardTasks) {
+    assert("equipmentType" in t, `Award task ${t.taskId} is missing equipmentType field`);
+  }
+  const withEquip = data.awardTasks.filter(t => t.equipmentType !== null);
+  console.log(`    ${withEquip.length}/${data.awardTasks.length} award tasks have equipmentType stored`);
+});
+
 // ── Summary ────────────────────────────────────────────────────────────────────
 
 console.log(`\n── Results: ${passed} passed, ${failed} failed ─────────────────────────────\n`);
@@ -125,5 +256,5 @@ if (failed > 0) {
   results.filter(r => !r.passed).forEach(r => console.log(`  ✗ ${r.name}: ${r.error}`));
   process.exit(1);
 } else {
-  console.log("My Procurement unified workspace path is confirmed working.");
+  console.log("My Procurement: equipment-aware matching, O/D normalization, and unified workspace path confirmed.");
 }

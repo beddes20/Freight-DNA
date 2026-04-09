@@ -244,10 +244,15 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
       ? `${item.volume.toLocaleString()} loads/yr`
       : null;
 
-  // Primary action: open LWQ at the matched lane. If no match found, go to LWQ root.
+  // Primary action: open LWQ at the matched lane.
+  // If no match found, go to LWQ root with a ?noMatch= hint so the rep gets a toast
+  // describing the lane they were looking for.
+  const noMatchHint = item.origin && item.destination
+    ? encodeURIComponent(`${item.origin} → ${item.destination}`)
+    : null;
   const primaryDestination = item.matchedLaneId
     ? `/lanes/work-queue?laneId=${item.matchedLaneId}`
-    : `/lanes/work-queue`;
+    : `/lanes/work-queue${noMatchHint ? `?noMatch=${noMatchHint}` : ""}`;
 
   return (
     <div
