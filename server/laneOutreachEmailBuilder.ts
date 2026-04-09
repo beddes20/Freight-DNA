@@ -3,29 +3,40 @@
  * Exported separately so they can be unit-tested without starting the server.
  */
 
-import { formatLaneDisplay, formatWeeklyLoadRange } from "@shared/laneFormatters";
+import { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType } from "@shared/laneFormatters";
 
-export { formatLaneDisplay, formatWeeklyLoadRange };
+export { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType };
 
+/**
+ * Fallback email used when the AI call fails.
+ *
+ * @param name                 Carrier display name
+ * @param hasVerifiedHistory   True ONLY when the carrier has a payeeCode (appeared in TMS data).
+ *                             Being in the catalog alone does not qualify — do not imply prior
+ *                             business otherwise.
+ * @param laneDisplay          Pre-formatted "City, ST → City, ST" string
+ * @param equipment            Human-readable equipment type (normalize before passing)
+ * @param loadRange            Human-friendly volume phrase from formatWeeklyLoadRange()
+ * @param mode                 "lane_building" | "immediate_plus_lane"
+ */
 export function buildFallbackEmail(
   name: string,
-  isKnown: boolean,
+  hasVerifiedHistory: boolean,
   laneDisplay: string,
   equipment: string,
   loadRange: string,
   mode: string,
 ): string {
-  const intro = isKnown
-    ? `We've run freight together before and I wanted to loop you in on something steady.`
-    : `I'm with Value Truck, a freight brokerage, and wanted to reach out about a lane we run regularly.`;
+  const greeting = hasVerifiedHistory ? `Hey ${name} —` : `Hey ${name} team —`;
+  const intro = hasVerifiedHistory
+    ? ``
+    : ` I'm with Value Truck, a freight brokerage.`;
 
   const modeNote = mode === "immediate_plus_lane"
-    ? ` We also have a load coming up on this corridor soon — happy to share details if the timing works.`
+    ? ` We also have an immediate load coming up on this lane that needs coverage now.`
     : "";
 
-  return `Hi ${name} team,
+  const bareRange = loadRange.replace(/^(usually|around|about)\s+/i, "");
 
-${intro} We move ${equipment} freight on the ${laneDisplay} corridor ${loadRange}, and I'm looking for reliable carriers to run it with us.${modeNote}
-
-Even if you don't have a truck available this week, I'd still love to connect — this lane runs consistently and I'd want you top of mind. Worth a quick call?`;
+  return `${greeting}${intro} Checking to see if you've got capacity for ${laneDisplay} (${equipment}). We usually have ${bareRange} on this lane and are looking to line up steady coverage.${modeNote} Does that fit your network? If so, I'd be glad to talk through it.`;
 }

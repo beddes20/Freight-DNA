@@ -3,6 +3,36 @@
  */
 
 /**
+ * Maps raw equipment-type codes (short codes, abbreviations, TMS artifacts)
+ * to human-readable names. Falls back to "dry van" for unrecognized short codes
+ * that are clearly not real words (e.g. "po", "ltl", "ftl").
+ */
+const EQUIPMENT_CODE_MAP: Record<string, string> = {
+  dv: "dry van",
+  van: "dry van",
+  fv: "flatbed",
+  flat: "flatbed",
+  fb: "flatbed",
+  rf: "reefer",
+  ref: "reefer",
+  reefer: "reefer",
+  sb: "step deck",
+  sd: "step deck",
+  dd: "double drop",
+  ltl: "LTL",
+  ftl: "dry van",
+  po: "dry van",
+};
+
+export function normalizeEquipmentType(raw: string | null | undefined): string {
+  if (!raw) return "dry van";
+  const key = raw.trim().toLowerCase();
+  if (EQUIPMENT_CODE_MAP[key]) return EQUIPMENT_CODE_MAP[key];
+  if (key.length <= 3 && !/[aeiou]/i.test(key)) return "dry van";
+  return raw.trim();
+}
+
+/**
  * Title-cases a city name and uppercases a state abbreviation.
  * Collapses duplicate state values embedded in the city string
  * (e.g. "Macon, GA" with state "GA" → "Macon, GA" not "Macon, GA, GA").
@@ -17,6 +47,12 @@ export function formatLaneLocation(city: string, state: string | null | undefine
   if (upperState) {
     const trailingState = new RegExp(`,?\\s*${upperState}$`, "i");
     rawCity = rawCity.replace(trailingState, "").trim();
+  }
+
+  // If the remaining "city" is just 2 alphabetic characters (bare state code in wrong field),
+  // return it uppercased rather than title-casing "ga" → "Ga".
+  if (!upperState && /^[a-zA-Z]{2}$/.test(rawCity)) {
+    return rawCity.toUpperCase();
   }
 
   const titledCity = rawCity

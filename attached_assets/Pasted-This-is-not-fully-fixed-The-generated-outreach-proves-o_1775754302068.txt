@@ -1,0 +1,63 @@
+This is not fully fixed. The generated outreach proves old logic / old phrasing is still leaking through.
+
+Example bad output I just got:
+“Hi 1 61 INC team,
+
+We've run freight together before and I wanted to loop you in on something steady. We move po freight on the Macon, GA → Ga corridor usually 5–7 a week, and I'm looking for reliable carriers to run it with us.
+
+Even if you don't have a truck available this week, I'd still love to connect — this lane runs consistently and I'd want you top of mind. Worth a quick call?”
+
+Problems still visible:
+1. “1 61 INC” is not normalized well.
+2. “We’ve run freight together before” should not appear unless that is actually true for this carrier.
+3. “po freight” is raw/bad phrasing.
+4. “Macon, GA → Ga corridor” is broken formatting and proves the lane formatter is not consistently applied.
+5. “I’d still love to connect”
+6. “this lane runs consistently”
+7. “top of mind”
+These are all old / banned style patterns that were supposed to be removed.
+
+I need you to trace the full generation path end-to-end and fix every layer, not just one prompt block.
+
+Please audit all of the following:
+- the route handler that builds the draft request
+- any prompt builder/helper used before the OpenAI call
+- any fallback template path
+- any subject line builder
+- any lane/context formatter used for origin/destination/corridor text
+- any carrier/company name formatter
+- any relationship-history conditional logic
+- any code path used when a carrier is a fallback recommendation with no executed load history
+
+Specific fixes required:
+1. Ensure formatLaneDisplay() is used everywhere lane text enters outreach generation.
+2. Do not generate “corridor” phrasing from partial/raw state fields like “GA”.
+3. If relationship history is not verified, do not imply prior business (“we’ve run freight together before”).
+4. Remove / ban these phrases across both AI and fallback outputs:
+   - love to connect
+   - top of mind
+   - lane runs consistently
+   - reaching out about
+   - value our relationship
+   - carrier bench
+5. If a field like “po” is equipment/mode metadata, either render it correctly in human language or omit it from the body copy.
+6. Normalize carrier display names better so “1 61 INC” doesn’t happen if source data is malformed.
+7. Add tests for generated body text, not just helper output.
+
+I want tests that explicitly fail if generated outreach contains:
+- duplicated/partial lane text
+- raw corridor fragments like “GA corridor”
+- banned phrases
+- false prior-relationship claims
+- raw load decimals
+- malformed carrier names when a cleaned name is available
+
+Also add at least 2 integration-style tests:
+- AI prompt path
+- fallback template path
+
+Then return:
+- exact files changed
+- exact generation path audited
+- where the stale phrasing was still coming from
+- sample output from both AI path and fallback path after the fix

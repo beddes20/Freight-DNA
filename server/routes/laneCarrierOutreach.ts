@@ -15,7 +15,7 @@ import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapac
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
 import { getLaneCoverageProfile, shouldUseIncumbentFirstFlow } from "../laneCoverageService";
 import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, type InsertCarrier } from "@shared/schema";
-import { formatLaneDisplay, formatWeeklyLoadRange, buildFallbackEmail as buildFallbackEmailHelper } from "../laneOutreachEmailBuilder";
+import { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType, buildFallbackEmail as buildFallbackEmailHelper } from "../laneOutreachEmailBuilder";
 import { z } from "zod";
 import { inArray, eq } from "drizzle-orm";
 import { sendEmail } from "../emailService";
@@ -1128,68 +1128,65 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         carrierNames.map(async (name: string, idx: number) => {
           const carrierId = Array.isArray(carrierIds) ? (carrierIds[idx] ?? null) : null;
           let carrierDetails = "";
+          // hasVerifiedHistory = true ONLY when the carrier has appeared in TMS financial data
+          // (payeeCode is set). Merely being in the carrier catalog does not imply prior business.
+          let hasVerifiedHistory = false;
           if (carrierId) {
             const c = await storage.getCarrier(carrierId);
             // Org-scope guard: never leak another org's carrier data
             if (c && c.orgId === user!.organizationId) {
-              if (c.regions?.length) carrierDetails += ` They operate in: ${c.regions.join(", ")}.`;
+              hasVerifiedHistory = !!(c as any).payeeCode;
+              if (c.regions?.length) carrierDetails += ` Preferred regions: ${c.regions.join(", ")}.`;
               if (c.equipmentTypes?.length) carrierDetails += ` Equipment: ${c.equipmentTypes.join(", ")}.`;
               if (c.notes) carrierDetails += ` Notes: ${c.notes}.`;
             }
           }
 
-          const isKnown = !!carrierId;
           const laneDisplay = formatLaneDisplay(lane.origin, lane.originState, lane.destination, lane.destinationState);
           const loadRange = formatWeeklyLoadRange(lane.avgLoadsPerWeek);
-          const equipment = lane.equipmentType ?? "dry van";
+          const equipment = normalizeEquipmentType(lane.equipmentType);
 
-          const modeContext = outreachMode === "immediate_plus_lane"
-            ? `We also have an immediate load on this corridor that needs a truck soon — mention this naturally.`
+          const immediateNote = outreachMode === "immediate_plus_lane"
+            ? `There is also an immediate load on this lane that needs a truck now — mention this in one natural sentence.`
             : "";
 
-          const prompt = `
-You are a freight broker writing a short, conversational outreach email to a carrier about a recurring lane.
+          const relationshipNote = hasVerifiedHistory
+            ? `You have hauled freight for us before — acknowledge the prior relationship briefly in one clause. Do NOT say "we've run freight together before" verbatim.`
+            : `This is a new prospect — introduce Value Truck as a freight brokerage in a single short phrase. Do NOT imply any prior business relationship.`;
+
+          const prompt = `You are a freight broker writing a short outreach email to a carrier about a recurring lane.
 
 Carrier: ${name}
-Known carrier (worked with us before): ${isKnown ? "Yes" : "No — new prospect"}${carrierDetails}
+Lane: ${laneDisplay} (${equipment})
+Weekly volume: ${loadRange}
+${relationshipNote}${carrierDetails ? `\nCarrier context:${carrierDetails}` : ""}${immediateNote ? `\nUrgent: ${immediateNote}` : ""}
 
-Lane context:
-- Lane: ${laneDisplay}
-- Equipment: ${equipment}
-- Volume: ${loadRange}
-- This is a steady, recurring corridor.
-${modeContext}
-
-Hard rules (never break these):
-- NEVER repeat a state abbreviation — write "Macon, GA → Marietta, PA" not "Macon, GA, GA → Marietta, PA, PA".
-- NEVER write a decimal load average (e.g. "5.10 loads/week"). Use natural ranges like "${loadRange}" instead.
-- NEVER use these phrases: "carrier bench", "we value our relationship", "building our carrier bench", "ongoing coverage", or any stiff corporate filler.
-- Keep the email under 120 words.
-- Sound like a real freight broker texting a carrier rep, not a marketing template.
-
-Structure (follow this loosely, vary phrasing across drafts):
-1. Short, direct greeting — say who you are if new prospect.
-2. Name the lane and the volume range naturally in one sentence.
-3. Ask if they can cover it or if they'd like to connect — invite flexible timing ("even if not this week, I'd love to be on your radar").
-4. Light close — no fluff.
-
-If this is a known carrier, reference that you've run freight together before (don't say "value our relationship").
-If new prospect, introduce Value Truck as a freight brokerage in one short phrase.
-
-Output ONLY the email body — no subject line, no sign-off block.
-`.trim();
+House style — follow every rule:
+- Direct, conversational, freight-native. Sound like a broker, not a sales rep or account manager.
+- 3–4 short sentences MAX. Under 100 words.
+- Use the lane exactly as written above: "${laneDisplay}". Never shorten, alter, or add "corridor" after it.
+- Use the volume phrase exactly as given: "${loadRange}". Never convert to a decimal.
+- BANNED — never use any of these phrases:
+  "carrier bench", "we value our relationship", "ongoing coverage",
+  "reaching out about", "love to connect", "top of mind",
+  "lane runs consistently", "this lane runs consistently",
+  "keep you in mind", "would love to", "I'd love to"
+- End with a direct operational ask: "Does that fit your network?" or "If that fits your network, I'd be glad to talk through it."
+- If this week doesn't work, say "if this week's tight, no worries" — not "I'd still love to connect."
+- Vary sentence structure. Do not copy examples verbatim.
+- Output ONLY the email body. No subject line. No sign-off block. No placeholders like [Name].`.trim();
 
           let body = "";
           try {
             body = await callAI(prompt);
           } catch {
-            body = buildFallbackEmailHelper(name, isKnown, laneDisplay, equipment, loadRange, outreachMode);
+            body = buildFallbackEmailHelper(name, hasVerifiedHistory, laneDisplay, equipment, loadRange, outreachMode);
           }
 
           return {
             carrierId,
             carrierName: name,
-            subject: `Lane Opportunity: ${laneDisplay} (${equipment})`,
+            subject: `Capacity Check: ${laneDisplay} (${equipment})`,
             body,
             outreachMode,
           };
@@ -1910,56 +1907,3 @@ Rules for suggestions:
   });
 }
 
-// ── Email generation helpers ───────────────────────────────────────────────
-
-/** Format origin → dest as "City, ST → City, ST" with consistent Title Case */
-function formatLaneDisplay(origin: string, dest: string): string {
-  const titleCase = (s: string) =>
-    s
-      .split(/,\s*/)
-      .map((part, i) =>
-        i === 0
-          ? part.trim().replace(/\b\w/g, (c) => c.toUpperCase())
-          : part.trim().toUpperCase()
-      )
-      .join(", ");
-  return `${titleCase(origin)} → ${titleCase(dest)}`;
-}
-
-/** Convert avgLoadsPerWeek (number or range string) to plain human phrasing */
-function humanLoadVolume(avg: string | number): string {
-  const n = typeof avg === "string" ? parseFloat(avg) : avg;
-  if (isNaN(n)) return "steady volume each week";
-  if (n < 1)   return "about 1 a week";
-  if (n < 2)   return "about 1–2 a week";
-  if (n < 3.5) return "around 2–3 a week";
-  if (n < 5)   return "around 3–5 a week";
-  if (n < 7)   return "usually 5–7 a week";
-  if (n < 9)   return "usually 7–9 a week";
-  return "around 8–10 a week";
-}
-
-// ── Fallback email generator ───────────────────────────────────────────────
-
-function buildFallbackEmail(
-  name: string,
-  isKnown: boolean,
-  laneDisplay: string,
-  equipment: string,
-  loadRange: string,
-  outreachMode: string,
-): string {
-  const intro = isKnown
-    ? `We've run freight together before and I wanted to loop you in on something steady.`
-    : `I'm with Value Truck, a freight brokerage, and wanted to reach out about a lane we run regularly.`;
-
-  const modeNote = outreachMode === "immediate_plus_lane"
-    ? ` We also have a load coming up on this corridor soon — happy to share details if the timing works.`
-    : "";
-
-  return `Hi ${name} team,
-
-${intro} We move ${equipment} freight on the ${laneDisplay} corridor ${loadRange}, and I'm looking for reliable carriers to run it with us.${modeNote}
-
-Even if you don't have a truck available this week, I'd still love to connect — this lane runs consistently and I'd want you top of mind. Worth a quick call?`;
-}

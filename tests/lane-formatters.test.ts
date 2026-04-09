@@ -1,15 +1,17 @@
 /**
- * Unit tests for shared/laneFormatters.ts and server/laneOutreachEmailBuilder.ts
+ * Unit + integration tests for lane outreach email generation.
  *
  * Covers:
  *   - formatLaneLocation: title-casing, state uppercasing, duplicate-state collapse
  *   - formatWeeklyLoadRange: decimal-to-range conversion and edge cases
- *   - buildFallbackEmail: no banned phrases, no raw decimal averages, no duplicate states
+ *   - normalizeEquipmentType: code → human-readable mapping
+ *   - buildFallbackEmail: no banned phrases, no raw decimals, no false relationships,
+ *     correct lane display, correct volume phrasing
  *
  * Run with: npx tsx tests/lane-formatters.test.ts
  */
 
-import { formatLaneLocation, formatLaneDisplay, formatWeeklyLoadRange } from "../shared/laneFormatters";
+import { formatLaneLocation, formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType } from "../shared/laneFormatters";
 import { buildFallbackEmail } from "../server/laneOutreachEmailBuilder";
 
 let passed = 0;
@@ -30,7 +32,7 @@ function assertEqual(description: string, actual: string, expected: string): voi
     console.log(`  ✓ ${description}`);
     passed++;
   } else {
-    console.error(`  ✗ ${description} — expected "${expected}", got "${actual}"`);
+    console.error(`  ✗ ${description}\n    expected: "${expected}"\n    got:      "${actual}"`);
     failed++;
   }
 }
@@ -46,7 +48,6 @@ assertEqual("lowercase state uppercased", formatLaneLocation("Dallas", "tx"), "D
 assertEqual("no state returns city only", formatLaneLocation("Chicago", null), "Chicago");
 assertEqual("undefined state returns city only", formatLaneLocation("Chicago", undefined), "Chicago");
 
-// Duplicate-state collapse: city already embeds the state abbreviation
 assertEqual(
   'city "Macon, GA" + state "GA" → "Macon, GA" (no duplication)',
   formatLaneLocation("Macon, GA", "GA"),
@@ -63,10 +64,7 @@ assertEqual(
   "Macon, GA",
 );
 
-assert(
-  'result never contains "GA, GA"',
-  !formatLaneLocation("Macon, GA", "GA").includes("GA, GA"),
-);
+assert('result never contains "GA, GA"', !formatLaneLocation("Macon, GA", "GA").includes("GA, GA"));
 
 // ── formatLaneDisplay ─────────────────────────────────────────────────────────
 
@@ -87,6 +85,11 @@ assertEqual(
   formatLaneDisplay("Chicago", null, "Dallas", null),
   "Chicago → Dallas",
 );
+assert(
+  'bare 2-letter state code as city is uppercased, not title-cased — "ga" → "GA" not "Ga"',
+  formatLaneDisplay("Macon", "GA", "ga", null) === "Macon, GA → GA" &&
+  !formatLaneDisplay("Macon", "GA", "ga", null).endsWith("→ Ga"),
+);
 
 // ── formatWeeklyLoadRange ─────────────────────────────────────────────────────
 
@@ -95,7 +98,7 @@ console.log("\n── formatWeeklyLoadRange ────────────
 assertEqual("5.10 → 'usually 5–7 a week'", formatWeeklyLoadRange(5.10), "usually 5–7 a week");
 assertEqual("2.2  → 'around 2–3 a week'",  formatWeeklyLoadRange(2.2),  "around 2–3 a week");
 assertEqual("0.9  → 'about 1–2 a week'",   formatWeeklyLoadRange(0.9),  "about 1–2 a week");
-assertEqual("0.3  → 'a few times a month'", formatWeeklyLoadRange(0.3),  "a few times a month");
+assertEqual("0.3  → 'a few times a month'", formatWeeklyLoadRange(0.3), "a few times a month");
 assertEqual("10.5 → '10 or more a week'",  formatWeeklyLoadRange(10.5), "10 or more a week");
 assertEqual("3.5  → 'around 3–4 a week'",  formatWeeklyLoadRange(3.5),  "around 3–4 a week");
 assertEqual("null → 'a few times a week'",  formatWeeklyLoadRange(null), "a few times a week");
@@ -103,42 +106,123 @@ assertEqual("string '3.5' → 'around 3–4 a week'", formatWeeklyLoadRange("3.5
 
 assert("no decimal digits in 5.10 output", !formatWeeklyLoadRange(5.10).match(/\d+\.\d+/));
 
-// ── buildFallbackEmail: no banned phrases ─────────────────────────────────────
+// ── normalizeEquipmentType ────────────────────────────────────────────────────
 
-console.log("\n── buildFallbackEmail: no banned phrases ────────────────────────────\n");
+console.log("\n── normalizeEquipmentType ───────────────────────────────────────────\n");
 
-const BANNED_PHRASES = [
+assertEqual('"dv" → "dry van"',      normalizeEquipmentType("dv"),       "dry van");
+assertEqual('"van" → "dry van"',     normalizeEquipmentType("van"),      "dry van");
+assertEqual('"po" → "dry van"',      normalizeEquipmentType("po"),       "dry van");
+assertEqual('"rf" → "reefer"',       normalizeEquipmentType("rf"),       "reefer");
+assertEqual('"flat" → "flatbed"',    normalizeEquipmentType("flat"),     "flatbed");
+assertEqual('"dry van" passthrough', normalizeEquipmentType("dry van"),  "dry van");
+assertEqual('"reefer" passthrough',  normalizeEquipmentType("reefer"),   "reefer");
+assertEqual('null → "dry van"',      normalizeEquipmentType(null),       "dry van");
+assert('"po" never surfaces as raw code', normalizeEquipmentType("po") !== "po");
+
+// ── buildFallbackEmail: banned phrases ────────────────────────────────────────
+
+console.log("\n── buildFallbackEmail: banned phrases ───────────────────────────────\n");
+
+const ALL_BANNED = [
+  "carrier bench",
   "we value our relationship",
   "building our carrier bench",
-  "carrier bench",
-  "averaging",
   "ongoing coverage",
+  "reaching out about",
+  "love to connect",
+  "i'd love to",
+  "would love to",
+  "top of mind",
+  "lane runs consistently",
+  "this lane runs consistently",
+  "keep you in mind",
+  "averaging",
+  "corridor",
 ];
 
-const laneDisp = formatLaneDisplay("Macon", "GA", "Marietta", "PA");
-const loadRng  = formatWeeklyLoadRange(5.1);
+const laneDisp  = formatLaneDisplay("Macon", "GA", "Marietta", "PA");
+const loadRng   = formatWeeklyLoadRange(5.1);
+const equipment = normalizeEquipmentType("dv");
 
-const knownEmail    = buildFallbackEmail("FastHaul", true,  laneDisp, "dry van", loadRng, "lane_building");
-const newEmail      = buildFallbackEmail("NewCo LLC", false, laneDisp, "reefer",  loadRng, "immediate_plus_lane");
+// new-prospect (hasVerifiedHistory = false)
+const newProspectEmail = buildFallbackEmail("FastHaul LLC", false, laneDisp, equipment, loadRng, "lane_building");
+// known carrier (hasVerifiedHistory = true)
+const knownCarrierEmail = buildFallbackEmail("TruckCo", true, laneDisp, equipment, loadRng, "lane_building");
+// immediate + lane mode
+const immediateEmail = buildFallbackEmail("ImmediateCo", false, laneDisp, equipment, loadRng, "immediate_plus_lane");
 
-for (const phrase of BANNED_PHRASES) {
+for (const phrase of ALL_BANNED) {
   assert(
-    `known-carrier email: no banned phrase "${phrase}"`,
-    !knownEmail.toLowerCase().includes(phrase.toLowerCase()),
+    `new-prospect email: banned phrase absent — "${phrase}"`,
+    !newProspectEmail.toLowerCase().includes(phrase.toLowerCase()),
   );
   assert(
-    `new-prospect email: no banned phrase "${phrase}"`,
-    !newEmail.toLowerCase().includes(phrase.toLowerCase()),
+    `known-carrier email: banned phrase absent — "${phrase}"`,
+    !knownCarrierEmail.toLowerCase().includes(phrase.toLowerCase()),
+  );
+  assert(
+    `immediate-mode email: banned phrase absent — "${phrase}"`,
+    !immediateEmail.toLowerCase().includes(phrase.toLowerCase()),
   );
 }
 
-assert("known email: no raw decimal average", !knownEmail.match(/\d+\.\d+\s*(loads|per)/i));
-assert("new email: no raw decimal average",   !newEmail.match(/\d+\.\d+\s*(loads|per)/i));
+// ── buildFallbackEmail: structural checks ─────────────────────────────────────
+
+console.log("\n── buildFallbackEmail: structural checks ────────────────────────────\n");
+
 assert(
-  "lane display correct in known email (no duplicate state)",
-  knownEmail.includes("Macon, GA → Marietta, PA") && !knownEmail.includes("GA, GA"),
+  "new-prospect: no raw decimal in body",
+  !newProspectEmail.match(/\d+\.\d+\s*(loads|per|\/)/i),
 );
-assert("immediate_plus_lane mode note present in new email", newEmail.includes("load coming up"));
+assert(
+  "known-carrier: no raw decimal in body",
+  !knownCarrierEmail.match(/\d+\.\d+\s*(loads|per|\/)/i),
+);
+assert(
+  "lane display present in new-prospect email (City, ST → City, ST)",
+  newProspectEmail.includes("Macon, GA → Marietta, PA"),
+);
+assert(
+  "lane display has no duplicate state — no 'GA, GA'",
+  !newProspectEmail.includes("GA, GA"),
+);
+assert(
+  "new-prospect: no false prior-relationship claim",
+  !newProspectEmail.toLowerCase().includes("we've run freight together") &&
+  !newProspectEmail.toLowerCase().includes("worked together before") &&
+  !newProspectEmail.toLowerCase().includes("run freight together"),
+);
+assert(
+  "known-carrier: no false prior-relationship claim phrasing",
+  !knownCarrierEmail.toLowerCase().includes("run freight together before"),
+);
+assert(
+  "immediate-mode email contains load urgency note",
+  immediateEmail.toLowerCase().includes("load coming up") ||
+  immediateEmail.toLowerCase().includes("immediate load"),
+);
+assert(
+  "new-prospect ends with operational ask",
+  newProspectEmail.includes("Does that fit your network") ||
+  newProspectEmail.includes("I'd be glad to talk through it"),
+);
+assert(
+  "new-prospect: volume phrase present without leading adverb duplication",
+  !newProspectEmail.includes("usually usually") &&
+  !newProspectEmail.includes("around around") &&
+  !newProspectEmail.includes("about about"),
+);
+
+// ── buildFallbackEmail: equipment normalization flows through ─────────────────
+
+console.log("\n── buildFallbackEmail: equipment normalization ──────────────────────\n");
+
+const poEmail = buildFallbackEmail("TestCo", false, laneDisp, normalizeEquipmentType("po"), loadRng, "lane_building");
+assert(
+  '"po" equipment type does not appear as raw code in email body',
+  !poEmail.toLowerCase().includes(" po ") && !poEmail.toLowerCase().includes(" po freight"),
+);
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

@@ -685,7 +685,8 @@ export function CarrierOutreachPanel({
     const subject = `Lane-Building Opportunity: ${laneDisplay} (${equipment})`;
 
     const loadRange = formatWeeklyLoadRange(lane?.avgLoadsPerWeek);
-    const fallbackBody = `Hi,\n\nI'm with Value Truck, a freight brokerage, and wanted to reach out about a lane we move regularly. We run ${equipment} freight on the ${laneDisplay} corridor ${loadRange} and are looking for reliable carriers to run it with us.\n\nEven if you don't have a truck available this week, I'd love to connect — this lane runs consistently and I'd want you top of mind. Worth a quick call?`;
+    const bareRange = loadRange.replace(/^(usually|around|about)\s+/i, "");
+    const fallbackBody = `Hey team — checking to see if you've got capacity for ${laneDisplay} (${equipment}). We usually have ${bareRange} on this lane and are looking to line up steady coverage. Does that fit your network? If so, I'd be glad to talk through it.`;
 
     // Build ad-hoc drafts for pasted email addresses, embedding the recipient email directly
     const adHocDrafts: EmailDraft[] = adHocParsed.valid.map(email => ({
