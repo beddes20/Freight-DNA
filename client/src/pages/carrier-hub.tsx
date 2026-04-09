@@ -6,7 +6,7 @@
  * Right side: expandable profile drawer with tabs
  */
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -367,10 +366,10 @@ function ContactForm({ carrierId, initial, onSave, onCancel }: {
 function ClaimedLaneForm({ carrierId, onSave, onCancel }: { carrierId: string; onSave: () => void; onCancel: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [form, setForm] = useState({ originState: "", originCity: "", destState: "", destCity: "", equipment: "", laneType: "prefer", notes: "" });
+  const [form, setForm] = useState({ originState: "", originCity: "", destState: "", destCity: "", equipment: "__any__", laneType: "prefer", notes: "" });
 
   const save = useMutation({
-    mutationFn: (data: typeof form) => apiRequest("POST", `/api/carrier-hub/${carrierId}/claimed-lanes`, data),
+    mutationFn: (data: typeof form) => apiRequest("POST", `/api/carrier-hub/${carrierId}/claimed-lanes`, { ...data, equipment: data.equipment === "__any__" ? "" : data.equipment }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/carrier-hub", carrierId] });
       toast({ title: "Lane preference added" });
@@ -419,7 +418,7 @@ function ClaimedLaneForm({ carrierId, onSave, onCancel }: { carrierId: string; o
               <SelectValue placeholder="Any" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">Any</SelectItem>
+              <SelectItem value="__any__">Any</SelectItem>
               {EQUIPMENT_OPTIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -1017,8 +1016,8 @@ function CarrierCard({ carrier, selected, onClick }: { carrier: CarrierRow; sele
 
 export default function CarrierHub() {
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [equipFilter, setEquipFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("__all__");
+  const [equipFilter, setEquipFilter] = useState("__all__");
   const [hasEmail, setHasEmail] = useState(false);
   const [hasPhone, setHasPhone] = useState(false);
   const [hasProvenHistory, setHasProvenHistory] = useState(false);
@@ -1034,10 +1033,13 @@ export default function CarrierHub() {
     if (cid) setSelectedCarrierId(cid);
   }, []);
 
+  const statusFilterValue = statusFilter === "__all__" ? "" : statusFilter;
+  const equipFilterValue = equipFilter === "__all__" ? "" : equipFilter;
+
   const queryParams = new URLSearchParams({
     ...(search && { q: search }),
-    ...(statusFilter && { status: statusFilter }),
-    ...(equipFilter && { equipment: equipFilter }),
+    ...(statusFilterValue && { status: statusFilterValue }),
+    ...(equipFilterValue && { equipment: equipFilterValue }),
     ...(hasEmail && { hasEmail: "true" }),
     ...(hasPhone && { hasPhone: "true" }),
     ...(hasProvenHistory && { hasProvenHistory: "true" }),
@@ -1053,7 +1055,7 @@ export default function CarrierHub() {
 
   const carriers = data?.carriers ?? [];
 
-  const activeFilters = [statusFilter, equipFilter, hasEmail, hasPhone, hasProvenHistory, hasClaimedLanes].filter(Boolean).length;
+  const activeFilters = [statusFilterValue, equipFilterValue, hasEmail, hasPhone, hasProvenHistory, hasClaimedLanes].filter(Boolean).length;
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
@@ -1096,7 +1098,7 @@ export default function CarrierHub() {
               <SelectValue placeholder="All statuses" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All statuses</SelectItem>
+              <SelectItem value="__all__">All statuses</SelectItem>
               <SelectItem value="active">Active</SelectItem>
               <SelectItem value="inactive">Inactive</SelectItem>
               <SelectItem value="flagged">Flagged</SelectItem>
@@ -1109,7 +1111,7 @@ export default function CarrierHub() {
               <SelectValue placeholder="All equipment" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All equipment</SelectItem>
+              <SelectItem value="__all__">All equipment</SelectItem>
               {EQUIPMENT_OPTIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -1142,7 +1144,7 @@ export default function CarrierHub() {
           </div>
 
           {activeFilters > 0 && (
-            <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={() => { setStatusFilter(""); setEquipFilter(""); setHasEmail(false); setHasPhone(false); setHasProvenHistory(false); setHasClaimedLanes(false); }} data-testid="btn-clear-filters">
+            <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={() => { setStatusFilter("__all__"); setEquipFilter("__all__"); setHasEmail(false); setHasPhone(false); setHasProvenHistory(false); setHasClaimedLanes(false); }} data-testid="btn-clear-filters">
               Clear filters ({activeFilters})
             </Button>
           )}
