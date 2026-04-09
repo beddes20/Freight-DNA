@@ -21,9 +21,14 @@ interface TmsRow {
   shipperCity?: string;
   originCity?: string;
   origin?: string;
+  shipperState?: string;
+  originState?: string;
   consigneeCity?: string;
   destinationCity?: string;
   destination?: string;
+  consigneeState?: string;
+  destinationState?: string;
+  destState?: string;
   carrier?: string;
   carrierName?: string;
   carrier_name?: string;
@@ -86,6 +91,8 @@ interface CarrierHistory {
   /** Total margin contribution from financial rows (if present) */
   totalMargin: number | null;
   marginRowCount: number;
+  /** Best match tier across all matched rows — drives score differentiation */
+  bestMatchTier: "exact" | "city" | "state";
 }
 
 function extractCarrierHistoryFromUploads(
@@ -95,6 +102,10 @@ function extractCarrierHistoryFromUploads(
   const history = new Map<string, CarrierHistory>();
   const originNorm = normStr(lane.origin);
   const destNorm = normStr(lane.destination);
+  // State-pair matching: cast a wider net by accepting any corridor in the same
+  // origin-state → dest-state direction (like the carrier lane search radius approach)
+  const laneOrigStateLower = normStr(lane.originState ?? "");
+  const laneDestStateLower = normStr(lane.destinationState ?? "");
 
   // Sort uploads newest first
   const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
@@ -104,6 +115,8 @@ function extractCarrierHistoryFromUploads(
     for (const row of rows) {
       const rowOrigin = normStr(row.shipperCity ?? row.originCity ?? row.origin ?? "");
       const rowDest = normStr(row.consigneeCity ?? row.destinationCity ?? row.destination ?? "");
+      const rowOriginState = normStr(row.shipperState ?? row.originState ?? "");
+      const rowDestState = normStr(row.consigneeState ?? row.destinationState ?? row.destState ?? "");
       const carrierRaw = normStr(row.carrier ?? row.carrierName ?? row.carrier_name ?? "");
       const month = String(row.month ?? "").slice(0, 7);
 
@@ -113,18 +126,27 @@ function extractCarrierHistoryFromUploads(
       if (!rowOrigin || !rowDest) continue;
 
       const isExact = rowOrigin === originNorm && rowDest === destNorm;
-      // Require at least 4 chars on both sides before prefix-matching to avoid
-      // false positives when either value is very short or empty after normalization
+
+      // Tier 2: city-prefix similarity (requires 4-char match on both sides)
       const originPrefix = originNorm.slice(0, 4);
       const destPrefix = destNorm.slice(0, 4);
       const isSimilarOrigin = originPrefix.length >= 4 && rowOrigin.length >= 4 &&
         (rowOrigin.includes(originPrefix) || originNorm.includes(rowOrigin.slice(0, 4)));
       const isSimilarDest = destPrefix.length >= 4 && rowDest.length >= 4 &&
         (rowDest.includes(destPrefix) || destNorm.includes(rowDest.slice(0, 4)));
+      const isCitySimilar = isSimilarOrigin && isSimilarDest;
 
-      if (!isExact && !(isSimilarOrigin && isSimilarDest)) continue;
+      // Tier 3: wider net — same origin state AND same destination state
+      // (e.g. "Dallas, TX → Memphis, TN" counts for "Laredo, TX → Nashville, TN")
+      const isStatePairMatch = laneOrigStateLower.length >= 2 && laneDestStateLower.length >= 2 &&
+        rowOriginState.length >= 2 && rowDestState.length >= 2 &&
+        rowOriginState === laneOrigStateLower && rowDestState === laneDestStateLower;
 
-      const existing = history.get(carrierRaw) ?? { loads: 0, lastUsedMonth: null, avgOnTimePct: null, totalMargin: null, marginRowCount: 0 };
+      if (!isExact && !isCitySimilar && !isStatePairMatch) continue;
+
+      const thisTier: CarrierHistory["bestMatchTier"] = isExact ? "exact" : isCitySimilar ? "city" : "state";
+
+      const existing = history.get(carrierRaw) ?? { loads: 0, lastUsedMonth: null, avgOnTimePct: null, totalMargin: null, marginRowCount: 0, bestMatchTier: thisTier };
 
       // Extract on-time % if present
       const onTimeRaw = row.onTimePct ?? row.on_time_pct;
@@ -133,6 +155,10 @@ function extractCarrierHistoryFromUploads(
       // Extract margin if present
       const marginRaw = row.margin ?? row.marginPct;
       const marginParsed = marginRaw !== undefined ? parseFloat(String(marginRaw)) : NaN;
+
+      // Upgrade the stored tier if this row is a better match (exact > city > state)
+      const tierRank = { exact: 0, city: 1, state: 2 } as const;
+      const betterTier = tierRank[thisTier] < tierRank[existing.bestMatchTier] ? thisTier : existing.bestMatchTier;
 
       history.set(carrierRaw, {
         loads: existing.loads + 1,
@@ -144,6 +170,7 @@ function extractCarrierHistoryFromUploads(
           ? (existing.totalMargin ?? 0) + marginParsed
           : existing.totalMargin,
         marginRowCount: !isNaN(marginParsed) ? existing.marginRowCount + 1 : existing.marginRowCount,
+        bestMatchTier: betterTier,
       });
     }
   }
@@ -222,7 +249,7 @@ export async function rankCarriersForLane(
     const reasons: string[] = [];
     let historyMatch: RankedCarrier["historyMatch"] = "none";
 
-    // Exact history match
+    // Exact/similar/state history match
     if (hist && hist.loads > 0) {
       const exactLoad = extractExactLaneLoads(uploads, lane, carrier.name);
       if (exactLoad > 0) {
@@ -231,10 +258,15 @@ export async function rankCarriersForLane(
         fitScore += pts;
         reasons.push(`Ran this lane ${exactLoad}× recently`);
         if (hist.lastUsedMonth) reasons.push(`last used ${hist.lastUsedMonth}`);
-      } else {
+      } else if (hist.bestMatchTier === "city") {
         historyMatch = "similar";
         fitScore += 25;
         reasons.push(`Ran similar corridors (${hist.loads} loads in region)`);
+      } else {
+        // State-pair match only — wider net, lower confidence
+        historyMatch = "similar";
+        fitScore += 12;
+        reasons.push(`Runs ${(lane.originState ?? "origin state").toUpperCase()} → ${(lane.destinationState ?? "dest state").toUpperCase()} lanes (${hist.loads} loads)`);
       }
     }
 
@@ -335,10 +367,19 @@ export async function rankCarriersForLane(
 
     const exactLoad = extractExactLaneLoads(uploads, lane, carrierNorm);
     const historyMatch: RankedCarrier["historyMatch"] = exactLoad > 0 ? "exact" : "similar";
-    let fitScore = Math.min(85, 30 + (exactLoad > 0 ? exactLoad * 5 : hist.loads * 2));
+    let fitScore: number;
     const reasons: string[] = [];
-    if (exactLoad > 0) reasons.push(`Ran this lane ${exactLoad}× from financial history`);
-    else reasons.push(`${hist.loads} loads on similar corridors`);
+    if (exactLoad > 0) {
+      fitScore = Math.min(85, 30 + exactLoad * 5);
+      reasons.push(`Ran this lane ${exactLoad}× from financial history`);
+    } else if (hist.bestMatchTier === "city") {
+      fitScore = Math.min(80, 30 + hist.loads * 2);
+      reasons.push(`${hist.loads} loads on similar corridors`);
+    } else {
+      // State-pair match only — wider net, lower base score
+      fitScore = Math.min(55, 18 + hist.loads * 2);
+      reasons.push(`Runs ${(lane.originState ?? "origin state").toUpperCase()} → ${(lane.destinationState ?? "dest state").toUpperCase()} lanes (${hist.loads} loads, financial data)`);
+    }
     if (hist.lastUsedMonth) reasons.push(`last used ${hist.lastUsedMonth}`);
 
     // On-time % from financial rows
