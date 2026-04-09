@@ -15,6 +15,7 @@ export interface PortletLayout {
 export type DashboardLayout = Record<string, PortletLayout>;
 
 export const DIRECTOR_PORTLETS: PortletDef[] = [
+  { id: "intel-snapshot",  label: "Intel Snapshot",          description: "Daily market pulse and top lane alerts from Sonar intelligence" },
   { id: "dir-activity",    label: "Activity Stats",          description: "Team activity counts — relationships moved, meaningful conversations, new contacts, touches today", directorOnly: true },
   { id: "dir-trending",    label: "Trending Accounts",       description: "Accounts trending up or down vs. 3-month rolling average", directorOnly: true },
   { id: "dir-margin",      label: "Margin Performance",      description: "NAM and AM margin metrics with goal progress bars", directorOnly: true },

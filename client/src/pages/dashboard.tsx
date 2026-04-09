@@ -45,6 +45,7 @@ import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
 import { LmCheckinBanner } from "@/components/lm-checkin-banner";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
 import { AccountGrowthPortlet } from "@/components/account-growth-portlet";
+import { IntelSnapshotPortlet } from "@/components/intel-snapshot-portlet";
 import { NextBestActionsPortlet } from "@/components/next-best-actions-portlet";
 import { DashboardActivitySheet, type PortletType } from "@/components/dashboard-activity-sheet";
 import { RelationshipDashboardSection } from "@/components/relationship-freight-portlet";
@@ -998,6 +999,13 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+      )}
+
+      {/* ── Intel Snapshot (admin only) ───────────────────────────────────────── */}
+      {isAdmin && (
+        <PortletErrorBoundary label="Intel Snapshot">
+          <IntelSnapshotPortlet />
+        </PortletErrorBoundary>
       )}
 
       {/* ── Forced Focus banner (Leadership Priority) — above NBA for reps/LMs ─── */}

@@ -12,6 +12,7 @@ import { registerForcedFocusRoutes } from "./routes/forcedFocus";
 import { registerLaneCarrierOutreachRoutes } from "./routes/laneCarrierOutreach";
 import { registerCarrierHubRoutes } from "./routes/carrierHub";
 import { registerMyProcurementRoutes } from "./routes/myProcurement";
+import { registerIntelRoutes } from "./routes/intel";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -2983,6 +2984,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerLaneCarrierOutreachRoutes(app);
   registerCarrierHubRoutes(app);
   registerMyProcurementRoutes(app);
+  registerIntelRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
 

@@ -58,6 +58,7 @@ import RepScorecardPage from "@/pages/rep-scorecard";
 import LmCheckinHistoryPage from "@/pages/lm-checkin-history";
 import LaneWorkQueuePage from "@/pages/lane-work-queue";
 import MyProcurementPage from "@/pages/my-procurement";
+import IntelPage from "@/pages/intel";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -138,6 +139,7 @@ function Router() {
       <Route path="/lm-checkin-history" component={LmCheckinHistoryPage} />
       <Route path="/lanes/work-queue" component={LaneWorkQueuePage} />
       <Route path="/my-procurement" component={MyProcurementPage} />
+      <Route path="/intel" component={IntelPage} />
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/terms" component={TermsPage} />
       <Route component={NotFound} />
