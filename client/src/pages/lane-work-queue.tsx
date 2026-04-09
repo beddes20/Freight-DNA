@@ -53,6 +53,8 @@ import {
   Filter,
   Database,
   PlusCircle,
+  Shield,
+  TrendingUp,
 } from "lucide-react";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -60,6 +62,26 @@ import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+interface CoverageProfile {
+  id: string;
+  coverageStatus: string;
+  sampleSize: number;
+  qualifiedCarrierCount: number;
+  topCarrierCoverageShare: string | null;
+  manualOverrideStatus: string | null;
+  broadenSearchActive: boolean;
+}
+
+interface CoverageProfileCarrier {
+  carrierName: string;
+  incumbentRank: number;
+  successfulLoadCount: number;
+  recentLoadCount: number;
+  coverageShare: string | null;
+  lastUsedAt: string | null;
+  isCurrentPrimary: boolean;
+}
 
 interface LaneItem {
   lane: {
@@ -173,6 +195,70 @@ function FrequencyBadge({ val }: { val: string | null | undefined }) {
 
 function avgLoadsNum(val: string | null | undefined): number {
   return parseLoadsPerWeek(val) ?? 0;
+}
+
+/** Coverage status badge — compact inline badge for work queue rows */
+function CoverageStatusBadge({
+  profile,
+  carriers,
+  laneId,
+}: {
+  profile: CoverageProfile;
+  carriers?: CoverageProfileCarrier[];
+  laneId: string;
+}) {
+  const effectiveStatus = profile.manualOverrideStatus ?? profile.coverageStatus;
+  const share = profile.topCarrierCoverageShare ? parseFloat(profile.topCarrierCoverageShare) : 0;
+  const n = profile.qualifiedCarrierCount;
+  const total = profile.sampleSize;
+
+  if (effectiveStatus === "stable") {
+    const topCount = carriers?.length ?? n;
+    const topLoads = carriers ? carriers.reduce((sum, c) => sum + c.successfulLoadCount, 0) : Math.round(share * total);
+    return (
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <Badge
+          variant="outline"
+          className="text-[10px] py-0 px-1.5 border-emerald-500/60 text-emerald-400 bg-emerald-500/10 gap-0.5"
+          data-testid={`badge-coverage-status-${laneId}`}
+        >
+          <Shield className="w-2.5 h-2.5" />
+          Stable
+        </Badge>
+        {total > 0 && (
+          <span
+            className="text-[10px] text-emerald-600 dark:text-emerald-500"
+            data-testid={`text-coverage-stat-${laneId}`}
+          >
+            {topCount} proven carrier{topCount !== 1 ? "s" : ""} · {topLoads} of {total} recent loads
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  if (effectiveStatus === "watch") {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] py-0 px-1.5 border-amber-500/50 text-amber-400 bg-amber-500/10 gap-0.5"
+        data-testid={`badge-coverage-status-${laneId}`}
+      >
+        <TrendingUp className="w-2.5 h-2.5" />
+        Watch
+      </Badge>
+    );
+  }
+
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] py-0 px-1.5 border-slate-500/30 text-slate-400 gap-0.5"
+      data-testid={`badge-coverage-status-${laneId}`}
+    >
+      Unstable
+    </Badge>
+  );
 }
 
 /** Sort items — high-frequency first, then by laneScore descending */
@@ -292,6 +378,13 @@ function LaneRow({
   const canUnassign = item.lane.ownerUserId &&
     (isManager || item.lane.ownerUserId === currentUser?.id);
 
+  const { data: coverageData } = useQuery<{ profile: CoverageProfile; carriers: CoverageProfileCarrier[] }>({
+    queryKey: ["/api/lanes", item.lane.id, "coverage-profile"],
+    queryFn: () => fetch(`/api/lanes/${item.lane.id}/coverage-profile`).then(r => r.ok ? r.json() : null),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+
   const contacted = item.lane.carriersContactedCount ?? 0;
   const progressPct = Math.min(100, (contacted / completionThreshold) * 100);
   const loadsNum = avgLoadsNum(item.lane.avgLoadsPerWeek);
@@ -341,6 +434,17 @@ function LaneRow({
               {item.lane.eligibilityConfidence}
             </Badge>
           </div>
+
+          {/* Coverage status badge */}
+          {coverageData?.profile && (
+            <div className="mt-1.5">
+              <CoverageStatusBadge
+                profile={coverageData.profile}
+                carriers={coverageData.carriers}
+                laneId={item.lane.id}
+              />
+            </div>
+          )}
 
           {/* Metrics row */}
           <div className="flex items-center gap-4 mt-2 flex-wrap">

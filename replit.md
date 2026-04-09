@@ -48,6 +48,7 @@ The application features a modern and responsive user interface built with React
     - **AI Email Drafting**: Generates personalized email drafts using GPT-4o-mini.
     - **NBA (Next Best Action) Phase 1**: Recommendation engine generating persistent cards for reps based on freight data rules (e.g., Load Decline, Single-Thread Risk, Stale Account).
     - **Lane Carrier Outreach Workflow**: Assignable lane workflow with work queues, carrier contactability, and email sending/tracking.
+    - **Stable Coverage System (Task #157)**: Per-lane coverage profiles computed from TMS history, classifying lanes as Stable/Watch/Unstable (≥70%/40–69%/<40% top-carrier concentration). Includes incumbent carrier tracking, score-floor boost for incumbents in ranked suggestions, broaden-search mode, manual override/confirm, and a Coverage tab in CarrierOutreachPanel.
     - **Carrier Hub (Phase 1)**: Central carrier intelligence layer with contact management, claimed lanes, and activity tracking.
     - **LWQ ↔ Carrier Hub Cross-Linking**: "Why this carrier" explanations on each ranked carrier suggestion (primary signal, claimed-lane-match badge, prior-positive-outreach badge). "View carrier profile" link on each card navigates to Carrier Hub via `?carrierId=`. Carrier Hub "Lanes" tab includes "Best Lanes Right Now" section (top-10 recommended active lanes scored by equipment/region/claimed-lane fit) with "Open in Lane Work Queue" cross-links (`?laneId=`). Both pages accept URL params to auto-open the relevant drawer.
 

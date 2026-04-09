@@ -128,6 +128,12 @@ import {
   carrierImportBatches,
   type CarrierImportBatch,
   type InsertCarrierImportBatch,
+  laneCoverageProfiles,
+  type LaneCoverageProfile,
+  type InsertLaneCoverageProfile,
+  laneCoverageProfileCarriers,
+  type LaneCoverageProfileCarrier,
+  type InsertLaneCoverageProfileCarrier,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -600,6 +606,16 @@ export interface IStorage {
     scopeLabel: string;
   }>;
   getLaneWorkQueue(orgId: string, completionThreshold: number, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<LaneWorkQueueResult>;
+
+  // Lane Coverage Profiles
+  getLaneCoverageProfile(orgId: string, laneKey: string): Promise<import('@shared/schema').LaneCoverageProfile | undefined>;
+  getLaneCoverageProfileById(id: string): Promise<import('@shared/schema').LaneCoverageProfile | undefined>;
+  getLaneCoverageProfileByLaneId(laneId: string): Promise<import('@shared/schema').LaneCoverageProfile | undefined>;
+  upsertLaneCoverageProfile(data: import('@shared/schema').InsertLaneCoverageProfile): Promise<import('@shared/schema').LaneCoverageProfile>;
+  updateLaneCoverageProfile(id: string, data: Partial<import('@shared/schema').InsertLaneCoverageProfile>): Promise<import('@shared/schema').LaneCoverageProfile | undefined>;
+  getLaneCoverageProfileCarriers(profileId: string): Promise<import('@shared/schema').LaneCoverageProfileCarrier[]>;
+  upsertLaneCoverageProfileCarrier(data: import('@shared/schema').InsertLaneCoverageProfileCarrier): Promise<import('@shared/schema').LaneCoverageProfileCarrier>;
+  deleteLaneCoverageProfileCarriers(profileId: string): Promise<void>;
 }
 
 const pool = new Pool({
@@ -3859,6 +3875,89 @@ export class DatabaseStorage implements IStorage {
     }
 
     return result;
+  }
+
+  // ── Lane Coverage Profiles ─────────────────────────────────────────────────
+
+  async getLaneCoverageProfile(orgId: string, laneKey: string): Promise<LaneCoverageProfile | undefined> {
+    const [row] = await db.select().from(laneCoverageProfiles)
+      .where(and(eq(laneCoverageProfiles.orgId, orgId), eq(laneCoverageProfiles.laneKey, laneKey)));
+    return row;
+  }
+
+  async getLaneCoverageProfileById(id: string): Promise<LaneCoverageProfile | undefined> {
+    const [row] = await db.select().from(laneCoverageProfiles).where(eq(laneCoverageProfiles.id, id));
+    return row;
+  }
+
+  async getLaneCoverageProfileByLaneId(laneId: string): Promise<LaneCoverageProfile | undefined> {
+    const [row] = await db.select().from(laneCoverageProfiles)
+      .where(eq(laneCoverageProfiles.laneId, laneId));
+    return row;
+  }
+
+  async upsertLaneCoverageProfile(data: InsertLaneCoverageProfile): Promise<LaneCoverageProfile> {
+    const now = new Date().toISOString();
+    const [row] = await db.insert(laneCoverageProfiles)
+      .values({ ...data, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: [laneCoverageProfiles.orgId, laneCoverageProfiles.laneKey],
+        set: {
+          laneId: data.laneId,
+          coverageStatus: data.coverageStatus,
+          sampleSize: data.sampleSize,
+          qualifiedCarrierCount: data.qualifiedCarrierCount,
+          topCarrierCoverageShare: data.topCarrierCoverageShare,
+          computedAt: data.computedAt,
+          manualOverrideStatus: data.manualOverrideStatus,
+          manualOverrideReason: data.manualOverrideReason,
+          manuallyConfirmedByUserId: data.manuallyConfirmedByUserId,
+          manuallyConfirmedAt: data.manuallyConfirmedAt,
+          broadenSearchActive: data.broadenSearchActive,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async updateLaneCoverageProfile(id: string, data: Partial<InsertLaneCoverageProfile>): Promise<LaneCoverageProfile | undefined> {
+    const [row] = await db.update(laneCoverageProfiles)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(laneCoverageProfiles.id, id))
+      .returning();
+    return row;
+  }
+
+  async getLaneCoverageProfileCarriers(profileId: string): Promise<LaneCoverageProfileCarrier[]> {
+    return db.select().from(laneCoverageProfileCarriers)
+      .where(eq(laneCoverageProfileCarriers.profileId, profileId))
+      .orderBy(asc(laneCoverageProfileCarriers.incumbentRank));
+  }
+
+  async upsertLaneCoverageProfileCarrier(data: InsertLaneCoverageProfileCarrier): Promise<LaneCoverageProfileCarrier> {
+    const [row] = await db.insert(laneCoverageProfileCarriers)
+      .values({ ...data, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: [laneCoverageProfileCarriers.profileId, laneCoverageProfileCarriers.carrierName],
+        set: {
+          carrierId: data.carrierId,
+          incumbentRank: data.incumbentRank,
+          successfulLoadCount: data.successfulLoadCount,
+          recentLoadCount: data.recentLoadCount,
+          coverageShare: data.coverageShare,
+          lastUsedAt: data.lastUsedAt,
+          lastSuccessAt: data.lastSuccessAt,
+          isCurrentPrimary: data.isCurrentPrimary,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async deleteLaneCoverageProfileCarriers(profileId: string): Promise<void> {
+    await db.delete(laneCoverageProfileCarriers).where(eq(laneCoverageProfileCarriers.profileId, profileId));
   }
 }
 

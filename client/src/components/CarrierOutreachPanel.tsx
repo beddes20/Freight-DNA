@@ -59,6 +59,11 @@ import {
   Upload,
   Plus,
   ExternalLink,
+  Shield,
+  TrendingUp,
+  ShieldCheck,
+  ShieldAlert,
+  Search,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
@@ -131,6 +136,32 @@ interface SuggestionsResponse {
   page: number;
   pageSize: number;
   totalPages: number;
+}
+
+interface CoverageProfile {
+  id: string;
+  laneId: string;
+  coverageStatus: string;
+  sampleSize: number;
+  qualifiedCarrierCount: number;
+  topCarrierCoverageShare: string | null;
+  manualOverrideStatus: string | null;
+  manualOverrideReason: string | null;
+  broadenSearchActive: boolean;
+  manuallyConfirmedAt: string | null;
+  updatedAt: string | null;
+}
+
+interface CoverageProfileCarrier {
+  id: string;
+  carrierId: string | null;
+  carrierName: string;
+  incumbentRank: number;
+  successfulLoadCount: number;
+  recentLoadCount: number;
+  coverageShare: string | null;
+  lastUsedAt: string | null;
+  isCurrentPrimary: boolean;
 }
 
 interface ParsedImportCarrier {
@@ -362,6 +393,14 @@ export function CarrierOutreachPanel({
     queryKey: ["/api/lanes", laneId, "carrier-bench"],
     queryFn: () => fetch(`/api/lanes/${laneId}/carrier-bench`).then(r => r.json()),
     enabled: !!laneId && open,
+  });
+
+  const { data: coverageData, refetch: refetchCoverage, isLoading: coverageLoading } = useQuery<{ profile: CoverageProfile; carriers: CoverageProfileCarrier[] }>({
+    queryKey: ["/api/lanes", laneId, "coverage-profile"],
+    queryFn: () => fetch(`/api/lanes/${laneId}/coverage-profile`).then(r => r.ok ? r.json() : null),
+    enabled: !!laneId && open,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
   });
 
   const { data: followupData, isLoading: followupLoading } = useQuery<{ suggestions: FollowupSuggestion[] }>({
@@ -983,10 +1022,178 @@ export function CarrierOutreachPanel({
             <TabsTrigger value="history" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-history">
               History {outreachHistory.length > 0 ? `(${outreachHistory.length})` : ""}
             </TabsTrigger>
+            <TabsTrigger value="coverage" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white flex items-center gap-1" data-testid="tab-coverage">
+              <Shield className="w-3 h-3" />
+              Coverage
+              {coverageData?.profile && (
+                <span className={`text-[9px] rounded px-0.5 ml-0.5 ${
+                  (coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus) === "stable"
+                    ? "text-emerald-400"
+                    : (coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus) === "watch"
+                      ? "text-amber-400"
+                      : "text-white/40"
+                }`}>
+                  {(coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus).charAt(0).toUpperCase() + (coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus).slice(1)}
+                </span>
+              )}
+            </TabsTrigger>
           </TabsList>
 
           {/* ── Carrier Suggestions Tab ─────────────────────────────────── */}
           <TabsContent value="carriers" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
+            {/* ── Stable Coverage section (shown above suggestions when profile exists) */}
+            {coverageData?.profile && (() => {
+              const profile = coverageData.profile;
+              const carriers = coverageData.carriers ?? [];
+              const effectiveStatus = profile.manualOverrideStatus ?? profile.coverageStatus;
+              const isStable = effectiveStatus === "stable";
+              const isWatch = effectiveStatus === "watch";
+              return (
+                <div className={`mb-4 rounded-lg border p-3 ${
+                  isStable ? "border-emerald-500/30 bg-emerald-500/8" :
+                  isWatch  ? "border-amber-500/20 bg-amber-500/5" :
+                             "border-white/8 bg-white/3"
+                }`} data-testid="coverage-section-inline">
+                  <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      {isStable ? (
+                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                      ) : isWatch ? (
+                        <TrendingUp className="w-4 h-4 text-amber-400 shrink-0" />
+                      ) : (
+                        <ShieldAlert className="w-4 h-4 text-white/30 shrink-0" />
+                      )}
+                      <span className={`text-xs font-semibold ${
+                        isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-white/40"
+                      }`}>
+                        {isStable ? "Stable Coverage" : isWatch ? "Coverage Watch" : "Unstable Coverage"}
+                        {profile.manualOverrideStatus && (
+                          <span className="ml-1.5 text-[9px] text-violet-400 font-normal">(override)</span>
+                        )}
+                      </span>
+                      {carriers.length > 0 && (
+                        <span className="text-[10px] text-white/40">
+                          {carriers.length} incumbent{carriers.length !== 1 ? "s" : ""} · {profile.sampleSize} loads
+                        </span>
+                      )}
+                      {profile.broadenSearchActive && (
+                        <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400">
+                          <Search className="w-2.5 h-2.5 mr-0.5" />
+                          Broaden on
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  {/* Incumbent carrier chips */}
+                  {carriers.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-2">
+                      {carriers.map((c, i) => (
+                        <span key={i} className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                          c.isCurrentPrimary
+                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                            : "border-white/10 bg-white/4 text-white/50"
+                        }`} data-testid={`coverage-inline-carrier-${i}`}>
+                          #{c.incumbentRank} {c.carrierName}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {/* Action row */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {/* Use Incumbent Flow — enable incumbent-first (only when stable & not broadened) */}
+                    {isStable && !profile.broadenSearchActive && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[10px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                        data-testid="button-use-incumbent-flow"
+                        title="Incumbent carriers are already ranked first when stable coverage is active"
+                      >
+                        <ShieldCheck className="w-3 h-3 mr-1" />
+                        Incumbent Flow Active
+                      </Button>
+                    )}
+                    {/* Confirm Stable — show when watch/unstable and concentration warrants it */}
+                    {!isStable && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[10px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                        data-testid="button-confirm-stable-inline"
+                        onClick={async () => {
+                          try {
+                            await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, {
+                              status: "stable",
+                              reason: "Manually confirmed stable by user",
+                            });
+                            await refetchCoverage();
+                            toast({ title: "Coverage marked as stable" });
+                          } catch {
+                            toast({ title: "Failed to confirm stable status", variant: "destructive" });
+                          }
+                        }}
+                      >
+                        <ShieldCheck className="w-3 h-3 mr-1" />
+                        Confirm Stable
+                      </Button>
+                    )}
+                    {/* Broaden Search toggle */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={`h-6 text-[10px] px-2 ${
+                        profile.broadenSearchActive
+                          ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
+                          : "border-white/15 text-white/50 hover:bg-white/8"
+                      }`}
+                      data-testid="button-broaden-search-inline"
+                      onClick={async () => {
+                        try {
+                          await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/broaden`, {
+                            active: !profile.broadenSearchActive,
+                          });
+                          await refetchCoverage();
+                          toast({
+                            title: profile.broadenSearchActive
+                              ? "Broaden search disabled"
+                              : "Broaden search enabled — open procurement mode active",
+                          });
+                        } catch {
+                          toast({ title: "Failed to toggle broaden search", variant: "destructive" });
+                        }
+                      }}
+                    >
+                      <Search className="w-3 h-3 mr-1" />
+                      {profile.broadenSearchActive ? "Disable Broaden" : "Broaden Search"}
+                    </Button>
+                    {/* Remove Stable Status — only when stable */}
+                    {isStable && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[10px] px-2 border-white/15 text-white/40 hover:bg-white/8 hover:text-red-400 hover:border-red-400/30"
+                        data-testid="button-remove-stable-status"
+                        onClick={async () => {
+                          try {
+                            await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, {
+                              status: "watch",
+                              reason: "Stable status removed by user",
+                            });
+                            await refetchCoverage();
+                            toast({ title: "Stable status removed" });
+                          } catch {
+                            toast({ title: "Failed to remove stable status", variant: "destructive" });
+                          }
+                        }}
+                      >
+                        Remove Stable Status
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Sort + Page Size controls */}
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <Select value={sortOption} onValueChange={v => { setSortOption(v); setCurrentPage(1); }}>
@@ -2046,6 +2253,249 @@ export function CarrierOutreachPanel({
                 })}
               </div>
             )}
+          </TabsContent>
+
+          {/* ── Stable Coverage Tab ──────────────────────────────────────── */}
+          <TabsContent value="coverage" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto" data-testid="tab-content-coverage">
+            {coverageLoading ? (
+              <div className="flex items-center gap-2 text-white/40 py-6">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-xs">Computing coverage profile…</span>
+              </div>
+            ) : !coverageData?.profile ? (
+              <div className="py-6">
+                <p className="text-xs text-white/40">
+                  Coverage data not available for this lane yet. Coverage profiles are built once a lane has sufficient TMS history.
+                </p>
+              </div>
+            ) : (() => {
+              const profile = coverageData.profile;
+              const carriers = coverageData.carriers ?? [];
+              const effectiveStatus = profile.manualOverrideStatus ?? profile.coverageStatus;
+              const isStable = effectiveStatus === "stable";
+              const isWatch = effectiveStatus === "watch";
+              const share = profile.topCarrierCoverageShare ? (parseFloat(profile.topCarrierCoverageShare) * 100).toFixed(0) : null;
+
+              return (
+                <div className="flex flex-col gap-5">
+                  {/* Status header */}
+                  <div className={`rounded-lg border p-4 ${
+                    isStable ? "border-emerald-500/30 bg-emerald-500/8" :
+                    isWatch  ? "border-amber-500/30 bg-amber-500/8" :
+                               "border-white/10 bg-white/4"
+                  }`} data-testid="coverage-status-header">
+                    <div className="flex items-center gap-2 mb-2">
+                      {isStable ? (
+                        <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                      ) : isWatch ? (
+                        <TrendingUp className="w-5 h-5 text-amber-400" />
+                      ) : (
+                        <ShieldAlert className="w-5 h-5 text-white/30" />
+                      )}
+                      <span className={`text-sm font-semibold ${
+                        isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-white/50"
+                      }`} data-testid="coverage-status-label">
+                        {isStable ? "Stable Coverage" : isWatch ? "Coverage Watch" : "Unstable Coverage"}
+                      </span>
+                      {profile.manualOverrideStatus && (
+                        <Badge variant="outline" className="text-[9px] py-0 px-1 border-violet-500/30 text-violet-400 ml-1">
+                          Manual override
+                        </Badge>
+                      )}
+                      {profile.broadenSearchActive && (
+                        <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 ml-1">
+                          <Search className="w-2.5 h-2.5 mr-0.5" />
+                          Broaden mode
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 mt-3">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] text-white/40">Sample Size</span>
+                        <span className="text-lg font-bold text-white" data-testid="coverage-sample-size">{profile.sampleSize}</span>
+                        <span className="text-[9px] text-white/30">total loads</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[10px] text-white/40">Qualified Carriers</span>
+                        <span className="text-lg font-bold text-white" data-testid="coverage-carrier-count">{profile.qualifiedCarrierCount}</span>
+                        <span className="text-[9px] text-white/30">with load history</span>
+                      </div>
+                      {share && (
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-white/40">Coverage Share</span>
+                          <span className="text-lg font-bold text-white">{share}%</span>
+                          <span className="text-[9px] text-white/30">of recent loads</span>
+                        </div>
+                      )}
+                    </div>
+                    {profile.manualOverrideReason && (
+                      <p className="mt-2 text-[10px] text-white/40 italic">
+                        Override reason: {profile.manualOverrideReason}
+                      </p>
+                    )}
+                    {profile.manuallyConfirmedAt && (
+                      <p className="text-[10px] text-white/30 mt-0.5">
+                        Confirmed {new Date(profile.manuallyConfirmedAt).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Incumbent carriers list */}
+                  {carriers.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold text-white/70 mb-2 flex items-center gap-1.5">
+                        <Star className="w-3 h-3 text-amber-400" />
+                        Incumbent Carriers
+                      </h3>
+                      <div className="flex flex-col gap-2">
+                        {carriers.map((c, idx) => {
+                          const coveragePct = c.coverageShare ? (parseFloat(c.coverageShare) * 100).toFixed(0) : null;
+                          return (
+                            <div
+                              key={c.id ?? idx}
+                              className="bg-white/4 border border-white/8 rounded-lg p-3"
+                              data-testid={`coverage-carrier-${idx}`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-[10px] font-bold rounded px-1 py-0.5 ${
+                                    c.incumbentRank === 1 ? "bg-amber-400/20 text-amber-400" : "bg-white/8 text-white/40"
+                                  }`}>#{c.incumbentRank}</span>
+                                  <span className="text-xs font-medium text-white" data-testid={`coverage-carrier-name-${idx}`}>
+                                    {c.carrierName}
+                                  </span>
+                                  {c.isCurrentPrimary && (
+                                    <Badge variant="outline" className="text-[9px] py-0 px-1 border-emerald-500/40 text-emerald-400">
+                                      Primary
+                                    </Badge>
+                                  )}
+                                </div>
+                                {coveragePct && (
+                                  <span className="text-[10px] text-white/50">{coveragePct}%</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                                <span className="text-[10px] text-white/40">
+                                  {c.successfulLoadCount} loads
+                                </span>
+                                {c.recentLoadCount > 0 && (
+                                  <span className="text-[10px] text-white/40">
+                                    {c.recentLoadCount} recent
+                                  </span>
+                                )}
+                                {c.lastUsedAt && (
+                                  <span className="text-[10px] text-white/30">
+                                    Last: {new Date(c.lastUsedAt).toLocaleDateString()}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div className="flex flex-col gap-2">
+                    <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wide">Actions</h3>
+
+                    {/* Confirm stable (only shown if system says stable but not yet confirmed) */}
+                    {isStable && !profile.manuallyConfirmedAt && !profile.manualOverrideStatus && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-xs justify-start border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                        data-testid="button-confirm-stable"
+                        onClick={async () => {
+                          try {
+                            await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/confirm`, {});
+                            await refetchCoverage();
+                            toast({ title: "Coverage confirmed stable" });
+                          } catch {
+                            toast({ title: "Failed to confirm coverage", variant: "destructive" });
+                          }
+                        }}
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />
+                        Confirm Stable Coverage
+                      </Button>
+                    )}
+
+                    {/* Broaden search toggle */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={`w-full text-xs justify-start ${
+                        profile.broadenSearchActive
+                          ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
+                          : "border-white/15 text-white/60 hover:bg-white/8"
+                      }`}
+                      data-testid="button-toggle-broaden"
+                      onClick={async () => {
+                        try {
+                          await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/broaden`, {
+                            active: !profile.broadenSearchActive,
+                          });
+                          await refetchCoverage();
+                          toast({
+                            title: profile.broadenSearchActive
+                              ? "Broaden search disabled — incumbent-first flow restored"
+                              : "Broaden search enabled — open procurement mode active",
+                          });
+                        } catch {
+                          toast({ title: "Failed to update broaden flag", variant: "destructive" });
+                        }
+                      }}
+                    >
+                      <Search className="w-3.5 h-3.5 mr-1.5" />
+                      {profile.broadenSearchActive ? "Disable Broaden Search" : "Enable Broaden Search"}
+                    </Button>
+
+                    {/* Override status */}
+                    <div className="flex gap-2">
+                      {(["stable", "watch", "unstable"] as const).map(s => (
+                        <Button
+                          key={s}
+                          size="sm"
+                          variant="outline"
+                          className={`flex-1 text-[11px] ${
+                            s === "stable" ? "border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10" :
+                            s === "watch"  ? "border-amber-500/30 text-amber-400 hover:bg-amber-500/10" :
+                                            "border-white/15 text-white/40 hover:bg-white/8"
+                          } ${effectiveStatus === s ? "bg-white/8 font-bold" : ""}`}
+                          data-testid={`button-override-${s}`}
+                          onClick={async () => {
+                            if (effectiveStatus === s) return;
+                            try {
+                              await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, {
+                                status: s,
+                                reason: `Manually set to ${s} by user`,
+                              });
+                              await refetchCoverage();
+                              toast({ title: `Coverage override set to ${s}` });
+                            } catch {
+                              toast({ title: "Failed to set override", variant: "destructive" });
+                            }
+                          }}
+                        >
+                          {s === "stable" ? <ShieldCheck className="w-3 h-3 mr-1" /> :
+                           s === "watch"  ? <TrendingUp className="w-3 h-3 mr-1" /> :
+                                           <ShieldAlert className="w-3 h-3 mr-1" />}
+                          {s.charAt(0).toUpperCase() + s.slice(1)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {profile.updatedAt && (
+                    <p className="text-[10px] text-white/25">
+                      Profile last updated {new Date(profile.updatedAt).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
           </TabsContent>
         </Tabs>
 

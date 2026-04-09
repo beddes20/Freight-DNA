@@ -13,8 +13,9 @@
  * V1 uses rule-based scoring; AI enrichment is additive.
  */
 
-import type { RecurringLane, Carrier, FinancialUpload, LaneCarrierInterest } from "@shared/schema";
+import type { RecurringLane, Carrier, FinancialUpload, LaneCarrierInterest, LaneCoverageProfile, LaneCoverageProfileCarrier } from "@shared/schema";
 import type { IStorage } from "./storage";
+import { COVERAGE_THRESHOLDS, shouldUseIncumbentFirstFlow } from "./laneCoverageService";
 
 /** Typed shape of TMS rows from financial upload JSONB */
 interface TmsRow {
@@ -67,6 +68,8 @@ export interface RankedCarrier {
   suppressionReasons: string[];        // human-readable negative flags (no email, recently contacted, flagged, etc.)
   equipmentMatch: boolean;             // carrier equipment overlaps with lane equipment
   regionMatch: boolean;                // carrier regions overlap with lane origin/dest
+  isIncumbent: boolean;                // true if this carrier is an incumbent for a stable lane
+  incumbentRank: number | null;        // 1-based rank among incumbents (null if not incumbent)
 }
 
 function normStr(s: string): string {
@@ -211,6 +214,7 @@ function extractCustomerHistoryLoads(
 /**
  * Rank all carriers in the org catalog for a given lane.
  * bench (optional): existing lane_carrier_interest rows for outcome-based boosts.
+ * coverageProfile + coverageCarriers (optional): if stable lane, incumbents get heavy score boost.
  *
  * Returns ALL scored carriers (no hard cap). Callers should apply pagination/filtering.
  */
@@ -218,6 +222,8 @@ export async function rankCarriersForLane(
   lane: RecurringLane,
   storage: IStorage,
   bench?: LaneCarrierInterest[],
+  coverageProfile?: LaneCoverageProfile | null,
+  coverageCarriers?: LaneCoverageProfileCarrier[],
 ): Promise<RankedCarrier[]> {
   const [catalogCarriers, uploads] = await Promise.all([
     storage.getCarriers(lane.orgId),
@@ -258,6 +264,19 @@ export async function rankCarriersForLane(
   const laneOriginState = normStr(lane.originState ?? "");
   const laneDestState = normStr(lane.destinationState ?? "");
   const customerName = lane.companyName ?? "";
+
+  // Build incumbent lookup for coverage boost
+  const useIncumbentFlow = shouldUseIncumbentFirstFlow(coverageProfile);
+  const ineligibleStatuses = new Set(["do_not_use", "inactive", "disqualified"]);
+  const ineligibleTags = new Set(["do_not_use", "service_flag", "flagged", "no_use"]);
+  // Map: normalized carrier name → incumbent rank (1-based)
+  const incumbentRankMap = new Map<string, number>();
+  if (useIncumbentFlow && coverageCarriers) {
+    for (const ic of coverageCarriers) {
+      incumbentRankMap.set(normStr(ic.carrierName), ic.incumbentRank);
+      if (ic.carrierId) incumbentRankMap.set(ic.carrierId, ic.incumbentRank);
+    }
+  }
 
   const ranked: RankedCarrier[] = [];
 
@@ -412,6 +431,23 @@ export async function rankCarriersForLane(
       }
     }
 
+    // Incumbent boost: if lane is stable and carrier is an incumbent, apply score floor
+    // do_not_use carriers still get suppressed even if they are incumbents
+    const isCarrierIneligible =
+      ineligibleStatuses.has(carrier.status ?? "") ||
+      (carrier.tags ?? []).some(t => ineligibleTags.has(normStr(t)));
+    const incumbentRank = (!isCarrierIneligible && useIncumbentFlow)
+      ? (incumbentRankMap.get(carrier.id) ?? incumbentRankMap.get(carrierNorm) ?? null)
+      : null;
+    const isIncumbent = incumbentRank !== null;
+    if (isIncumbent && incumbentRank !== null) {
+      const incumbentFloor = Math.max(1, COVERAGE_THRESHOLDS.INCUMBENT_SCORE_FLOOR_TOP - (incumbentRank - 1) * COVERAGE_THRESHOLDS.INCUMBENT_SCORE_FLOOR_STEP);
+      fitScore = Math.max(incumbentFloor, fitScore);
+      if (!reasons.some(r => r.toLowerCase().includes("incumbent"))) {
+        reasons.push(`Proven incumbent (rank #${incumbentRank})`);
+      }
+    }
+
     ranked.push({
       carrierId: carrier.id,
       carrierName: carrier.name,
@@ -436,6 +472,8 @@ export async function rankCarriersForLane(
       suppressionReasons,
       equipmentMatch,
       regionMatch: !!regionMatch,
+      isIncumbent,
+      incumbentRank,
     });
   }
 
@@ -512,6 +550,17 @@ export async function rankCarriersForLane(
       }
     }
 
+    // Incumbent boost for TMS-only carriers
+    const incumbentRankHist = useIncumbentFlow ? (incumbentRankMap.get(carrierNorm) ?? null) : null;
+    const isIncumbentHist = incumbentRankHist !== null;
+    if (isIncumbentHist && incumbentRankHist !== null) {
+      const incumbentFloor = Math.max(1, COVERAGE_THRESHOLDS.INCUMBENT_SCORE_FLOOR_TOP - (incumbentRankHist - 1) * COVERAGE_THRESHOLDS.INCUMBENT_SCORE_FLOOR_STEP);
+      fitScore = Math.min(100, Math.max(incumbentFloor, fitScore));
+      if (!reasons.some(r => r.toLowerCase().includes("incumbent"))) {
+        reasons.push(`Proven incumbent (rank #${incumbentRankHist})`);
+      }
+    }
+
     ranked.push({
       carrierId: null,
       carrierName: toTitleCase(carrierNorm),
@@ -536,6 +585,8 @@ export async function rankCarriersForLane(
       suppressionReasons,
       equipmentMatch: false,
       regionMatch: false,
+      isIncumbent: isIncumbentHist,
+      incumbentRank: incumbentRankHist,
     });
   }
 

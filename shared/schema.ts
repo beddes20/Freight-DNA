@@ -1320,6 +1320,59 @@ export type InsertLaneCarrierInterest = z.infer<typeof insertLaneCarrierInterest
 export type LaneCarrierInterest = typeof laneCarrierInterest.$inferSelect;
 
 /**
+ * Lane Coverage Profiles — tracks stable coverage status per lane (origin+dest+equipment).
+ * Computed from financial upload history; can be manually overridden by users.
+ */
+export const laneCoverageProfiles = pgTable("lane_coverage_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  laneId: varchar("lane_id").references(() => recurringLanes.id, { onDelete: "cascade" }),
+  laneKey: text("lane_key").notNull(), // normalized: "origin||destination||equipment"
+  coverageStatus: text("coverage_status").notNull().default("unstable"), // "stable" | "watch" | "unstable"
+  sampleSize: integer("sample_size").notNull().default(0),
+  qualifiedCarrierCount: integer("qualified_carrier_count").notNull().default(0),
+  topCarrierCoverageShare: decimal("top_carrier_coverage_share", { precision: 5, scale: 4 }), // 0–1
+  computedAt: text("computed_at"),
+  manualOverrideStatus: text("manual_override_status"), // null | "stable" | "watch" | "unstable"
+  manualOverrideReason: text("manual_override_reason"),
+  manuallyConfirmedByUserId: varchar("manually_confirmed_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  manuallyConfirmedAt: text("manually_confirmed_at"),
+  broadenSearchActive: boolean("broaden_search_active").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("lane_coverage_profiles_org_key").on(table.orgId, table.laneKey),
+]);
+export const insertLaneCoverageProfileSchema = createInsertSchema(laneCoverageProfiles).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertLaneCoverageProfile = z.infer<typeof insertLaneCoverageProfileSchema>;
+export type LaneCoverageProfile = typeof laneCoverageProfiles.$inferSelect;
+
+/**
+ * Per-carrier evidence for lane coverage profiles.
+ * Stores historical usage counts, coverage share, and recency for each incumbent.
+ */
+export const laneCoverageProfileCarriers = pgTable("lane_coverage_profile_carriers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  profileId: varchar("profile_id").notNull().references(() => laneCoverageProfiles.id, { onDelete: "cascade" }),
+  carrierId: varchar("carrier_id").references(() => carriers.id, { onDelete: "set null" }),
+  carrierName: text("carrier_name").notNull(),
+  incumbentRank: integer("incumbent_rank").notNull().default(1), // 1 = top incumbent
+  successfulLoadCount: integer("successful_load_count").notNull().default(0),
+  recentLoadCount: integer("recent_load_count").notNull().default(0), // last 3 uploads
+  coverageShare: decimal("coverage_share", { precision: 5, scale: 4 }), // 0–1 share of matching loads
+  lastUsedAt: text("last_used_at"),
+  lastSuccessAt: text("last_success_at"),
+  isCurrentPrimary: boolean("is_current_primary").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("lane_coverage_profile_carriers_profile_carrier").on(table.profileId, table.carrierName),
+]);
+export const insertLaneCoverageProfileCarrierSchema = createInsertSchema(laneCoverageProfileCarriers).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertLaneCoverageProfileCarrier = z.infer<typeof insertLaneCoverageProfileCarrierSchema>;
+export type LaneCoverageProfileCarrier = typeof laneCoverageProfileCarriers.$inferSelect;
+
+/**
  * Outreach activity log — every time a user contacts carriers for a lane.
  */
 export const carrierOutreachLogs = pgTable("carrier_outreach_logs", {

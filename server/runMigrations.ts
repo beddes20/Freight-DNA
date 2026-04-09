@@ -1382,4 +1382,58 @@ export async function runMigrations() {
   } finally {
     clientCarrierHub.release();
   }
+
+  // Lane Coverage Profiles — Task #157
+  const clientCoverage = await pool.connect();
+  try {
+    await clientCoverage.query(`
+      CREATE TABLE IF NOT EXISTS lane_coverage_profiles (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        lane_id varchar REFERENCES recurring_lanes(id) ON DELETE SET NULL,
+        lane_key text NOT NULL,
+        coverage_status text NOT NULL DEFAULT 'unstable',
+        sample_size integer NOT NULL DEFAULT 0,
+        qualified_carrier_count integer NOT NULL DEFAULT 0,
+        top_carrier_coverage_share numeric(6,4),
+        computed_at timestamp NOT NULL DEFAULT NOW(),
+        manual_override_status text,
+        manual_override_reason text,
+        manually_confirmed_by_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        manually_confirmed_at timestamp,
+        broaden_search_active boolean NOT NULL DEFAULT false,
+        updated_at timestamp NOT NULL DEFAULT NOW(),
+        UNIQUE (org_id, lane_key)
+      )
+    `);
+    await clientCoverage.query(`CREATE INDEX IF NOT EXISTS idx_lane_coverage_profiles_org ON lane_coverage_profiles(org_id)`);
+    await clientCoverage.query(`CREATE INDEX IF NOT EXISTS idx_lane_coverage_profiles_lane ON lane_coverage_profiles(lane_id) WHERE lane_id IS NOT NULL`);
+
+    await clientCoverage.query(`
+      CREATE TABLE IF NOT EXISTS lane_coverage_profile_carriers (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        profile_id varchar NOT NULL REFERENCES lane_coverage_profiles(id) ON DELETE CASCADE,
+        carrier_id varchar REFERENCES carriers(id) ON DELETE SET NULL,
+        carrier_name text NOT NULL,
+        incumbent_rank integer NOT NULL,
+        successful_load_count integer NOT NULL DEFAULT 0,
+        recent_load_count integer NOT NULL DEFAULT 0,
+        coverage_share numeric(6,4),
+        last_used_at text,
+        last_success_at text,
+        is_current_primary boolean NOT NULL DEFAULT false,
+        created_at timestamp NOT NULL DEFAULT NOW(),
+        updated_at timestamp NOT NULL DEFAULT NOW(),
+        UNIQUE (profile_id, incumbent_rank)
+      )
+    `);
+    await clientCoverage.query(`CREATE INDEX IF NOT EXISTS idx_lcpc_profile ON lane_coverage_profile_carriers(profile_id)`);
+    await clientCoverage.query(`CREATE INDEX IF NOT EXISTS idx_lcpc_carrier ON lane_coverage_profile_carriers(carrier_id) WHERE carrier_id IS NOT NULL`);
+
+    console.log("[migrations] lane coverage profile tables ensured");
+  } catch (err) {
+    console.error("[migrations] lane coverage profile tables error:", err);
+  } finally {
+    clientCoverage.release();
+  }
 }

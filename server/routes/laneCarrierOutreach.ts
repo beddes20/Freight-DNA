@@ -13,6 +13,7 @@ import { requireAuth, getCurrentUser } from "../auth";
 import { rankCarriersForLane } from "../carrierRankingService";
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
+import { getLaneCoverageProfile, shouldUseIncumbentFirstFlow } from "../laneCoverageService";
 import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, type InsertCarrier } from "@shared/schema";
 import { z } from "zod";
 import { inArray, eq } from "drizzle-orm";
@@ -891,7 +892,21 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     try {
       // Pass existing bench data so ranking can boost carriers with positive prior outcomes
       const bench = await storage.getLaneCarrierBench(req.params.laneId);
-      let ranked = await rankCarriersForLane(lane, storage, bench);
+
+      // Fetch coverage profile for incumbent boost (if broaden search is NOT active)
+      let coverageProfile = null;
+      let coverageCarriers: import("@shared/schema").LaneCoverageProfileCarrier[] = [];
+      try {
+        const profileResult = await getLaneCoverageProfile(lane, storage);
+        coverageProfile = profileResult.profile;
+        if (!coverageProfile.broadenSearchActive) {
+          coverageCarriers = profileResult.carriers;
+        }
+      } catch {
+        // Non-fatal: coverage profile is optional
+      }
+
+      let ranked = await rankCarriersForLane(lane, storage, bench, coverageProfile, coverageCarriers);
 
       // ── Query parameter parsing ──────────────────────────────────────────
       const pageSize = parseInt(String(req.query.pageSize ?? "20"), 10);
@@ -1772,6 +1787,116 @@ Rules for suggestions:
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const batches = await storage.getCarrierImportBatches(user.organizationId, req.params.laneId);
     res.json(batches);
+  });
+
+  // ── Lane Coverage Profile ──────────────────────────────────────────────────
+
+  /** GET /api/lanes/:laneId/coverage-profile — compute on demand and cache */
+  app.get("/api/lanes/:laneId/coverage-profile", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user, res);
+    if (!lane) return;
+
+    try {
+      const { profile, carriers } = await getLaneCoverageProfile(lane, storage);
+      res.json({ profile, carriers });
+    } catch (err) {
+      console.error("[coverage-profile] error:", err);
+      res.status(500).json({ error: "Failed to compute coverage profile" });
+    }
+  });
+
+  /** POST /api/lanes/:laneId/coverage-profile/confirm — user confirms stable status */
+  app.post("/api/lanes/:laneId/coverage-profile/confirm", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user, res);
+    if (!lane) return;
+
+    try {
+      const existing = await storage.getLaneCoverageProfileByLaneId(lane.id);
+      if (!existing) {
+        return res.status(404).json({ error: "No coverage profile found for this lane" });
+      }
+      const updated = await storage.updateLaneCoverageProfile(existing.id, {
+        manuallyConfirmedByUserId: user.id,
+        manuallyConfirmedAt: new Date().toISOString(),
+        manualOverrideStatus: "stable",
+        manualOverrideReason: req.body?.reason ?? "User confirmed stable status",
+      });
+      res.json({ profile: updated });
+    } catch (err) {
+      console.error("[coverage-profile/confirm] error:", err);
+      res.status(500).json({ error: "Failed to confirm coverage profile" });
+    }
+  });
+
+  /** POST /api/lanes/:laneId/coverage-profile/override — set manual override status */
+  app.post("/api/lanes/:laneId/coverage-profile/override", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user, res);
+    if (!lane) return;
+
+    const schema = z.object({
+      status: z.enum(["stable", "watch", "unstable"]),
+      reason: z.string().min(1).max(500),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    try {
+      let existing = await storage.getLaneCoverageProfileByLaneId(lane.id);
+      if (!existing) {
+        // Create a minimal profile if none exists
+        const profile = await getLaneCoverageProfile(lane, storage);
+        existing = profile.profile;
+      }
+      const updated = await storage.updateLaneCoverageProfile(existing.id, {
+        manualOverrideStatus: parsed.data.status,
+        manualOverrideReason: parsed.data.reason,
+        manuallyConfirmedByUserId: user.id,
+        manuallyConfirmedAt: new Date().toISOString(),
+      });
+      res.json({ profile: updated });
+    } catch (err) {
+      console.error("[coverage-profile/override] error:", err);
+      res.status(500).json({ error: "Failed to override coverage profile" });
+    }
+  });
+
+  /** POST /api/lanes/:laneId/coverage-profile/broaden — enable open procurement mode */
+  app.post("/api/lanes/:laneId/coverage-profile/broaden", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+
+    const lane = await getLaneWithAccessCheck(req.params.laneId, user, res);
+    if (!lane) return;
+
+    const active = req.body?.active !== false; // default true
+
+    try {
+      let existing = await storage.getLaneCoverageProfileByLaneId(lane.id);
+      if (!existing) {
+        const profile = await getLaneCoverageProfile(lane, storage);
+        existing = profile.profile;
+      }
+      const updated = await storage.updateLaneCoverageProfile(existing.id, {
+        broadenSearchActive: active,
+      });
+      res.json({ profile: updated });
+    } catch (err) {
+      console.error("[coverage-profile/broaden] error:", err);
+      res.status(500).json({ error: "Failed to update broaden search flag" });
+    }
   });
 }
 
