@@ -11,6 +11,10 @@ export function registerMyProcurementRoutes(app: Express) {
    *                    Excludes resolved lanes (resolved_at IS NOT NULL)
    *   2. awardTasks  — tasks where assignedTo = me AND type = "carrier_procurement"
    *                    Excludes closed tasks (status != 'open')
+   *
+   * Each award task includes `matchedLaneId` — the ID of the matching recurring_lane
+   * found by case-insensitive origin/destination lookup — so the client can deep-link
+   * directly to the LWQ procurement workspace for both source types.
    */
   app.get("/api/my-procurement", async (req, res) => {
     try {
@@ -107,7 +111,25 @@ export function registerMyProcurementRoutes(app: Express) {
         [user.id, user.organizationId]
       );
 
-      const awardTasks = taskRows.rows.map((r) => {
+      // Parse award task lane metadata from attachedLaneData JSONB
+      type RawAwardTask = {
+        taskId: string;
+        title: string;
+        status: string;
+        dueDate: string | null;
+        companyId: string | null;
+        createdAt: string | null;
+        lane: string | null;
+        origin: string | null;
+        destination: string | null;
+        volume: number | null;
+        awardId: string | null;
+        awardTitle: string | null;
+        customerName: string | null;
+        matchedLaneId: string | null;
+      };
+
+      const rawTasks: RawAwardTask[] = taskRows.rows.map((r) => {
         const laneData: Array<Record<string, unknown>> = Array.isArray(r.attached_lane_data)
           ? (r.attached_lane_data as Array<Record<string, unknown>>)
           : [];
@@ -126,10 +148,63 @@ export function registerMyProcurementRoutes(app: Express) {
           awardId: (proc["awardId"] as string) ?? null,
           awardTitle: (proc["awardTitle"] as string) ?? null,
           customerName: (proc["customerName"] as string) ?? null,
+          matchedLaneId: null,
         };
       });
 
-      return res.json({ lwqLanes, awardTasks });
+      // ── 3. Lane ID lookup — match award task origins/destinations to recurring_lanes ─
+      // Collect unique pairs that have both origin and destination
+      const pairsToLookup = [
+        ...new Map(
+          rawTasks
+            .filter((t) => t.origin && t.destination)
+            .map((t) => [
+              `${t.origin!.toLowerCase().trim()}|${t.destination!.toLowerCase().trim()}`,
+              { origin: t.origin!, destination: t.destination! },
+            ])
+        ).values(),
+      ];
+
+      if (pairsToLookup.length > 0) {
+        // Build a single query using UNNEST to do all lookups in one round-trip
+        // Returns one row per (origin, destination) pair — picks the most recently assigned lane
+        const lookupResult = await storage.pool.query<{
+          id: string;
+          origin_key: string;
+          destination_key: string;
+        }>(
+          `SELECT DISTINCT ON (LOWER(TRIM(origin)), LOWER(TRIM(destination)))
+             id,
+             LOWER(TRIM(origin)) AS origin_key,
+             LOWER(TRIM(destination)) AS destination_key
+           FROM recurring_lanes
+           WHERE org_id = $1
+             AND (LOWER(TRIM(origin)), LOWER(TRIM(destination))) IN (${pairsToLookup
+               .map((_, i) => `($${2 + i * 2}, $${3 + i * 2})`)
+               .join(", ")})
+           ORDER BY LOWER(TRIM(origin)), LOWER(TRIM(destination)), assigned_at DESC NULLS LAST`,
+          [
+            user.organizationId,
+            ...pairsToLookup.flatMap((p) => [
+              p.origin.toLowerCase().trim(),
+              p.destination.toLowerCase().trim(),
+            ]),
+          ]
+        );
+
+        const laneByPair = new Map(
+          lookupResult.rows.map((r) => [`${r.origin_key}|${r.destination_key}`, r.id])
+        );
+
+        for (const task of rawTasks) {
+          if (task.origin && task.destination) {
+            const key = `${task.origin.toLowerCase().trim()}|${task.destination.toLowerCase().trim()}`;
+            task.matchedLaneId = laneByPair.get(key) ?? null;
+          }
+        }
+      }
+
+      return res.json({ lwqLanes, awardTasks: rawTasks });
     } catch (err) {
       console.error("[my-procurement]", err);
       return res.status(500).json({ error: "Failed to load procurement data" });

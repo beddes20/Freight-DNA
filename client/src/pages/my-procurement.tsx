@@ -1,17 +1,17 @@
 /**
  * My Procurement — Personal procurement work surface for the authenticated user.
  *
- * Shows two buckets unified into one view:
+ * Shows two source types in one unified view — both always open the same LWQ workspace:
  *  1. LWQ Lane Assignments  — recurring lanes where I am the owner
- *  2. Award Procurement     — tasks of type carrier_procurement assigned to me
+ *  2. Award Procurement     — carrier_procurement tasks assigned to me
  *
- * Each item has a direct "Open in LWQ" action for immediate work.
+ * For award tasks the server resolves a `matchedLaneId` by matching origin/destination
+ * against recurring_lanes, so "Open in LWQ" deep-links identically for both sources.
  */
 
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { useAuth } from "@/hooks/use-auth";
 import { formatLaneDisplay } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Truck,
   Building2,
-  ArrowRight,
   CheckCircle2,
   Clock,
   Briefcase,
@@ -30,6 +29,7 @@ import {
   Award,
   MapPin,
   AlertCircle,
+  ExternalLink,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -67,6 +67,7 @@ interface AwardTask {
   awardId: string | null;
   awardTitle: string | null;
   customerName: string | null;
+  matchedLaneId: string | null;
 }
 
 interface MyProcurementData {
@@ -124,10 +125,36 @@ function ProgressPips({ contacted, threshold }: { contacted: number; threshold: 
   );
 }
 
+/** Shared primary action button — same visual treatment for both sources */
+function OpenInLwqButton({
+  laneId,
+  testId,
+  disabled,
+}: {
+  laneId: string;
+  testId: string;
+  disabled?: boolean;
+}) {
+  const [, navigate] = useLocation();
+  return (
+    <Button
+      size="sm"
+      variant="default"
+      className="h-8 text-xs gap-1.5"
+      data-testid={testId}
+      disabled={disabled}
+      onClick={() => navigate(`/lanes/work-queue?laneId=${laneId}`)}
+    >
+      <ListFilter className="w-3.5 h-3.5" />
+      Open in LWQ
+      <ChevronRight className="w-3 h-3" />
+    </Button>
+  );
+}
+
 // ── LWQ Lane Card ──────────────────────────────────────────────────────────────
 
 function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: string) => void }) {
-  const [, navigate] = useLocation();
   const contacted = item.carriersContactedCount ?? 0;
   const laneDisplay = formatLaneDisplay(
     item.origin,
@@ -145,15 +172,22 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
       className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors"
       data-testid={`card-lwq-lane-${item.laneId}`}
     >
-      {/* Lane identity */}
+      {/* Source badge */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <Truck className="w-4 h-4 text-muted-foreground shrink-0" />
+          <Badge
+            variant="outline"
+            className="text-xs border-blue-700 text-blue-400 bg-blue-950/30 shrink-0"
+            data-testid={`badge-source-lwq-${item.laneId}`}
+          >
+            <Truck className="w-2.5 h-2.5 mr-1" />
+            LWQ
+          </Badge>
           <span className="font-semibold text-sm truncate" data-testid={`text-lane-${item.laneId}`}>
             {laneDisplay}
           </span>
           {item.isManual && (
-            <Badge variant="outline" className="text-xs border-blue-700 text-blue-400 bg-blue-950/30">
+            <Badge variant="outline" className="text-xs border-slate-600 text-slate-400">
               Manual
             </Badge>
           )}
@@ -179,17 +213,7 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
 
       {/* Actions */}
       <div className="flex items-center gap-2 shrink-0">
-        <Button
-          size="sm"
-          variant="default"
-          className="h-8 text-xs gap-1.5"
-          data-testid={`btn-open-lwq-${item.laneId}`}
-          onClick={() => navigate(`/lanes/work-queue?laneId=${item.laneId}`)}
-        >
-          <ListFilter className="w-3.5 h-3.5" />
-          Open in LWQ
-          <ChevronRight className="w-3 h-3" />
-        </Button>
+        <OpenInLwqButton laneId={item.laneId} testId={`btn-open-lwq-${item.laneId}`} />
         {contacted >= COMPLETION_THRESHOLD && (
           <Button
             size="sm"
@@ -220,6 +244,11 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
       ? `${item.volume.toLocaleString()} loads/yr`
       : null;
 
+  // Primary action: open LWQ at the matched lane. If no match found, go to LWQ root.
+  const primaryDestination = item.matchedLaneId
+    ? `/lanes/work-queue?laneId=${item.matchedLaneId}`
+    : `/lanes/work-queue`;
+
   return (
     <div
       className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors"
@@ -228,13 +257,33 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
       {/* Lane identity */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <Award className="w-4 h-4 text-amber-500 shrink-0" />
-          <span className="font-semibold text-sm truncate" data-testid={`text-lane-award-${item.taskId}`}>
+          <Badge
+            variant="outline"
+            className="text-xs border-amber-700 text-amber-400 bg-amber-950/30 shrink-0"
+            data-testid={`badge-source-award-${item.taskId}`}
+          >
+            <Award className="w-2.5 h-2.5 mr-1" />
+            Award
+          </Badge>
+          <span
+            className="font-semibold text-sm truncate"
+            data-testid={`text-lane-award-${item.taskId}`}
+          >
             {laneDisplay}
           </span>
           {item.awardTitle && (
-            <Badge variant="outline" className="text-xs border-amber-700 text-amber-400 bg-amber-950/30">
+            <span className="text-xs text-muted-foreground truncate">
               {item.awardTitle}
+            </span>
+          )}
+          {/* Indicate when no matching LWQ lane was found — so the rep knows context */}
+          {!item.matchedLaneId && (
+            <Badge
+              variant="outline"
+              className="text-xs border-slate-600 text-slate-500"
+              title="No matching lane found in the work queue — you'll land on the LWQ home"
+            >
+              No lane match
             </Badge>
           )}
         </div>
@@ -261,21 +310,30 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
         </div>
       </div>
 
-      {/* Actions */}
+      {/* Actions — primary is always LWQ; award link is secondary */}
       <div className="flex items-center gap-2 shrink-0">
+        <Button
+          size="sm"
+          variant="default"
+          className="h-8 text-xs gap-1.5"
+          data-testid={`btn-open-lwq-award-${item.taskId}`}
+          onClick={() => navigate(primaryDestination)}
+        >
+          <ListFilter className="w-3.5 h-3.5" />
+          Open in LWQ
+          <ChevronRight className="w-3 h-3" />
+        </Button>
+        {/* Secondary: View Award for reference/context */}
         {item.awardId && (
           <Button
             size="sm"
-            variant="default"
-            className="h-8 text-xs gap-1.5"
-            data-testid={`btn-open-award-${item.taskId}`}
-            onClick={() =>
-              navigate(`/rfp-awards?awardId=${item.awardId}&tab=lanes`)
-            }
+            variant="ghost"
+            className="h-8 text-xs gap-1 text-muted-foreground hover:text-foreground"
+            data-testid={`btn-view-award-${item.taskId}`}
+            onClick={() => navigate(`/rfp-awards?awardId=${item.awardId}&tab=lanes`)}
           >
-            <Award className="w-3.5 h-3.5" />
-            View Award
-            <ChevronRight className="w-3 h-3" />
+            <ExternalLink className="w-3 h-3" />
+            Award
           </Button>
         )}
         <Button
@@ -296,7 +354,6 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 export default function MyProcurementPage() {
-  const { user } = useAuth();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<"all" | "lwq" | "award">("all");
 
@@ -330,6 +387,7 @@ export default function MyProcurementPage() {
   const awardTasks = data?.awardTasks ?? [];
   const total = lwqLanes.length + awardTasks.length;
   const inProgress = lwqLanes.filter((l) => l.carriersContactedCount > 0).length;
+  const matchedCount = awardTasks.filter((t) => t.matchedLaneId).length;
 
   return (
     <div className="flex flex-col h-full overflow-auto">
@@ -342,7 +400,7 @@ export default function MyProcurementPage() {
               My Procurement
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Your active lane assignments and award procurement tasks in one view
+              All your active procurement work in one place — click any item to open the lane workspace
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -407,12 +465,17 @@ export default function MyProcurementPage() {
                 All ({total})
               </TabsTrigger>
               <TabsTrigger value="lwq" data-testid="tab-lwq">
-                <ListFilter className="w-3.5 h-3.5 mr-1.5" />
+                <Truck className="w-3.5 h-3.5 mr-1.5" />
                 Lane Assignments ({lwqLanes.length})
               </TabsTrigger>
               <TabsTrigger value="award" data-testid="tab-award">
                 <Award className="w-3.5 h-3.5 mr-1.5" />
                 Award Tasks ({awardTasks.length})
+                {matchedCount > 0 && matchedCount < awardTasks.length && (
+                  <span className="ml-1.5 text-xs text-muted-foreground">
+                    {matchedCount} matched
+                  </span>
+                )}
               </TabsTrigger>
             </TabsList>
 
