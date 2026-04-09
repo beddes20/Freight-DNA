@@ -34,7 +34,7 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CompanyDialog } from "@/components/company-dialog";
-import { GrowthScoreBadge } from "@/components/account-growth-portlet";
+import { GROWTH_BAND_STYLES } from "@/components/account-growth-portlet";
 import { MomentumScoreDrawer } from "@/components/momentum-score-drawer";
 import type { MomentumScore } from "@/components/momentum-score-drawer";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -653,23 +653,41 @@ export default function Customers() {
                           })()}
                         </div>
                       </div>
-                      {!company.archivedAt && (
-                        <div className="flex items-center gap-1">
-                          {contacts.length > 0 && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!company.archivedAt && (() => {
+                          const gs = growthScoreMap.get(company.id);
+                          if (!gs) return null;
+                          const style = GROWTH_BAND_STYLES[gs.band] ?? GROWTH_BAND_STYLES.stable;
+                          return (
                             <button
-                              className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-                              title="Quick log touch"
-                              data-testid={`button-quick-touch-${company.id}`}
-                              onClick={e => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setQuickTouch({ company, contacts });
-                                setQuickTouchContactId(contacts[0]?.id ?? "");
-                              }}
+                              type="button"
+                              data-testid={`badge-momentum-header-${company.id}`}
+                              title={`Momentum Score: ${gs.score}/100 — ${gs.bandLabel}. Click for breakdown.`}
+                              aria-label={`Momentum Score: ${gs.score}/100 — ${gs.bandLabel}`}
+                              onClick={e => { e.preventDefault(); e.stopPropagation(); setMomentumCompanyId(company.id); }}
+                              className={`inline-flex items-center font-bold rounded-full border px-2 py-0.5 text-xs hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-ring cursor-pointer mr-0.5 ${style.bg} ${style.text} ${style.border}`}
                             >
-                              <PhoneCall className="h-4 w-4" />
+                              <span className="hidden sm:inline">Momentum&nbsp;</span>
+                              <span>{gs.score}</span>
                             </button>
-                          )}
+                          );
+                        })()}
+                        {!company.archivedAt && contacts.length > 0 && (
+                          <button
+                            className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                            title="Quick log touch"
+                            data-testid={`button-quick-touch-${company.id}`}
+                            onClick={e => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setQuickTouch({ company, contacts });
+                              setQuickTouchContactId(contacts[0]?.id ?? "");
+                            }}
+                          >
+                            <PhoneCall className="h-4 w-4" />
+                          </button>
+                        )}
+                        {!company.archivedAt && (
                           <button
                             className="p-1 rounded text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
                             title="Quick add contact"
@@ -682,9 +700,9 @@ export default function Customers() {
                           >
                             <UserPlus className="h-4 w-4" />
                           </button>
-                        </div>
-                      )}
-                      <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
+                        )}
+                        <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                      </div>
                     </div>
 
                     <div className="mt-3 flex items-center gap-3 flex-wrap">
@@ -696,18 +714,6 @@ export default function Customers() {
                         <Network className="h-3.5 w-3.5" />
                         <span>Org Chart</span>
                       </div>
-                      {!company.archivedAt && (() => {
-                        const gs = growthScoreMap.get(company.id);
-                        if (!gs) return null;
-                        return (
-                          <GrowthScoreBadge
-                            score={gs.score}
-                            band={gs.band}
-                            bandLabel={gs.bandLabel}
-                            onClick={(e) => { e.stopPropagation(); setMomentumCompanyId(company.id); }}
-                          />
-                        );
-                      })()}
                       {openTasks > 0 && !company.archivedAt && (
                         <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs">
                           <AlertTriangle className="h-3 w-3 mr-1" />
