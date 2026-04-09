@@ -196,10 +196,10 @@ const SOURCE_COLORS: Record<string, string> = {
   loadsmart: "border-violet-500/40 text-violet-400",
   import_paste: "border-teal-500/40 text-teal-400",
   csv_paste: "border-teal-500/40 text-teal-400",
-  manual: "border-slate-500/40 text-slate-400",
+  manual: "border-border text-muted-foreground",
   engine: "border-blue-500/40 text-blue-400",
   excel_seed: "border-emerald-500/40 text-emerald-400",
-  other: "border-white/20 text-white/40",
+  other: "border-border text-muted-foreground",
 };
 
 interface EmailDraft {
@@ -842,21 +842,21 @@ export function CarrierOutreachPanel({
     <Sheet open={open} onOpenChange={v => { if (!v) onClose(); }}>
       <SheetContent
         side="right"
-        className="w-full sm:max-w-xl bg-slate-900 border-white/10 text-white overflow-y-auto p-0"
+        className="w-full sm:max-w-xl bg-background border-border text-foreground overflow-y-auto p-0"
         data-testid="carrier-outreach-panel"
       >
         {/* Header */}
-        <SheetHeader className="px-5 pt-5 pb-3 border-b border-white/8">
+        <SheetHeader className="px-5 pt-5 pb-3 border-b border-border">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-md bg-amber-500/20 flex items-center justify-center">
               <Truck className="w-4 h-4 text-amber-400" />
             </div>
             <div>
-              <SheetTitle className="text-sm font-semibold text-white leading-tight">
+              <SheetTitle className="text-sm font-semibold text-foreground leading-tight">
                 Lock In Capacity
               </SheetTitle>
               {lane && (
-                <SheetDescription className="text-xs text-white/50 mt-0.5">
+                <SheetDescription className="text-xs text-muted-foreground mt-0.5">
                   {laneLabel(lane)} · {lane.equipmentType ?? "Any Equipment"}
                 </SheetDescription>
               )}
@@ -867,23 +867,23 @@ export function CarrierOutreachPanel({
           {lane && (
             <div className="flex gap-3 mt-3 flex-wrap">
               <div className="flex flex-col">
-                <span className="text-[10px] text-white/40 uppercase tracking-wide">Avg Loads/Week</span>
-                <span className="text-sm font-semibold text-white">{lane.avgLoadsPerWeek ?? "—"}</span>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Avg Loads/Week</span>
+                <span className="text-sm font-semibold text-foreground">{lane.avgLoadsPerWeek ?? "—"}</span>
               </div>
               <div className="flex flex-col">
-                <span className="text-[10px] text-white/40 uppercase tracking-wide">Weeks Active</span>
-                <span className="text-sm font-semibold text-white">{lane.weeksActive ?? "—"}/{lane.lookbackWeeks ?? 4}</span>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Weeks Active</span>
+                <span className="text-sm font-semibold text-foreground">{lane.weeksActive ?? "—"}/{lane.lookbackWeeks ?? 4}</span>
               </div>
               <div className="flex flex-col">
-                <span className="text-[10px] text-white/40 uppercase tracking-wide">Lane Score</span>
-                <span className="text-sm font-semibold text-white">{lane.laneScore ?? "—"}</span>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Lane Score</span>
+                <span className="text-sm font-semibold text-foreground">{lane.laneScore ?? "—"}</span>
               </div>
               <div className="flex flex-col">
-                <span className="text-[10px] text-white/40 uppercase tracking-wide">Confidence</span>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Confidence</span>
                 <Badge variant="outline" className={`text-[10px] py-0 px-1.5 capitalize
                   ${lane.eligibilityConfidence === "high" ? "border-emerald-500/40 text-emerald-300" :
                     lane.eligibilityConfidence === "medium" ? "border-amber-500/40 text-amber-300" :
-                    "border-slate-500/40 text-slate-300"}`}>
+                    "border-border text-foreground"}`}>
                   {lane.eligibilityConfidence}
                 </Badge>
               </div>
@@ -894,10 +894,10 @@ export function CarrierOutreachPanel({
           {lane && (
             <div className="mt-2">
               <div className="flex justify-between items-center mb-1">
-                <span className="text-[10px] text-white/40">Carriers Contacted</span>
-                <span className="text-[10px] text-white/60">{contactedCount}/{completionThreshold}</span>
+                <span className="text-[10px] text-muted-foreground">Carriers Contacted</span>
+                <span className="text-[10px] text-muted-foreground">{contactedCount}/{completionThreshold}</span>
               </div>
-              <div className="h-1.5 rounded-full bg-white/8">
+              <div className="h-1.5 rounded-full bg-muted/40">
                 <div
                   className="h-1.5 rounded-full bg-amber-400 transition-all"
                   style={{ width: `${progressPct}%` }}
@@ -925,7 +925,7 @@ export function CarrierOutreachPanel({
               {/* Unassigned state — show assign button for managers */}
               {!lane.ownerUserId && isManager && (
                 <div className="flex items-center gap-1.5" data-testid="chip-lane-unassigned">
-                  <span className="text-[11px] text-white/30 italic">No owner assigned</span>
+                  <span className="text-[11px] text-muted-foreground italic">No owner assigned</span>
                   {currentUser && (
                     <button
                       onClick={() => assignLaneMutation.mutate(currentUser.id)}
@@ -938,7 +938,7 @@ export function CarrierOutreachPanel({
                   )}
                   {isDirectorOrAdmin && (
                     <Select onValueChange={v => assignLaneMutation.mutate(v)}>
-                      <SelectTrigger className="h-6 w-auto text-[10px] bg-white/5 border-white/10 text-white/50" data-testid="btn-assign-select">
+                      <SelectTrigger className="h-6 w-auto text-[10px] bg-muted/20 border-border text-muted-foreground" data-testid="btn-assign-select">
                         <SelectValue placeholder="Assign to…" />
                       </SelectTrigger>
                       <SelectContent>
@@ -955,16 +955,16 @@ export function CarrierOutreachPanel({
                 const canUnassign = isManager || lane.ownerUserId === currentUser?.id;
                 return (
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <div className="flex items-center gap-1 bg-white/5 border border-white/10 rounded-full px-2 py-0.5"
+                    <div className="flex items-center gap-1 bg-muted/20 border border-border rounded-full px-2 py-0.5"
                       data-testid="chip-lane-owner">
                       <User className="w-3 h-3 text-blue-300" />
-                      <span className="text-[11px] text-white/70">Owner: {owner?.name ?? lane.ownerUserId}</span>
+                      <span className="text-[11px] text-foreground/70">Owner: {owner?.name ?? lane.ownerUserId}</span>
                       {isDirectorOrAdmin && (
                         <Select
                           value={lane.ownerUserId}
                           onValueChange={v => reassignMutation.mutate({ ownerUserId: v })}
                         >
-                          <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-white/40 hover:text-white/80"
+                          <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-muted-foreground hover:text-foreground/80"
                             data-testid="btn-reassign-owner">
                             <SelectValue />
                           </SelectTrigger>
@@ -993,16 +993,16 @@ export function CarrierOutreachPanel({
               {lane.overseerUserId && lane.overseerUserId !== lane.ownerUserId && (() => {
                 const overseer = teamMembers.find(m => m.id === lane.overseerUserId);
                 return (
-                  <div className="flex items-center gap-1 bg-white/5 border border-white/10 rounded-full px-2 py-0.5"
+                  <div className="flex items-center gap-1 bg-muted/20 border border-border rounded-full px-2 py-0.5"
                     data-testid="chip-lane-overseer">
                     <UserCheck className="w-3 h-3 text-violet-300" />
-                    <span className="text-[11px] text-white/70">Overseer: {overseer?.name ?? lane.overseerUserId}</span>
+                    <span className="text-[11px] text-foreground/70">Overseer: {overseer?.name ?? lane.overseerUserId}</span>
                     {isDirectorOrAdmin && (
                       <Select
                         value={lane.overseerUserId ?? ""}
                         onValueChange={v => reassignMutation.mutate({ overseerUserId: v })}
                       >
-                        <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-white/40 hover:text-white/80"
+                        <SelectTrigger className="h-4 w-4 p-0 border-0 bg-transparent text-muted-foreground hover:text-foreground/80"
                           data-testid="btn-reassign-overseer">
                           <SelectValue />
                         </SelectTrigger>
@@ -1021,18 +1021,18 @@ export function CarrierOutreachPanel({
 
           {/* Mode selector */}
           <div className="flex items-center gap-2 mt-3">
-            <span className="text-[10px] text-white/40 shrink-0">Outreach Mode:</span>
+            <span className="text-[10px] text-muted-foreground shrink-0">Outreach Mode:</span>
             <Select
               value={outreachMode}
               onValueChange={(v: "lane_building" | "immediate_plus_lane") => setOutreachMode(v)}
             >
               <SelectTrigger
-                className="h-7 text-xs bg-white/5 border-white/10 text-white/80 flex-1"
+                className="h-7 text-xs bg-muted/20 border-border text-foreground/80 flex-1"
                 data-testid="outreach-mode-select"
               >
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="bg-slate-800 border-white/10 text-white">
+              <SelectContent className="bg-card border-border text-foreground">
                 <SelectItem value="lane_building" className="text-xs">Lane-Building (recurring framing)</SelectItem>
                 <SelectItem value="immediate_plus_lane" className="text-xs">Immediate Load + Lane Building</SelectItem>
               </SelectContent>
@@ -1042,24 +1042,24 @@ export function CarrierOutreachPanel({
 
         {/* Body */}
         <Tabs defaultValue="carriers" className="flex flex-col flex-1">
-          <TabsList className="w-full rounded-none bg-white/4 border-b border-white/8 h-9 px-5 gap-0 justify-start">
-            <TabsTrigger value="carriers" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-carriers">
+          <TabsList className="w-full rounded-none bg-muted/10 border-b border-border h-9 px-5 gap-0 justify-start">
+            <TabsTrigger value="carriers" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-carriers">
               Carrier Suggestions
             </TabsTrigger>
-            <TabsTrigger value="bench" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-bench">
+            <TabsTrigger value="bench" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-bench">
               Bench {bench.length > 0 ? `(${bench.length})` : ""}
             </TabsTrigger>
-            <TabsTrigger value="import" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-import">
+            <TabsTrigger value="import" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-import">
               <Upload className="w-3 h-3 mr-1" />
               Import
             </TabsTrigger>
-            <TabsTrigger value="followup" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-followup">
+            <TabsTrigger value="followup" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-followup">
               Follow-up
             </TabsTrigger>
-            <TabsTrigger value="history" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white" data-testid="tab-history">
+            <TabsTrigger value="history" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground" data-testid="tab-history">
               History {outreachHistory.length > 0 ? `(${outreachHistory.length})` : ""}
             </TabsTrigger>
-            <TabsTrigger value="coverage" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-white flex items-center gap-1" data-testid="tab-coverage">
+            <TabsTrigger value="coverage" className="text-xs h-full rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-foreground flex items-center gap-1" data-testid="tab-coverage">
               <Shield className="w-3 h-3" />
               Coverage
               {coverageData?.profile && (
@@ -1068,7 +1068,7 @@ export function CarrierOutreachPanel({
                     ? "text-emerald-400"
                     : (coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus) === "watch"
                       ? "text-amber-400"
-                      : "text-white/40"
+                      : "text-muted-foreground"
                 }`}>
                   {(coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus).charAt(0).toUpperCase() + (coverageData.profile.manualOverrideStatus ?? coverageData.profile.coverageStatus).slice(1)}
                 </span>
@@ -1089,7 +1089,7 @@ export function CarrierOutreachPanel({
                 <div className={`mb-4 rounded-lg border p-3 ${
                   isStable ? "border-emerald-500/30 bg-emerald-500/8" :
                   isWatch  ? "border-amber-500/20 bg-amber-500/5" :
-                             "border-white/8 bg-white/3"
+                             "border-border bg-muted/15"
                 }`} data-testid="coverage-section-inline">
                   <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
                     <div className="flex items-center gap-2">
@@ -1098,10 +1098,10 @@ export function CarrierOutreachPanel({
                       ) : isWatch ? (
                         <TrendingUp className="w-4 h-4 text-amber-400 shrink-0" />
                       ) : (
-                        <ShieldAlert className="w-4 h-4 text-white/30 shrink-0" />
+                        <ShieldAlert className="w-4 h-4 text-muted-foreground shrink-0" />
                       )}
                       <span className={`text-xs font-semibold ${
-                        isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-white/40"
+                        isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-muted-foreground"
                       }`}>
                         {isStable ? "Stable Coverage" : isWatch ? "Coverage Watch" : "Unstable Coverage"}
                         {profile.manualOverrideStatus && (
@@ -1109,7 +1109,7 @@ export function CarrierOutreachPanel({
                         )}
                       </span>
                       {carriers.length > 0 && (
-                        <span className="text-[10px] text-white/40">
+                        <span className="text-[10px] text-muted-foreground">
                           {carriers.length} incumbent{carriers.length !== 1 ? "s" : ""} · {profile.sampleSize} loads
                         </span>
                       )}
@@ -1128,7 +1128,7 @@ export function CarrierOutreachPanel({
                         <span key={i} className={`text-[10px] px-1.5 py-0.5 rounded border ${
                           c.isCurrentPrimary
                             ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
-                            : "border-white/10 bg-white/4 text-white/50"
+                            : "border-border bg-muted/10 text-muted-foreground"
                         }`} data-testid={`coverage-inline-carrier-${i}`}>
                           #{c.incumbentRank} {c.carrierName}
                         </span>
@@ -1181,7 +1181,7 @@ export function CarrierOutreachPanel({
                       className={`h-6 text-[10px] px-2 ${
                         profile.broadenSearchActive
                           ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
-                          : "border-white/15 text-white/50 hover:bg-white/8"
+                          : "border-border text-muted-foreground hover:bg-muted/40"
                       }`}
                       data-testid="button-broaden-search-inline"
                       onClick={async () => {
@@ -1208,7 +1208,7 @@ export function CarrierOutreachPanel({
                       <Button
                         size="sm"
                         variant="outline"
-                        className="h-6 text-[10px] px-2 border-white/15 text-white/40 hover:bg-white/8 hover:text-red-400 hover:border-red-400/30"
+                        className="h-6 text-[10px] px-2 border-border text-muted-foreground hover:bg-muted/40 hover:text-red-400 hover:border-red-400/30"
                         data-testid="button-remove-stable-status"
                         onClick={async () => {
                           try {
@@ -1234,10 +1234,10 @@ export function CarrierOutreachPanel({
             {/* Sort + Page Size controls */}
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <Select value={sortOption} onValueChange={v => { setSortOption(v); setCurrentPage(1); }}>
-                <SelectTrigger className="h-7 w-auto text-[10px] bg-white/5 border-white/10 text-white/70 min-w-[140px]" data-testid="select-sort-carriers">
+                <SelectTrigger className="h-7 w-auto text-[10px] bg-muted/20 border-border text-foreground/70 min-w-[140px]" data-testid="select-sort-carriers">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-white/10 text-white">
+                <SelectContent className="bg-card border-border text-foreground">
                   <SelectItem value="recommended" className="text-xs">Recommended</SelectItem>
                   <SelectItem value="loadsDesc" className="text-xs">Exact Lane Loads ↓</SelectItem>
                   <SelectItem value="recency" className="text-xs">Recency</SelectItem>
@@ -1247,10 +1247,10 @@ export function CarrierOutreachPanel({
                 </SelectContent>
               </Select>
               <Select value={String(pageSize)} onValueChange={v => { setPageSize(Number(v)); setCurrentPage(1); }}>
-                <SelectTrigger className="h-7 w-auto text-[10px] bg-white/5 border-white/10 text-white/70 min-w-[80px]" data-testid="select-page-size">
+                <SelectTrigger className="h-7 w-auto text-[10px] bg-muted/20 border-border text-foreground/70 min-w-[80px]" data-testid="select-page-size">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-white/10 text-white">
+                <SelectContent className="bg-card border-border text-foreground">
                   <SelectItem value="20" className="text-xs">20</SelectItem>
                   <SelectItem value="50" className="text-xs">50</SelectItem>
                   <SelectItem value="100" className="text-xs">100</SelectItem>
@@ -1258,7 +1258,7 @@ export function CarrierOutreachPanel({
                 </SelectContent>
               </Select>
               {totalCount > 0 && (
-                <span className="text-[10px] text-white/30 ml-auto" data-testid="text-results-count">
+                <span className="text-[10px] text-muted-foreground ml-auto" data-testid="text-results-count">
                   Showing {filteredCarriers.length} of {totalCount} carriers
                 </span>
               )}
@@ -1269,7 +1269,7 @@ export function CarrierOutreachPanel({
               <button
                 onClick={() => { setFilterExactOnly(v => !v); setCurrentPage(1); }}
                 className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  filterExactOnly ? "bg-amber-500/20 border-amber-400/40 text-amber-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                  filterExactOnly ? "bg-amber-500/20 border-amber-400/40 text-amber-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
                 }`}
                 data-testid="filter-exact-only"
               >
@@ -1278,7 +1278,7 @@ export function CarrierOutreachPanel({
               <button
                 onClick={() => { setFilterHasEmail(v => !v); setCurrentPage(1); }}
                 className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  filterHasEmail ? "bg-emerald-500/20 border-emerald-400/40 text-emerald-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                  filterHasEmail ? "bg-emerald-500/20 border-emerald-400/40 text-emerald-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
                 }`}
                 data-testid="filter-has-email"
               >
@@ -1287,7 +1287,7 @@ export function CarrierOutreachPanel({
               <button
                 onClick={() => { setFilterNotRecentlyContacted(v => !v); setCurrentPage(1); }}
                 className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  filterNotRecentlyContacted ? "bg-violet-500/20 border-violet-400/40 text-violet-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                  filterNotRecentlyContacted ? "bg-violet-500/20 border-violet-400/40 text-violet-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
                 }`}
                 data-testid="filter-not-recently-contacted"
               >
@@ -1296,7 +1296,7 @@ export function CarrierOutreachPanel({
               <button
                 onClick={() => { setActiveOnly(v => !v); setCurrentPage(1); }}
                 className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  activeOnly ? "bg-blue-500/20 border-blue-400/40 text-blue-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                  activeOnly ? "bg-blue-500/20 border-blue-400/40 text-blue-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
                 }`}
                 data-testid="toggle-active-90-days"
               >
@@ -1305,7 +1305,7 @@ export function CarrierOutreachPanel({
               <button
                 onClick={() => { setFilterIncludeNewProspects(v => !v); setCurrentPage(1); }}
                 className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  !filterIncludeNewProspects ? "bg-slate-600/40 border-slate-400/40 text-slate-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                  !filterIncludeNewProspects ? "bg-muted/50 border-border text-foreground" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
                 }`}
                 data-testid="filter-include-new-prospects"
               >
@@ -1314,7 +1314,7 @@ export function CarrierOutreachPanel({
               <button
                 onClick={() => setExcludeServiceFlags(v => !v)}
                 className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                  excludeServiceFlags ? "bg-red-500/20 border-red-400/40 text-red-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                  excludeServiceFlags ? "bg-red-500/20 border-red-400/40 text-red-300" : "bg-muted/10 border-border text-muted-foreground hover:border-border"
                 }`}
                 data-testid="toggle-exclude-service-flags"
               >
@@ -1327,21 +1327,21 @@ export function CarrierOutreachPanel({
               <div className="flex items-center gap-2 mb-3 flex-wrap">
                 <button
                   onClick={selectAllFiltered}
-                  className="text-[10px] px-2 py-0.5 rounded-full border border-white/20 bg-white/5 text-white/50 hover:text-white/80 transition-colors"
+                  className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors"
                   data-testid="btn-select-all-filtered"
                 >
                   Select All ({filteredCarriers.length})
                 </button>
                 <button
                   onClick={() => selectTopN(20)}
-                  className="text-[10px] px-2 py-0.5 rounded-full border border-white/20 bg-white/5 text-white/50 hover:text-white/80 transition-colors"
+                  className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors"
                   data-testid="btn-select-top-20"
                 >
                   Top 20
                 </button>
                 <button
                   onClick={() => selectTopN(50)}
-                  className="text-[10px] px-2 py-0.5 rounded-full border border-white/20 bg-white/5 text-white/50 hover:text-white/80 transition-colors"
+                  className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors"
                   data-testid="btn-select-top-50"
                 >
                   Top 50
@@ -1359,14 +1359,14 @@ export function CarrierOutreachPanel({
             )}
 
             {suggestionsLoading && (
-              <div className="flex items-center gap-2 text-white/40 text-xs py-4">
+              <div className="flex items-center gap-2 text-muted-foreground text-xs py-4">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 Loading carrier suggestions…
               </div>
             )}
 
             {!suggestionsLoading && filteredCarriers.length === 0 && (
-              <div className="text-xs text-white/40 py-4">
+              <div className="text-xs text-muted-foreground py-4">
                 {rankedCarriers.length === 0
                   ? "No carriers in catalog yet. Add carriers in the Carriers admin tab to get AI rankings."
                   : "No carriers match the active filters."}
@@ -1386,7 +1386,7 @@ export function CarrierOutreachPanel({
                       {historicalCarriers.length} Historical Carrier{historicalCarriers.length !== 1 ? "s" : ""} — Not Yet in Catalog
                     </span>
                   </div>
-                  {historicalSectionCollapsed ? <ChevronDown className="w-3 h-3 text-white/40" /> : <ChevronUp className="w-3 h-3 text-white/40" />}
+                  {historicalSectionCollapsed ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronUp className="w-3 h-3 text-muted-foreground" />}
                 </button>
                 {!historicalSectionCollapsed && (
                   <div className="px-3 pb-3 flex flex-col gap-1.5">
@@ -1394,10 +1394,10 @@ export function CarrierOutreachPanel({
                       These carriers ran this exact lane but are not in your carrier catalog. Add them to enable outreach.
                     </p>
                     {historicalCarriers.map((c, i) => (
-                      <div key={c.carrierName} className="flex items-center justify-between gap-2 bg-white/4 border border-white/8 rounded px-2 py-1.5">
+                      <div key={c.carrierName} className="flex items-center justify-between gap-2 bg-muted/10 border border-border rounded px-2 py-1.5">
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs text-white font-medium truncate">{c.carrierName}</p>
-                          <p className="text-[9px] text-white/40">{c.loadsOnLane} loads{c.lastUsedMonth ? ` · last ${c.lastUsedMonth}` : ""}</p>
+                          <p className="text-xs text-foreground font-medium truncate">{c.carrierName}</p>
+                          <p className="text-[9px] text-muted-foreground">{c.loadsOnLane} loads{c.lastUsedMonth ? ` · last ${c.lastUsedMonth}` : ""}</p>
                         </div>
                         <a
                           href="/admin/carriers"
@@ -1426,17 +1426,17 @@ export function CarrierOutreachPanel({
                       className={`text-left p-3 rounded-lg border transition-colors ${
                         isSelected
                           ? "bg-amber-500/10 border-amber-500/30"
-                          : "bg-white/3 border-white/8 hover:bg-white/6"
+                          : "bg-muted/15 border-border hover:bg-muted/30"
                       }`}
                       data-testid={`carrier-suggestion-${idx}`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-semibold text-white truncate">{c.carrierName}</span>
+                            <span className="text-xs font-semibold text-foreground truncate">{c.carrierName}</span>
                             {c.mcDot && (
                               <span
-                                className="text-[9px] px-1.5 py-0 rounded border border-slate-500/40 text-slate-400 bg-slate-500/10 font-mono shrink-0"
+                                className="text-[9px] px-1.5 py-0 rounded border border-border text-muted-foreground bg-muted/20 font-mono shrink-0"
                                 data-testid={`text-mc-number-${idx}`}
                                 title="MC Number"
                               >
@@ -1449,21 +1449,21 @@ export function CarrierOutreachPanel({
                               </Badge>
                             )}
                             {c.isNewProspect && (
-                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-slate-500/40 text-slate-400">New Prospect</Badge>
+                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-border text-muted-foreground">New Prospect</Badge>
                             )}
                             {!c.historyMatch || c.historyMatch === "none" || c.historyMatch === "region" ? (
-                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-white/15 text-white/40">
+                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-border text-muted-foreground">
                                 {HISTORY_MATCH_LABELS[c.historyMatch] ?? c.historyMatch}
                               </Badge>
                             ) : null}
                             {c.sourceChannel && SOURCE_LABELS[c.sourceChannel] && (
-                              <Badge variant="outline" className={`text-[9px] py-0 px-1 ${SOURCE_COLORS[c.sourceChannel] ?? "border-white/20 text-white/40"}`}>
+                              <Badge variant="outline" className={`text-[9px] py-0 px-1 ${SOURCE_COLORS[c.sourceChannel] ?? "border-border text-muted-foreground"}`}>
                                 {SOURCE_LABELS[c.sourceChannel]}
                               </Badge>
                             )}
                           </div>
                           {/* Why this carrier — primary signal */}
-                          <p className="text-[10px] text-white/55 mt-0.5 line-clamp-2">
+                          <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">
                             {c.whyThisCarrier?.primarySignal ?? c.fitReason}
                           </p>
                           {/* Signal badges — claimed lane match / prior positive outreach */}
@@ -1493,12 +1493,12 @@ export function CarrierOutreachPanel({
                             </div>
                           )}
                           {(capturedEmails[key] || c.primaryEmail || c.backupEmail) && (
-                            <p className="text-[10px] text-white/30 mt-0.5 truncate">
+                            <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
                               {capturedEmails[key] || c.primaryEmail || c.backupEmail}
                             </p>
                           )}
                           {(c.regions.length > 0 || c.equipmentTypes.length > 0) && (
-                            <p className="text-[10px] text-white/30 mt-0.5">
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
                               {[...c.regions, ...c.equipmentTypes].slice(0, 4).join(" · ")}
                             </p>
                           )}
@@ -1517,10 +1517,10 @@ export function CarrierOutreachPanel({
                           )}
                         </div>
                         <div className="flex flex-col items-end shrink-0">
-                          <div className={`text-xs font-bold ${c.fitScore >= 70 ? "text-emerald-400" : c.fitScore >= 45 ? "text-amber-400" : "text-white/50"}`}>
+                          <div className={`text-xs font-bold ${c.fitScore >= 70 ? "text-emerald-400" : c.fitScore >= 45 ? "text-amber-400" : "text-muted-foreground"}`}>
                             {c.fitScore}
                           </div>
-                          <div className="text-[9px] text-white/30">fit</div>
+                          <div className="text-[9px] text-muted-foreground">fit</div>
                           {isSelected && (
                             <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 mt-1" />
                           )}
@@ -1541,7 +1541,7 @@ export function CarrierOutreachPanel({
                             value={capturedEmails[key] ?? c.primaryEmail ?? ""}
                             onChange={e => setCapturedEmails(prev => ({ ...prev, [key]: e.target.value }))}
                             placeholder={`email@${c.carrierName.toLowerCase().replace(/\s+/g, "")}.com`}
-                            className="w-full text-[11px] text-white/70 bg-white/5 border border-white/10 rounded px-2 py-1 placeholder:text-white/20 focus:outline-none focus:border-orange-400/40"
+                            className="w-full text-[11px] text-foreground/70 bg-muted/20 border border-border rounded px-2 py-1 placeholder:text-muted-foreground/30 focus:outline-none focus:border-orange-400/40"
                             data-testid={`add-email-input-${idx}`}
                           />
                         </div>
@@ -1551,7 +1551,7 @@ export function CarrierOutreachPanel({
                             value={inlineEmails[key] ?? ""}
                             onChange={e => setInlineEmails(prev => ({ ...prev, [key]: e.target.value }))}
                             placeholder={`Add a personalized note for ${c.carrierName}…`}
-                            className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[60px] placeholder:text-white/20"
+                            className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[60px] placeholder:text-muted-foreground/30"
                             data-testid={`inline-email-${idx}`}
                           />
                         </div>
@@ -1568,18 +1568,18 @@ export function CarrierOutreachPanel({
                 <button
                   onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                   disabled={currentPage <= 1}
-                  className="text-[10px] px-2 py-1 rounded border border-white/15 text-white/50 bg-white/5 hover:bg-white/10 disabled:opacity-40 transition-colors"
+                  className="text-[10px] px-2 py-1 rounded border border-border text-muted-foreground bg-muted/20 hover:bg-muted/40 disabled:opacity-40 transition-colors"
                   data-testid="btn-prev-page"
                 >
                   ← Prev
                 </button>
-                <span className="text-[10px] text-white/40">
+                <span className="text-[10px] text-muted-foreground">
                   Page {currentPage} of {totalPages}
                 </span>
                 <button
                   onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                   disabled={currentPage >= totalPages}
-                  className="text-[10px] px-2 py-1 rounded border border-white/15 text-white/50 bg-white/5 hover:bg-white/10 disabled:opacity-40 transition-colors"
+                  className="text-[10px] px-2 py-1 rounded border border-border text-muted-foreground bg-muted/20 hover:bg-muted/40 disabled:opacity-40 transition-colors"
                   data-testid="btn-next-page"
                 >
                   Next →
@@ -1589,29 +1589,29 @@ export function CarrierOutreachPanel({
 
             {/* Shared Template Editor — shown when carriers are selected */}
             {selectedCarriers.size > 0 && (
-              <div className="mt-4 bg-slate-800/60 rounded-lg border border-white/8 p-3">
+              <div className="mt-4 bg-muted/40 rounded-lg border border-border p-3">
                 <div className="flex items-center justify-between mb-1.5">
-                  <p className="text-[10px] font-semibold text-white/70 uppercase tracking-wide">
+                  <p className="text-[10px] font-semibold text-foreground/70 uppercase tracking-wide">
                     Shared Template (applies to all selected carriers)
                   </p>
                   {sharedTemplate.trim() && (
                     <button
                       onClick={() => setSharedTemplate("")}
-                      className="text-[9px] text-white/30 hover:text-white/50"
+                      className="text-[9px] text-muted-foreground hover:text-foreground/50"
                       data-testid="clear-shared-template"
                     >
                       Clear
                     </button>
                   )}
                 </div>
-                <p className="text-[9px] text-white/30 mb-1.5">
+                <p className="text-[9px] text-muted-foreground mb-1.5">
                   Enter a shared body for all selected carriers. Leave blank to let AI draft individual emails.
                 </p>
                 <Textarea
                   value={sharedTemplate}
                   onChange={e => setSharedTemplate(e.target.value)}
                   placeholder={`Hi [Carrier Name], I wanted to reach out about a recurring lane we run consistently…`}
-                  className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[80px] placeholder:text-white/20"
+                  className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[80px] placeholder:text-muted-foreground/30"
                   data-testid="shared-template-editor"
                 />
                 {sharedTemplate.trim() && (
@@ -1628,7 +1628,7 @@ export function CarrierOutreachPanel({
               <div className="mt-4">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <p className="text-xs font-semibold text-white/80">Drafted Emails ({emailDrafts.length})</p>
+                    <p className="text-xs font-semibold text-foreground/80">Drafted Emails ({emailDrafts.length})</p>
                     {sendOverallStatus === "done" && (
                       <span className="text-[9px] text-emerald-400 flex items-center gap-0.5">
                         <CheckCircle2 className="w-2.5 h-2.5" /> Sent
@@ -1638,7 +1638,7 @@ export function CarrierOutreachPanel({
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => navigator.clipboard.writeText(emailDrafts.map(d => `To: ${d.carrierName}\nSubject: ${d.subject}\n\n${d.body}`).join("\n\n---\n\n"))}
-                      className="text-[10px] text-white/30 hover:text-white/60 flex items-center gap-0.5"
+                      className="text-[10px] text-muted-foreground hover:text-foreground/60 flex items-center gap-0.5"
                       data-testid="btn-copy-all-drafts"
                       title="Copy all drafts to clipboard"
                     >
@@ -1646,7 +1646,7 @@ export function CarrierOutreachPanel({
                     </button>
                     <button
                       onClick={() => setShowEmails(false)}
-                      className="text-[10px] text-white/30 hover:text-white/60"
+                      className="text-[10px] text-muted-foreground hover:text-foreground/60"
                     >
                       Hide
                     </button>
@@ -1660,14 +1660,14 @@ export function CarrierOutreachPanel({
                         status === "sent" ? "bg-emerald-500/5 border-emerald-500/20" :
                         status === "failed" ? "bg-red-500/5 border-red-500/20" :
                         status === "no_email" ? "bg-orange-500/5 border-orange-500/20" :
-                        "bg-white/4 border-white/8"
+                        "bg-muted/10 border-border"
                       }`}>
                         <div className="flex items-center justify-between mb-1">
                           <p className="text-[10px] font-semibold text-amber-300">{draft.carrierName}</p>
                           <div className="flex items-center gap-1.5">
                             <button
                               onClick={() => navigator.clipboard.writeText(draft.body)}
-                              className="text-[9px] text-white/30 hover:text-white/60"
+                              className="text-[9px] text-muted-foreground hover:text-foreground/60"
                               title="Copy body"
                               data-testid={`btn-copy-draft-${i}`}
                             >
@@ -1696,7 +1696,7 @@ export function CarrierOutreachPanel({
                           </div>
                         </div>
                         <div className="flex items-center gap-1 mb-1">
-                          <span className="text-[10px] text-white/30 shrink-0">Subject:</span>
+                          <span className="text-[10px] text-muted-foreground shrink-0">Subject:</span>
                           <input
                             type="text"
                             value={draft.subject}
@@ -1706,7 +1706,7 @@ export function CarrierOutreachPanel({
                               return next;
                             })}
                             disabled={sendOverallStatus !== "idle"}
-                            className="flex-1 text-[10px] text-white/70 bg-white/5 border border-white/10 rounded px-2 py-0.5 focus:outline-none focus:border-amber-400/40 disabled:opacity-60 placeholder:text-white/20"
+                            className="flex-1 text-[10px] text-foreground/70 bg-muted/20 border border-border rounded px-2 py-0.5 focus:outline-none focus:border-amber-400/40 disabled:opacity-60 placeholder:text-muted-foreground/30"
                             data-testid={`email-subject-${i}`}
                           />
                         </div>
@@ -1718,7 +1718,7 @@ export function CarrierOutreachPanel({
                             return next;
                           })}
                           disabled={sendOverallStatus !== "idle"}
-                          className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[100px] disabled:opacity-60"
+                          className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[100px] disabled:opacity-60"
                           data-testid={`email-draft-${i}`}
                         />
                       </div>
@@ -1740,7 +1740,7 @@ export function CarrierOutreachPanel({
                         }
                       }}
                       disabled={sendOutreachMutation.isPending}
-                      className="flex-1 h-8 text-xs bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                      className="flex-1 h-8 text-xs bg-blue-600 hover:bg-blue-500 text-foreground font-semibold"
                       data-testid="btn-send-emails"
                     >
                       {sendOutreachMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Send className="w-3 h-3 mr-1" />}
@@ -1751,7 +1751,7 @@ export function CarrierOutreachPanel({
                       size="sm"
                       onClick={handleLogOutreach}
                       disabled={outreachLogMutation.isPending}
-                      className="flex-1 h-8 text-xs border-white/20 text-white/60 hover:bg-white/5"
+                      className="flex-1 h-8 text-xs border-border text-muted-foreground hover:bg-muted/20"
                       data-testid="btn-log-without-sending"
                     >
                       {outreachLogMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <ClipboardCheck className="w-3 h-3 mr-1" />}
@@ -1783,26 +1783,26 @@ export function CarrierOutreachPanel({
                   <div className="w-5 h-5 rounded bg-blue-500/20 flex items-center justify-center shrink-0">
                     <Mail className="w-3 h-3 text-blue-400" />
                   </div>
-                  <span className="text-xs font-semibold text-white/80">Paste Email Addresses</span>
+                  <span className="text-xs font-semibold text-foreground/80">Paste Email Addresses</span>
                   {adHocParsed.valid.length > 0 && (
                     <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-300">
                       {adHocParsed.valid.length} ready
                     </span>
                   )}
                 </div>
-                {adHocEmailsExpanded ? <ChevronUp className="w-3.5 h-3.5 text-white/40" /> : <ChevronDown className="w-3.5 h-3.5 text-white/40" />}
+                {adHocEmailsExpanded ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
               </button>
 
               {adHocEmailsExpanded && (
-                <div className="flex flex-col gap-3 mt-2 p-3 bg-white/3 border border-white/8 rounded-lg">
-                  <p className="text-[10px] text-white/50">
+                <div className="flex flex-col gap-3 mt-2 p-3 bg-muted/15 border border-border rounded-lg">
+                  <p className="text-[10px] text-muted-foreground">
                     Paste email addresses for carriers not in the catalog — from DAT, broker groups, etc. These will be included when you send outreach. No carrier records are created.
                   </p>
                   <Textarea
                     value={adHocEmailPasteText}
                     onChange={e => setAdHocEmailPasteText(e.target.value)}
                     placeholder={"carrier@example.com, dispatcher@trucking.com\nops@freightco.com"}
-                    className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[80px] placeholder:text-white/20 font-mono"
+                    className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[80px] placeholder:text-muted-foreground/30 font-mono"
                     data-testid="textarea-adhoc-emails"
                   />
 
@@ -1848,7 +1848,7 @@ export function CarrierOutreachPanel({
                         size="sm"
                         onClick={() => setAdHocEmailPasteText("")}
                         variant="outline"
-                        className="h-7 text-[10px] border-white/15 text-white/40 hover:bg-white/5"
+                        className="h-7 text-[10px] border-border text-muted-foreground hover:bg-muted/20"
                         data-testid="btn-clear-adhoc-emails"
                       >
                         Clear
@@ -1865,7 +1865,7 @@ export function CarrierOutreachPanel({
               )}
             </div>
 
-            <div className="border-t border-white/8 mb-4" />
+            <div className="border-t border-border mb-4" />
 
             {importResults ? (
               /* Success state — show import results */
@@ -1877,23 +1877,23 @@ export function CarrierOutreachPanel({
                       {importResults.filter(r => r.status === "new").length} new carriers imported
                     </p>
                     {importResults.filter(r => r.status === "matched").length > 0 && (
-                      <p className="text-[10px] text-white/50">
+                      <p className="text-[10px] text-muted-foreground">
                         {importResults.filter(r => r.status === "matched").length} matched existing catalog records
                       </p>
                     )}
-                    <p className="text-[10px] text-white/50">All carriers added to lane bench</p>
+                    <p className="text-[10px] text-muted-foreground">All carriers added to lane bench</p>
                   </div>
                 </div>
 
                 {/* Result list */}
                 <div className="flex flex-col gap-1.5">
                   {importResults.map((r, idx) => (
-                    <div key={idx} className="flex items-center gap-2 p-2 bg-white/3 rounded border border-white/8">
+                    <div key={idx} className="flex items-center gap-2 p-2 bg-muted/15 rounded border border-border">
                       <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.status === "new" ? "bg-emerald-400" : "bg-amber-400"}`} />
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs text-white truncate">{r.carrier.name}</p>
+                        <p className="text-xs text-foreground truncate">{r.carrier.name}</p>
                         {r.carrier.primaryEmail && (
-                          <p className="text-[10px] text-white/40 truncate">{r.carrier.primaryEmail}</p>
+                          <p className="text-[10px] text-muted-foreground truncate">{r.carrier.primaryEmail}</p>
                         )}
                       </div>
                       <Badge variant="outline" className={`text-[9px] py-0 px-1 shrink-0 ${
@@ -1905,7 +1905,7 @@ export function CarrierOutreachPanel({
                         href={`/carrier-hub?carrierId=${r.carrier.id}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="p-0.5 text-white/40 hover:text-white/80 transition-colors shrink-0"
+                        className="p-0.5 text-muted-foreground hover:text-foreground/80 transition-colors shrink-0"
                         data-testid={`link-hub-import-result-${r.carrier.id}`}
                       >
                         <ExternalLink className="w-3 h-3" />
@@ -1922,7 +1922,7 @@ export function CarrierOutreachPanel({
                     setParsedImportCarriers(null);
                     setImportPasteText("");
                   }}
-                  className="w-full text-xs border-white/15 text-white/60 hover:bg-white/6"
+                  className="w-full text-xs border-border text-muted-foreground hover:bg-muted/30"
                   data-testid="btn-import-again"
                 >
                   <Upload className="w-3 h-3 mr-1" />
@@ -1933,10 +1933,10 @@ export function CarrierOutreachPanel({
               /* Preview state — show parsed carriers before confirm */
               <div className="flex flex-col gap-4">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-white">{parsedImportCarriers.length} carriers parsed</p>
+                  <p className="text-xs font-semibold text-foreground">{parsedImportCarriers.length} carriers parsed</p>
                   <button
                     onClick={() => setParsedImportCarriers(null)}
-                    className="text-[10px] text-white/40 hover:text-white/60"
+                    className="text-[10px] text-muted-foreground hover:text-foreground/60"
                     data-testid="btn-import-back"
                   >
                     ← Edit
@@ -1945,16 +1945,16 @@ export function CarrierOutreachPanel({
 
                 {/* Preview table */}
                 <div className="flex flex-col gap-1">
-                  <div className="grid grid-cols-12 gap-2 px-2 py-1 text-[9px] uppercase tracking-wide text-white/30">
+                  <div className="grid grid-cols-12 gap-2 px-2 py-1 text-[9px] uppercase tracking-wide text-muted-foreground">
                     <span className="col-span-5">Name</span>
                     <span className="col-span-4">Email</span>
                     <span className="col-span-3">MC#</span>
                   </div>
                   {parsedImportCarriers.map((c, idx) => (
-                    <div key={idx} className="grid grid-cols-12 gap-2 px-2 py-1.5 bg-white/3 rounded border border-white/8">
-                      <span className="col-span-5 text-[10px] text-white truncate">{c.name}</span>
-                      <span className="col-span-4 text-[10px] text-white/50 truncate">{c.email ?? "—"}</span>
-                      <span className="col-span-3 text-[10px] text-white/50 truncate">{c.mcDot ?? "—"}</span>
+                    <div key={idx} className="grid grid-cols-12 gap-2 px-2 py-1.5 bg-muted/15 rounded border border-border">
+                      <span className="col-span-5 text-[10px] text-foreground truncate">{c.name}</span>
+                      <span className="col-span-4 text-[10px] text-muted-foreground truncate">{c.email ?? "—"}</span>
+                      <span className="col-span-3 text-[10px] text-muted-foreground truncate">{c.mcDot ?? "—"}</span>
                     </div>
                   ))}
                 </div>
@@ -1980,11 +1980,11 @@ export function CarrierOutreachPanel({
               /* Input state — paste textarea */
               <div className="flex flex-col gap-4">
                 <div>
-                  <p className="text-xs text-white/60 mb-3">
+                  <p className="text-xs text-muted-foreground mb-3">
                     Paste carrier contacts from DAT, Loadsmart, or any other platform. Supports tab-delimited, CSV, or plain name + email format.
                   </p>
-                  <div className="text-[9px] text-white/30 mb-2 font-mono bg-white/3 border border-white/8 rounded px-2 py-1.5 space-y-0.5">
-                    <div className="text-white/50 mb-1">Supported formats (one per line):</div>
+                  <div className="text-[9px] text-muted-foreground mb-2 font-mono bg-muted/15 border border-border rounded px-2 py-1.5 space-y-0.5">
+                    <div className="text-muted-foreground mb-1">Supported formats (one per line):</div>
                     <div>ABC Transport Inc, abc@transport.com, MC123456</div>
                     <div>XYZ Logistics | xyz@logistics.com</div>
                     <div>Smith Trucking LLC {"  "} MC789012</div>
@@ -1994,9 +1994,9 @@ export function CarrierOutreachPanel({
 
                 {/* Source selector */}
                 <div>
-                  <p className="text-[9px] text-white/40 uppercase tracking-wide mb-1.5">Source Platform</p>
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wide mb-1.5">Source Platform</p>
                   <Select value={importSource} onValueChange={setImportSource}>
-                    <SelectTrigger className="h-8 text-xs bg-white/5 border-white/15 text-white/80" data-testid="select-import-source">
+                    <SelectTrigger className="h-8 text-xs bg-muted/20 border-border text-foreground/80" data-testid="select-import-source">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -2011,16 +2011,16 @@ export function CarrierOutreachPanel({
 
                 {/* Paste area */}
                 <div>
-                  <p className="text-[9px] text-white/40 uppercase tracking-wide mb-1.5">Carrier List</p>
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wide mb-1.5">Carrier List</p>
                   <Textarea
                     value={importPasteText}
                     onChange={e => setImportPasteText(e.target.value)}
                     placeholder={"ABC Transport Inc, abc@transport.com, MC123456\nXYZ Logistics, xyz@example.com\nSmith Trucking LLC"}
-                    className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[160px] placeholder:text-white/20 font-mono"
+                    className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[160px] placeholder:text-muted-foreground/30 font-mono"
                     data-testid="textarea-import-paste"
                   />
                   {importPasteText && (
-                    <p className="text-[9px] text-white/30 mt-1">
+                    <p className="text-[9px] text-muted-foreground mt-1">
                       {importPasteText.split("\n").filter(l => l.trim().length > 2).length} lines detected
                     </p>
                   )}
@@ -2050,7 +2050,7 @@ export function CarrierOutreachPanel({
           {/* ── Bench Tab ───────────────────────────────────────────────── */}
           <TabsContent value="bench" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
             {bench.length === 0 ? (
-              <p className="text-xs text-white/40 py-4">
+              <p className="text-xs text-muted-foreground py-4">
                 No carriers tracked yet. Select carriers from the Suggestions tab and mark them as contacted.
               </p>
             ) : (
@@ -2070,7 +2070,7 @@ export function CarrierOutreachPanel({
                         <p className="text-[10px] text-blue-300/60 mt-0.5">
                           These carriers have hauled this lane before. Add their phone or email in the Carrier catalog to enable outreach.
                         </p>
-                        <p className="text-[10px] text-white/40 mt-1">{historicalMissingContact.map(b => b.carrierName).join(", ")}</p>
+                        <p className="text-[10px] text-muted-foreground mt-1">{historicalMissingContact.map(b => b.carrierName).join(", ")}</p>
                       </div>
                     </div>
                   );
@@ -2082,13 +2082,13 @@ export function CarrierOutreachPanel({
                   return (
                     <div
                       key={interest.id}
-                      className="bg-white/4 rounded-lg border border-white/8 p-3"
+                      className="bg-muted/10 rounded-lg border border-border p-3"
                       data-testid={`bench-item-${interest.id}`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
-                          <p className="text-xs font-semibold text-white truncate">{interest.carrierName}</p>
+                          <p className="text-xs font-semibold text-foreground truncate">{interest.carrierName}</p>
                           {interest.sourceType === "historical" && (
                             <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400">
                               Ran this lane
@@ -2102,12 +2102,12 @@ export function CarrierOutreachPanel({
                           )}
                           </div>
                           {interest.outreachSentAt && (
-                            <p className="text-[10px] text-white/30 mt-0.5">
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
                               Contacted {new Date(interest.outreachSentAt).toLocaleDateString()}
                             </p>
                           )}
                           {interest.lastReplySnippet && (
-                            <p className="text-[10px] text-white/50 italic mt-0.5 line-clamp-2">
+                            <p className="text-[10px] text-muted-foreground italic mt-0.5 line-clamp-2">
                               "{interest.lastReplySnippet}"
                             </p>
                           )}
@@ -2136,7 +2136,7 @@ export function CarrierOutreachPanel({
                             className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
                               interest.interestStatus === opt.value
                                 ? "border-blue-400/60 bg-blue-500/20 text-blue-300"
-                                : "border-white/10 bg-white/5 text-white/30 hover:text-white/60 hover:border-white/20"
+                                : "border-border bg-muted/20 text-muted-foreground hover:text-foreground/60 hover:border-border"
                             }`}
                             data-testid={`status-${opt.value}-${interest.id}`}
                           >
@@ -2148,7 +2148,7 @@ export function CarrierOutreachPanel({
                       {/* Reply classify toggle */}
                       <button
                         onClick={() => setExpandedReply(isExpanded ? null : interest.id)}
-                        className="mt-2 flex items-center gap-1 text-[10px] text-white/30 hover:text-white/60"
+                        className="mt-2 flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground/60"
                         data-testid={`classify-toggle-${interest.id}`}
                       >
                         <Mail className="w-3 h-3" />
@@ -2162,7 +2162,7 @@ export function CarrierOutreachPanel({
                             placeholder="Paste carrier reply here…"
                             value={replyInputs[interest.id] ?? ""}
                             onChange={e => setReplyInputs(prev => ({ ...prev, [interest.id]: e.target.value }))}
-                            className="text-[11px] text-white/70 bg-white/5 border-white/10 resize-none min-h-[60px]"
+                            className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[60px]"
                             data-testid={`reply-input-${interest.id}`}
                           />
                           <Button
@@ -2186,14 +2186,14 @@ export function CarrierOutreachPanel({
           {/* ── Follow-up Tab ────────────────────────────────────────────── */}
           <TabsContent value="followup" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
             {followupLoading ? (
-              <div className="flex items-center gap-2 text-white/40 text-xs py-4">
+              <div className="flex items-center gap-2 text-muted-foreground text-xs py-4">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 Loading suggestions…
               </div>
             ) : (
               <div className="flex flex-col gap-2">
                 {(followupData?.suggestions ?? []).length === 0 && (
-                  <p className="text-xs text-white/40 py-4">
+                  <p className="text-xs text-muted-foreground py-4">
                     No follow-up suggestions yet — contact some carriers first.
                   </p>
                 )}
@@ -2202,16 +2202,16 @@ export function CarrierOutreachPanel({
                     key={i}
                     className={`p-3 rounded-lg border flex items-start gap-2 ${
                       s.priority === "high" ? "bg-amber-500/8 border-amber-500/20" :
-                      s.priority === "medium" ? "bg-white/4 border-white/10" :
-                      "bg-white/2 border-white/6"
+                      s.priority === "medium" ? "bg-muted/10 border-border" :
+                      "bg-muted/10 border-border/60"
                     }`}
                     data-testid={`followup-suggestion-${i}`}
                   >
                     <Lightbulb className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
                       s.priority === "high" ? "text-amber-400" :
-                      s.priority === "medium" ? "text-white/50" : "text-white/30"
+                      s.priority === "medium" ? "text-muted-foreground" : "text-foreground/30"
                     }`} />
-                    <p className="text-xs text-white/70">{s.message}</p>
+                    <p className="text-xs text-foreground/70">{s.message}</p>
                   </div>
                 ))}
               </div>
@@ -2223,24 +2223,24 @@ export function CarrierOutreachPanel({
             {isHistoryLoading ? (
               <div className="flex flex-col gap-3 animate-pulse" data-testid="history-loading">
                 {[1, 2, 3].map(i => (
-                  <div key={i} className="h-16 rounded-lg bg-white/6 border border-white/8" />
+                  <div key={i} className="h-16 rounded-lg bg-muted/30 border border-border" />
                 ))}
               </div>
             ) : isHistoryError ? (
               <div className="flex flex-col items-center gap-2 py-6 text-center" data-testid="history-error">
                 <XCircle className="w-5 h-5 text-red-400" />
                 <p className="text-xs text-red-400 font-medium">Could not load outreach history</p>
-                <p className="text-[10px] text-white/40">Contact support if this persists</p>
+                <p className="text-[10px] text-muted-foreground">Contact support if this persists</p>
                 <button
                   onClick={() => refetchHistory()}
-                  className="mt-1 text-[10px] text-white/50 underline hover:text-white/70"
+                  className="mt-1 text-[10px] text-muted-foreground underline hover:text-foreground/70"
                   data-testid="history-retry"
                 >
                   Try again
                 </button>
               </div>
             ) : outreachHistory.length === 0 ? (
-              <p className="text-xs text-white/40 py-4" data-testid="history-empty">
+              <p className="text-xs text-muted-foreground py-4" data-testid="history-empty">
                 No outreach history yet for this lane.
               </p>
             ) : (
@@ -2251,10 +2251,10 @@ export function CarrierOutreachPanel({
                     sent: { label: "Sent", color: "text-emerald-400", icon: <CheckCircle2 className="w-3 h-3" /> },
                     partial: { label: "Partial", color: "text-amber-400", icon: <AlertCircle className="w-3 h-3" /> },
                     failed: { label: "Failed", color: "text-red-400", icon: <XCircle className="w-3 h-3" /> },
-                    draft: { label: "Logged", color: "text-white/40", icon: <ClipboardCheck className="w-3 h-3" /> },
-                  }[status] ?? { label: status, color: "text-white/40", icon: <Clock className="w-3 h-3" /> };
+                    draft: { label: "Logged", color: "text-muted-foreground", icon: <ClipboardCheck className="w-3 h-3" /> },
+                  }[status] ?? { label: status, color: "text-muted-foreground", icon: <Clock className="w-3 h-3" /> };
                   return (
-                    <div key={log.id} className="bg-white/4 rounded-lg border border-white/8 p-3" data-testid={`outreach-log-${log.id}`}>
+                    <div key={log.id} className="bg-muted/10 rounded-lg border border-border p-3" data-testid={`outreach-log-${log.id}`}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
@@ -2262,21 +2262,21 @@ export function CarrierOutreachPanel({
                               {statusConfig.icon}
                               {statusConfig.label}
                             </span>
-                            <span className="text-[9px] text-white/30">·</span>
-                            <span className="text-[9px] text-white/40">
+                            <span className="text-[9px] text-muted-foreground">·</span>
+                            <span className="text-[9px] text-muted-foreground">
                               {log.outreachMode === "immediate_plus_lane" ? "Immediate + Lane" : "Lane-Building"}
                             </span>
                           </div>
-                          <p className="text-[10px] text-white/70 mt-1 font-medium">
+                          <p className="text-[10px] text-foreground/70 mt-1 font-medium">
                             {log.carrierNames.join(", ")}
                           </p>
                           {log.sentAt && (
-                            <p className="text-[9px] text-white/30 mt-0.5">
+                            <p className="text-[9px] text-muted-foreground mt-0.5">
                               Sent {new Date(log.sentAt).toLocaleString()}
                             </p>
                           )}
                           {!log.sentAt && (
-                            <p className="text-[9px] text-white/30 mt-0.5">
+                            <p className="text-[9px] text-muted-foreground mt-0.5">
                               Logged {new Date(log.timestamp).toLocaleString()}
                             </p>
                           )}
@@ -2284,7 +2284,7 @@ export function CarrierOutreachPanel({
                             <p className="text-[9px] text-red-400/70 mt-0.5">Error: {log.failureReason}</p>
                           )}
                         </div>
-                        <span className="text-[9px] text-white/30 shrink-0">
+                        <span className="text-[9px] text-muted-foreground shrink-0">
                           {log.carrierNames.length} carrier{log.carrierNames.length !== 1 ? "s" : ""}
                         </span>
                       </div>
@@ -2300,7 +2300,7 @@ export function CarrierOutreachPanel({
                                 {isAdHoc && (
                                   <span className="px-1 py-0.5 rounded bg-blue-500/15 border border-blue-500/25 text-blue-400">Ad-hoc</span>
                                 )}
-                                <span className="text-white/50">{displayName}</span>
+                                <span className="text-muted-foreground">{displayName}</span>
                                 {r.status === "sent" && <span className="text-emerald-400 flex items-center gap-0.5"><CheckCircle2 className="w-2 h-2" /> sent</span>}
                                 {r.status === "failed" && <span className="text-red-400 flex items-center gap-0.5"><XCircle className="w-2 h-2" /> {r.error ?? "failed"}</span>}
                                 {r.status === "no_email" && <span className="text-orange-400">no email on file</span>}
@@ -2314,8 +2314,8 @@ export function CarrierOutreachPanel({
                       {log.emailDrafts && log.emailDrafts.length > 0 && (
                         <div className="mt-2 flex flex-col gap-0.5">
                           {log.emailDrafts.map((d, di) => (
-                            <p key={di} className="text-[9px] text-white/30 truncate">
-                              <span className="text-white/20">Subject:</span> {d.subject}
+                            <p key={di} className="text-[9px] text-muted-foreground truncate">
+                              <span className="text-muted-foreground/30">Subject:</span> {d.subject}
                             </p>
                           ))}
                         </div>
@@ -2330,13 +2330,13 @@ export function CarrierOutreachPanel({
           {/* ── Stable Coverage Tab ──────────────────────────────────────── */}
           <TabsContent value="coverage" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto" data-testid="tab-content-coverage">
             {coverageLoading ? (
-              <div className="flex items-center gap-2 text-white/40 py-6">
+              <div className="flex items-center gap-2 text-muted-foreground py-6">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 <span className="text-xs">Computing coverage profile…</span>
               </div>
             ) : !coverageData?.profile ? (
               <div className="py-6">
-                <p className="text-xs text-white/40">
+                <p className="text-xs text-muted-foreground">
                   Coverage data not available for this lane yet. Coverage profiles are built once a lane has sufficient TMS history.
                 </p>
               </div>
@@ -2354,7 +2354,7 @@ export function CarrierOutreachPanel({
                   <div className={`rounded-lg border p-4 ${
                     isStable ? "border-emerald-500/30 bg-emerald-500/8" :
                     isWatch  ? "border-amber-500/30 bg-amber-500/8" :
-                               "border-white/10 bg-white/4"
+                               "border-border bg-muted/10"
                   }`} data-testid="coverage-status-header">
                     <div className="flex items-center gap-2 mb-2">
                       {isStable ? (
@@ -2362,10 +2362,10 @@ export function CarrierOutreachPanel({
                       ) : isWatch ? (
                         <TrendingUp className="w-5 h-5 text-amber-400" />
                       ) : (
-                        <ShieldAlert className="w-5 h-5 text-white/30" />
+                        <ShieldAlert className="w-5 h-5 text-muted-foreground" />
                       )}
                       <span className={`text-sm font-semibold ${
-                        isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-white/50"
+                        isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-muted-foreground"
                       }`} data-testid="coverage-status-label">
                         {isStable ? "Stable Coverage" : isWatch ? "Coverage Watch" : "Unstable Coverage"}
                       </span>
@@ -2383,30 +2383,30 @@ export function CarrierOutreachPanel({
                     </div>
                     <div className="grid grid-cols-3 gap-3 mt-3">
                       <div className="flex flex-col">
-                        <span className="text-[10px] text-white/40">Sample Size</span>
-                        <span className="text-lg font-bold text-white" data-testid="coverage-sample-size">{profile.sampleSize}</span>
-                        <span className="text-[9px] text-white/30">total loads</span>
+                        <span className="text-[10px] text-muted-foreground">Sample Size</span>
+                        <span className="text-lg font-bold text-foreground" data-testid="coverage-sample-size">{profile.sampleSize}</span>
+                        <span className="text-[9px] text-muted-foreground">total loads</span>
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-[10px] text-white/40">Qualified Carriers</span>
-                        <span className="text-lg font-bold text-white" data-testid="coverage-carrier-count">{profile.qualifiedCarrierCount}</span>
-                        <span className="text-[9px] text-white/30">with load history</span>
+                        <span className="text-[10px] text-muted-foreground">Qualified Carriers</span>
+                        <span className="text-lg font-bold text-foreground" data-testid="coverage-carrier-count">{profile.qualifiedCarrierCount}</span>
+                        <span className="text-[9px] text-muted-foreground">with load history</span>
                       </div>
                       {share && (
                         <div className="flex flex-col">
-                          <span className="text-[10px] text-white/40">Coverage Share</span>
-                          <span className="text-lg font-bold text-white">{share}%</span>
-                          <span className="text-[9px] text-white/30">of recent loads</span>
+                          <span className="text-[10px] text-muted-foreground">Coverage Share</span>
+                          <span className="text-lg font-bold text-foreground">{share}%</span>
+                          <span className="text-[9px] text-muted-foreground">of recent loads</span>
                         </div>
                       )}
                     </div>
                     {profile.manualOverrideReason && (
-                      <p className="mt-2 text-[10px] text-white/40 italic">
+                      <p className="mt-2 text-[10px] text-muted-foreground italic">
                         Override reason: {profile.manualOverrideReason}
                       </p>
                     )}
                     {profile.manuallyConfirmedAt && (
-                      <p className="text-[10px] text-white/30 mt-0.5">
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
                         Confirmed {new Date(profile.manuallyConfirmedAt).toLocaleDateString()}
                       </p>
                     )}
@@ -2415,7 +2415,7 @@ export function CarrierOutreachPanel({
                   {/* Incumbent carriers list */}
                   {carriers.length > 0 && (
                     <div>
-                      <h3 className="text-xs font-semibold text-white/70 mb-2 flex items-center gap-1.5">
+                      <h3 className="text-xs font-semibold text-foreground/70 mb-2 flex items-center gap-1.5">
                         <Star className="w-3 h-3 text-amber-400" />
                         Incumbent Carriers
                       </h3>
@@ -2425,15 +2425,15 @@ export function CarrierOutreachPanel({
                           return (
                             <div
                               key={c.id ?? idx}
-                              className="bg-white/4 border border-white/8 rounded-lg p-3"
+                              className="bg-muted/10 border border-border rounded-lg p-3"
                               data-testid={`coverage-carrier-${idx}`}
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <div className="flex items-center gap-2">
                                   <span className={`text-[10px] font-bold rounded px-1 py-0.5 ${
-                                    c.incumbentRank === 1 ? "bg-amber-400/20 text-amber-400" : "bg-white/8 text-white/40"
+                                    c.incumbentRank === 1 ? "bg-amber-400/20 text-amber-400" : "bg-muted/40 text-muted-foreground"
                                   }`}>#{c.incumbentRank}</span>
-                                  <span className="text-xs font-medium text-white" data-testid={`coverage-carrier-name-${idx}`}>
+                                  <span className="text-xs font-medium text-foreground" data-testid={`coverage-carrier-name-${idx}`}>
                                     {c.carrierName}
                                   </span>
                                   {c.isCurrentPrimary && (
@@ -2443,20 +2443,20 @@ export function CarrierOutreachPanel({
                                   )}
                                 </div>
                                 {coveragePct && (
-                                  <span className="text-[10px] text-white/50">{coveragePct}%</span>
+                                  <span className="text-[10px] text-muted-foreground">{coveragePct}%</span>
                                 )}
                               </div>
                               <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                                <span className="text-[10px] text-white/40">
+                                <span className="text-[10px] text-muted-foreground">
                                   {c.successfulLoadCount} loads
                                 </span>
                                 {c.recentLoadCount > 0 && (
-                                  <span className="text-[10px] text-white/40">
+                                  <span className="text-[10px] text-muted-foreground">
                                     {c.recentLoadCount} recent
                                   </span>
                                 )}
                                 {c.lastUsedAt && (
-                                  <span className="text-[10px] text-white/30">
+                                  <span className="text-[10px] text-muted-foreground">
                                     Last: {new Date(c.lastUsedAt).toLocaleDateString()}
                                   </span>
                                 )}
@@ -2470,7 +2470,7 @@ export function CarrierOutreachPanel({
 
                   {/* Action buttons */}
                   <div className="flex flex-col gap-2">
-                    <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wide">Actions</h3>
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Actions</h3>
 
                     {/* Confirm stable (only shown if system says stable but not yet confirmed) */}
                     {isStable && !profile.manuallyConfirmedAt && !profile.manualOverrideStatus && (
@@ -2501,7 +2501,7 @@ export function CarrierOutreachPanel({
                       className={`w-full text-xs justify-start ${
                         profile.broadenSearchActive
                           ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
-                          : "border-white/15 text-white/60 hover:bg-white/8"
+                          : "border-border text-muted-foreground hover:bg-muted/40"
                       }`}
                       data-testid="button-toggle-broaden"
                       onClick={async () => {
@@ -2534,8 +2534,8 @@ export function CarrierOutreachPanel({
                           className={`flex-1 text-[11px] ${
                             s === "stable" ? "border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10" :
                             s === "watch"  ? "border-amber-500/30 text-amber-400 hover:bg-amber-500/10" :
-                                            "border-white/15 text-white/40 hover:bg-white/8"
-                          } ${effectiveStatus === s ? "bg-white/8 font-bold" : ""}`}
+                                            "border-border text-muted-foreground hover:bg-muted/40"
+                          } ${effectiveStatus === s ? "bg-muted/40 font-bold" : ""}`}
                           data-testid={`button-override-${s}`}
                           onClick={async () => {
                             if (effectiveStatus === s) return;
@@ -2561,7 +2561,7 @@ export function CarrierOutreachPanel({
                   </div>
 
                   {profile.updatedAt && (
-                    <p className="text-[10px] text-white/25">
+                    <p className="text-[10px] text-muted-foreground">
                       Profile last updated {new Date(profile.updatedAt).toLocaleString()}
                     </p>
                   )}
@@ -2572,7 +2572,7 @@ export function CarrierOutreachPanel({
         </Tabs>
 
         {/* Sticky action bar */}
-        <div className="fixed bottom-0 right-0 w-full sm:max-w-xl bg-slate-900/95 backdrop-blur border-t border-white/8 px-5 py-3 flex gap-2 z-50">
+        <div className="fixed bottom-0 right-0 w-full sm:max-w-xl bg-background/95 backdrop-blur border-t border-border px-5 py-3 flex gap-2 z-50">
           <Button
             variant="outline"
             size="sm"
@@ -2616,18 +2616,18 @@ export function CarrierOutreachPanel({
         {/* Bulk send confirmation dialog (50+ carriers warning) */}
         {sendConfirmOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70" data-testid="send-confirm-dialog">
-            <div className="bg-slate-800 border border-white/15 rounded-xl p-5 max-w-sm w-full mx-4 shadow-2xl">
+            <div className="bg-card border border-border rounded-xl p-5 max-w-sm w-full mx-4 shadow-2xl">
               <div className="flex items-center gap-2 mb-3">
                 <AlertCircle className="w-5 h-5 text-orange-400 shrink-0" />
-                <p className="text-sm font-semibold text-white">Send to {emailDrafts.length} carriers?</p>
+                <p className="text-sm font-semibold text-foreground">Send to {emailDrafts.length} carriers?</p>
               </div>
-              <p className="text-xs text-white/60 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 You are about to send outreach emails to <span className="text-orange-300 font-medium">{emailDrafts.length} carriers</span>. 
                 This is a large batch — confirm you want to proceed.
               </p>
 
               {/* Override recently-contacted toggle */}
-              <div className="flex items-center gap-2 mb-4 p-2 bg-white/5 border border-white/10 rounded-lg">
+              <div className="flex items-center gap-2 mb-4 p-2 bg-muted/20 border border-border rounded-lg">
                 <input
                   type="checkbox"
                   id="override-recently-contacted"
@@ -2636,7 +2636,7 @@ export function CarrierOutreachPanel({
                   className="w-3.5 h-3.5 accent-amber-400"
                   data-testid="chk-override-recently-contacted"
                 />
-                <label htmlFor="override-recently-contacted" className="text-[11px] text-white/60 cursor-pointer">
+                <label htmlFor="override-recently-contacted" className="text-[11px] text-muted-foreground cursor-pointer">
                   Include recently-contacted carriers (override 14-day suppression)
                 </label>
               </div>
@@ -2646,7 +2646,7 @@ export function CarrierOutreachPanel({
                   variant="outline"
                   size="sm"
                   onClick={() => setSendConfirmOpen(false)}
-                  className="flex-1 h-8 text-xs border-white/20 text-white/60 hover:bg-white/5"
+                  className="flex-1 h-8 text-xs border-border text-muted-foreground hover:bg-muted/20"
                   data-testid="btn-cancel-bulk-send"
                 >
                   Cancel
@@ -2660,7 +2660,7 @@ export function CarrierOutreachPanel({
                     }
                     handleSendOutreach();
                   }}
-                  className="flex-1 h-8 text-xs bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                  className="flex-1 h-8 text-xs bg-blue-600 hover:bg-blue-500 text-foreground font-semibold"
                   data-testid="btn-confirm-bulk-send"
                 >
                   <Send className="w-3 h-3 mr-1" />
