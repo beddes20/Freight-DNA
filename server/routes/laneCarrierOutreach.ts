@@ -894,8 +894,88 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     try {
       // Pass existing bench data so ranking can boost carriers with positive prior outcomes
       const bench = await storage.getLaneCarrierBench(req.params.laneId);
-      const ranked = await rankCarriersForLane(lane, storage, bench);
-      res.json({ carriers: ranked });
+      let ranked = await rankCarriersForLane(lane, storage, bench);
+
+      // ── Query parameter parsing ──────────────────────────────────────────
+      const pageSize = parseInt(String(req.query.pageSize ?? "20"), 10);
+      const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10));
+      const sort = String(req.query.sort ?? "recommended");
+      const exactOnly = req.query.exactOnly === "true";
+      const hasEmail = req.query.hasEmail === "true";
+      const notRecentlyContacted = req.query.notRecentlyContacted === "true";
+      const activeOnly = req.query.activeOnly === "true";
+      const includeNewProspects = req.query.includeNewProspects !== "false"; // default true
+      const overrideRecentlyContacted = req.query.overrideRecentlyContacted === "true";
+
+      // ── Filtering ────────────────────────────────────────────────────────
+      if (exactOnly) {
+        ranked = ranked.filter(c => c.historyMatch === "exact");
+      }
+      if (hasEmail) {
+        ranked = ranked.filter(c => !!(c.primaryEmail || c.backupEmail));
+      }
+      if (notRecentlyContacted && !overrideRecentlyContacted) {
+        ranked = ranked.filter(c =>
+          !c.suppressionReasons.some(r => r.startsWith("Recently contacted"))
+        );
+      }
+      if (activeOnly) {
+        ranked = ranked.filter(c => {
+          if (!c.lastUsedMonth) return false;
+          const lastDate = new Date(c.lastUsedMonth + "-01");
+          return Date.now() - lastDate.getTime() <= 90 * 24 * 60 * 60 * 1000;
+        });
+      }
+      if (!includeNewProspects) {
+        ranked = ranked.filter(c => !c.isNewProspect);
+      }
+
+      const totalCount = ranked.length;
+
+      // ── Sorting ──────────────────────────────────────────────────────────
+      if (sort === "loadsDesc") {
+        ranked = [...ranked].sort((a, b) => b.loadsOnLane - a.loadsOnLane);
+      } else if (sort === "recency") {
+        ranked = [...ranked].sort((a, b) => {
+          const aM = a.lastUsedMonth ?? "";
+          const bM = b.lastUsedMonth ?? "";
+          if (bM !== aM) return bM.localeCompare(aM);
+          return b.fitScore - a.fitScore;
+        });
+      } else if (sort === "customerHistory") {
+        ranked = [...ranked].sort((a, b) => {
+          if (b.customerHistoryLoads !== a.customerHistoryLoads) return b.customerHistoryLoads - a.customerHistoryLoads;
+          return b.fitScore - a.fitScore;
+        });
+      } else if (sort === "outreachReadiness") {
+        ranked = [...ranked].sort((a, b) => {
+          const aReady = (a.primaryEmail || a.backupEmail) ? 1 : 0;
+          const bReady = (b.primaryEmail || b.backupEmail) ? 1 : 0;
+          if (bReady !== aReady) return bReady - aReady;
+          return b.fitScore - a.fitScore;
+        });
+      } else if (sort === "alpha") {
+        ranked = [...ranked].sort((a, b) => a.carrierName.localeCompare(b.carrierName));
+      }
+      // "recommended" = default rule-based order (already sorted above)
+
+      // ── Pagination ───────────────────────────────────────────────────────
+      let paginated: typeof ranked;
+      if (pageSize === 0) {
+        // pageSize=0 means "all"
+        paginated = ranked;
+      } else {
+        const offset = (page - 1) * pageSize;
+        paginated = ranked.slice(offset, offset + pageSize);
+      }
+
+      res.json({
+        carriers: paginated,
+        totalCount,
+        page,
+        pageSize: pageSize === 0 ? totalCount : pageSize,
+        totalPages: pageSize === 0 ? 1 : Math.ceil(totalCount / pageSize),
+      });
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Failed to rank carriers" });
     }

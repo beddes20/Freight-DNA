@@ -106,6 +106,16 @@ interface RankedCarrier {
   equipmentTypes: string[];
   tags: string[];
   sourceChannel: string | null;
+  suppressionReasons: string[];
+  customerHistoryLoads: number;
+}
+
+interface SuggestionsResponse {
+  carriers: RankedCarrier[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 }
 
 interface ParsedImportCarrier {
@@ -279,6 +289,19 @@ export function CarrierOutreachPanel({
   // Carrier suggestion filters
   const [activeOnly, setActiveOnly] = useState(false);
   const [excludeServiceFlags, setExcludeServiceFlags] = useState(false);
+  // New: filter/sort/pagination state
+  const [pageSize, setPageSize] = useState(20);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [sortOption, setSortOption] = useState("recommended");
+  const [filterExactOnly, setFilterExactOnly] = useState(false);
+  const [filterHasEmail, setFilterHasEmail] = useState(false);
+  const [filterNotRecentlyContacted, setFilterNotRecentlyContacted] = useState(false);
+  const [filterIncludeNewProspects, setFilterIncludeNewProspects] = useState(true);
+  const [overrideRecentlyContacted, setOverrideRecentlyContacted] = useState(false);
+  const [historicalSectionCollapsed, setHistoricalSectionCollapsed] = useState(false);
+  // Confirmation dialog state for bulk send
+  const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
+  const [sendConfirmOverride, setSendConfirmOverride] = useState(false);
   // Inline email notes per carrier (keyed by carrierId ?? carrierName)
   const [inlineEmails, setInlineEmails] = useState<Record<string, string>>({});
   // User-entered email addresses for carriers that have no primaryEmail in the catalog
@@ -302,9 +325,21 @@ export function CarrierOutreachPanel({
     enabled: !!laneId && open,
   });
 
-  const { data: suggestionsData, isLoading: suggestionsLoading } = useQuery<{ carriers: RankedCarrier[] }>({
-    queryKey: ["/api/lanes", laneId, "carrier-suggestions"],
-    queryFn: () => fetch(`/api/lanes/${laneId}/carrier-suggestions`).then(r => r.json()),
+  const suggestionsQueryParams = new URLSearchParams({
+    pageSize: String(pageSize),
+    page: String(currentPage),
+    sort: sortOption,
+    ...(filterExactOnly ? { exactOnly: "true" } : {}),
+    ...(filterHasEmail ? { hasEmail: "true" } : {}),
+    ...(filterNotRecentlyContacted ? { notRecentlyContacted: "true" } : {}),
+    ...(activeOnly ? { activeOnly: "true" } : {}),
+    ...(!filterIncludeNewProspects ? { includeNewProspects: "false" } : {}),
+    ...(overrideRecentlyContacted ? { overrideRecentlyContacted: "true" } : {}),
+  }).toString();
+
+  const { data: suggestionsData, isLoading: suggestionsLoading } = useQuery<SuggestionsResponse>({
+    queryKey: ["/api/lanes", laneId, "carrier-suggestions", suggestionsQueryParams],
+    queryFn: () => fetch(`/api/lanes/${laneId}/carrier-suggestions?${suggestionsQueryParams}`).then(r => r.json()),
     enabled: !!laneId && open,
   });
 
@@ -464,21 +499,21 @@ export function CarrierOutreachPanel({
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   const rankedCarriers = suggestionsData?.carriers ?? [];
+  const totalCount = suggestionsData?.totalCount ?? 0;
+  const totalPages = suggestionsData?.totalPages ?? 1;
 
-  // Apply frontend filters
-  const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+  // Apply remaining frontend-only filters (service flags — not in server params)
   const filteredCarriers = rankedCarriers.filter(c => {
-    if (activeOnly) {
-      if (!c.lastUsedMonth) return false;
-      const lastDate = new Date(c.lastUsedMonth + "-01");
-      if (Date.now() - lastDate.getTime() > NINETY_DAYS_MS) return false;
-    }
     if (excludeServiceFlags) {
       const flagTags = ["do_not_use", "service_flag", "flagged", "no_use"];
       if (c.tags.some(t => flagTags.includes(t.toLowerCase()))) return false;
     }
     return true;
   });
+
+  // Historical carriers: carrierId === null (from financial history, not in catalog)
+  const historicalCarriers = filteredCarriers.filter(c => c.carrierId === null && c.historyMatch === "exact");
+  const catalogCarriersWithExactHistory = filteredCarriers.filter(c => c.carrierId !== null && c.historyMatch === "exact");
 
   function toggleCarrier(c: RankedCarrier) {
     setSelectedCarriers(prev => {
@@ -488,6 +523,20 @@ export function CarrierOutreachPanel({
       else next.add(key);
       return next;
     });
+  }
+
+  function selectAllFiltered() {
+    const keys = filteredCarriers.map(c => c.carrierId ?? c.carrierName);
+    setSelectedCarriers(new Set(keys));
+  }
+
+  function clearSelection() {
+    setSelectedCarriers(new Set());
+  }
+
+  function selectTopN(n: number) {
+    const keys = filteredCarriers.slice(0, n).map(c => c.carrierId ?? c.carrierName);
+    setSelectedCarriers(new Set(keys));
   }
 
   /**
@@ -923,16 +972,85 @@ export function CarrierOutreachPanel({
 
           {/* ── Carrier Suggestions Tab ─────────────────────────────────── */}
           <TabsContent value="carriers" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
-            {/* Filter toggles */}
-            <div className="flex items-center gap-2 mb-3 flex-wrap">
+            {/* Sort + Page Size controls */}
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <Select value={sortOption} onValueChange={v => { setSortOption(v); setCurrentPage(1); }}>
+                <SelectTrigger className="h-7 w-auto text-[10px] bg-white/5 border-white/10 text-white/70 min-w-[140px]" data-testid="select-sort-carriers">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-white/10 text-white">
+                  <SelectItem value="recommended" className="text-xs">Recommended</SelectItem>
+                  <SelectItem value="loadsDesc" className="text-xs">Exact Lane Loads ↓</SelectItem>
+                  <SelectItem value="recency" className="text-xs">Recency</SelectItem>
+                  <SelectItem value="customerHistory" className="text-xs">Customer History</SelectItem>
+                  <SelectItem value="outreachReadiness" className="text-xs">Outreach Readiness</SelectItem>
+                  <SelectItem value="alpha" className="text-xs">A–Z</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={String(pageSize)} onValueChange={v => { setPageSize(Number(v)); setCurrentPage(1); }}>
+                <SelectTrigger className="h-7 w-auto text-[10px] bg-white/5 border-white/10 text-white/70 min-w-[80px]" data-testid="select-page-size">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-white/10 text-white">
+                  <SelectItem value="20" className="text-xs">20</SelectItem>
+                  <SelectItem value="50" className="text-xs">50</SelectItem>
+                  <SelectItem value="100" className="text-xs">100</SelectItem>
+                  <SelectItem value="0" className="text-xs">All</SelectItem>
+                </SelectContent>
+              </Select>
+              {totalCount > 0 && (
+                <span className="text-[10px] text-white/30 ml-auto" data-testid="text-results-count">
+                  Showing {filteredCarriers.length} of {totalCount} carriers
+                </span>
+              )}
+            </div>
+
+            {/* Filter chips */}
+            <div className="flex items-center gap-1.5 mb-3 flex-wrap">
               <button
-                onClick={() => setActiveOnly(v => !v)}
+                onClick={() => { setFilterExactOnly(v => !v); setCurrentPage(1); }}
+                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                  filterExactOnly ? "bg-amber-500/20 border-amber-400/40 text-amber-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                }`}
+                data-testid="filter-exact-only"
+              >
+                Exact history
+              </button>
+              <button
+                onClick={() => { setFilterHasEmail(v => !v); setCurrentPage(1); }}
+                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                  filterHasEmail ? "bg-emerald-500/20 border-emerald-400/40 text-emerald-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                }`}
+                data-testid="filter-has-email"
+              >
+                Has email
+              </button>
+              <button
+                onClick={() => { setFilterNotRecentlyContacted(v => !v); setCurrentPage(1); }}
+                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                  filterNotRecentlyContacted ? "bg-violet-500/20 border-violet-400/40 text-violet-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                }`}
+                data-testid="filter-not-recently-contacted"
+              >
+                Not recent
+              </button>
+              <button
+                onClick={() => { setActiveOnly(v => !v); setCurrentPage(1); }}
                 className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
                   activeOnly ? "bg-blue-500/20 border-blue-400/40 text-blue-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
                 }`}
                 data-testid="toggle-active-90-days"
               >
-                Active (90 days)
+                Active (90d)
+              </button>
+              <button
+                onClick={() => { setFilterIncludeNewProspects(v => !v); setCurrentPage(1); }}
+                className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                  !filterIncludeNewProspects ? "bg-slate-600/40 border-slate-400/40 text-slate-300" : "bg-white/4 border-white/10 text-white/40 hover:border-white/20"
+                }`}
+                data-testid="filter-include-new-prospects"
+              >
+                {filterIncludeNewProspects ? "Incl. prospects" : "No prospects"}
               </button>
               <button
                 onClick={() => setExcludeServiceFlags(v => !v)}
@@ -941,12 +1059,45 @@ export function CarrierOutreachPanel({
                 }`}
                 data-testid="toggle-exclude-service-flags"
               >
-                Exclude Flagged
+                Excl. flagged
               </button>
-              {(activeOnly || excludeServiceFlags) && rankedCarriers.length !== filteredCarriers.length && (
-                <span className="text-[10px] text-white/30">{filteredCarriers.length}/{rankedCarriers.length} shown</span>
-              )}
             </div>
+
+            {/* Bulk selection controls */}
+            {filteredCarriers.length > 0 && (
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                <button
+                  onClick={selectAllFiltered}
+                  className="text-[10px] px-2 py-0.5 rounded-full border border-white/20 bg-white/5 text-white/50 hover:text-white/80 transition-colors"
+                  data-testid="btn-select-all-filtered"
+                >
+                  Select All ({filteredCarriers.length})
+                </button>
+                <button
+                  onClick={() => selectTopN(20)}
+                  className="text-[10px] px-2 py-0.5 rounded-full border border-white/20 bg-white/5 text-white/50 hover:text-white/80 transition-colors"
+                  data-testid="btn-select-top-20"
+                >
+                  Top 20
+                </button>
+                <button
+                  onClick={() => selectTopN(50)}
+                  className="text-[10px] px-2 py-0.5 rounded-full border border-white/20 bg-white/5 text-white/50 hover:text-white/80 transition-colors"
+                  data-testid="btn-select-top-50"
+                >
+                  Top 50
+                </button>
+                {selectedCarriers.size > 0 && (
+                  <button
+                    onClick={clearSelection}
+                    className="text-[10px] px-2 py-0.5 rounded-full border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+                    data-testid="btn-clear-selection"
+                  >
+                    Clear ({selectedCarriers.size})
+                  </button>
+                )}
+              </div>
+            )}
 
             {suggestionsLoading && (
               <div className="flex items-center gap-2 text-white/40 text-xs py-4">
@@ -963,10 +1114,52 @@ export function CarrierOutreachPanel({
               </div>
             )}
 
+            {/* Historical Carriers Callout — carriers from lane history not yet in catalog */}
+            {!suggestionsLoading && historicalCarriers.length > 0 && (
+              <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden" data-testid="historical-carriers-callout">
+                <button
+                  className="w-full flex items-center justify-between px-3 py-2 text-left"
+                  onClick={() => setHistoricalSectionCollapsed(v => !v)}
+                >
+                  <div className="flex items-center gap-2">
+                    <History className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="text-xs font-semibold text-amber-300">
+                      {historicalCarriers.length} Historical Carrier{historicalCarriers.length !== 1 ? "s" : ""} — Not Yet in Catalog
+                    </span>
+                  </div>
+                  {historicalSectionCollapsed ? <ChevronDown className="w-3 h-3 text-white/40" /> : <ChevronUp className="w-3 h-3 text-white/40" />}
+                </button>
+                {!historicalSectionCollapsed && (
+                  <div className="px-3 pb-3 flex flex-col gap-1.5">
+                    <p className="text-[10px] text-amber-200/60 mb-1">
+                      These carriers ran this exact lane but are not in your carrier catalog. Add them to enable outreach.
+                    </p>
+                    {historicalCarriers.map((c, i) => (
+                      <div key={c.carrierName} className="flex items-center justify-between gap-2 bg-white/4 border border-white/8 rounded px-2 py-1.5">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-white font-medium truncate">{c.carrierName}</p>
+                          <p className="text-[9px] text-white/40">{c.loadsOnLane} loads{c.lastUsedMonth ? ` · last ${c.lastUsedMonth}` : ""}</p>
+                        </div>
+                        <a
+                          href="/admin/carriers"
+                          className="shrink-0 text-[9px] px-1.5 py-0.5 rounded border border-amber-400/30 text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 flex items-center gap-0.5 transition-colors"
+                          data-testid={`btn-add-to-catalog-${i}`}
+                        >
+                          <Plus className="w-2.5 h-2.5" />
+                          Add to Catalog
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex flex-col gap-2">
               {filteredCarriers.map((c, idx) => {
                 const key = c.carrierId ?? c.carrierName;
                 const isSelected = selectedCarriers.has(key);
+                const suppressions = c.suppressionReasons ?? [];
                 return (
                   <div key={key} className="flex flex-col">
                     <button
@@ -982,25 +1175,38 @@ export function CarrierOutreachPanel({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs font-semibold text-white truncate">{c.carrierName}</span>
+                            {c.historyMatch === "exact" && c.loadsOnLane > 0 && (
+                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-amber-500/50 text-amber-300 bg-amber-500/10">
+                                Ran lane {c.loadsOnLane}×
+                              </Badge>
+                            )}
                             {c.isNewProspect && (
                               <Badge variant="outline" className="text-[9px] py-0 px-1 border-slate-500/40 text-slate-400">New Prospect</Badge>
                             )}
-                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-white/15 text-white/40">
-                              {HISTORY_MATCH_LABELS[c.historyMatch] ?? c.historyMatch}
-                            </Badge>
+                            {!c.historyMatch || c.historyMatch === "none" || c.historyMatch === "region" ? (
+                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-white/15 text-white/40">
+                                {HISTORY_MATCH_LABELS[c.historyMatch] ?? c.historyMatch}
+                              </Badge>
+                            ) : null}
                             {c.sourceChannel && SOURCE_LABELS[c.sourceChannel] && (
                               <Badge variant="outline" className={`text-[9px] py-0 px-1 ${SOURCE_COLORS[c.sourceChannel] ?? "border-white/20 text-white/40"}`}>
                                 {SOURCE_LABELS[c.sourceChannel]}
                               </Badge>
                             )}
-                            {!c.primaryEmail && !c.backupEmail && !capturedEmails[key] && (
-                              <Badge variant="outline" className="text-[9px] py-0 px-1 border-orange-500/40 text-orange-400 flex items-center gap-0.5">
-                                <Mail className="w-2.5 h-2.5" />
-                                No email on file
-                              </Badge>
-                            )}
                           </div>
+                          {/* Positive fit reason */}
                           <p className="text-[10px] text-white/50 mt-0.5 line-clamp-2">{c.fitReason}</p>
+                          {/* Suppression reasons (negative flags) */}
+                          {suppressions.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {suppressions.map((r, ri) => (
+                                <span key={ri} className="text-[9px] px-1 py-0 rounded border border-red-500/30 text-red-400 bg-red-500/5 flex items-center gap-0.5">
+                                  <AlertCircle className="w-2 h-2 shrink-0" />
+                                  {r}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           {(capturedEmails[key] || c.primaryEmail || c.backupEmail) && (
                             <p className="text-[10px] text-white/30 mt-0.5 truncate">
                               {capturedEmails[key] || c.primaryEmail || c.backupEmail}
@@ -1059,6 +1265,31 @@ export function CarrierOutreachPanel({
                 );
               })}
             </div>
+
+            {/* Pagination controls */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 mt-4" data-testid="pagination-controls">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage <= 1}
+                  className="text-[10px] px-2 py-1 rounded border border-white/15 text-white/50 bg-white/5 hover:bg-white/10 disabled:opacity-40 transition-colors"
+                  data-testid="btn-prev-page"
+                >
+                  ← Prev
+                </button>
+                <span className="text-[10px] text-white/40">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage >= totalPages}
+                  className="text-[10px] px-2 py-1 rounded border border-white/15 text-white/50 bg-white/5 hover:bg-white/10 disabled:opacity-40 transition-colors"
+                  data-testid="btn-next-page"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
 
             {/* Shared Template Editor — shown when carriers are selected */}
             {selectedCarriers.size > 0 && (
@@ -1204,7 +1435,14 @@ export function CarrierOutreachPanel({
                   <div className="mt-3 flex gap-2">
                     <Button
                       size="sm"
-                      onClick={handleSendOutreach}
+                      onClick={() => {
+                        if (emailDrafts.length >= 50) {
+                          setSendConfirmOpen(true);
+                          setSendConfirmOverride(false);
+                        } else {
+                          handleSendOutreach();
+                        }
+                      }}
                       disabled={sendOutreachMutation.isPending}
                       className="flex-1 h-8 text-xs bg-blue-600 hover:bg-blue-500 text-white font-semibold"
                       data-testid="btn-send-emails"
@@ -1781,7 +2019,18 @@ export function CarrierOutreachPanel({
           </Button>
           <Button
             size="sm"
-            onClick={showEmails && emailDrafts.length > 0 ? handleSendOutreach : handleLogOutreach}
+            onClick={() => {
+              if (showEmails && emailDrafts.length > 0) {
+                if (emailDrafts.length >= 50) {
+                  setSendConfirmOpen(true);
+                  setSendConfirmOverride(false);
+                } else {
+                  handleSendOutreach();
+                }
+              } else {
+                handleLogOutreach();
+              }
+            }}
             disabled={(selectedCarriers.size === 0 && emailDrafts.length === 0) || outreachLogMutation.isPending || sendOutreachMutation.isPending}
             className="flex-1 h-8 text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold"
             data-testid="btn-mark-contacted"
@@ -1796,6 +2045,64 @@ export function CarrierOutreachPanel({
             {showEmails && emailDrafts.length > 0 ? `Send Emails (${emailDrafts.length})` : `Mark Contacted (${selectedCarriers.size})`}
           </Button>
         </div>
+
+        {/* Bulk send confirmation dialog (50+ carriers warning) */}
+        {sendConfirmOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70" data-testid="send-confirm-dialog">
+            <div className="bg-slate-800 border border-white/15 rounded-xl p-5 max-w-sm w-full mx-4 shadow-2xl">
+              <div className="flex items-center gap-2 mb-3">
+                <AlertCircle className="w-5 h-5 text-orange-400 shrink-0" />
+                <p className="text-sm font-semibold text-white">Send to {emailDrafts.length} carriers?</p>
+              </div>
+              <p className="text-xs text-white/60 mb-4">
+                You are about to send outreach emails to <span className="text-orange-300 font-medium">{emailDrafts.length} carriers</span>. 
+                This is a large batch — confirm you want to proceed.
+              </p>
+
+              {/* Override recently-contacted toggle */}
+              <div className="flex items-center gap-2 mb-4 p-2 bg-white/5 border border-white/10 rounded-lg">
+                <input
+                  type="checkbox"
+                  id="override-recently-contacted"
+                  checked={sendConfirmOverride}
+                  onChange={e => setSendConfirmOverride(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-amber-400"
+                  data-testid="chk-override-recently-contacted"
+                />
+                <label htmlFor="override-recently-contacted" className="text-[11px] text-white/60 cursor-pointer">
+                  Include recently-contacted carriers (override 14-day suppression)
+                </label>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSendConfirmOpen(false)}
+                  className="flex-1 h-8 text-xs border-white/20 text-white/60 hover:bg-white/5"
+                  data-testid="btn-cancel-bulk-send"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setSendConfirmOpen(false);
+                    if (sendConfirmOverride) {
+                      setOverrideRecentlyContacted(true);
+                    }
+                    handleSendOutreach();
+                  }}
+                  className="flex-1 h-8 text-xs bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                  data-testid="btn-confirm-bulk-send"
+                >
+                  <Send className="w-3 h-3 mr-1" />
+                  Confirm Send
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </SheetContent>
     </Sheet>
   );

@@ -64,6 +64,7 @@ export interface RankedCarrier {
   customerHistoryLoads: number;        // loads this carrier hauled for the same customer
   priorOutcomeBoost: boolean;          // true if prior bench outcome was positive (available_now/next_week)
   sourceChannel: string | null;        // where this carrier was originally sourced from
+  suppressionReasons: string[];        // human-readable negative flags (no email, recently contacted, flagged, etc.)
 }
 
 function normStr(s: string): string {
@@ -208,6 +209,8 @@ function extractCustomerHistoryLoads(
 /**
  * Rank all carriers in the org catalog for a given lane.
  * bench (optional): existing lane_carrier_interest rows for outcome-based boosts.
+ *
+ * Returns ALL scored carriers (no hard cap). Callers should apply pagination/filtering.
  */
 export async function rankCarriersForLane(
   lane: RecurringLane,
@@ -231,6 +234,21 @@ export async function rankCarriersForLane(
     }
   }
 
+  // Build set of recently-contacted carrier keys (last 14 days)
+  const recentlyContactedKeys = new Set<string>();
+  const fourteenDaysAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  if (bench) {
+    for (const b of bench) {
+      if (b.outreachSentAt) {
+        const sentAt = new Date(b.outreachSentAt).getTime();
+        if (sentAt > fourteenDaysAgo) {
+          if (b.carrierId) recentlyContactedKeys.add(b.carrierId);
+          recentlyContactedKeys.add(normStr(b.carrierName));
+        }
+      }
+    }
+  }
+
   const history = extractCarrierHistoryFromUploads(uploads, lane);
   const laneOrigin = normStr(lane.origin);
   const laneDest = normStr(lane.destination);
@@ -249,18 +267,27 @@ export async function rankCarriersForLane(
     const reasons: string[] = [];
     let historyMatch: RankedCarrier["historyMatch"] = "none";
 
-    // Exact/similar/state history match
+    // Exact history match — use guaranteed floor scores
     if (hist && hist.loads > 0) {
       const exactLoad = extractExactLaneLoads(uploads, lane, carrier.name);
       if (exactLoad > 0) {
         historyMatch = "exact";
-        const pts = Math.min(40, 10 + exactLoad * 5);
-        fitScore += pts;
-        reasons.push(`Ran this lane ${exactLoad}× recently`);
+        // Guaranteed floor scores that regional-only carriers can't reach
+        let exactFloor: number;
+        if (exactLoad >= 10) exactFloor = 80;
+        else if (exactLoad >= 5) exactFloor = 70;
+        else exactFloor = 55;
+        // Additional incremental bonus per load (up to 10 extra points)
+        const extraPts = Math.min(10, exactLoad * 1);
+        fitScore = Math.max(exactFloor, exactFloor + extraPts - 10);
+        // Always at least the floor
+        fitScore = Math.max(exactFloor, fitScore);
+        reasons.push(`Ran this exact lane ${exactLoad}×`);
         if (hist.lastUsedMonth) reasons.push(`last used ${hist.lastUsedMonth}`);
       } else if (hist.bestMatchTier === "city") {
+        // Similar corridor (city-level prefix match) — 50–64 band
         historyMatch = "similar";
-        fitScore += 25;
+        fitScore = Math.min(64, 50 + Math.min(14, hist.loads * 2));
         reasons.push(`Ran similar corridors (${hist.loads} loads in region)`);
       } else {
         // State-pair match only — wider net, lower confidence
@@ -270,10 +297,15 @@ export async function rankCarriersForLane(
       }
     }
 
-    // Equipment fit
+    // Equipment fit — capped so regional-only stays below exact-history floor
     if (laneEquip && carrier.equipmentTypes && carrier.equipmentTypes.length > 0) {
       if (overlaps(carrier.equipmentTypes, laneEquip)) {
-        fitScore += 20;
+        // Only add if score is in non-history band (cap contribution for pure prospects)
+        if (historyMatch === "none" || historyMatch === "region") {
+          fitScore += 20;
+        } else {
+          fitScore += 5; // smaller bonus when history already gives the edge
+        }
         reasons.push(`Equipment match: ${laneEquip}`);
       }
     } else {
@@ -289,7 +321,12 @@ export async function rankCarriersForLane(
       overlaps(carrierRegions, laneDest);
     if (regionMatch) {
       if (historyMatch === "none") historyMatch = "region";
-      fitScore += 15;
+      // Cap region bonus so pure regional prospect stays below 50
+      if (historyMatch === "region") {
+        fitScore += 15;
+      } else {
+        fitScore += 5;
+      }
       reasons.push("Operates in this region");
     }
 
@@ -335,6 +372,34 @@ export async function rankCarriersForLane(
 
     if (fitScore === 0 && historyMatch === "none" && !regionMatch) continue; // skip zero-fit unknown carriers
 
+    // Build suppression reasons
+    const suppressionReasons: string[] = [];
+    if (!carrier.primaryEmail && !carrier.backupEmail) {
+      suppressionReasons.push("No email on file");
+    }
+    const isRecentlyContacted = recentlyContactedKeys.has(carrier.id) || recentlyContactedKeys.has(carrierNorm);
+    if (isRecentlyContacted) {
+      const benchEntry = bench?.find(b =>
+        (b.carrierId === carrier.id || normStr(b.carrierName) === carrierNorm) && b.outreachSentAt
+      );
+      if (benchEntry?.outreachSentAt) {
+        const daysAgo = Math.round((Date.now() - new Date(benchEntry.outreachSentAt).getTime()) / (1000 * 60 * 60 * 24));
+        suppressionReasons.push(`Recently contacted (${daysAgo} day${daysAgo === 1 ? "" : "s"} ago)`);
+      } else {
+        suppressionReasons.push("Recently contacted");
+      }
+    }
+    const flagTags = ["do_not_use", "service_flag", "flagged", "no_use"];
+    if ((carrier.tags ?? []).some(t => flagTags.includes(normStr(t)))) {
+      suppressionReasons.push("Flagged / do not use");
+    }
+    if (hist?.lastUsedMonth) {
+      const monthsAgo = monthDiff(hist.lastUsedMonth);
+      if (monthsAgo >= 12) {
+        suppressionReasons.push(`No recent activity (${monthsAgo} months ago)`);
+      }
+    }
+
     ranked.push({
       carrierId: carrier.id,
       carrierName: carrier.name,
@@ -356,6 +421,7 @@ export async function rankCarriersForLane(
       customerHistoryLoads: custLoads,
       priorOutcomeBoost: hadPositiveOutcome,
       sourceChannel: (carrier as any).sourceChannel ?? null,
+      suppressionReasons,
     });
   }
 
@@ -367,19 +433,29 @@ export async function rankCarriersForLane(
 
     const exactLoad = extractExactLaneLoads(uploads, lane, carrierNorm);
     const historyMatch: RankedCarrier["historyMatch"] = exactLoad > 0 ? "exact" : "similar";
+
+    // Apply floor scoring for history-only carriers — same bands as catalog carriers
     let fitScore: number;
     const reasons: string[] = [];
-    if (exactLoad > 0) {
-      fitScore = Math.min(85, 30 + exactLoad * 5);
-      reasons.push(`Ran this lane ${exactLoad}× from financial history`);
+    if (exactLoad >= 10) {
+      fitScore = 80;
+      reasons.push(`Ran this exact lane ${exactLoad}× from financial history`);
+    } else if (exactLoad >= 5) {
+      fitScore = 70;
+      reasons.push(`Ran this exact lane ${exactLoad}× from financial history`);
+    } else if (exactLoad > 0) {
+      fitScore = 55;
+      reasons.push(`Ran this exact lane ${exactLoad}× from financial history`);
     } else if (hist.bestMatchTier === "city") {
-      fitScore = Math.min(80, 30 + hist.loads * 2);
+      fitScore = Math.min(64, 50 + Math.min(14, hist.loads * 2));
       reasons.push(`${hist.loads} loads on similar corridors`);
     } else {
       // State-pair match only — wider net, lower base score
       fitScore = Math.min(55, 18 + hist.loads * 2);
       reasons.push(`Runs ${(lane.originState ?? "origin state").toUpperCase()} → ${(lane.destinationState ?? "dest state").toUpperCase()} lanes (${hist.loads} loads, financial data)`);
     }
+
+    fitScore = Math.min(100, fitScore);
     if (hist.lastUsedMonth) reasons.push(`last used ${hist.lastUsedMonth}`);
 
     // On-time % from financial rows
@@ -400,6 +476,26 @@ export async function rankCarriersForLane(
     if (hadPositiveOutcomeHist) {
       fitScore = Math.min(100, fitScore + 10);
       reasons.push("Showed availability in prior outreach");
+    }
+
+    // Suppression reasons for history-only carriers
+    const suppressionReasons: string[] = [];
+    suppressionReasons.push("No email on file"); // TMS-only carriers have no catalog entry
+    const isRecentlyContactedHist = recentlyContactedKeys.has(carrierNorm);
+    if (isRecentlyContactedHist) {
+      const benchEntry = bench?.find(b => normStr(b.carrierName) === carrierNorm && b.outreachSentAt);
+      if (benchEntry?.outreachSentAt) {
+        const daysAgo = Math.round((Date.now() - new Date(benchEntry.outreachSentAt).getTime()) / (1000 * 60 * 60 * 24));
+        suppressionReasons.push(`Recently contacted (${daysAgo} day${daysAgo === 1 ? "" : "s"} ago)`);
+      } else {
+        suppressionReasons.push("Recently contacted");
+      }
+    }
+    if (hist.lastUsedMonth) {
+      const monthsAgo = monthDiff(hist.lastUsedMonth);
+      if (monthsAgo >= 12) {
+        suppressionReasons.push(`No recent activity (${monthsAgo} months ago)`);
+      }
     }
 
     ranked.push({
@@ -423,6 +519,7 @@ export async function rankCarriersForLane(
       customerHistoryLoads: custLoadsHist,
       priorOutcomeBoost: hadPositiveOutcomeHist,
       sourceChannel: null,
+      suppressionReasons,
     });
   }
 
@@ -434,13 +531,12 @@ export async function rankCarriersForLane(
     return b.fitScore - a.fitScore;
   });
 
-  const top20 = ranked.slice(0, 20);
-
-  // AI enrichment: enrich fitReason strings for top candidates with AI analysis
-  // Falls back gracefully to rule-based reasons on any error.
+  // AI enrichment: enrich fitReason strings for top-5 rule-scored candidates only.
+  // AI re-sort only affects the top-5 positions; the rest keep rule-based order.
+  // No hard cap on total returned — callers handle pagination.
   try {
     const { callAI } = await import("./aiHelpers");
-    const top5 = top20.slice(0, 5);
+    const top5 = ranked.slice(0, 5);
     if (top5.length > 0) {
       const carrierSummaries = top5.map((c, i) =>
         `${i + 1}. ${c.carrierName}: rule fit=${c.fitScore}, history=${c.historyMatch}, ` +
@@ -465,40 +561,75 @@ Respond ONLY with JSON array: [{"name": "<carrier name>", "reason": "<1 sentence
 
       if (Array.isArray(aiResults)) {
         for (const aiItem of aiResults) {
-          const carrier = top20.find(c => normStr(c.carrierName) === normStr(aiItem.name));
+          const carrier = top5.find(c => normStr(c.carrierName) === normStr(aiItem.name));
           if (carrier && typeof aiItem.reason === "string" && typeof aiItem.adjustedScore === "number") {
             carrier.fitReason = aiItem.reason;
-            // Blend rule-based and AI scores (70/30)
-            carrier.fitScore = Math.min(100, Math.max(0,
+            // Blend rule-based and AI scores (70/30) but enforce history floor
+            const blended = Math.min(100, Math.max(0,
               Math.round(0.7 * carrier.fitScore + 0.3 * aiItem.adjustedScore)
             ));
+            // Never let AI drag an exact-history carrier below its floor
+            if (carrier.historyMatch === "exact") {
+              const exactLoads = carrier.loadsOnLane;
+              const floor = exactLoads >= 10 ? 80 : exactLoads >= 5 ? 70 : 55;
+              carrier.fitScore = Math.max(floor, blended);
+            } else {
+              carrier.fitScore = blended;
+            }
           }
         }
-        // Re-sort after AI score adjustments
-        top20.sort((a, b) => b.fitScore - a.fitScore);
+        // Re-sort top-5 after AI score adjustments, then stitch back
+        top5.sort((a, b) => b.fitScore - a.fitScore);
+        // Re-insert top-5 into the beginning of ranked array
+        for (let i = 0; i < top5.length; i++) {
+          ranked[i] = top5[i];
+        }
       }
     }
   } catch {
     // Silent fallback to rule-based ranking
   }
 
-  return top20;
+  return ranked;
 }
 
+/**
+ * Extracts the count of exact-lane loads for a carrier from the last 3 uploads.
+ * Uses both strict equality AND city-prefix matching (consistent with extractCarrierHistoryFromUploads).
+ */
 function extractExactLaneLoads(uploads: FinancialUpload[], lane: RecurringLane, carrierName: string): number {
   const originNorm = normStr(lane.origin);
   const destNorm = normStr(lane.destination);
   const carrierNorm = normStr(carrierName);
   let count = 0;
-  // Sort newest first to ensure we check recent uploads, not oldest 2
+  // Sort newest first — scan last 3 uploads (same as extractCarrierHistoryFromUploads)
   const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-  for (const upload of sorted.slice(0, 2)) {
+  for (const upload of sorted.slice(0, 3)) {
     const rows = (upload.rows as TmsRow[]) ?? [];
     for (const row of rows) {
       const rowOrigin = normStr(row.shipperCity ?? row.originCity ?? row.origin ?? "");
       const rowDest = normStr(row.consigneeCity ?? row.destinationCity ?? row.destination ?? "");
       const rowCarrier = normStr(row.carrier ?? row.carrierName ?? row.carrier_name ?? "");
-      if (rowOrigin === originNorm && rowDest === destNorm && rowCarrier === carrierNorm) {
+
+      if (rowCarrier !== carrierNorm) continue;
+      if (!rowOrigin || !rowDest) continue;
+
+      // Exact city match
+      const isExact = rowOrigin === originNorm && rowDest === destNorm;
+      if (isExact) {
+        count++;
+        continue;
+      }
+
+      // Prefix match (consistent with extractCarrierHistoryFromUploads)
+      const originPrefix = originNorm.slice(0, 4);
+      const destPrefix = destNorm.slice(0, 4);
+      const isPrefixOrigin = originPrefix.length >= 4 && rowOrigin.length >= 4 &&
+        (rowOrigin.includes(originPrefix) || originNorm.includes(rowOrigin.slice(0, 4)));
+      const isPrefixDest = destPrefix.length >= 4 && rowDest.length >= 4 &&
+        (rowDest.includes(destPrefix) || destNorm.includes(rowDest.slice(0, 4)));
+
+      if (isPrefixOrigin && isPrefixDest) {
         count++;
       }
     }
