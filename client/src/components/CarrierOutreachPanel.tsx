@@ -10,10 +10,16 @@
  *   6. Receive follow-up suggestions
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { formatLaneDisplay, formatWeeklyLoadRange } from "@shared/laneFormatters";
+import {
+  OUTREACH_TEMPLATES,
+  DEFAULT_TEMPLATE_ID,
+  applyLaneVars,
+  applyTemplateVars,
+} from "@/lib/outreachTemplates";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -348,6 +354,16 @@ export function CarrierOutreachPanel({
   const [capturedEmails, setCapturedEmails] = useState<Record<string, string>>({});
   // Shared outreach template that applies to all selected carriers
   const [sharedTemplate, setSharedTemplate] = useState("");
+  // ── Template selector state ────────────────────────────────────────────────
+  const [sharedSubject, setSharedSubject] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
+  // Track what was last applied by the selector (for dirty detection)
+  const [lastAppliedBody, setLastAppliedBody] = useState("");
+  const [lastAppliedSubject, setLastAppliedSubject] = useState("");
+  // Non-null while waiting for user to confirm a template switch over unsaved edits
+  const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(null);
+  // Tracks which lane ID we have already applied the initial default template for
+  const initialTemplateAppliedRef = useRef<string | null>(null);
   // ── Import tab state ──────────────────────────────────────────────────────
   const [importPasteText, setImportPasteText] = useState("");
   const [importSource, setImportSource] = useState("dat");
@@ -401,6 +417,25 @@ export function CarrierOutreachPanel({
       return next;
     });
   }, [suggestionsData]);
+
+  // Apply the default template (with lane vars substituted) the first time a lane loads.
+  // Skips re-application if the rep has already edited the content.
+  useEffect(() => {
+    if (!lane || lane.id === initialTemplateAppliedRef.current) return;
+    initialTemplateAppliedRef.current = lane.id;
+    const tpl = OUTREACH_TEMPLATES.find(t => t.id === selectedTemplateId) ?? OUTREACH_TEMPLATES[0];
+    const laneVars = {
+      origin: `${lane.origin}, ${lane.originState}`,
+      destination: `${lane.destination}, ${lane.destinationState}`,
+      equipmentType: lane.equipmentType ?? "dry van",
+    };
+    const body = applyLaneVars(tpl.body, laneVars);
+    const subj = applyLaneVars(tpl.subject, laneVars);
+    setSharedTemplate(body);
+    setSharedSubject(subj);
+    setLastAppliedBody(body);
+    setLastAppliedSubject(subj);
+  }, [lane?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: bench = [], refetch: refetchBench } = useQuery<CarrierInterest[]>({
     queryKey: ["/api/lanes", laneId, "carrier-bench"],
@@ -696,6 +731,50 @@ export function CarrierOutreachPanel({
 
   const adHocParsed = adHocEmailPasteText.trim() ? parseAdHocEmails(adHocEmailPasteText) : { valid: [], invalid: [] };
 
+  // ── Template helpers ─────────────────────────────────────────────────────
+
+  /** Apply a template to the editor, substituting lane-level vars immediately. */
+  function applyTemplateToEditor(templateId: string) {
+    const tpl = OUTREACH_TEMPLATES.find(t => t.id === templateId);
+    if (!tpl) return;
+    const laneVars = {
+      origin: lane ? `${lane.origin}, ${lane.originState}` : "",
+      destination: lane ? `${lane.destination}, ${lane.destinationState}` : "",
+      equipmentType: lane?.equipmentType ?? "dry van",
+    };
+    const body = applyLaneVars(tpl.body, laneVars);
+    const subj = applyLaneVars(tpl.subject, laneVars);
+    setSharedTemplate(body);
+    setSharedSubject(subj);
+    setLastAppliedBody(body);
+    setLastAppliedSubject(subj);
+    setSelectedTemplateId(templateId);
+  }
+
+  /** Check whether rep has modified the template content since it was last applied. */
+  function isTemplateDirty() {
+    // Only considered dirty if we've applied at least one template before
+    if (!lastAppliedBody) return false;
+    return sharedTemplate !== lastAppliedBody || sharedSubject !== lastAppliedSubject;
+  }
+
+  /** Handle rep selecting a new template — shows confirm if current content is dirty. */
+  function handleTemplateSelect(templateId: string) {
+    if (templateId === selectedTemplateId) return;
+    if (isTemplateDirty()) {
+      setPendingTemplateId(templateId);
+    } else if (templateId === "__ai__") {
+      // Clear template to fall back to AI drafting
+      setSharedTemplate("");
+      setSharedSubject("");
+      setLastAppliedBody("");
+      setLastAppliedSubject("");
+      setSelectedTemplateId("__ai__");
+    } else {
+      applyTemplateToEditor(templateId);
+    }
+  }
+
   function handleGenerateOutreach() {
     const selected = filteredCarriers.filter(c => selectedCarriers.has(c.carrierId ?? c.carrierName));
     if (selected.length === 0 && adHocParsed.valid.length === 0) {
@@ -704,30 +783,32 @@ export function CarrierOutreachPanel({
     }
     const laneDisplay = lane ? formatLaneDisplay(lane.origin, lane.originState, lane.destination, lane.destinationState) : "";
     const equipment = lane?.equipmentType ?? "dry van";
-    const subject = `Lane-Building Opportunity: ${laneDisplay} (${equipment})`;
-
+    // Auto-generated subject/body are only used as last-resort fallbacks (no template)
+    const autoSubject = `Lane-Building Opportunity: ${laneDisplay} (${equipment})`;
     const loadRange = formatWeeklyLoadRange(lane?.avgLoadsPerWeek);
     const bareRange = loadRange.replace(/^(usually|around|about)\s+/i, "");
-    const fallbackBody = `Hey team — checking to see if you've got capacity for ${laneDisplay} (${equipment}). We usually have ${bareRange} on this lane and are looking to line up steady coverage. Does that fit your network? If so, I'd be glad to talk through it.`;
+    const autoFallbackBody = `Hey team — checking to see if you've got capacity for ${laneDisplay} (${equipment}). We usually have ${bareRange} on this lane and are looking to line up steady coverage. Does that fit your network? If so, I'd be glad to talk through it.`;
 
-    // Build ad-hoc drafts for pasted email addresses, embedding the recipient email directly
+    const effectiveBody = sharedTemplate.trim() || autoFallbackBody;
+    const effectiveSubject = sharedSubject.trim() || autoSubject;
+
+    // Build ad-hoc drafts for pasted email addresses ({{carrierName}} → "team")
     const adHocDrafts: EmailDraft[] = adHocParsed.valid.map(email => ({
       carrierId: null,
       carrierName: `Ad-hoc: ${email}`,
-      subject,
-      body: sharedTemplate.trim() || fallbackBody,
+      subject: applyTemplateVars(effectiveSubject, { carrierName: "team" }),
+      body: applyTemplateVars(effectiveBody, { carrierName: "team" }),
       outreachMode,
       recipientEmail: email,
     }));
 
-    // If user has provided a shared template, apply it to all selected carriers directly
-    // (skip AI drafting — the shared template IS the email body, personalized only by carrier name)
+    // If a template (or any shared body) is set, use it — no AI drafting
     if (sharedTemplate.trim()) {
       const carrierDrafts: EmailDraft[] = selected.map(c => ({
         carrierId: c.carrierId,
         carrierName: c.carrierName,
-        subject,
-        body: sharedTemplate.trim(),
+        subject: applyTemplateVars(effectiveSubject, { carrierName: c.carrierName }),
+        body: applyTemplateVars(effectiveBody, { carrierName: c.carrierName }),
         outreachMode,
       }));
       setEmailDrafts([...carrierDrafts, ...adHocDrafts]);
@@ -1949,32 +2030,109 @@ export function CarrierOutreachPanel({
                 </div>
               ) : null}
 
-              {/* Shared template + outreach mode — shown when no drafts yet */}
+              {/* Template selector + editor — shown when no drafts yet */}
               {(selectedCarriers.size > 0 || adHocParsed.valid.length > 0) && !showEmails && (
                 <>
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">
-                        Shared Template <span className="normal-case font-normal text-muted-foreground/60">(optional — leave blank for AI drafts)</span>
-                      </p>
+                  {/* ── Template selector ── */}
+                  <div className="mb-3">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium shrink-0">Template</p>
+                      <Select value={selectedTemplateId} onValueChange={handleTemplateSelect}>
+                        <SelectTrigger className="flex-1 h-7 text-xs bg-muted/20 border-border text-foreground/80" data-testid="template-selector">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-card border-border text-foreground">
+                          {OUTREACH_TEMPLATES.map(t => (
+                            <SelectItem key={t.id} value={t.id} className="text-xs">{t.label}</SelectItem>
+                          ))}
+                          <SelectItem value="__ai__" className="text-xs text-blue-400">AI Draft (let AI write it)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Unsaved-edit confirmation */}
+                    {pendingTemplateId && (
+                      <div className="mb-2 flex items-center gap-2 bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-2" data-testid="template-switch-confirm">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <p className="text-[11px] text-amber-300 flex-1">Switching templates will replace your current edits. Continue?</p>
+                        <button
+                          onClick={() => {
+                            if (pendingTemplateId === "__ai__") {
+                              setSharedTemplate(""); setSharedSubject(""); setLastAppliedBody(""); setLastAppliedSubject(""); setSelectedTemplateId("__ai__");
+                            } else {
+                              applyTemplateToEditor(pendingTemplateId);
+                            }
+                            setPendingTemplateId(null);
+                          }}
+                          className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 text-amber-300 hover:bg-amber-500/30 transition-colors"
+                          data-testid="btn-confirm-template-switch"
+                        >
+                          Replace
+                        </button>
+                        <button
+                          onClick={() => setPendingTemplateId(null)}
+                          className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted/20 transition-colors"
+                          data-testid="btn-cancel-template-switch"
+                        >
+                          Keep edits
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Subject field */}
+                    <div className="mb-2">
+                      <p className="text-[9px] text-muted-foreground uppercase tracking-wide mb-1">Subject</p>
+                      <input
+                        type="text"
+                        value={sharedSubject}
+                        onChange={e => setSharedSubject(e.target.value)}
+                        className="w-full text-[11px] text-foreground/80 bg-muted/20 border border-border rounded px-2.5 py-1.5 focus:outline-none focus:border-amber-400/40 placeholder:text-muted-foreground/30"
+                        placeholder="Email subject line…"
+                        data-testid="template-subject-input"
+                      />
+                    </div>
+
+                    {/* Body editor */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-[9px] text-muted-foreground uppercase tracking-wide">
+                          Message body
+                          {sharedTemplate.includes("{{carrierName}}") && (
+                            <span className="ml-1.5 text-amber-400/60 normal-case font-normal">· {"{{carrierName}}"} will be filled per carrier</span>
+                          )}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          {isTemplateDirty() && (
+                            <span className="text-[9px] text-amber-400/70 italic">edited</span>
+                          )}
+                          {sharedTemplate.trim() && (
+                            <button
+                              onClick={() => { setSharedTemplate(""); setSharedSubject(""); setLastAppliedBody(""); setLastAppliedSubject(""); }}
+                              className="text-[9px] text-muted-foreground hover:text-foreground/50"
+                              data-testid="clear-shared-template"
+                            >
+                              Clear (use AI)
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <Textarea
+                        value={sharedTemplate}
+                        onChange={e => setSharedTemplate(e.target.value)}
+                        placeholder="Leave blank to let AI draft personalised emails per carrier…"
+                        className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[120px] placeholder:text-muted-foreground/30"
+                        data-testid="shared-template-editor"
+                      />
                       {sharedTemplate.trim() && (
-                        <button onClick={() => setSharedTemplate("")} className="text-[9px] text-muted-foreground hover:text-foreground/50" data-testid="clear-shared-template">Clear</button>
+                        <p className="text-[9px] text-emerald-400/70 mt-1 flex items-center gap-1">
+                          <CheckCircle2 className="w-2.5 h-2.5" />
+                          Template will be sent to {selectedCarriers.size + adHocParsed.valid.length} recipient(s) — skip AI
+                        </p>
                       )}
                     </div>
-                    <Textarea
-                      value={sharedTemplate}
-                      onChange={e => setSharedTemplate(e.target.value)}
-                      placeholder={`Hi [Carrier Name], I wanted to reach out about a recurring lane we run consistently…`}
-                      className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[120px] placeholder:text-muted-foreground/30"
-                      data-testid="shared-template-editor"
-                    />
-                    {sharedTemplate.trim() && (
-                      <p className="text-[9px] text-emerald-400/70 mt-1 flex items-center gap-1">
-                        <CheckCircle2 className="w-2.5 h-2.5" />
-                        This template will be sent to {selectedCarriers.size + adHocParsed.valid.length} recipient(s) instead of AI drafting
-                      </p>
-                    )}
                   </div>
+
+                  {/* Outreach mode */}
                   <div className="flex items-center gap-2 mb-4">
                     <span className="text-[10px] text-muted-foreground shrink-0">Outreach mode:</span>
                     <Select value={outreachMode} onValueChange={(v: "lane_building" | "immediate_plus_lane") => setOutreachMode(v)}>
