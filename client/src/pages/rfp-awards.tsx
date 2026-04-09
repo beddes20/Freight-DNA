@@ -340,8 +340,18 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
             : `One task per qualifying lane. Target 5–10 carrier contacts each.`,
         });
       }
-    } catch {
-      toast({ title: "Failed to generate procurement tasks", variant: "destructive" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      let detail: string | undefined;
+      try {
+        const jsonPart = msg.replace(/^\d+:\s*/, "");
+        detail = JSON.parse(jsonPart).error;
+      } catch { /* ignore */ }
+      toast({
+        title: "Failed to generate procurement tasks",
+        description: detail ?? "Please check the award has lanes in Origin → Destination format.",
+        variant: "destructive",
+      });
     } finally {
       setGeneratingTasks(false);
     }
@@ -1801,8 +1811,18 @@ export default function RfpAwards() {
           description: "Target 5–10 carrier contacts per lane.",
         });
       }
-    } catch {
-      toast({ title: "Failed to generate procurement tasks", variant: "destructive" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      let detail: string | undefined;
+      try {
+        const jsonPart = msg.replace(/^\d+:\s*/, "");
+        detail = JSON.parse(jsonPart).error;
+      } catch { /* ignore */ }
+      toast({
+        title: "Failed to generate procurement tasks",
+        description: detail ?? "Please check the award has lanes in Origin → Destination format.",
+        variant: "destructive",
+      });
     } finally {
       setPromptGeneratingTasks(false);
     }

@@ -8397,6 +8397,9 @@ Respond with valid JSON only:
       const { lanes } = (req.body ?? {}) as { lanes?: Array<{ lane: string }> };
       const award = await storage.getAward(awardId);
       if (!award) return res.status(404).json({ error: "Award not found" });
+      if (!award.lanes || award.lanes.length === 0) {
+        return res.status(400).json({ error: "This award has no lanes. Edit the award and add lanes in Origin → Destination format before generating tasks." });
+      }
       // Parse award lane strings server-side; origin/dest/volume are derived here, not trusted from client
       const lanePattern = /^(.+?)\s*(?:→|->|\bto\b)\s*(.+?)(?:\s*\((\d[\d,]*)\s*(?:loads?|shipments?|shpts?)[^)]*\))?$/i;
       type LaneMeta = { origin: string; destination: string; volume: number };
@@ -8413,7 +8416,7 @@ Respond with valid JSON only:
       );
       // Process all server-computed qualifying lanes (any parseable origin → destination)
       const validLaneEntries = [...qualifyingLaneMap.entries()];
-      if (validLaneEntries.length === 0) return res.status(400).json({ error: "No parseable lanes found for this award. Use format: Origin → Destination" });
+      if (validLaneEntries.length === 0) return res.status(400).json({ error: "No parseable lanes found for this award. Edit the award and ensure lanes use Origin → Destination format (e.g., Chicago, IL → Memphis, TN)." });
       const company = award.companyId ? await storage.getCompany(award.companyId) : null;
       const customerName = company?.name ?? null;
       const awardTitle = award.title ?? null;

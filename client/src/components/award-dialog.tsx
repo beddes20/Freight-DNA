@@ -109,7 +109,7 @@ export function AwardDialog({ open, onOpenChange, award, onCreated, defaultCompa
       const existing = award.lanes ?? [];
       setParsedLaneLabels(existing);
       setSelectedLaneIdxs(new Set(existing.map((_, i) => i)));
-      setManualLanes(existing.length > 0 ? existing.join(", ") : "");
+      setManualLanes(existing.length > 0 ? existing.join("\n") : "");
       setParsedLaneFileName(null);
     } else {
       form.reset({ companyId: defaultCompanyId ?? "", title: "", value: "", awardDate: "", notes: "" });
@@ -244,7 +244,7 @@ export function AwardDialog({ open, onOpenChange, award, onCreated, defaultCompa
       lanesArray = parsedLaneLabels.filter((_, i) => selectedLaneIdxs.has(i));
       if (lanesArray.length === 0) lanesArray = null;
     } else if (manualLanes.trim()) {
-      lanesArray = manualLanes.split(",").map(l => l.trim()).filter(Boolean);
+      lanesArray = manualLanes.split(/\n|;/).map(l => l.trim()).filter(Boolean);
     }
 
     const payload: InsertAward = {
@@ -435,14 +435,15 @@ export function AwardDialog({ open, onOpenChange, award, onCreated, defaultCompa
                   </>
                 ) : (
                   <div className="space-y-1.5">
-                    <Input
+                    <Textarea
                       value={manualLanes}
                       onChange={e => setManualLanes(e.target.value)}
-                      placeholder="e.g., Chicago, IL → Memphis, TN (120 loads), Dallas → Houston"
+                      placeholder={"One lane per line, e.g.:\nChicago, IL → Memphis, TN (120 loads)\nDallas, TX → Houston, TX (80 loads)"}
+                      rows={4}
                       data-testid="input-award-lanes"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Enter lanes manually, or upload an Excel/CSV above — AI will read the headers and map origin, destination, and volume automatically.
+                      Enter one lane per line using Origin → Destination format, or upload an Excel/CSV above — AI will read the headers and map origin, destination, and volume automatically.
                     </p>
                   </div>
                 )}
