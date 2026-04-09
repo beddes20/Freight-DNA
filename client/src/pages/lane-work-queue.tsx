@@ -59,6 +59,7 @@ import {
   TrendingUp,
   Trash2,
   Pencil,
+  X,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -74,6 +75,11 @@ import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
+import {
+  resolveLaneLocationWithConfidence,
+  normalizeStateAbbr,
+  type NormalizationResult,
+} from "@/lib/laneLocationNormalizer";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -987,6 +993,119 @@ interface BuildLaneForm {
 
 const EQUIPMENT_TYPES = ["Dry Van", "Reefer", "Flatbed", "Step Deck", "RGN", "Tanker", "Box Truck", "Other"];
 
+interface FieldNormState {
+  result: NormalizationResult | null;
+  dismissedSuggestion: boolean;
+  acceptedCandidate: string | null;
+}
+
+const EMPTY_NORM_STATE: FieldNormState = {
+  result: null,
+  dismissedSuggestion: false,
+  acceptedCandidate: null,
+};
+
+function LocationFeedback({
+  norm,
+  fieldId,
+  onAccept,
+  onDismiss,
+}: {
+  norm: FieldNormState;
+  fieldId: string;
+  onAccept: (canonical: string, city: string, state: string) => void;
+  onDismiss: () => void;
+}) {
+  const { result, dismissedSuggestion } = norm;
+  if (!result) return null;
+
+  if (result.status === "exact" && result.correctedFrom) {
+    return (
+      <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 mt-1" data-testid={`hint-corrected-${fieldId}`}>
+        <CheckCircle2 className="w-3 h-3 shrink-0" />
+        Auto-formatted to <span className="font-medium">{result.canonical}</span>
+      </p>
+    );
+  }
+
+  if (result.status === "corrected" && !dismissedSuggestion) {
+    return (
+      <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 mt-1" data-testid={`hint-corrected-${fieldId}`}>
+        <CheckCircle2 className="w-3 h-3 shrink-0" />
+        Corrected from <span className="italic">{result.correctedFrom}</span> → <span className="font-medium">{result.canonical}</span>
+      </p>
+    );
+  }
+
+  if ((result.status === "suggested") && !dismissedSuggestion) {
+    return (
+      <div className="flex items-center gap-1.5 mt-1 flex-wrap" data-testid={`hint-suggested-${fieldId}`}>
+        <span className="text-[11px] text-amber-600 dark:text-amber-400">Did you mean?</span>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-[11px] bg-amber-500/10 border border-amber-400/30 text-amber-600 dark:text-amber-400 rounded px-2 py-0.5 hover:bg-amber-500/20 transition-colors"
+          onClick={() => result.city && result.state && onAccept(result.canonical!, result.city, result.state)}
+          data-testid={`btn-accept-suggestion-${fieldId}`}
+        >
+          <CheckCircle2 className="w-3 h-3" />
+          {result.canonical}
+        </button>
+        <button
+          type="button"
+          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          onClick={onDismiss}
+          data-testid={`btn-dismiss-suggestion-${fieldId}`}
+        >
+          <X className="w-3 h-3" />
+        </button>
+      </div>
+    );
+  }
+
+  if (result.status === "ambiguous" && !dismissedSuggestion && result.candidates && result.candidates.length > 0) {
+    return (
+      <div className="mt-1" data-testid={`hint-ambiguous-${fieldId}`}>
+        <span className="text-[11px] text-amber-600 dark:text-amber-400 block mb-1">Did you mean?</span>
+        <div className="flex flex-wrap gap-1">
+          {result.candidates.slice(0, 4).map(c => (
+            <button
+              key={`${c.city}-${c.state}`}
+              type="button"
+              className="inline-flex items-center gap-1 text-[11px] bg-amber-500/10 border border-amber-400/30 text-amber-600 dark:text-amber-400 rounded px-2 py-0.5 hover:bg-amber-500/20 transition-colors"
+              onClick={() => onAccept(`${c.city}, ${c.state}`, c.city, c.state)}
+              data-testid={`btn-candidate-${fieldId}-${c.state}`}
+            >
+              {c.city}, {c.state}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="text-[11px] text-muted-foreground hover:text-foreground transition-colors px-1"
+            onClick={onDismiss}
+            data-testid={`btn-dismiss-ambiguous-${fieldId}`}
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (result.status === "invalid") {
+    const stateInvalid = result.state && result.state.length > 2;
+    return (
+      <p className="text-[11px] text-destructive flex items-center gap-1 mt-1" data-testid={`hint-invalid-${fieldId}`}>
+        <AlertCircle className="w-3 h-3 shrink-0" />
+        {stateInvalid
+          ? `"${result.state}" is not a valid US state`
+          : "City not recognized — double-check the spelling"}
+      </p>
+    );
+  }
+
+  return null;
+}
+
 function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
   const { toast } = useToast();
   const [form, setForm] = useState<BuildLaneForm>({
@@ -1000,29 +1119,154 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
     notes: "",
   });
 
+  const [originNorm, setOriginNorm] = useState<FieldNormState>(EMPTY_NORM_STATE);
+  const [destNorm, setDestNorm] = useState<FieldNormState>(EMPTY_NORM_STATE);
+
+  function runNormalization(city: string, state: string, setter: (s: FieldNormState) => void) {
+    if (!city.trim()) {
+      setter(EMPTY_NORM_STATE);
+      return;
+    }
+    const result = resolveLaneLocationWithConfidence(city, state || undefined);
+    setter({ result, dismissedSuggestion: false, acceptedCandidate: null });
+
+    if (result.status === "exact" || result.status === "corrected") {
+      if (result.city && result.state) {
+        return result;
+      }
+    }
+    return result;
+  }
+
+  function handleOriginBlur() {
+    const result = runNormalization(form.origin, form.originState, setOriginNorm);
+    if (result && (result.status === "exact" || result.status === "corrected") && result.city && result.state) {
+      setForm(f => ({ ...f, origin: result.city!, originState: result.state! }));
+    } else if (result && result.status === "corrected" && result.city && result.state) {
+      setForm(f => ({ ...f, origin: result.city!, originState: result.state! }));
+    }
+  }
+
+  function handleDestBlur() {
+    const result = runNormalization(form.destination, form.destinationState, setDestNorm);
+    if (result && (result.status === "exact" || result.status === "corrected") && result.city && result.state) {
+      setForm(f => ({ ...f, destination: result.city!, destinationState: result.state! }));
+    } else if (result && result.status === "corrected" && result.city && result.state) {
+      setForm(f => ({ ...f, destination: result.city!, destinationState: result.state! }));
+    }
+  }
+
+  function handleOriginStateBlur() {
+    if (!form.originState.trim()) return;
+    const { abbr, valid } = normalizeStateAbbr(form.originState);
+    if (valid && abbr) {
+      setForm(f => ({ ...f, originState: abbr }));
+      const existingStatus = originNorm.result?.status;
+      const needsRevalidation = !existingStatus || existingStatus === "invalid" || existingStatus === "ambiguous" || existingStatus === "suggested";
+      if (form.origin.trim() && needsRevalidation) {
+        runNormalization(form.origin, abbr, setOriginNorm);
+      }
+    } else if (!valid) {
+      setOriginNorm(prev => ({
+        ...prev,
+        result: {
+          status: "invalid",
+          canonical: null,
+          city: form.origin,
+          state: abbr ?? form.originState.toUpperCase(),
+          originalInput: `${form.origin}, ${form.originState}`,
+        },
+        dismissedSuggestion: false,
+        acceptedCandidate: null,
+      }));
+    }
+  }
+
+  function handleDestStateBlur() {
+    if (!form.destinationState.trim()) return;
+    const { abbr, valid } = normalizeStateAbbr(form.destinationState);
+    if (valid && abbr) {
+      setForm(f => ({ ...f, destinationState: abbr }));
+      const existingStatus = destNorm.result?.status;
+      const needsRevalidation = !existingStatus || existingStatus === "invalid" || existingStatus === "ambiguous" || existingStatus === "suggested";
+      if (form.destination.trim() && needsRevalidation) {
+        runNormalization(form.destination, abbr, setDestNorm);
+      }
+    } else if (!valid) {
+      setDestNorm(prev => ({
+        ...prev,
+        result: {
+          status: "invalid",
+          canonical: null,
+          city: form.destination,
+          state: abbr ?? form.destinationState.toUpperCase(),
+          originalInput: `${form.destination}, ${form.destinationState}`,
+        },
+        dismissedSuggestion: false,
+        acceptedCandidate: null,
+      }));
+    }
+  }
+
+  function acceptOriginSuggestion(_canonical: string, city: string, state: string) {
+    setForm(f => ({ ...f, origin: city, originState: state }));
+    setOriginNorm(EMPTY_NORM_STATE);
+  }
+
+  function acceptDestSuggestion(_canonical: string, city: string, state: string) {
+    setForm(f => ({ ...f, destination: city, destinationState: state }));
+    setDestNorm(EMPTY_NORM_STATE);
+  }
+
+  const originHasBlockingError = originNorm.result?.status === "invalid";
+  const destHasBlockingError = destNorm.result?.status === "invalid";
+
   const buildMutation = useMutation({
-    mutationFn: () =>
-      apiRequest("POST", "/api/lanes/manual", {
-        origin: form.origin.trim(),
-        originState: form.originState.trim() || undefined,
-        destination: form.destination.trim(),
-        destinationState: form.destinationState.trim() || undefined,
+    mutationFn: () => {
+      const originResult = resolveLaneLocationWithConfidence(form.origin, form.originState || undefined);
+      const destResult = resolveLaneLocationWithConfidence(form.destination, form.destinationState || undefined);
+
+      const finalOrigin = (originResult.status === "exact" || originResult.status === "corrected") && originResult.city
+        ? originResult.city
+        : form.origin.trim();
+      const finalOriginState = (originResult.status === "exact" || originResult.status === "corrected") && originResult.state
+        ? originResult.state
+        : form.originState.trim() || undefined;
+      const finalDest = (destResult.status === "exact" || destResult.status === "corrected") && destResult.city
+        ? destResult.city
+        : form.destination.trim();
+      const finalDestState = (destResult.status === "exact" || destResult.status === "corrected") && destResult.state
+        ? destResult.state
+        : form.destinationState.trim() || undefined;
+
+      return apiRequest("POST", "/api/lanes/manual", {
+        origin: finalOrigin,
+        originState: finalOriginState,
+        destination: finalDest,
+        destinationState: finalDestState,
         equipmentType: form.equipmentType || undefined,
         avgLoadsPerWeek: form.avgLoadsPerWeek ? parseFloat(form.avgLoadsPerWeek) : undefined,
         companyName: form.companyName.trim() || undefined,
         notes: form.notes.trim() || undefined,
-      }).then(r => r.json()),
+      }).then(r => r.json());
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
       toast({ title: "Lane created", description: "Manual lane added to the work queue." });
       onCreated();
       onClose();
       setForm({ origin: "", originState: "", destination: "", destinationState: "", equipmentType: "", avgLoadsPerWeek: "", companyName: "", notes: "" });
+      setOriginNorm(EMPTY_NORM_STATE);
+      setDestNorm(EMPTY_NORM_STATE);
     },
     onError: () => toast({ title: "Failed to create lane", variant: "destructive" }),
   });
 
-  const canSubmit = form.origin.trim().length > 0 && form.destination.trim().length > 0;
+  const canSubmit =
+    form.origin.trim().length > 0 &&
+    form.destination.trim().length > 0 &&
+    !originHasBlockingError &&
+    !destHasBlockingError;
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
@@ -1043,8 +1287,19 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
                 id="build-origin"
                 placeholder="e.g. Salt Lake City"
                 value={form.origin}
-                onChange={e => setForm(f => ({ ...f, origin: e.target.value }))}
+                onChange={e => {
+                  setForm(f => ({ ...f, origin: e.target.value }));
+                  setOriginNorm(EMPTY_NORM_STATE);
+                }}
+                onBlur={handleOriginBlur}
+                className={originHasBlockingError ? "border-destructive focus-visible:ring-destructive" : ""}
                 data-testid="input-build-origin"
+              />
+              <LocationFeedback
+                norm={originNorm}
+                fieldId="origin"
+                onAccept={acceptOriginSuggestion}
+                onDismiss={() => setOriginNorm(prev => ({ ...prev, dismissedSuggestion: true }))}
               />
             </div>
             <div className="space-y-1.5">
@@ -1054,7 +1309,10 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
                 placeholder="e.g. UT"
                 maxLength={2}
                 value={form.originState}
-                onChange={e => setForm(f => ({ ...f, originState: e.target.value.toUpperCase() }))}
+                onChange={e => {
+                  setForm(f => ({ ...f, originState: e.target.value.toUpperCase() }));
+                }}
+                onBlur={handleOriginStateBlur}
                 data-testid="input-build-origin-state"
               />
             </div>
@@ -1068,8 +1326,19 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
                 id="build-dest"
                 placeholder="e.g. Dallas"
                 value={form.destination}
-                onChange={e => setForm(f => ({ ...f, destination: e.target.value }))}
+                onChange={e => {
+                  setForm(f => ({ ...f, destination: e.target.value }));
+                  setDestNorm(EMPTY_NORM_STATE);
+                }}
+                onBlur={handleDestBlur}
+                className={destHasBlockingError ? "border-destructive focus-visible:ring-destructive" : ""}
                 data-testid="input-build-dest"
+              />
+              <LocationFeedback
+                norm={destNorm}
+                fieldId="dest"
+                onAccept={acceptDestSuggestion}
+                onDismiss={() => setDestNorm(prev => ({ ...prev, dismissedSuggestion: true }))}
               />
             </div>
             <div className="space-y-1.5">
@@ -1079,7 +1348,10 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
                 placeholder="e.g. TX"
                 maxLength={2}
                 value={form.destinationState}
-                onChange={e => setForm(f => ({ ...f, destinationState: e.target.value.toUpperCase() }))}
+                onChange={e => {
+                  setForm(f => ({ ...f, destinationState: e.target.value.toUpperCase() }));
+                }}
+                onBlur={handleDestStateBlur}
                 data-testid="input-build-dest-state"
               />
             </div>
@@ -1260,30 +1532,30 @@ export default function LaneWorkQueuePage() {
 
   // Filtered queue used by BucketSection renders
   const filteredQueue = useMemo(() => {
-    if (!queue) return null;
+    if (!queue?.unassigned) return null;
     return {
       unassigned: filterBucket(queue.unassigned),
-      noContactable: filterBucket(queue.noContactable),
-      assignedUntouched: filterBucket(queue.assignedUntouched),
-      inProgress: filterBucket(queue.inProgress),
+      noContactable: filterBucket(queue.noContactable ?? []),
+      assignedUntouched: filterBucket(queue.assignedUntouched ?? []),
+      inProgress: filterBucket(queue.inProgress ?? []),
     };
   }, [queue, customerFilter, highFreqOnly]);
 
   // Count high-frequency lanes across all buckets for the filter chip label
   const highFreqCount = useMemo(() => {
-    if (!queue) return 0;
+    if (!queue?.unassigned) return 0;
     return (
       queue.unassigned.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
-      queue.noContactable.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
-      queue.assignedUntouched.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
-      queue.inProgress.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length
+      (queue.noContactable ?? []).filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
+      (queue.assignedUntouched ?? []).filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
+      (queue.inProgress ?? []).filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length
     );
   }, [queue]);
 
-  const totalLanes = (queue?.unassigned.length ?? 0) +
-    (queue?.noContactable.length ?? 0) +
-    (queue?.assignedUntouched.length ?? 0) +
-    (queue?.inProgress.length ?? 0);
+  const totalLanes = (queue?.unassigned?.length ?? 0) +
+    (queue?.noContactable?.length ?? 0) +
+    (queue?.assignedUntouched?.length ?? 0) +
+    (queue?.inProgress?.length ?? 0);
 
   // Sort unassigned by avgLoadsPerWeek descending so highest-frequency lanes appear first
   const sortedUnassigned = [...(filteredQueue?.unassigned ?? [])].sort((a, b) => {
