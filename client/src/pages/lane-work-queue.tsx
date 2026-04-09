@@ -617,7 +617,7 @@ function LaneRow({
 
         {/* Right side actions */}
         <div className="flex flex-col items-center gap-2 shrink-0">
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1">
             {canDelete && (
               <button
                 className="p-1 rounded hover:bg-amber-500/10 text-muted-foreground hover:text-amber-400"
