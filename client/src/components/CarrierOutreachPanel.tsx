@@ -524,9 +524,16 @@ export function CarrierOutreachPanel({
     },
   });
 
-  const { data: outreachHistory = [], refetch: refetchHistory } = useQuery<OutreachLog[]>({
+  const { data: outreachHistory = [], refetch: refetchHistory, isLoading: isHistoryLoading, isError: isHistoryError } = useQuery<OutreachLog[]>({
     queryKey: ["/api/lanes", laneId, "outreach-history"],
-    queryFn: () => fetch(`/api/lanes/${laneId}/outreach-log`).then(r => r.json()),
+    queryFn: async () => {
+      const r = await fetch(`/api/lanes/${laneId}/outreach-log`);
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body?.error ?? `Failed to load outreach history (${r.status})`);
+      }
+      return r.json();
+    },
     enabled: !!laneId && open,
   });
 
@@ -2167,9 +2174,28 @@ export function CarrierOutreachPanel({
 
           {/* ── History Tab ──────────────────────────────────────────────── */}
           <TabsContent value="history" className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
-            {outreachHistory.length === 0 ? (
-              <p className="text-xs text-white/40 py-4">
-                No outreach history yet. Send emails to see them logged here.
+            {isHistoryLoading ? (
+              <div className="flex flex-col gap-3 animate-pulse" data-testid="history-loading">
+                {[1, 2, 3].map(i => (
+                  <div key={i} className="h-16 rounded-lg bg-white/6 border border-white/8" />
+                ))}
+              </div>
+            ) : isHistoryError ? (
+              <div className="flex flex-col items-center gap-2 py-6 text-center" data-testid="history-error">
+                <XCircle className="w-5 h-5 text-red-400" />
+                <p className="text-xs text-red-400 font-medium">Could not load outreach history</p>
+                <p className="text-[10px] text-white/40">Contact support if this persists</p>
+                <button
+                  onClick={() => refetchHistory()}
+                  className="mt-1 text-[10px] text-white/50 underline hover:text-white/70"
+                  data-testid="history-retry"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : outreachHistory.length === 0 ? (
+              <p className="text-xs text-white/40 py-4" data-testid="history-empty">
+                No outreach history yet for this lane.
               </p>
             ) : (
               <div className="flex flex-col gap-3">
