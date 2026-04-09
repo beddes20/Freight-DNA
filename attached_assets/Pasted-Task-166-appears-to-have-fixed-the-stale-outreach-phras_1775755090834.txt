@@ -1,0 +1,105 @@
+Task #166 appears to have fixed the stale outreach phrasing across the major code paths, but I want a final end-to-end verification in the actual app — not just code review and not just unit tests.
+
+Please do a full proof-of-behavior audit of lane outreach generation and return concrete evidence.
+
+Context
+We recently fixed multiple issues in the lane outreach generation flow:
+- server/laneOutreachEmailBuilder.ts fallback had banned phrases
+- server/routes/laneCarrierOutreach.ts AI prompt leaked banned phrasing and allowed false relationship claims
+- client/src/components/CarrierOutreachPanel.tsx had a second fallbackBody with the same bad phrasing
+- relationship logic incorrectly treated any catalog carrier as “known”; this was changed to verified-history logic using payeeCode
+- equipment normalization and lane formatting were also improved
+- tests are now passing, but I want live-path verification
+
+Your job
+Trace and verify the entire outreach generation path end to end in the running app and in the actual request/response flow.
+
+What I need verified
+1. AI path
+Generate at least one outreach draft through the normal AI-enabled path.
+Use a realistic lane and carrier.
+Capture:
+- the request inputs
+- whether AI path was actually used
+- the final generated subject/body shown in the UI or returned by the API
+
+2. Fallback path
+Force at least one outreach draft through the fallback path.
+Do not just inspect code — actually trigger the path by disabling/failing AI in a controlled way.
+Capture:
+- the request inputs
+- proof that fallback path was used
+- the final generated subject/body shown in the UI or returned by the API
+
+3. Phrase audit
+For both the AI-generated draft and the fallback-generated draft, verify that none of the banned/stale phrasing appears.
+Specifically check for:
+- “we’ve run freight together before”
+- “corridor”
+- “love to connect”
+- “top of mind”
+- “I’d love to be on your radar”
+- any false claim that implies prior haul history when verified history does not exist
+
+4. Verified-history behavior
+Verify that a carrier without payeeCode does NOT get copy that implies prior business history.
+Verify that a carrier with payeeCode can use the history-aware path only if the prompt/output is still truthful.
+I want one example of each if possible:
+- no payeeCode
+- with payeeCode
+
+5. UI consistency
+Verify the final draft displayed in CarrierOutreachPanel matches the actual backend-generated content.
+I want confirmation that there is no stale second client-only fallback still surfacing old phrasing in the UI.
+
+6. Formatting checks
+Verify these formatting fixes in live output:
+- “po” equipment renders as “dry van”
+- bare 2-letter state-code city values render uppercase, e.g. “GA” not “Ga”
+- lane formatting reads naturally in the actual generated message
+
+Required output
+Return the following in a clean, direct format:
+
+A. Summary
+- whether the AI path is clean
+- whether the fallback path is clean
+- whether UI and backend outputs match
+- whether any stale phrasing still exists anywhere in the actual behavior
+
+B. Exact paths exercised
+- route/endpoint called
+- whether AI or fallback path executed
+- any relevant component or function names involved in the actual run
+
+C. Evidence
+For each scenario tested, include:
+- test scenario name
+- lane details used
+- carrier details used
+- whether payeeCode existed
+- generated subject
+- generated body
+- pass/fail against banned phrase audit
+
+D. Files inspected or changed
+If you had to make additional fixes, list exact files changed and why.
+
+E. Final conclusion
+One sentence: is this actually fixed end to end in the running product, yes or no?
+
+Important constraints
+- Do not stop at “tests pass”
+- Do not stop at “code looks correct”
+- Actually run the generation flow
+- Actually verify the content shown to the user
+- If anything is still wrong, fix it and rerun the same proof
+- Keep scope focused on lane outreach generation behavior, not unrelated product cleanup
+
+Success criteria
+I should be able to read your response and see:
+- one real AI-path example
+- one real fallback-path example
+- proof neither contains banned phrasing
+- proof false relationship claims are gone
+- proof the UI is not using stale local fallback content
