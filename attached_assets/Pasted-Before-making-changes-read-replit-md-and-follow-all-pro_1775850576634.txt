@@ -1,0 +1,243 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+We are upgrading the Lane Work Queue specifically for **high-frequency lanes** (2+ loads per week). This is a core workflow that ops/procurement will use constantly, so it needs to be fast, trustworthy, and deeply informative.
+
+Context (what already exists):
+- Lane Work Queue:
+  - Shows eligible lanes and LMAM ownership.
+  - Right-side panel with carrier suggestions and outreach tools.
+- Carrier procurement Phase 1:
+  - Ranking uses:
+    - region/equipment fit,
+    - exact lane history,
+    - customer history,
+    - prior outreach outcomes/signals.
+  - AI-generated procurement emails per carrier, plus a safe fallback template.
+  - Send-from-platform endpoints:
+    - POST /api/lanes/:laneId/draft-outreach-emails
+    - POST /api/lanes/:laneId/send-outreach-emails
+  - Outcome logging into carrierOutreachLogs (sentAt, deliveryStatus, recipients, failureReason).
+  - Bench entries get outreachSentAt stamped.
+  - History tab per lane shows past outreach.
+- Tests:
+  - ~46 tests previously, and more added since (work queue + outreach + carrier history).
+
+The pain points we want to eliminate:
+- On high-frequency lanes, carriers with strong exact-lane history sometimes don’t rank at/near the top.
+- Limited ergonomics for sending to a larger list (20+ carriers) quickly.
+- Lack of transparent “Why this carrier?” explanations.
+- No direct use of the new Market Signal / carrier intelligence NBAs to influence lane-level suggestions.
+
+Goal of this task:
+Ship **Lane Work Queue v2 for high-frequency lanes** that:
+- always surfaces the obviously-best carriers first,
+- explains *why* each carrier is suggested,
+- makes bulk outreach to 20–30 carriers fast and safe,
+- starts leveraging the Market Signal + carrier intelligence layer where appropriate,
+- remains fully test-covered and regression-safe.
+
+Scope:
+- Focus on lane-level procurement UX and ranking for lanes with 2+ loads/week.
+- No new UI pages; improve the existing Lane Work Queue panel and ranking.
+- Do NOT redesign the Market Signal engine, account scoring, or global NBA engine in this task.
+- Keep changes incremental and well-tested.
+
+--------------------------------------------------
+1. DEFINE “HIGH-FREQUENCY LANE” & FILTERING
+--------------------------------------------------
+
+First, make “2+ loads per week” an explicit, configurable concept.
+
+Implement:
+- A helper or config that determines if a lane is high-frequency, e.g.:
+  - frequencyLookbackDays (e.g., 30)
+  - minLoadsPerWeek (e.g., 2)
+  - computed as: total loads over lookback / weeks in window
+
+This doesn’t have to be perfect forecasting; it just needs to reliably identify lanes that run often enough to justify more tooling.
+
+Use this to:
+- mark lanes as high-frequency in Lane Work Queue,
+- optionally add a filter or badge (“High-frequency lane”).
+
+Keep thresholds in a central config file (not magic numbers).
+
+--------------------------------------------------
+2. RANKING V2 FOR HIGH-FREQUENCY LANES
+--------------------------------------------------
+
+For **high-frequency lanes only**, enhance the ranking logic so that:
+
+- Carriers with strong **exact-lane history** are always near the top.
+- Region/equipment fit and customer history still matter, but exact-lane history gets a strong weight bump.
+- Recent performance and outreach outcomes are incorporated (service & responsiveness).
+- For lanes with a lot of history, exact-lane + region patterns dominate noise.
+
+Concretely:
+- Revisit the scoring formula for suggested carriers when:
+  - lane.isHighFrequency === true
+
+Scoring should combine:
+- exact lane runs (count, recency)
+- near-lane / regional runs
+- equipment match certainty
+- customer history (if carrier has history with that customer on other lanes)
+- recent outreach outcomes (responded yes, no, non-responsive)
+- any carrier-level market NBA fit if available (optional in this task)
+
+Add tests for specific scenarios:
+- A carrier with 16 runs on this exact lane should rank top 1–3.
+- A carrier with only regional runs but no exact lane history should rank below exact-lane carriers.
+- Carriers with poor recent service (if such signals exist) should be penalized appropriately.
+
+Keep the ranking implementation:
+- deterministic,
+- debuggable,
+- with clear comments on weights.
+
+--------------------------------------------------
+3. “WHY THIS CARRIER?” EXPLANATIONS
+--------------------------------------------------
+
+Add a structured explanation for each suggested carrier in the Lane Work Queue panel.
+
+For each suggested carrier, compute and expose a breakdown like:
+
+- exactLaneHistory:
+  - runsOnThisLane: number
+  - lastRunAt: date
+- regionalHistory:
+  - runsInRegion: number
+- customerHistory:
+  - hasHistoryWithCustomer: boolean
+  - runsForThisCustomer: number (maybe across lanes)
+- outreachHistory:
+  - lastOutreachStatus: (sent, responded, declined, no-response)
+  - lastOutreachAt: date
+- fitSignals:
+  - regionEquipmentFitScore
+  - laneHistoryScore
+  - customerHistoryScore
+
+UI expectations (backend focus in this task):
+- Expose this breakdown through the existing API used by the Lane Work Queue panel.
+- Ensure the panel can render something like:
+  - “16 runs on this lane (last on 2026-03-28), strong fit for this customer, last outreach responded yes on 2026-03-30.”
+
+Add tests for the explanation builder:
+- Given certain history, the explanation object should contain the right counts/dates.
+- No explanation field should be missing or misleading.
+
+--------------------------------------------------
+4. BULK OUTREACH ERGONOMICS (20–30 CARRIERS)
+--------------------------------------------------
+
+Improve the “send to many carriers” flow for high-frequency lanes.
+
+Behavior:
+- On high-frequency lanes, the right-side panel should make it easy to:
+  - see a larger ranked list (e.g., top 20–30 carriers),
+  - select a subset (with sensible defaults, like top N),
+  - send AI-generated or template-based emails to that subset with minimal friction.
+
+Backend/API expectations:
+- Support sending outreach to an array of carrierIds for a lane in a single operation (reusing existing API semantics where possible).
+- Log outcomes correctly in carrierOutreachLogs (one entry per carrier).
+- Ensure idempotency/guardrails:
+  - avoid duplicate sends to the same carrier & lane in a short window (unless explicitly overridden).
+
+Tests:
+- Bulk send to N carriers creates N logs with correct recipients and lane reference.
+- When re-sending within a short configured window, either:
+  - system prevents duplicate logs, or
+  - marks them clearly as repeat outreach, per agreed behavior.
+
+--------------------------------------------------
+5. INTEGRATE EARLY WITH MARKET SIGNAL / CARRIER INTEL (OPTIONAL BUT PREFERRED)
+--------------------------------------------------
+
+If feasible within scope, add a small but meaningful integration point with the Market Signal + carrier intelligence layer (from Tasks #185/186/187):
+
+- When ranking carriers for a high-frequency lane:
+  - optionally boost carriers who also have a relevant carrier-side Market NBA for the same region/equipment.
+    - e.g., if a carrier has a “market_surge_carrier_outreach” NBA for outbound GA dry van, and this lane is GA→X dry van, give them a small score boost.
+
+This is a light integration:
+- Do not pull in heavy market-signal logic here.
+- Just:
+  - fetch relevant carrier-market NBAs for this lane’s scope (if available),
+  - bump those carriers slightly in the ranking,
+  - and add a fitSignals flag like `hasMarketNbaBoost: true` in the explanation.
+
+Tests:
+- When a carrier has a matching carrier-market NBA, they rank higher than an otherwise identical carrier without it.
+- Explanation reflects this with a clear flag.
+
+If this integration feels too heavy for one PR, stub the hook and leave TODOs, but keep the ranking logic ready to accept such a signal.
+
+--------------------------------------------------
+6. PERFORMANCE & UX GUARDRAILS
+--------------------------------------------------
+
+Ensure the v2 logic is performant for:
+- lanes with lots of history (many historical runs),
+- selection lists of 20–30 carriers.
+
+Guardrails:
+- Use efficient queries/joins and indexes for lane + carrier history lookups.
+- Avoid N+1 queries inside ranking loops; batch where possible.
+- Consider pagination if more than 30 carriers are available, but default view can be top N.
+
+Tests:
+- Add a test with a synthetic scenario of many carriers with history on a lane and ensure:
+  - ranking still computes quickly,
+  - the right carriers appear at the top.
+
+--------------------------------------------------
+7. TESTS & REGRESSION PROTECTION
+--------------------------------------------------
+
+Add/update tests for:
+
+1) Ranking correctness:
+   - exact-lane heavy user ranks highest.
+   - regional-only carriers rank below exact-lane carriers when both exist.
+   - carriers with poor recent signals are down-weighted.
+
+2) Explanation correctness:
+   - explanation object fields match underlying history.
+   - explanation is stable/deterministic.
+
+3) Bulk outreach:
+   - sending to multiple carriers creates correct logs.
+   - no accidental double-sends in a short window (per chosen behavior).
+
+4) High-frequency identification:
+   - lanes above threshold are marked high-frequency.
+   - lanes below threshold are not.
+
+5) Integration safety:
+   - non-high-frequency lanes continue to behave as before (no regression).
+   - if Market Signal integration is added, it doesn’t break ranking when no signals exist.
+
+--------------------------------------------------
+8. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. short summary of what you changed
+2. exact files changed
+3. the definition and config used to detect high-frequency lanes
+4. updated ranking logic, with an emphasis on high-frequency lanes
+5. structure of the “Why this carrier” explanation object
+6. any new/updated endpoints for bulk outreach
+7. any integration with Market Signal / carrier NBAs (or explicit TODOs if stubbed)
+8. tests added/updated
+9. assumptions and edge cases
+
+Success criteria:
+- For lanes with 2+ loads per week, the Lane Work Queue feels:
+  - obviously correct in which carriers appear at the top,
+  - transparent (why each carrier),
+  - fast for sending to 20–30 carriers,
+  - and ready to plug deeper into the Market Signal / carrier intelligence layer.
