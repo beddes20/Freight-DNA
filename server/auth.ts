@@ -181,10 +181,29 @@ export function setupAuth(app: any) {
   });
 }
 
+// Symbol used to cache the resolved user on the request object so routes that
+// call getCurrentUser() after requireAuth() don't pay a second DB round-trip.
+const RESOLVED_USER = Symbol("resolvedUser");
+
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   // Primary: Clerk JWT auth
   const { userId } = getAuth(req);
-  if (userId) return next();
+  if (userId) {
+    // Resolve the user now and cache it on the request.  This also back-fills
+    // req.session so the many existing routes that read req.session.organizationId
+    // continue to work whether a real express-session is present or not.
+    const user = await getCurrentUser(req);
+    if (user) {
+      (req as any)[RESOLVED_USER] = user;
+      if (!req.session) {
+        (req as any).session = { organizationId: user.organizationId, userId: user.id };
+      } else {
+        req.session.organizationId = req.session.organizationId || user.organizationId;
+        req.session.userId = req.session.userId || user.id;
+      }
+    }
+    return next();
+  }
 
   // Secondary (dev/test only): session-based auth
   if (!IS_PROD && req.session?.userId) return next();
@@ -193,6 +212,9 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 }
 
 export async function getCurrentUser(req: Request): Promise<User | null> {
+  // Return cached value if requireAuth already resolved it
+  if ((req as any)[RESOLVED_USER]) return (req as any)[RESOLVED_USER];
+
   // Check Clerk first
   const { userId: clerkUserId } = getAuth(req);
   if (clerkUserId) {
