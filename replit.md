@@ -49,6 +49,20 @@ The application uses React, TypeScript, Tailwind CSS, and `shadcn/ui` for a mode
     - **My Procurement**: Personal unified work surface for reps at `/my-procurement`, showing LWQ lane assignments and open award carrier procurement tasks.
     - **Carrier Hub (Phase 1)**: Central carrier intelligence layer with contact management, claimed lanes, and activity tracking.
     - **LWQ ↔ Carrier Hub Cross-Linking**: Provides explanations for ranked carrier suggestions and allows navigation to Carrier Hub profiles.
+    - **Two-Way Carrier Email (Task #183)**: Outbound emails to carriers include a reply-to address routed through Microsoft Graph webhook. Inbound replies are matched to outreach logs, stored, and surfaced in the CarrierOutreachPanel with a reply thread view. Reply status tracked per log (`replied`, `reply_snippet`, `replied_at`, `reply_message_id`).
+    - **Inbound Reply Surfaces (Task #184)**: Inbound carrier replies are surfaced across Lane Work Queue, My Procurement, and the sidebar with a `needsAction` distinction. `needsAction = hotCount > 0 AND no open follow-up task`. Two visual states: ⚡ bright green "Needs Action" (unactioned hot reply) vs. muted green (already actioned). Sidebar badge counts only unactioned lanes. Auto follow-up tasks are created for `available_now` and `available_next_week` classifications only; the task description includes the inbound reply snippet. See approved spec below.
+
+## Inbound Reply Auto-Task Spec (locked April 2026)
+
+This governs `ensureHotFollowUpTask` in `server/routes/laneCarrierOutreach.ts`. These rules were explicitly confirmed by the product owner and must not be changed without re-approval.
+
+| Rule | Behavior |
+|---|---|
+| **Trigger** | `available_now` and `available_next_week` only. `needs_follow_up` does NOT trigger a task — too broad, would create noise. |
+| **Deduplication** | Per-open-task: while any open (non-closed) follow-up task exists, skip creation. After closure, new qualifying replies from the same carrier on the same lane CAN create a new task. |
+| **Needs Action clearing** | Task creation = actioned. No secondary explicit action log required. |
+| **Event key** | Prefer `carrier_hot_event:{interestId}` when interest ID is known; fall back to `carrier_hot:{laneId}:{carrierId}`. |
+| **Reply snippet** | Included as a quoted block in the task description so the assignee can see the carrier's reply without opening the full thread. |
 
 ## Carrier History & Ranking Contract (locked April 2026)
 
@@ -150,7 +164,7 @@ npx tsx tests/carrier-history-extraction.test.ts
 ```
 
 All three test suites must stay green at all times:
-- `npx tsx tests/guardrails.test.ts` — 55 assertions (shared surface integrity)
+- `npx tsx tests/guardrails.test.ts` — 43 assertions (shared surface integrity)
 - `npx tsx tests/my-procurement.test.ts` — 20 assertions (My Procurement contract)
 - `npx tsx tests/carrier-history-extraction.test.ts` — 45 assertions (this contract)
 
@@ -159,7 +173,8 @@ All three test suites must stay green at all times:
 - **xlsx (SheetJS)**: For Excel and CSV parsing.
 - **multer**: For file uploads.
 - **Leaflet**: For interactive mapping.
-- **OneDrive API (Microsoft Graph API)**: For financial data synchronization.
+- **OneDrive API (Microsoft Graph API)**: For financial data synchronization and reply webhook routing.
 - **node-cron**: For scheduling recurring jobs.
 - **Resend / GoDaddy SMTP**: For sending transactional and report emails.
 - **OpenAI (GPT-4o-mini)**: For AI-assisted features (RFP column mapping, lane gap insights, email drafting).
+- **Microsoft Graph API (Outlook)**: Two-way carrier email via webhook subscription; inbound replies matched to outreach logs.
