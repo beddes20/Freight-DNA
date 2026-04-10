@@ -299,7 +299,10 @@ export default function AdminCarriers() {
       const res = await fetch("/api/admin/carriers/seed-from-excel", { method: "POST", body: fd });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? `Import failed (${res.status})`);
+        const b = body as { error?: string; message?: string; details?: string };
+        const msg = b.error ?? b.message ?? `Import failed (${res.status})`;
+        const detail = b.details ? `: ${b.details}` : "";
+        throw new Error(`${msg}${detail}`);
       }
       return res.json() as Promise<SeedResponse>;
     },

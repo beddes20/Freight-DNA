@@ -236,14 +236,14 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Carrier Excel Seed ─────────────────────────────────────────────────────
 
-  app.post("/api/admin/carriers/seed-from-excel", upload.single("file"), async (req, res) => {
+  app.post("/api/admin/carriers/seed-from-excel", upload.single("file"), async (req, res, next) => {
+    try {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!ADMIN_ROLES.includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    try {
-      const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
       const sheetName = wb.SheetNames[0];
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" }) as Record<string, unknown>[];
 
@@ -605,8 +605,20 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       }
     } catch (err) {
       console.error("[carrier-seed]", err);
-      res.status(500).json({ error: "Failed to parse Excel file", details: (err as Error)?.message });
+      return res.status(500).json({ error: "Failed to process file", details: (err as Error)?.message });
     }
+  });
+
+  app.use("/api/admin/carriers/seed-from-excel", (err: any, _req: any, res: any, next: any) => {
+    if (err && err.code === "LIMIT_FILE_SIZE") {
+      console.error("[carrier-seed] file too large:", err.message);
+      return res.status(400).json({ error: "File too large", details: err.message });
+    }
+    if (err) {
+      console.error("[carrier-seed] multer error:", err);
+      return res.status(400).json({ error: "File upload error", details: err.message });
+    }
+    next();
   });
 
   // ── Lane Outreach Config (client-readable, no flag gate) ──────────────────
