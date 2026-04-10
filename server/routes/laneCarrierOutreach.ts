@@ -357,11 +357,25 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       if (mode === "rolodex") {
         const payeeCol  = findCol(["payee code", "payee"]);
         const nameCol   = findCol(["name", "legal name", "carrier name", "company name", "company"]);
-        const mcCol     = findCol(["mc number", "mc#", "mc num", "mc"]);
-        const phoneCol  = findCol(["phone number", "phone", "tel"]);
-        const emailCol  = findCol(["contact email", "email"]);
-        const cityCol   = findCol(["city"]);
-        const stateCol  = findCol(["state"]);
+        const mcCol          = findCol(["mc number", "mc#", "mc num", "mc"]);
+        const phoneCol       = findCol(["phone number", "phone", "tel"]);
+        const emailCol       = findCol(["contact email", "email"]);
+        const cityCol        = findCol(["city"]);
+        const stateCol       = findCol(["state"]);
+        // Extended fields — captured when present in the source file
+        const legalNameCol   = findCol(["legal name"]);
+        const dotCol         = findCol(["dot number", "dot#", "dot num"]);
+        const equipCol       = findCol(["primary equip type", "equipment type", "equip type", "trailer type", "equipment", "equip"]);
+        const statusCol      = findCol(["activity status", "status"]);
+
+        /** Map a raw TMS status string to the canonical carrier status enum. */
+        function mapCarrierStatus(raw: string): "active" | "inactive" | "do_not_use" | null {
+          const v = raw.toLowerCase().trim();
+          if (v === "active")                            return "active";
+          if (v === "inactive" || v === "suspended")    return "inactive";
+          if (v === "do not use" || v === "do_not_use") return "do_not_use";
+          return null;
+        }
 
         // Load ALL existing carriers once — avoids N individual lookups per row
         const allExisting = await storage.getCarriers(orgId);
@@ -385,11 +399,16 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
           if (!payeeCode && !rawName) { blankRows++; continue; }
 
-          const mcNumber = str(row, mcCol);
-          const phone    = str(row, phoneCol) || null;
-          const email    = str(row, emailCol) || null;
-          const city     = str(row, cityCol)  || null;
-          const state    = str(row, stateCol) || null;
+          const mcNumber       = str(row, mcCol);
+          const phone          = str(row, phoneCol) || null;
+          const email          = str(row, emailCol) || null;
+          const city           = str(row, cityCol)  || null;
+          const state          = str(row, stateCol) || null;
+          const legalName      = str(row, legalNameCol) || null;
+          const dotNumber      = str(row, dotCol) || null;
+          const rawEquip       = str(row, equipCol);
+          const equipmentTypes = rawEquip ? [rawEquip] : [];
+          const mappedStatus   = statusCol ? mapCarrierStatus(str(row, statusCol)) : null;
 
           // ── Match priority (in-memory) ───────────────────────────────────────
           let existing: Carrier | undefined;
@@ -413,12 +432,15 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
             toCreate.push({
               orgId,
               name: rawName,
+              legalName,
               payeeCode: payeeCode || null,
               mcDot: mcNumber || null,
+              dotNumber,
               phone, city, state,
               primaryEmail: email,
               backupEmail: null,
-              regions: [], equipmentTypes: [], tags: [],
+              regions: [], equipmentTypes, tags: [],
+              status: mappedStatus ?? "active",
             });
             createdNames.add(nameKey);
             // Update in-memory maps so subsequent rows don't create duplicates
@@ -440,12 +462,19 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
           // Prefer non-empty rolodex value; never overwrite existing non-empty with blank
           const patch: Partial<Omit<InsertCarrier, 'orgId'>> = {};
-          if (!existing.payeeCode && payeeCode)                    patch.payeeCode    = payeeCode;
-          if (!existing.mcDot    && mcNumber && !conflicts.find(c => c.startsWith(existing!.name))) patch.mcDot = mcNumber;
-          if (!existing.phone    && phone)                         patch.phone        = phone;
-          if (!existing.primaryEmail && email)                     patch.primaryEmail = email;
-          if (!existing.city     && city)                          patch.city         = city;
-          if (!existing.state    && state)                         patch.state        = state;
+          if (!existing.payeeCode  && payeeCode)                    patch.payeeCode  = payeeCode;
+          if (!existing.mcDot      && mcNumber && !conflicts.find(c => c.startsWith(existing!.name))) patch.mcDot = mcNumber;
+          if (!existing.dotNumber  && dotNumber)                    patch.dotNumber  = dotNumber;
+          if (!existing.legalName  && legalName)                    patch.legalName  = legalName;
+          if (!existing.phone      && phone)                        patch.phone      = phone;
+          if (!existing.primaryEmail && email)                      patch.primaryEmail = email;
+          if (!existing.city       && city)                         patch.city       = city;
+          if (!existing.state      && state)                        patch.state      = state;
+          if ((!existing.equipmentTypes || existing.equipmentTypes.length === 0) && equipmentTypes.length > 0)
+            patch.equipmentTypes = equipmentTypes;
+          // Only update status if carrier is currently "active" and file says it's inactive/DNU
+          if (mappedStatus && mappedStatus !== "active" && existing.status === "active")
+            patch.status = mappedStatus;
 
           if (Object.keys(patch).length === 0) { upToDate++; continue; }
           toUpdate.push({ existing, patch });
