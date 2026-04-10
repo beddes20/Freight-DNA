@@ -206,7 +206,7 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
 
     // First sign-in: try to link by email
     try {
-      const clerkUser = await clerkClient().users.getUser(clerkUserId);
+      const clerkUser = await clerkClient.users.getUser(clerkUserId);
       const email = clerkUser.emailAddresses[0]?.emailAddress?.toLowerCase();
       if (email) {
         const dbUser = await storage.getUserByUsername(email);
