@@ -1468,11 +1468,6 @@ House style — follow every rule:
    *   - The moment a follow-up task is created, the lane is no longer "Needs Action".
    *   - No secondary explicit action log is required to clear the indicator.
    *
-   * NOTE: A prior automated code review suggested changing all three of the above
-   * behaviors. Those suggestions were based on an assumed spec, not the approved product
-   * behavior, and were explicitly rejected by the product owner. The behaviors above are
-   * final and intentional.
-   *
    * `replySnippet` (when available) is appended as a quoted block in the task description
    * so the assignee can see what the carrier said without opening the full thread.
    */
