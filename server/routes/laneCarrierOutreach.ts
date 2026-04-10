@@ -1395,16 +1395,34 @@ House style — follow every rule:
   });
 
   /**
-   * ensureHotFollowUpTask — creates a follow-up task when a carrier is classified
-   * as hot (available_now | available_next_week). Idempotent using two-level deduplication:
+   * ensureHotFollowUpTask — creates a carrier follow-up task when a reply is classified
+   * as hot. This function encodes the following APPROVED product spec (confirmed by
+   * product owner April 2026; do not change without explicit re-approval):
    *
-   * - If `eventId` is provided (e.g., interestId or outreach log id), a per-event key
-   *   `carrier_hot_event:{eventId}` is used — one task per unique reply event.
-   * - Otherwise falls back to a per-carrier+lane key `carrier_hot:{laneId}:{carrierId}`
-   *   which prevents duplicate open tasks for the same carrier+lane pair.
+   * TRIGGER: available_now or available_next_week ONLY.
+   *   - needs_follow_up does NOT trigger task creation — it is too broad and would
+   *     produce noisy tasks from ambiguous or non-committal replies.
    *
-   * `replySnippet` (when available) is appended to the task description so the
-   * assignee can see what the carrier actually said without opening the full thread.
+   * DEDUPLICATION: per-open-task, not permanent lifetime dedupe.
+   *   - While any open (non-closed) follow-up task exists for this event/lane/carrier,
+   *     skip creation to prevent duplicates within the same work cycle.
+   *   - After a task is CLOSED, a new qualifying reply from the same carrier on the same
+   *     lane IS allowed to generate a new task. A new later reply is a new actionable event.
+   *   - Two-level key: if `eventId` is known (interest record id), use per-event key
+   *     `carrier_hot_event:{eventId}`. Otherwise fall back to `carrier_hot:{laneId}:{carrierId}`.
+   *
+   * NEEDS ACTION CLEARING: task creation = actioned.
+   *   - A lane is "unactioned" while hotCount > 0 and no open follow-up task exists.
+   *   - The moment a follow-up task is created, the lane is no longer "Needs Action".
+   *   - No secondary explicit action log is required to clear the indicator.
+   *
+   * NOTE: A prior automated code review suggested changing all three of the above
+   * behaviors. Those suggestions were based on an assumed spec, not the approved product
+   * behavior, and were explicitly rejected by the product owner. The behaviors above are
+   * final and intentional.
+   *
+   * `replySnippet` (when available) is appended as a quoted block in the task description
+   * so the assignee can see what the carrier said without opening the full thread.
    */
   async function ensureHotFollowUpTask(
     laneId: string,
