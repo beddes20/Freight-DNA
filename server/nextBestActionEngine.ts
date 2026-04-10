@@ -26,8 +26,9 @@
  */
 
 import type { IStorage } from "./storage";
-import type { Touchpoint, Contact, Rfp } from "../shared/schema";
+import type { Touchpoint, Contact, Rfp, EmailMessage, EmailSignal } from "../shared/schema";
 import { businessDaysAgo } from "./growthScoreCalculator";
+import { storage as defaultStorage } from "./storage";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -589,4 +590,166 @@ export async function computeNextBestAction(
   const { signals, businessDaysSinceLastTouch } = await gatherSignals(companyId, organizationId, storage);
   const action  = evaluateRules(signals, businessDaysSinceLastTouch);
   return { ...action, signals };
+}
+
+// ── Email Signal → NBA Card mapping (Task #190) ───────────────────────────────
+
+/**
+ * Signal → NBA card mapping table.
+ *
+ * Keys are intentType values from the email intelligence taxonomy.
+ * Values are the ruleType, urgency, and outcomeType for the NBA card, or null
+ * when the signal does not warrant its own NBA card (hard confirmations, positive signals, etc.).
+ *
+ * outcomeType semantics:
+ *   protect  — at-risk or defensive action (close-lost risk, stalled threads, service issues)
+ *   grow     — expansion or revenue-capture opportunity (new lanes, pricing, contracts)
+ *   execute  — capacity or operational action (lane coverage, carrier follow-through)
+ */
+interface NbaSignalMapping {
+  ruleType: string;
+  urgency: string;
+  outcomeType: string;
+}
+
+const EMAIL_SIGNAL_NBA_MAP: Record<string, NbaSignalMapping | null> = {
+  // Carrier signals — Execute (capacity management) or Protect (service/risk)
+  lane_offer:             { ruleType: "recurring_lane_capacity",         urgency: "high",     outcomeType: "execute" },
+  lane_decline:           { ruleType: "load_decline",                    urgency: "high",     outcomeType: "execute" },
+  capacity_available:     { ruleType: "recurring_lane_capacity",         urgency: "moderate", outcomeType: "execute" },
+  capacity_unavailable:   { ruleType: "single_thread_risk",              urgency: "moderate", outcomeType: "execute" },
+  new_lane_preference:    { ruleType: "recurring_lane_capacity",         urgency: "moderate", outcomeType: "execute" },
+  price_pushback:         { ruleType: "stale_account",                   urgency: "moderate", outcomeType: "protect" },
+  service_issue:          { ruleType: "overdue_next_action",             urgency: "high",     outcomeType: "protect" },
+  soft_commitment:        { ruleType: "stale_account",                   urgency: "moderate", outcomeType: "execute" },
+  hard_commitment:        null,
+  paperwork_compliance:   null,
+
+  // Customer signals — Grow (opportunity) or Protect (at-risk/churn defense)
+  pricing_request:        { ruleType: "market_surge_customer_outreach",  urgency: "high",     outcomeType: "grow"    },
+  objection:              { ruleType: "stale_account",                   urgency: "moderate", outcomeType: "protect" },
+  service_complaint:      { ruleType: "overdue_next_action",             urgency: "high",     outcomeType: "protect" },
+  urgency_signal:         { ruleType: "overdue_next_action",             urgency: "high",     outcomeType: "execute" },
+  stalled_thread:         { ruleType: "stale_account",                   urgency: "moderate", outcomeType: "protect" },
+  meaningful_touchpoint:  null,
+  new_opportunity:        { ruleType: "spot_to_contract",                urgency: "high",     outcomeType: "grow"    },
+  positive_feedback:      null,
+  closed_won_indicator:   null,
+  closed_lost_indicator:  { ruleType: "stale_account",                   urgency: "critical", outcomeType: "protect" },
+};
+
+export const SIGNAL_CONFIDENCE_THRESHOLD = 60;
+
+/**
+ * Given a set of email signals that were just extracted from a message,
+ * creates NBA cards for signals that map to known NBA rule types.
+ *
+ * Supports both account-context (linkedAccountId) and carrier-context
+ * (linkedCarrierId with a lane resolved to a company) generation paths.
+ * Skips signals below the confidence threshold and deduplicates via
+ * getRecentNbaCardByType (24h window).
+ */
+type NbaEmailStorage = Pick<
+  IStorage,
+  "getRecentNbaCardByType" | "getRecurringLane" | "getFirstOrgAdmin" | "createNbaCard"
+>;
+
+export async function generateNbasFromEmailSignals(
+  orgId: string,
+  message: EmailMessage,
+  signals: EmailSignal[],
+  storageInstance: NbaEmailStorage = defaultStorage,
+): Promise<void> {
+  for (const signal of signals) {
+    if (signal.confidence < SIGNAL_CONFIDENCE_THRESHOLD) continue;
+
+    const mapping = EMAIL_SIGNAL_NBA_MAP[signal.intentType];
+    if (!mapping) continue;
+
+    // Resolve the account (companyId) for the NBA card.
+    // Direct account link is preferred; for carrier signals we fall through to
+    // the lane's company when the message has no explicit account link.
+    let companyId: string | null = message.linkedAccountId ?? null;
+
+    if (!companyId && message.linkedLaneId) {
+      const lane = await storageInstance.getRecurringLane(message.linkedLaneId);
+      companyId = lane?.companyId ?? null;
+    }
+
+    if (!companyId) continue;
+
+    // 24-hour dedup — skip if a card of this rule type was already created today.
+    const existingCard = await storageInstance.getRecentNbaCardByType(companyId, mapping.ruleType, 1);
+    if (existingCard) continue;
+
+    // Assign to lane owner if possible, otherwise fall back to org admin.
+    let assignedUserId: string | null = null;
+    if (message.linkedLaneId) {
+      const lane = await storageInstance.getRecurringLane(message.linkedLaneId);
+      if (lane?.ownerUserId) assignedUserId = lane.ownerUserId;
+    }
+    if (!assignedUserId) {
+      const admin = await storageInstance.getFirstOrgAdmin(orgId);
+      assignedUserId = admin?.id ?? null;
+    }
+    if (!assignedUserId) continue;
+
+    const confidenceLabel: string =
+      signal.confidence >= 80 ? "high" : signal.confidence >= 60 ? "medium" : "low";
+    const urgencyScore: number =
+      mapping.urgency === "critical" ? 90 : mapping.urgency === "high" ? 70 : 50;
+
+    // signalSummary is typed as jsonb (any[]) — use a plain object array
+    const signalSummaryValue: Array<Record<string, unknown>> = [
+      { intentType: signal.intentType, confidence: signal.confidence },
+    ];
+
+    const now = new Date().toISOString();
+    await storageInstance.createNbaCard({
+      companyId,
+      userId: assignedUserId,
+      orgId,
+      ruleType: mapping.ruleType,
+      outcomeType: mapping.outcomeType,
+      confidence: confidenceLabel,
+      signalCount: 1,
+      signalSummary: signalSummaryValue,
+      whyThisNow: buildNbaTitleFromSignal(signal),
+      suggestedAction: buildNbaBodyFromSignal(signal, message),
+      expectedOutcome: "Engage promptly to maintain the relationship and resolve the issue.",
+      urgencyScore,
+      status: "generated",
+      linkedLaneId: message.linkedLaneId ?? null,
+      createdAt: now,
+    });
+  }
+}
+
+function buildNbaTitleFromSignal(signal: EmailSignal): string {
+  const titles: Record<string, string> = {
+    lane_offer:             "Carrier offering lane capacity — log interest",
+    lane_decline:           "Carrier declined lane — find backup",
+    capacity_available:     "Carrier has capacity available",
+    capacity_unavailable:   "Carrier capacity unavailable",
+    new_lane_preference:    "Carrier expressing new lane preference",
+    price_pushback:         "Carrier rate pushback — review pricing",
+    service_issue:          "Carrier reported a service issue",
+    soft_commitment:        "Carrier gave soft commitment — confirm",
+    pricing_request:        "Customer requested pricing",
+    objection:              "Customer objection raised",
+    service_complaint:      "Service complaint received",
+    urgency_signal:         "Customer urgent — action needed",
+    stalled_thread:         "Email thread stalled — follow up",
+    new_opportunity:        "New freight opportunity from customer",
+    closed_lost_indicator:  "Customer lost signal detected",
+  };
+  return titles[signal.intentType] ?? `Email signal: ${signal.intentType}`;
+}
+
+function buildNbaBodyFromSignal(signal: EmailSignal, message: EmailMessage): string {
+  const base = `Detected from ${message.direction} email` +
+    (message.subject ? ` — "${message.subject.slice(0, 80)}"` : "") +
+    `. Intent: ${signal.intentType} (${signal.confidence}% confidence).`;
+  if (signal.intentSubtype) return `${base} Subtype: ${signal.intentSubtype}.`;
+  return base;
 }

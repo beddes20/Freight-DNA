@@ -146,6 +146,12 @@ import {
   type CarrierMarketNba,
   type InsertCarrierMarketNba,
   carrierClaimedLanes,
+  emailMessages,
+  type EmailMessage,
+  type InsertEmailMessage,
+  emailSignals,
+  type EmailSignal,
+  type InsertEmailSignal,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -717,6 +723,33 @@ export interface IStorage {
   getCarriersByOrgForMarketSignal(orgId: string): Promise<import('@shared/schema').Carrier[]>;
   getCarrierClaimedLanesByCarrierId(carrierId: string): Promise<import('@shared/schema').CarrierClaimedLane[]>;
   getFinancialRowsForCarrierSignal(orgId: string, originRegion: string, equipmentType: string | null, since: Date): Promise<Array<{ carrierId: string | null; originRegion: string | null; occurredAt: Date }>>;
+
+  // Email Intelligence Layer (Task #190)
+  insertEmailMessage(data: import('@shared/schema').InsertEmailMessage): Promise<import('@shared/schema').EmailMessage>;
+  /**
+   * Insert an inbound email_message row, or return the existing row if a row
+   * with the same (orgId, providerMessageId) already exists.
+   * This prevents duplicate rows from replayed Graph API webhook notifications.
+   * When providerMessageId is absent falls back to plain insert.
+   */
+  upsertInboundEmailMessage(data: import('@shared/schema').InsertEmailMessage): Promise<{ message: import('@shared/schema').EmailMessage; created: boolean }>;
+  updateEmailMessageLinks(id: string, links: {
+    linkedAccountId?: string | null;
+    linkedCarrierId?: string | null;
+    linkedLaneId?: string | null;
+    linkedLoadId?: string | null;
+    linkedTaskId?: string | null;
+    linkedNbaId?: string | null;
+    linkedOutreachLogId?: string | null;
+  }): Promise<import('@shared/schema').EmailMessage | undefined>;
+  insertEmailSignals(signals: import('@shared/schema').InsertEmailSignal[]): Promise<import('@shared/schema').EmailSignal[]>;
+  getEmailSignalsForAccount(accountId: string, limit?: number): Promise<import('@shared/schema').EmailSignal[]>;
+  getEmailSignalsForCarrier(carrierId: string, limit?: number): Promise<import('@shared/schema').EmailSignal[]>;
+  getEmailSignalsForLane(laneId: string, limit?: number): Promise<import('@shared/schema').EmailSignal[]>;
+  getEmailSignalsForLoad(loadId: string, limit?: number): Promise<import('@shared/schema').EmailSignal[]>;
+  getUnprocessedEmailMessages(limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
+  getEmailSignalsByThread(threadId: string, since?: Date): Promise<import('@shared/schema').EmailSignal[]>;
+  markEmailMessageProcessed(id: string): Promise<void>;
 }
 
 const pool = new Pool({
@@ -4775,6 +4808,141 @@ export class DatabaseStorage implements IStorage {
       const rowTokens = rowRegion.split("_").filter((t: string) => t.length === 2);
       return sigTokens.some((t: string) => rowTokens.includes(t));
     });
+  }
+
+  // ─── Email Intelligence Layer (Task #190) ──────────────────────────────────
+
+  async insertEmailMessage(data: InsertEmailMessage): Promise<EmailMessage> {
+    const [row] = await db.insert(emailMessages).values(data).returning();
+    return row;
+  }
+
+  async upsertInboundEmailMessage(
+    data: InsertEmailMessage,
+  ): Promise<{ message: EmailMessage; created: boolean }> {
+    // No provider key — fall back to plain insert (cannot dedupe)
+    if (!data.providerMessageId) {
+      const msg = await this.insertEmailMessage(data);
+      return { message: msg, created: true };
+    }
+
+    // Atomic insert-or-ignore using ON CONFLICT DO NOTHING on the
+    // unique index (org_id, provider_message_id WHERE provider_message_id IS NOT NULL).
+    // If a duplicate arrives the insert is silently skipped and we fall through
+    // to the SELECT to return the existing row — no race window.
+    const inserted = await db
+      .insert(emailMessages)
+      .values(data)
+      .onConflictDoNothing()
+      .returning();
+
+    if (inserted.length > 0) {
+      return { message: inserted[0], created: true };
+    }
+
+    // Row already existed — fetch and return it
+    const [existing] = await db
+      .select()
+      .from(emailMessages)
+      .where(
+        and(
+          eq(emailMessages.orgId, data.orgId),
+          eq(emailMessages.providerMessageId, data.providerMessageId),
+        ),
+      )
+      .limit(1);
+
+    return { message: existing, created: false };
+  }
+
+  async updateEmailMessageLinks(id: string, links: {
+    linkedAccountId?: string | null;
+    linkedCarrierId?: string | null;
+    linkedLaneId?: string | null;
+    linkedLoadId?: string | null;
+    linkedTaskId?: string | null;
+    linkedNbaId?: string | null;
+    linkedOutreachLogId?: string | null;
+  }): Promise<EmailMessage | undefined> {
+    const [row] = await db.update(emailMessages)
+      .set(links)
+      .where(eq(emailMessages.id, id))
+      .returning();
+    return row;
+  }
+
+  async insertEmailSignals(signals: InsertEmailSignal[]): Promise<EmailSignal[]> {
+    if (signals.length === 0) return [];
+    return db.insert(emailSignals).values(signals).returning();
+  }
+
+  async getEmailSignalsForAccount(accountId: string, limit = 100): Promise<EmailSignal[]> {
+    const msgs = await db.select({ id: emailMessages.id })
+      .from(emailMessages)
+      .where(eq(emailMessages.linkedAccountId, accountId));
+    if (msgs.length === 0) return [];
+    return db.select().from(emailSignals)
+      .where(inArray(emailSignals.messageId, msgs.map(m => m.id)))
+      .orderBy(desc(emailSignals.createdAt))
+      .limit(limit);
+  }
+
+  async getEmailSignalsForCarrier(carrierId: string, limit = 100): Promise<EmailSignal[]> {
+    const msgs = await db.select({ id: emailMessages.id })
+      .from(emailMessages)
+      .where(eq(emailMessages.linkedCarrierId, carrierId));
+    if (msgs.length === 0) return [];
+    return db.select().from(emailSignals)
+      .where(inArray(emailSignals.messageId, msgs.map(m => m.id)))
+      .orderBy(desc(emailSignals.createdAt))
+      .limit(limit);
+  }
+
+  async getEmailSignalsForLane(laneId: string, limit = 100): Promise<EmailSignal[]> {
+    const msgs = await db.select({ id: emailMessages.id })
+      .from(emailMessages)
+      .where(eq(emailMessages.linkedLaneId, laneId));
+    if (msgs.length === 0) return [];
+    return db.select().from(emailSignals)
+      .where(inArray(emailSignals.messageId, msgs.map(m => m.id)))
+      .orderBy(desc(emailSignals.createdAt))
+      .limit(limit);
+  }
+
+  async getEmailSignalsForLoad(loadId: string, limit = 100): Promise<EmailSignal[]> {
+    const msgs = await db.select({ id: emailMessages.id })
+      .from(emailMessages)
+      .where(eq(emailMessages.linkedLoadId, loadId));
+    if (msgs.length === 0) return [];
+    return db.select().from(emailSignals)
+      .where(inArray(emailSignals.messageId, msgs.map(m => m.id)))
+      .orderBy(desc(emailSignals.createdAt))
+      .limit(limit);
+  }
+
+  async getUnprocessedEmailMessages(limit = 50): Promise<EmailMessage[]> {
+    return db.select().from(emailMessages)
+      .where(isNull(emailMessages.processedForSignalsAt))
+      .orderBy(asc(emailMessages.createdAt))
+      .limit(limit);
+  }
+
+  async getEmailSignalsByThread(threadId: string, since?: Date): Promise<EmailSignal[]> {
+    const msgs = await db.select({ id: emailMessages.id })
+      .from(emailMessages)
+      .where(eq(emailMessages.threadId, threadId));
+    if (msgs.length === 0) return [];
+    const conditions: SQL[] = [inArray(emailSignals.messageId, msgs.map(m => m.id))];
+    if (since) conditions.push(gte(emailSignals.createdAt, since));
+    return db.select().from(emailSignals)
+      .where(and(...conditions))
+      .orderBy(desc(emailSignals.createdAt));
+  }
+
+  async markEmailMessageProcessed(id: string): Promise<void> {
+    await db.update(emailMessages)
+      .set({ processedForSignalsAt: new Date() })
+      .where(eq(emailMessages.id, id));
   }
 }
 

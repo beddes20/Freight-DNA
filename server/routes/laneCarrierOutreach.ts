@@ -23,6 +23,7 @@ import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "../emailGate";
 import { sendOutlookEmail, outlookEnabled } from "../outlookService";
 import { getGraphAccessToken } from "../graphService";
 import { getReplyTrackingStatus } from "../graphSubscriptionService";
+import { logOutboundCarrierEmail, logInboundCarrierEmail } from "../emailIntelligenceService";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -1994,6 +1995,29 @@ Rules for suggestions:
       logs.push(log);
     }
 
+    // ── Email Intelligence: log outbound email messages ────────────────────────
+    // Fire-and-forget per sent carrier to avoid blocking the response.
+    for (const r of results) {
+      if (r.status !== "sent") continue;
+      const draftForCarrier = emailDrafts.find(d =>
+        (d.carrierId && d.carrierId === r.carrierId) ||
+        (d.carrierName && d.carrierName === r.carrierName)
+      );
+      logOutboundCarrierEmail({
+        orgId: user.organizationId,
+        threadId: r.internetMessageId ?? primaryThreadId,
+        fromEmail: fromAddr,
+        toEmail: r.email,
+        subject: draftForCarrier?.subject ?? primarySubject,
+        body: draftForCarrier?.body ?? null,
+        linkedCarrierId: r.carrierId ?? null,
+        linkedLaneId: req.params.laneId,
+        linkedOutreachLogId: log.id,
+      }).catch(err =>
+        console.error("[emailIntelligence] outbound log error:", err)
+      );
+    }
+
     // Upsert bench entries for carriers that were contacted (sent or no_email still = attempt)
     const sentAt = now.toISOString();
     for (const r of results) {
@@ -2357,7 +2381,7 @@ Rules for suggestions:
 
         try {
           const token = await getGraphAccessToken();
-          const msgUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(replyMailbox)}/messages/${resourceId}?$select=id,internetMessageId,internetMessageHeaders,subject,bodyPreview,from,conversationId,toRecipients,receivedDateTime`;
+          const msgUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(replyMailbox)}/messages/${resourceId}?$select=id,internetMessageId,internetMessageHeaders,subject,bodyPreview,body,from,conversationId,toRecipients,receivedDateTime`;
           const msgRes = await fetch(msgUrl, {
             headers: { Authorization: `Bearer ${token}` },
           });
@@ -2373,8 +2397,11 @@ Rules for suggestions:
             internetMessageHeaders?: Array<{ name: string; value: string }>;
             subject?: string;
             bodyPreview?: string;
+            body?: { content?: string; contentType?: string };
             conversationId?: string;
             receivedDateTime?: string;
+            from?: { emailAddress?: { address?: string; name?: string } };
+            toRecipients?: Array<{ emailAddress?: { address?: string; name?: string } }>;
           };
 
           const msgHeaders = msg.internetMessageHeaders ?? [];
@@ -2445,6 +2472,39 @@ Rules for suggestions:
           await storage.recordOutreachReply(matchedLog.id, snippet, receivedAt);
           processed++;
           console.log(`[outlook-webhook] Reply recorded for outreach log ${matchedLog.id}`);
+
+          // ── Email Intelligence: queue inbound reply for signal extraction ───
+          // Use conversationId as threadId for consistent thread-level dedup;
+          // fall back to In-Reply-To message ID when conversationId is absent.
+          // Pass internetMessageId as providerMessageId for upsert idempotency
+          // so replayed Graph notifications don't create duplicate rows.
+          const emailThreadId = msg.conversationId
+            ?? (inReplyTo ? inReplyTo.replace(/[<>]/g, "") : null);
+          const providerMsgId = msg.internetMessageId
+            ? msg.internetMessageId.replace(/[<>]/g, "")
+            : null;
+          const carrierIds: string[] = Array.isArray(matchedLog.carrierIds)
+            ? (matchedLog.carrierIds as string[])
+            : [];
+          const firstCarrierId = carrierIds[0] ?? null;
+          logInboundCarrierEmail({
+            orgId: matchedLog.orgId,
+            providerMessageId: providerMsgId,
+            threadId: emailThreadId,
+            fromEmail: msg.from?.emailAddress?.address ?? null,
+            toEmail: msg.toRecipients?.[0]?.emailAddress?.address ?? null,
+            subject: msg.subject ?? null,
+            body: msg.body?.content ?? msg.bodyPreview ?? null,
+            linkedCarrierId: firstCarrierId,
+            linkedLaneId: matchedLog.laneId ?? null,
+            linkedOutreachLogId: matchedLog.id,
+          }).then(({ created }) => {
+            if (!created) {
+              console.log(`[emailIntelligence] skipped duplicate inbound message (providerMsgId=${providerMsgId})`);
+            }
+          }).catch(err =>
+            console.error("[emailIntelligence] inbound log error:", err)
+          );
         } catch (innerErr) {
           console.error(`[outlook-webhook] Error processing notification for resource ${resourceId}:`, innerErr);
         }

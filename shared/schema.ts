@@ -959,6 +959,8 @@ export const crmOpportunities = pgTable("crm_opportunities", {
   probability: integer("probability"),
   notes: text("notes"),
   lostReason: text("lost_reason"),
+  /** Task #190 — closed_won / closed_lost / null (open) */
+  outcome: text("outcome"),
   createdById: varchar("created_by_id").notNull().references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -1629,3 +1631,79 @@ export const featureFlags = pgTable("feature_flags", {
 export const insertFeatureFlagSchema = createInsertSchema(featureFlags).omit({ id: true, updatedAt: true });
 export type InsertFeatureFlag = z.infer<typeof insertFeatureFlagSchema>;
 export type FeatureFlag = typeof featureFlags.$inferSelect;
+
+// ─── Email Intelligence Layer (Task #190) ────────────────────────────────────
+
+export type CustomerIntentType =
+  | "pricing_request"
+  | "objection"
+  | "service_complaint"
+  | "urgency_signal"
+  | "stalled_thread"
+  | "meaningful_touchpoint"
+  | "new_opportunity"
+  | "positive_feedback"
+  | "closed_won_indicator"
+  | "closed_lost_indicator";
+
+export type CarrierIntentType =
+  | "lane_offer"
+  | "lane_decline"
+  | "capacity_available"
+  | "capacity_unavailable"
+  | "new_lane_preference"
+  | "price_pushback"
+  | "service_issue"
+  | "soft_commitment"
+  | "hard_commitment"
+  | "paperwork_compliance";
+
+export type EmailIntentType = CustomerIntentType | CarrierIntentType;
+
+export type EmailActorType = "customer" | "carrier" | "internal";
+
+export const emailMessages = pgTable("email_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  /**
+   * Provider-specific message ID (e.g. Graph internetMessageId / SMTP Message-ID).
+   * Used as an idempotency key so replayed webhooks don't insert duplicate rows.
+   * Unique per org.
+   */
+  providerMessageId: text("provider_message_id"),
+  threadId: text("thread_id"),
+  direction: text("direction").notNull(),
+  fromEmail: text("from_email"),
+  toEmail: text("to_email"),
+  ccEmail: text("cc_email"),
+  subject: text("subject"),
+  body: text("body"),
+  linkedAccountId: varchar("linked_account_id").references(() => companies.id, { onDelete: "set null" }),
+  linkedCarrierId: varchar("linked_carrier_id").references(() => carriers.id, { onDelete: "set null" }),
+  linkedLaneId: varchar("linked_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
+  linkedLoadId: varchar("linked_load_id"),
+  linkedTaskId: varchar("linked_task_id").references(() => tasks.id, { onDelete: "set null" }),
+  linkedNbaId: varchar("linked_nba_id").references(() => nbaCards.id, { onDelete: "set null" }),
+  linkedOutreachLogId: varchar("linked_outreach_log_id").references(() => carrierOutreachLogs.id, { onDelete: "set null" }),
+  processedForSignalsAt: timestamp("processed_for_signals_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertEmailMessageSchema = createInsertSchema(emailMessages).omit({ id: true, createdAt: true });
+export type InsertEmailMessage = z.infer<typeof insertEmailMessageSchema>;
+export type EmailMessage = typeof emailMessages.$inferSelect;
+
+export const emailSignals = pgTable("email_signals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  messageId: varchar("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+  intentType: text("intent_type").notNull(),
+  intentSubtype: text("intent_subtype"),
+  actorType: text("actor_type").notNull(),
+  entityType: text("entity_type"),
+  entityId: varchar("entity_id"),
+  confidence: integer("confidence").notNull().default(50),
+  extractedData: jsonb("extracted_data").default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertEmailSignalSchema = createInsertSchema(emailSignals).omit({ id: true, createdAt: true });
+export type InsertEmailSignal = z.infer<typeof insertEmailSignalSchema>;
+export type EmailSignal = typeof emailSignals.$inferSelect;

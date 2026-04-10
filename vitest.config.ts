@@ -4,7 +4,10 @@ import path from "path";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["client/src/lib/__tests__/**/*.test.ts"],
+    include: [
+      "client/src/lib/__tests__/**/*.test.ts",
+      "server/__tests__/**/*.test.ts",
+    ],
     globals: false,
   },
   resolve: {

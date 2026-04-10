@@ -17,6 +17,7 @@ import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
 import { startIntelEmailScheduler } from "./intelEmailScheduler";
+import { startEmailIntelligenceScheduler } from "./emailIntelligenceScheduler";
 import { initGraphSubscriptionService } from "./graphSubscriptionService";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
@@ -232,6 +233,7 @@ async function initStripe() {
       initNbaPhase1Scheduler();
       initMarketSignalScheduler();
       startIntelEmailScheduler();
+      startEmailIntelligenceScheduler();
       initGraphSubscriptionService().catch(err => {
         console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));
       });

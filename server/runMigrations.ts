@@ -1680,4 +1680,87 @@ export async function runMigrations() {
   } finally {
     clientCarrierNbas.release();
   }
+
+  // Task #190 — Email Intelligence Layer v1
+  const clientEmailIntel = await pool.connect();
+  try {
+    await clientEmailIntel.query(`
+      CREATE TABLE IF NOT EXISTS email_messages (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        thread_id text,
+        direction text NOT NULL,
+        from_email text,
+        to_email text,
+        cc_email text,
+        subject text,
+        body text,
+        linked_account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        linked_carrier_id varchar REFERENCES carriers(id) ON DELETE SET NULL,
+        linked_lane_id varchar REFERENCES recurring_lanes(id) ON DELETE SET NULL,
+        linked_load_id varchar,
+        linked_task_id varchar REFERENCES tasks(id) ON DELETE SET NULL,
+        linked_nba_id varchar REFERENCES nba_cards(id) ON DELETE SET NULL,
+        linked_outreach_log_id varchar REFERENCES carrier_outreach_logs(id) ON DELETE SET NULL,
+        processed_for_signals_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_messages_org_id ON email_messages(org_id)
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_messages_thread_id ON email_messages(thread_id) WHERE thread_id IS NOT NULL
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_messages_unprocessed ON email_messages(created_at) WHERE processed_for_signals_at IS NULL
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_messages_carrier ON email_messages(linked_carrier_id) WHERE linked_carrier_id IS NOT NULL
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_messages_account ON email_messages(linked_account_id) WHERE linked_account_id IS NOT NULL
+    `);
+    await clientEmailIntel.query(`
+      CREATE TABLE IF NOT EXISTS email_signals (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        intent_type text NOT NULL,
+        intent_subtype text,
+        actor_type text NOT NULL,
+        entity_type text,
+        entity_id varchar,
+        confidence integer NOT NULL DEFAULT 50,
+        extracted_data jsonb DEFAULT '{}',
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_signals_message_id ON email_signals(message_id)
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_signals_entity ON email_signals(entity_type, entity_id)
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_signals_intent_type ON email_signals(intent_type)
+    `);
+    // Add outcome column to crm_opportunities if absent
+    await clientEmailIntel.query(`
+      ALTER TABLE crm_opportunities ADD COLUMN IF NOT EXISTS outcome text
+    `);
+    // Add provider_message_id for inbound idempotency (Task #190 rev)
+    await clientEmailIntel.query(`
+      ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS provider_message_id text
+    `);
+    await clientEmailIntel.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_provider_msg_id
+        ON email_messages(org_id, provider_message_id)
+        WHERE provider_message_id IS NOT NULL
+    `);
+    console.log("[migrations] email_messages, email_signals tables ensured, crm_opportunities.outcome added (Task #190)");
+  } catch (err) {
+    console.error("[migrations] email intelligence migration error:", err);
+  } finally {
+    clientEmailIntel.release();
+  }
 }
