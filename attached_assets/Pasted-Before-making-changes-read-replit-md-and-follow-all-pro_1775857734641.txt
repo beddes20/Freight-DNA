@@ -1,0 +1,233 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+Context:
+We now have:
+- carrier ranking with HF logic, Market NBAs, and explanations
+- email intelligence with carrier-side signals
+- market-signal-driven carrier NBAs
+- (from the previous task) carrier_intel_suggestions-like staging and consumers
+
+But Carrier Hub UI does not yet expose a unified “Carrier Intelligence” view.
+
+Goal:
+Build **Carrier Hub Enrichment v1**:
+- backend: carrier intelligence summary API
+- frontend: “Intelligence” tab in Carrier Hub
+- suggestion accept/reject flows
+- clear separation of history vs. declared vs. suggested intel
+
+--------------------------------------------------
+1. DATA MODEL – CONFIRM/FINISH SUGGESTIONS TABLE
+--------------------------------------------------
+
+If `carrier_intel_suggestions` (or similar) already exists from the Email Consumers task, reuse it.
+
+If not present, add it now (see Task 1 spec):
+- carrierId, orgId
+- sourceType (email_signal / market_nba / manual_user / system_inferred)
+- emailSignalId / marketSignalId (nullable)
+- suggestionType
+- payload JSONB
+- confidenceScore
+- status (pending/accepted/rejected/auto_accepted)
+- createdAt / updatedAt / acceptedAt / rejectedAt
+- acceptedByUserId / rejectedByUserId
+- comment (nullable)
+
+Add storage methods:
+- getSuggestionsForCarrier(carrierId, { status? })
+- updateSuggestionStatus(id, status, { userId, comment? })
+- getAccepted* helper(s) for future ranking use.
+
+--------------------------------------------------
+2. BACKEND – CARRIER INTELLIGENCE SUMMARY API
+--------------------------------------------------
+
+Add an internal route, e.g.:
+
+GET /api/internal/carriers/:carrierId/intelligence
+
+Return:
+
+{
+  carrier: {
+    id,
+    name,
+    mcNumber,
+    dotNumber,
+    primaryEquipment,
+    homeRegions,
+    ... (basic profile fields)
+  },
+  history: {
+    topLanes: [ { origin, destination, loadsCount }, ... ],
+    topRegions: [ { region, loadsCount }, ... ],
+    equipmentMix: [ { equipmentType, loadsCount }, ... ]
+  },
+  declaredPreferences: {
+    lanes: [...],
+    regions: [...],
+    equipment: [...]
+  },
+  marketSignals: [
+    { id, type, scope, severity, createdAt, description }
+  ],
+  suggestions: {
+    pending: [...],
+    accepted: [...],
+    rejected: [...]
+  }
+}
+
+Use existing history and market-signal tables to populate:
+- top lanes/regions/equipment (from TMS / lane history).
+- current Market NBAs / signals for this carrier.
+
+Use carrier_intel_suggestions to populate:
+- pending/accepted/rejected.
+
+Apply the same auth & multi-org guardrails as other internal carrier routes.
+
+--------------------------------------------------
+3. BACKEND – ACCEPT/REJECT ENDPOINTS
+--------------------------------------------------
+
+Add endpoints:
+
+- POST /api/internal/carriers/:carrierId/intelligence/suggestions/:suggestionId/accept
+- POST /api/internal/carriers/:carrierId/intelligence/suggestions/:suggestionId/reject
+
+Behavior:
+- validate carrierId ownership/org
+- update `status`, `acceptedAt`/`rejectedAt`, `acceptedByUserId`/`rejectedByUserId`
+- optional comment in request body
+- return updated suggestion
+
+Do NOT mutate core carrier profile in this task.
+We are just managing the suggestion lifecycle.
+
+--------------------------------------------------
+4. FRONTEND – CARRIER HUB INTELLIGENCE TAB
+--------------------------------------------------
+
+In the Carrier Hub UI:
+
+A) Add an “Intelligence” tab or section in the carrier detail view.
+
+When selected:
+- call the intelligence API for that carrier.
+- show a loading/skeleton state while fetching.
+
+B) Layout (desktop-first, responsive):
+
+Sections:
+1) “Lane & Region History”
+   - show top lanes with counts (chip/table)
+   - top regions
+   - equipment mix
+
+2) “Declared Preferences”
+   - lanes / regions / equipment the system already considers as declared/canonical.
+
+3) “Suggested Intelligence” (Pending)
+   - list of pending suggestions grouped by suggestionType:
+     - lane_preference
+     - capacity_available/unavailable
+     - equipment_capability
+     - region_preference
+     - price_sensitivity
+     - service_risk
+   - each item shows:
+     - a concise description
+       - e.g. “AZ → PNW, dry van, weekly”
+     - source:
+       - from email: date + “View email” link (if we have a thread URL or at least a threadId)
+       - from market signal: type + region
+     - confidenceScore (visual hint; not necessarily numeric)
+     - createdAt relative time (“3 days ago”)
+     - Accept / Reject buttons (and optional comment field or modal)
+
+4) “History & Decisions”
+   - collapsed section listing accepted & rejected suggestions:
+     - what was accepted/rejected
+     - by whom
+     - when
+
+C) UX rules:
+- Accept/Reject calls hit the new endpoints and update local state without full reload.
+- Provide minimal but clear labels; avoid overwhelming the user.
+
+--------------------------------------------------
+5. WIRES TO EXISTING SYSTEMS
+--------------------------------------------------
+
+We are NOT changing ranking or procurement behavior in this task.
+
+But we want:
+- accepted suggestions to be easy to consume later.
+
+So:
+- ensure accepted suggestions are clearly accessible via:
+  - getAcceptedLanePreferencesForCarrier
+  - getAcceptedRegionPreferencesForCarrier
+  - getAcceptedEquipmentCapabilitiesForCarrier
+
+You can implement these helpers now even if not yet used by ranking.
+
+--------------------------------------------------
+6. DEDUPE & PRESENTATION RULES
+--------------------------------------------------
+
+Backend already dedupes on (carrierId, suggestionType, payload, threadId).
+
+UI should:
+- group similar suggestions when possible (e.g., multiple lane_preference suggestions in same corridor can be shown together).
+- avoid listing obviously duplicate or noisy suggestions twice.
+
+If necessary, apply simple client-side grouping (e.g., same normalized lane string).
+
+--------------------------------------------------
+7. TESTS
+--------------------------------------------------
+
+Add tests for:
+
+Backend:
+- intelligence summary returns correct structure for a carrier with:
+  - some lane history,
+  - some declared preferences,
+  - at least one market signal,
+  - pending/accepted/rejected suggestions.
+- accept/reject endpoints:
+  - change status and audit fields,
+  - enforce carrierId/org correctness.
+
+Frontend:
+- Intelligence tab:
+  - loads and displays history and suggestions correctly (snapshot/pattern tests).
+  - Accept/Reject buttons call backend and update UI state.
+  - handles “no history / no suggestions” gracefully.
+
+Integration:
+- Adding a carrier_intel_suggestion row makes it show up in the Intelligence tab.
+- Updating status to accepted/rejected moves it out of Pending into the correct section.
+
+--------------------------------------------------
+8. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. summary of changes
+2. files changed
+3. final carrier_intel_suggestions schema (or reused equivalent)
+4. intelligence summary API response example
+5. screenshots or description of the Intelligence tab UI
+6. dedupe & grouping behavior
+7. tests added/updated
+8. known limitations / ideas for v2 (e.g., direct ranking integration)
+
+Success criteria:
+- Every carrier has a clear Intelligence view combining history, preferences, signals, and suggestions.
+- Pending suggestions are actionable (accept/reject) with clear source explanations.
+- Accepted intelligence is stored cleanly for future ranking and NBA consumption.
+- No auto-mutation of core carrier profile yet — everything is staged and auditable.
