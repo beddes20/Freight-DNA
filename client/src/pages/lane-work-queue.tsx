@@ -571,7 +571,14 @@ function LaneRow({
   return (
     <div
       className={`bg-card border rounded-lg p-4 hover:border-amber-500/30 transition-colors cursor-pointer group ${
-        replyNeedsAction ? "border-green-500/40 bg-green-950/5" : isHighFreq ? "border-amber-500/20" : "border-border"
+        // Green border for any hot lane — full brightness if needsAction (unactioned), dimmer if already actioned
+        hasHotReply
+          ? replyNeedsAction
+            ? "border-green-500/40 bg-green-950/5"
+            : "border-green-700/30 bg-green-950/3"
+          : isHighFreq
+            ? "border-amber-500/20"
+            : "border-border"
       }`}
       onClick={() => onOpen(item.lane.id)}
       data-testid={`work-queue-row-${item.lane.id}`}

@@ -1396,13 +1396,15 @@ House style — follow every rule:
 
   /**
    * ensureHotFollowUpTask — creates a follow-up task when a carrier is classified
-   * as hot (available_now | available_next_week). Idempotent: skips if an open
-   * follow-up task already exists for this carrier+lane pair.
+   * as hot (available_now | available_next_week). Idempotent using two-level deduplication:
    *
-   * Single unified dedupeKey: `carrier_hot:{laneId}:{carrierId}` — shared by both
-   * the classify-reply path and the direct carrier-interest update path, so a
-   * carrier+lane pair never produces more than one open task regardless of how
-   * the status was set.
+   * - If `eventId` is provided (e.g., interestId or outreach log id), a per-event key
+   *   `carrier_hot_event:{eventId}` is used — one task per unique reply event.
+   * - Otherwise falls back to a per-carrier+lane key `carrier_hot:{laneId}:{carrierId}`
+   *   which prevents duplicate open tasks for the same carrier+lane pair.
+   *
+   * `replySnippet` (when available) is appended to the task description so the
+   * assignee can see what the carrier actually said without opening the full thread.
    */
   async function ensureHotFollowUpTask(
     laneId: string,
@@ -1411,12 +1413,19 @@ House style — follow every rule:
     status: string,
     actorUserId: string,
     orgId: string,
+    opts?: { replySnippet?: string | null; eventId?: string | null },
   ): Promise<void> {
     const HOT = new Set(["available_now", "available_next_week"]);
     if (!HOT.has(status)) return;
 
     try {
-      const dedupeKey = `carrier_hot:${laneId}:${carrierId}`;
+      // Event-level deduplication: if we have an event/interest ID, prefer that key
+      // so distinct reply events from the same carrier on the same lane each get one task.
+      // Without an eventId, fall back to carrier+lane pair guard to avoid duplicate open tasks.
+      const dedupeKey = opts?.eventId
+        ? `carrier_hot_event:${opts.eventId}`
+        : `carrier_hot:${laneId}:${carrierId}`;
+
       const exists = await storage.pool.query(
         `SELECT id FROM tasks WHERE org_id = $1 AND lane_context->>'dedupeKey' = $2 AND status != 'closed' LIMIT 1`,
         [orgId, dedupeKey]
@@ -1434,9 +1443,14 @@ House style — follow every rule:
       const carrierHubPath = `/carrier-hub/${carrierId}`;
       const laneQueuePath = `/lanes/work-queue?laneId=${laneId}`;
 
+      const snippet = opts?.replySnippet?.trim();
+      const snippetSection = snippet
+        ? `\n\nCarrier reply:\n"${snippet.length > 400 ? snippet.slice(0, 400) + "…" : snippet}"`
+        : "";
+
       await storage.createTask({
         title: `Confirm carrier: ${carrierLabel} is ${statusLabel} — ${laneLabel}`,
-        description: `${carrierLabel} replied and was classified as "${statusLabel}" for lane ${laneLabel}.\n\nSecure the load and confirm booking details.\n\nLane queue: ${laneQueuePath}\nCarrier Hub: ${carrierHubPath}`,
+        description: `${carrierLabel} replied and was classified as "${statusLabel}" for lane ${laneLabel}.${snippetSection}\n\nSecure the load and confirm booking details.\n\nLane queue: ${laneQueuePath}\nCarrier Hub: ${carrierHubPath}`,
         status: "open",
         assignedTo: assignedUserId,
         assignedBy: actorUserId,
@@ -1490,7 +1504,10 @@ House style — follow every rule:
     // If a rep directly sets (or reclassifies) a carrier to a hot status, ensure
     // a follow-up task exists. Non-blocking — response is sent regardless.
     if (carrierId && interestStatus) {
-      await ensureHotFollowUpTask(req.params.laneId, carrierId, carrierName, interestStatus, user.id, user.organizationId);
+      await ensureHotFollowUpTask(req.params.laneId, carrierId, carrierName, interestStatus, user.id, user.organizationId, {
+        replySnippet: replySnippet ?? null,
+        eventId: record.id ? `interest:${record.id}` : null,
+      });
     }
 
     res.json(record);
@@ -1585,10 +1602,13 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
     }
 
     // If classified as hot and we have a resolved carrierId, ensure a follow-up task exists.
-    // Uses the shared ensureHotFollowUpTask helper (same dedupeKey as carrier-interest POST)
-    // so the two paths never create duplicate tasks for the same carrier+lane pair.
+    // Pass the reply snippet and interestId for event-level deduplication so each distinct
+    // classify-reply event produces its own task (rather than being suppressed while another open task exists).
     if (carrierId) {
-      await ensureHotFollowUpTask(req.params.laneId, carrierId, carrierName, classification, user.id, user.organizationId);
+      await ensureHotFollowUpTask(req.params.laneId, carrierId, carrierName, classification, user.id, user.organizationId, {
+        replySnippet: replyText.slice(0, 500),
+        eventId: interestId ? `interest:${interestId}` : null,
+      });
     }
 
     res.json({ classification, confidence, replyText: replyText.slice(0, 500) });
