@@ -1702,8 +1702,48 @@ export const emailSignals = pgTable("email_signals", {
   entityId: varchar("entity_id"),
   confidence: integer("confidence").notNull().default(50),
   extractedData: jsonb("extracted_data").default({}),
+  linkedAccountId: varchar("linked_account_id").references(() => companies.id, { onDelete: "set null" }),
+  linkedCarrierId: varchar("linked_carrier_id").references(() => carriers.id, { onDelete: "set null" }),
+  linkedLaneId: varchar("linked_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
+  linkedOpportunityId: varchar("linked_opportunity_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const insertEmailSignalSchema = createInsertSchema(emailSignals).omit({ id: true, createdAt: true });
 export type InsertEmailSignal = z.infer<typeof insertEmailSignalSchema>;
 export type EmailSignal = typeof emailSignals.$inferSelect;
+
+// ─── Carrier Email Suggestions (Task #191) ───────────────────────────────────
+// Staged enrichment suggestions from carrier email signals — carrier profile
+// fields are NEVER overwritten directly; all changes go through this table.
+
+export const carrierEmailSuggestions = pgTable("carrier_email_suggestions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carrierId: varchar("carrier_id").notNull().references(() => carriers.id, { onDelete: "cascade" }),
+  emailMessageId: varchar("email_message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+  threadId: text("thread_id"),
+  suggestionType: text("suggestion_type").notNull(),
+  payload: jsonb("payload").default({}),
+  confidence: integer("confidence").notNull().default(50),
+  payloadHash: text("payload_hash"),
+  status: text("status").notNull().default("pending"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertCarrierEmailSuggestionSchema = createInsertSchema(carrierEmailSuggestions).omit({ id: true, createdAt: true });
+export type InsertCarrierEmailSuggestion = z.infer<typeof insertCarrierEmailSuggestionSchema>;
+export type CarrierEmailSuggestion = typeof carrierEmailSuggestions.$inferSelect;
+
+// ─── Email Outcome Links (Task #191) ─────────────────────────────────────────
+// Join table linking email signals to outcome events (won/lost/neutral) for
+// win/loss analysis. Populated automatically for closed_won/lost signals.
+
+export const emailOutcomeLinks = pgTable("email_outcome_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  emailSignalId: varchar("email_signal_id").notNull().references(() => emailSignals.id, { onDelete: "cascade" }),
+  entityType: text("entity_type").notNull(),
+  entityId: varchar("entity_id").notNull(),
+  outcomeType: text("outcome_type").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertEmailOutcomeLinkSchema = createInsertSchema(emailOutcomeLinks).omit({ id: true, createdAt: true });
+export type InsertEmailOutcomeLink = z.infer<typeof insertEmailOutcomeLinkSchema>;
+export type EmailOutcomeLink = typeof emailOutcomeLinks.$inferSelect;

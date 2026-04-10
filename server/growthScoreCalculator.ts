@@ -21,6 +21,7 @@
  */
 
 import type { IStorage } from "./storage";
+import { getRecentAccountEmailSignalSummary, type AccountEmailSignalSummary } from "./emailSignalSummaryService";
 
 export type GrowthScoreDriver = {
   label: string;
@@ -67,6 +68,21 @@ export type MomentumBreakdown = {
     max: number;
     hasActiveRfp: boolean;
     rfpTitle: string | null;
+  };
+  emailSignals: {
+    meaningfulTouchpointCount: number;
+    stalledThreadCount: number;
+    serviceComplaintCount: number;
+    urgencySignalCount: number;
+    newOpportunityCount: number;
+    closedWonCount: number;
+    closedLostCount: number;
+    emailTouchpointBonus: number;
+    stalledThreadPenalty: number;
+    serviceComplaintPenalty: number;
+    urgencyBoost: number;
+    opportunityBoost: number;
+    outcomePenalty: number;
   };
   penalties: {
     totalPenalty: number;
@@ -161,6 +177,24 @@ const BAND_COLORS: Record<GrowthScoreResult["band"], GrowthScoreResult["bandColo
   at_risk:        "red",
 };
 
+function emptyEmailSignalsBreakdown(): MomentumBreakdown["emailSignals"] {
+  return {
+    meaningfulTouchpointCount: 0,
+    stalledThreadCount: 0,
+    serviceComplaintCount: 0,
+    urgencySignalCount: 0,
+    newOpportunityCount: 0,
+    closedWonCount: 0,
+    closedLostCount: 0,
+    emailTouchpointBonus: 0,
+    stalledThreadPenalty: 0,
+    serviceComplaintPenalty: 0,
+    urgencyBoost: 0,
+    opportunityBoost: 0,
+    outcomePenalty: 0,
+  };
+}
+
 function emptyBreakdown(): MomentumBreakdown {
   return {
     touchpointHealth: { points: 0, max: 40, recency: { points: 0, max: 28, bdSinceLastTouch: null }, frequency10BD: { points: 0, max: 7, count: 0 }, meaningful30d: { points: 0, max: 5, count: 0 } },
@@ -169,6 +203,7 @@ function emptyBreakdown(): MomentumBreakdown {
     volumeSignal: { points: 0, max: 12, hasFinancialData: false, ytdLoads: 0 },
     laneBreadth: { points: 0, max: 10, corridorCount: 0 },
     rfpOpportunity: { points: 0, max: 8, hasActiveRfp: false, rfpTitle: null },
+    emailSignals: emptyEmailSignalsBreakdown(),
     penalties: { totalPenalty: 0, staleTouchLight: 0, staleTouchHeavy: 0, noMeaningfulConversation90Days: 0, noThirdOrHomeRun: 0, overdueTask: 0 },
   };
 }
@@ -189,7 +224,7 @@ export async function computeGrowthScore(
   // If either fails (e.g. transient DB error), we fall back to empty arrays so
   // the touchpoint, relationship, and lane buckets — the most real-time signals —
   // are still computed correctly.
-  const [company, touchpoints, contacts, laneAttributions, tasks, rfps, uploads] = await Promise.all([
+  const [company, touchpoints, contacts, laneAttributions, tasks, rfps, uploads, emailSummary] = await Promise.all([
     storage.getCompany(companyId),
     storage.getTouchpointsByCompany(companyId),
     storage.getContactsByCompany(companyId),
@@ -202,6 +237,10 @@ export async function computeGrowthScore(
     storage.getFinancialUploadsForOrg(organizationId).catch((err: unknown) => {
       console.error("[growthScore] getFinancialUploadsForOrg fallback:", err);
       return [] as Awaited<ReturnType<typeof storage.getFinancialUploadsForOrg>>;
+    }),
+    getRecentAccountEmailSignalSummary(companyId, 30, storage).catch((err: unknown) => {
+      console.error("[growthScore] emailSignalSummary fallback:", err);
+      return null as AccountEmailSignalSummary | null;
     }),
   ]);
 
@@ -389,6 +428,60 @@ export async function computeGrowthScore(
 
   const momentumPts = consistencyPts + trendPts; // max 12
 
+  // ── Bucket 7: Email Signal Adjustments (bounded, additive) ───────────────
+  // Bounded adjustments so email signals cannot dominate the score.
+  // Max combined email boost: +8 pts; max combined email penalty: -8 pts.
+  const es = emailSummary?.counts;
+  let emailTouchpointBonus = 0;
+  let stalledThreadPenalty = 0;
+  let serviceComplaintPenalty = 0;
+  let urgencyBoost = 0;
+  let opportunityBoost = 0;
+  let outcomePenalty = 0;
+
+  if (es) {
+    // meaningful_touchpoint: each email touchpoint adds up to +3 pts (max 1 bonus credited)
+    if (es.meaningful_touchpoint >= 2) {
+      emailTouchpointBonus = 3;
+      drivers.push({ label: `${es.meaningful_touchpoint} meaningful email touchpoints in last 30 days`, points: 3, positive: true });
+    } else if (es.meaningful_touchpoint === 1) {
+      emailTouchpointBonus = 1;
+      drivers.push({ label: "Meaningful email touchpoint in last 30 days", points: 1, positive: true });
+    }
+
+    // stalled_thread: -2 pts per stalled thread (max -4)
+    if (es.stalled_thread > 0) {
+      stalledThreadPenalty = Math.min(4, es.stalled_thread * 2);
+      drivers.push({ label: `${es.stalled_thread} stalled email thread${es.stalled_thread > 1 ? "s" : ""} detected`, points: -stalledThreadPenalty, positive: false });
+    }
+
+    // service_complaint: -3 pts per complaint (max -6)
+    if (es.service_complaint > 0) {
+      serviceComplaintPenalty = Math.min(6, es.service_complaint * 3);
+      drivers.push({ label: `${es.service_complaint} email service complaint${es.service_complaint > 1 ? "s" : ""} in last 30 days`, points: -serviceComplaintPenalty, positive: false });
+    }
+
+    // urgency_signal: +1 pt (signals active engagement)
+    if (es.urgency_signal > 0) {
+      urgencyBoost = 1;
+    }
+
+    // new_opportunity: +3 pts (expansion momentum)
+    if (es.new_opportunity > 0) {
+      opportunityBoost = 3;
+      drivers.push({ label: `New freight opportunity detected via email`, points: 3, positive: true });
+    }
+
+    // closed_won: +0 pts to score (history context only, no direct boost)
+    // closed_lost: -5 pts (strong signal of lost business)
+    if (es.closed_lost_indicator > 0) {
+      outcomePenalty = 5;
+      drivers.push({ label: "Closed-lost email signal detected", points: -5, positive: false });
+    }
+  }
+
+  const emailNetAdjustment = (emailTouchpointBonus + urgencyBoost + opportunityBoost) - (stalledThreadPenalty + serviceComplaintPenalty + outcomePenalty);
+
   // ── Sum positive buckets ─────────────────────────────────────────────────
   const positiveTotal = tpHealth + relDepth + volumePts + lanePts + rfpPts + momentumPts;
 
@@ -441,7 +534,7 @@ export async function computeGrowthScore(
     drivers.push({ label: `${overdueTasks.length} overdue task${overdueTasks.length > 1 ? "s" : ""}`, points: -3, positive: false });
   }
 
-  const rawScore = Math.max(0, Math.min(100, positiveTotal - penalties));
+  const rawScore = Math.max(0, Math.min(100, positiveTotal - penalties + emailNetAdjustment));
   const score    = Math.round(rawScore);
   const band     = scoreToBand(score);
 
@@ -490,6 +583,21 @@ export async function computeGrowthScore(
       max: 8,
       hasActiveRfp: !!activeRfp,
       rfpTitle: activeRfp?.title ?? null,
+    },
+    emailSignals: {
+      meaningfulTouchpointCount: emailSummary?.counts.meaningful_touchpoint ?? 0,
+      stalledThreadCount: emailSummary?.counts.stalled_thread ?? 0,
+      serviceComplaintCount: emailSummary?.counts.service_complaint ?? 0,
+      urgencySignalCount: emailSummary?.counts.urgency_signal ?? 0,
+      newOpportunityCount: emailSummary?.counts.new_opportunity ?? 0,
+      closedWonCount: emailSummary?.counts.closed_won_indicator ?? 0,
+      closedLostCount: emailSummary?.counts.closed_lost_indicator ?? 0,
+      emailTouchpointBonus,
+      stalledThreadPenalty,
+      serviceComplaintPenalty,
+      urgencyBoost,
+      opportunityBoost,
+      outcomePenalty,
     },
     penalties: {
       totalPenalty: -penalties,

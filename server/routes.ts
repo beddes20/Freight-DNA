@@ -16,6 +16,7 @@ import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach"
 import { registerIntelRoutes } from "./routes/intel";
 import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
 import { registerMarketSignalRoutes } from "./routes/marketSignals";
+import { registerEmailIntelligenceRoutes } from "./routes/emailIntelligence";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -3029,9 +3030,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerIntelRoutes(app);
   registerGraphWebhookRoutes(app);
   registerMarketSignalRoutes(app);
+  registerEmailIntelligenceRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
-  registerMarketSignalRoutes(app);
 
   registerFinancialRoutes(app);
   // ── Company Historical Trends ─────────────────────────────────────────────

@@ -725,6 +725,151 @@ export async function generateNbasFromEmailSignals(
   }
 }
 
+// ── Account Email NBA Consumer (Task #191) ────────────────────────────────────
+
+/**
+ * Intent family groupings for dedup — at most one active NBA per
+ * (threadId, intent family, accountId) is allowed.
+ */
+const ACCOUNT_EMAIL_INTENT_FAMILIES: Record<string, string> = {
+  pricing_request:       "pricing",
+  objection:             "objection",
+  service_complaint:     "service",
+  stalled_thread:        "stalled",
+  urgency_signal:        "urgency",
+  new_opportunity:       "opportunity",
+  closed_lost_indicator: "outcome",
+};
+
+interface AccountEmailNbaRule {
+  ruleType: string;
+  outcomeType: string;
+  urgency: "critical" | "high" | "moderate";
+  title: string;
+  body: (signal: EmailSignal, message: EmailMessage) => string;
+}
+
+const ACCOUNT_EMAIL_NBA_RULES: Record<string, AccountEmailNbaRule> = {
+  pricing_request: {
+    ruleType: "email_quote_follow_up",
+    outcomeType: "grow",
+    urgency: "high",
+    title: "Follow up on pricing request",
+    body: (s, m) => `Customer requested a quote${m.subject ? ` — "${m.subject.slice(0, 60)}"` : ""}. Send a competitive rate and confirm lane details.`,
+  },
+  objection: {
+    ruleType: "email_objection_handling",
+    outcomeType: "protect",
+    urgency: "high",
+    title: "Handle customer objection",
+    body: (s, m) => `Customer raised an objection${m.subject ? ` in "${m.subject.slice(0, 60)}"` : ""}. Address the concern promptly to protect the relationship.`,
+  },
+  service_complaint: {
+    ruleType: "email_service_recovery",
+    outcomeType: "protect",
+    urgency: "high",
+    title: "Service recovery — escalate complaint",
+    body: (s, m) => `Service complaint received${m.subject ? ` — "${m.subject.slice(0, 60)}"` : ""}. Escalate internally and respond with a resolution plan.`,
+  },
+  stalled_thread: {
+    ruleType: "email_re_engage_thread",
+    outcomeType: "protect",
+    urgency: "moderate",
+    title: "Re-engage stalled email thread",
+    body: (s, m) => `Email thread appears stalled${m.subject ? ` — "${m.subject.slice(0, 60)}"` : ""}. Send a follow-up to unblock and keep the conversation moving.`,
+  },
+  urgency_signal: {
+    ruleType: "email_urgency_outreach",
+    outcomeType: "execute",
+    urgency: "high",
+    title: "Customer has urgent need — prioritize outreach",
+    body: (s, m) => `Urgency signal detected${m.subject ? ` in "${m.subject.slice(0, 60)}"` : ""}. Contact the customer immediately to confirm capacity and timing.`,
+  },
+  new_opportunity: {
+    ruleType: "email_opportunity_qualify",
+    outcomeType: "grow",
+    urgency: "high",
+    title: "Qualify new freight opportunity",
+    body: (s, m) => `Customer mentioned new lanes or freight volume${m.subject ? ` in "${m.subject.slice(0, 60)}"` : ""}. Set up a qualification call to scope the opportunity.`,
+  },
+};
+
+type AccountEmailNbaStorage = Pick<
+  IStorage,
+  "getRecentNbaCardByType" | "getActiveNbaCardByThreadAndType" | "getFirstOrgAdmin" | "createNbaCard"
+>;
+
+/**
+ * Generate email-driven account NBA cards from a set of signals.
+ * Dedup: at most one active NBA per (threadId, intent family, accountId).
+ * Uses the existing nba_cards table with a 24-hour window dedup.
+ */
+export async function generateAccountEmailNbas(
+  orgId: string,
+  accountId: string,
+  message: EmailMessage,
+  signals: EmailSignal[],
+  storageInstance: AccountEmailNbaStorage = defaultStorage,
+): Promise<void> {
+  const familiesProcessed = new Set<string>();
+
+  for (const signal of signals) {
+    if (signal.confidence < 60) continue;
+
+    const family = ACCOUNT_EMAIL_INTENT_FAMILIES[signal.intentType];
+    if (!family) continue;
+
+    const rule = ACCOUNT_EMAIL_NBA_RULES[signal.intentType];
+    if (!rule) continue;
+
+    // Per-thread per-family dedup within this call (in-memory)
+    const threadFamilyKey = `${message.threadId ?? signal.id}:${family}`;
+    if (familiesProcessed.has(threadFamilyKey)) continue;
+    familiesProcessed.add(threadFamilyKey);
+
+    // DB dedup: at most one active NBA per (accountId, ruleType, threadId)
+    // Uses JSONB @> query on signalSummary[*].threadId for precise thread-keyed dedup.
+    const threadId = message.threadId ?? signal.id;
+    const existing = await storageInstance.getActiveNbaCardByThreadAndType(accountId, rule.ruleType, threadId);
+    if (existing) continue;
+
+    let assignedUserId: string | null = null;
+    const admin = await storageInstance.getFirstOrgAdmin(orgId);
+    assignedUserId = admin?.id ?? null;
+    if (!assignedUserId) continue;
+
+    const urgencyScore =
+      rule.urgency === "critical" ? 90 : rule.urgency === "high" ? 70 : 50;
+
+    const signalSummaryValue: Array<Record<string, unknown>> = [{
+      intentType: signal.intentType,
+      confidence: signal.confidence,
+      threadId: message.threadId ?? null,
+      signalDate: signal.createdAt.toISOString(),
+      subject: message.subject ?? null,
+    }];
+
+    const now = new Date().toISOString();
+    await storageInstance.createNbaCard({
+      companyId: accountId,
+      userId: assignedUserId,
+      orgId,
+      ruleType: rule.ruleType,
+      outcomeType: rule.outcomeType,
+      confidence: signal.confidence >= 80 ? "high" : "medium",
+      signalCount: 1,
+      signalSummary: signalSummaryValue,
+      whyThisNow: rule.title,
+      suggestedAction: rule.body(signal, message),
+      expectedOutcome: "Engage promptly to maintain the relationship and capture the opportunity.",
+      urgencyScore,
+      status: "generated",
+      linkedLaneId: message.linkedLaneId ?? null,
+      createdAt: now,
+    });
+  }
+}
+
 function buildNbaTitleFromSignal(signal: EmailSignal): string {
   const titles: Record<string, string> = {
     lane_offer:             "Carrier offering lane capacity — log interest",

@@ -152,6 +152,12 @@ import {
   emailSignals,
   type EmailSignal,
   type InsertEmailSignal,
+  carrierEmailSuggestions,
+  type CarrierEmailSuggestion,
+  type InsertCarrierEmailSuggestion,
+  emailOutcomeLinks,
+  type EmailOutcomeLink,
+  type InsertEmailOutcomeLink,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -548,6 +554,8 @@ export interface IStorage {
   createNbaCard(data: InsertNbaCard): Promise<NbaCard>;
   getVisibleNbaCards(userId: string, limit?: number): Promise<NbaCard[]>;
   getRecentNbaCardByType(companyId: string, ruleType: string, dayLimit: number): Promise<NbaCard | undefined>;
+  /** Email NBA dedup: return active card for (companyId, ruleType, threadId) regardless of age. */
+  getActiveNbaCardByThreadAndType(companyId: string, ruleType: string, threadId: string): Promise<NbaCard | undefined>;
   getRecentNbaCardByLane(laneId: string, userId: string, dayLimit: number): Promise<NbaCard | undefined>;
   getNbaCard(id: string): Promise<NbaCard | undefined>;
   resolveNbaCard(id: string, userId: string, data: Record<string, unknown>): Promise<NbaCard | undefined>;
@@ -720,6 +728,8 @@ export interface IStorage {
    */
   getRecentSuccessfulOutreachCarrierIds(laneId: string, windowMs: number): Promise<Set<string>>;
   getCarrierMarketNbaByDedup(carrierId: string, marketSignalId: string, recommendationType: string): Promise<CarrierMarketNba | undefined>;
+  /** Dedup lookup by (carrierId, marketSignalId) only — ignores recommendationType. */
+  getCarrierMarketNbaBySignalKey(carrierId: string, marketSignalId: string): Promise<CarrierMarketNba | undefined>;
   getCarriersByOrgForMarketSignal(orgId: string): Promise<import('@shared/schema').Carrier[]>;
   getCarrierClaimedLanesByCarrierId(carrierId: string): Promise<import('@shared/schema').CarrierClaimedLane[]>;
   getFinancialRowsForCarrierSignal(orgId: string, originRegion: string, equipmentType: string | null, since: Date): Promise<Array<{ carrierId: string | null; originRegion: string | null; occurredAt: Date }>>;
@@ -750,6 +760,15 @@ export interface IStorage {
   getUnprocessedEmailMessages(limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
   getEmailSignalsByThread(threadId: string, since?: Date): Promise<import('@shared/schema').EmailSignal[]>;
   markEmailMessageProcessed(id: string): Promise<void>;
+  // Email Signal Consumers (Task #191)
+  insertCarrierEmailSuggestion(data: import('@shared/schema').InsertCarrierEmailSuggestion): Promise<import('@shared/schema').CarrierEmailSuggestion>;
+  getCarrierEmailSuggestionByDedup(carrierId: string, threadId: string, suggestionType: string, payloadHash: string): Promise<import('@shared/schema').CarrierEmailSuggestion | undefined>;
+  getCarrierEmailSuggestions(carrierId: string, status?: string): Promise<import('@shared/schema').CarrierEmailSuggestion[]>;
+  insertEmailOutcomeLink(data: import('@shared/schema').InsertEmailOutcomeLink): Promise<import('@shared/schema').EmailOutcomeLink>;
+  getEmailOutcomeLinksBySignal(emailSignalId: string): Promise<import('@shared/schema').EmailOutcomeLink[]>;
+  getEmailOutcomeLinksByEntity(entityType: string, entityId: string): Promise<import('@shared/schema').EmailOutcomeLink[]>;
+  getWinLossEmailSignals(outcomeType: 'won' | 'lost'): Promise<Array<{ signal: import('@shared/schema').EmailSignal; links: import('@shared/schema').EmailOutcomeLink[] }>>;
+  updateEmailSignalLinks(signalId: string, links: { linkedAccountId?: string | null; linkedCarrierId?: string | null; linkedLaneId?: string | null; linkedOpportunityId?: string | null }): Promise<void>;
 }
 
 const pool = new Pool({
@@ -3094,6 +3113,23 @@ export class DatabaseStorage implements IStorage {
     return rows.filter(r => r.createdAt >= cutoffStr)[0];
   }
 
+  async getActiveNbaCardByThreadAndType(
+    companyId: string,
+    ruleType: string,
+    threadId: string,
+  ): Promise<NbaCard | undefined> {
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(and(
+        eq(nbaCards.companyId, companyId),
+        eq(nbaCards.ruleType, ruleType),
+        sql`${nbaCards.signalSummary}::jsonb @> ${JSON.stringify([{ threadId }])}::jsonb`,
+      ))
+      .orderBy(desc(nbaCards.createdAt))
+      .limit(1);
+    return rows[0];
+  }
+
   async getRecentNbaCardByLane(laneId: string, userId: string, dayLimit: number): Promise<NbaCard | undefined> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - dayLimit);
@@ -4748,6 +4784,19 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
+  async getCarrierMarketNbaBySignalKey(
+    carrierId: string,
+    marketSignalId: string,
+  ): Promise<CarrierMarketNba | undefined> {
+    const [row] = await db.select().from(carrierMarketNbas)
+      .where(and(
+        eq(carrierMarketNbas.carrierId, carrierId),
+        eq(carrierMarketNbas.marketSignalId, marketSignalId),
+      ))
+      .limit(1);
+    return row;
+  }
+
   async getCarriersByOrgForMarketSignal(orgId: string): Promise<import('@shared/schema').Carrier[]> {
     return this.getCarriers(orgId);
   }
@@ -4943,6 +4992,111 @@ export class DatabaseStorage implements IStorage {
     await db.update(emailMessages)
       .set({ processedForSignalsAt: new Date() })
       .where(eq(emailMessages.id, id));
+  }
+
+  // ── Email Signal Consumers (Task #191) ──────────────────────────────────────
+
+  async insertCarrierEmailSuggestion(data: InsertCarrierEmailSuggestion): Promise<CarrierEmailSuggestion> {
+    const [row] = await db.insert(carrierEmailSuggestions).values(data).returning();
+    return row;
+  }
+
+  async getCarrierEmailSuggestionByDedup(
+    carrierId: string,
+    threadId: string,
+    suggestionType: string,
+    payloadHash: string,
+  ): Promise<CarrierEmailSuggestion | undefined> {
+    const [row] = await db.select()
+      .from(carrierEmailSuggestions)
+      .where(
+        and(
+          eq(carrierEmailSuggestions.carrierId, carrierId),
+          eq(carrierEmailSuggestions.threadId, threadId),
+          eq(carrierEmailSuggestions.suggestionType, suggestionType),
+          eq(carrierEmailSuggestions.payloadHash, payloadHash),
+        ),
+      )
+      .limit(1);
+    return row;
+  }
+
+  async getCarrierEmailSuggestions(carrierId: string, status?: string): Promise<CarrierEmailSuggestion[]> {
+    const conditions: SQL[] = [eq(carrierEmailSuggestions.carrierId, carrierId)];
+    if (status) conditions.push(eq(carrierEmailSuggestions.status, status));
+    return db.select()
+      .from(carrierEmailSuggestions)
+      .where(and(...conditions))
+      .orderBy(desc(carrierEmailSuggestions.createdAt));
+  }
+
+  async insertEmailOutcomeLink(data: InsertEmailOutcomeLink): Promise<EmailOutcomeLink> {
+    const [row] = await db.insert(emailOutcomeLinks).values(data).returning();
+    return row;
+  }
+
+  async getEmailOutcomeLinksBySignal(emailSignalId: string): Promise<EmailOutcomeLink[]> {
+    return db.select()
+      .from(emailOutcomeLinks)
+      .where(eq(emailOutcomeLinks.emailSignalId, emailSignalId))
+      .orderBy(desc(emailOutcomeLinks.createdAt));
+  }
+
+  async getEmailOutcomeLinksByEntity(entityType: string, entityId: string): Promise<EmailOutcomeLink[]> {
+    return db.select()
+      .from(emailOutcomeLinks)
+      .where(
+        and(
+          eq(emailOutcomeLinks.entityType, entityType),
+          eq(emailOutcomeLinks.entityId, entityId),
+        ),
+      )
+      .orderBy(desc(emailOutcomeLinks.createdAt));
+  }
+
+  async getWinLossEmailSignals(
+    outcomeType: "won" | "lost",
+  ): Promise<Array<{ signal: EmailSignal; links: EmailOutcomeLink[] }>> {
+    const links = await db.select()
+      .from(emailOutcomeLinks)
+      .where(eq(emailOutcomeLinks.outcomeType, outcomeType))
+      .orderBy(desc(emailOutcomeLinks.createdAt));
+
+    if (links.length === 0) return [];
+
+    const signalIds = [...new Set(links.map(l => l.emailSignalId))];
+    const signals = await db.select()
+      .from(emailSignals)
+      .where(inArray(emailSignals.id, signalIds));
+
+    const signalMap = new Map(signals.map(s => [s.id, s]));
+    const signalLinkMap = new Map<string, EmailOutcomeLink[]>();
+    for (const link of links) {
+      const existing = signalLinkMap.get(link.emailSignalId) ?? [];
+      existing.push(link);
+      signalLinkMap.set(link.emailSignalId, existing);
+    }
+
+    return signalIds
+      .filter(id => signalMap.has(id))
+      .map(id => ({
+        signal: signalMap.get(id)!,
+        links: signalLinkMap.get(id) ?? [],
+      }));
+  }
+
+  async updateEmailSignalLinks(
+    signalId: string,
+    links: {
+      linkedAccountId?: string | null;
+      linkedCarrierId?: string | null;
+      linkedLaneId?: string | null;
+      linkedOpportunityId?: string | null;
+    },
+  ): Promise<void> {
+    await db.update(emailSignals)
+      .set(links)
+      .where(eq(emailSignals.id, signalId));
   }
 }
 
