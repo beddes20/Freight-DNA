@@ -158,6 +158,9 @@ import {
   emailOutcomeLinks,
   type EmailOutcomeLink,
   type InsertEmailOutcomeLink,
+  carrierIntelSuggestions,
+  type CarrierIntelSuggestion,
+  type InsertCarrierIntelSuggestion,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -769,6 +772,13 @@ export interface IStorage {
   getEmailOutcomeLinksByEntity(entityType: string, entityId: string): Promise<import('@shared/schema').EmailOutcomeLink[]>;
   getWinLossEmailSignals(outcomeType: 'won' | 'lost'): Promise<Array<{ signal: import('@shared/schema').EmailSignal; links: import('@shared/schema').EmailOutcomeLink[] }>>;
   updateEmailSignalLinks(signalId: string, links: { linkedAccountId?: string | null; linkedCarrierId?: string | null; linkedLaneId?: string | null; linkedOpportunityId?: string | null }): Promise<void>;
+
+  // Carrier Intel Suggestions (Task #193)
+  insertCarrierIntelSuggestion(data: import('@shared/schema').InsertCarrierIntelSuggestion): Promise<import('@shared/schema').CarrierIntelSuggestion>;
+  getSuggestionsForCarrier(carrierId: string, status?: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
+  getSuggestionById(id: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
+  updateSuggestionStatus(id: string, status: 'accepted' | 'rejected' | 'auto_accepted', opts: { userId?: string; comment?: string }): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
+  findDuplicateSuggestion(carrierId: string, suggestionType: string, emailSignalId: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
 }
 
 const pool = new Pool({
@@ -5097,6 +5107,62 @@ export class DatabaseStorage implements IStorage {
     await db.update(emailSignals)
       .set(links)
       .where(eq(emailSignals.id, signalId));
+  }
+
+  // ── Carrier Intel Suggestions (Task #193) ──────────────────────────────────
+
+  async insertCarrierIntelSuggestion(data: InsertCarrierIntelSuggestion): Promise<CarrierIntelSuggestion> {
+    const [row] = await db.insert(carrierIntelSuggestions).values(data).returning();
+    return row;
+  }
+
+  async getSuggestionsForCarrier(carrierId: string, status?: string): Promise<CarrierIntelSuggestion[]> {
+    const conditions: SQL[] = [eq(carrierIntelSuggestions.carrierId, carrierId)];
+    if (status) conditions.push(eq(carrierIntelSuggestions.status, status));
+    return db.select().from(carrierIntelSuggestions)
+      .where(and(...conditions))
+      .orderBy(desc(carrierIntelSuggestions.createdAt));
+  }
+
+  async getSuggestionById(id: string): Promise<CarrierIntelSuggestion | undefined> {
+    const [row] = await db.select().from(carrierIntelSuggestions).where(eq(carrierIntelSuggestions.id, id));
+    return row;
+  }
+
+  async updateSuggestionStatus(
+    id: string,
+    status: 'accepted' | 'rejected' | 'auto_accepted',
+    opts: { userId?: string; comment?: string }
+  ): Promise<CarrierIntelSuggestion | undefined> {
+    const now = new Date();
+    const updates: Partial<CarrierIntelSuggestion> = {
+      status,
+      updatedAt: now,
+      comment: opts.comment ?? undefined,
+    };
+    if (status === 'accepted' || status === 'auto_accepted') {
+      updates.acceptedAt = now;
+      if (opts.userId) updates.acceptedByUserId = opts.userId;
+    } else if (status === 'rejected') {
+      updates.rejectedAt = now;
+      if (opts.userId) updates.rejectedByUserId = opts.userId;
+    }
+    const [row] = await db.update(carrierIntelSuggestions)
+      .set(updates as any)
+      .where(eq(carrierIntelSuggestions.id, id))
+      .returning();
+    return row;
+  }
+
+  async findDuplicateSuggestion(carrierId: string, suggestionType: string, emailSignalId: string): Promise<CarrierIntelSuggestion | undefined> {
+    const [row] = await db.select().from(carrierIntelSuggestions)
+      .where(and(
+        eq(carrierIntelSuggestions.carrierId, carrierId),
+        eq(carrierIntelSuggestions.suggestionType, suggestionType),
+        eq(carrierIntelSuggestions.emailSignalId, emailSignalId),
+      ))
+      .limit(1);
+    return row;
   }
 }
 

@@ -1747,3 +1747,57 @@ export const emailOutcomeLinks = pgTable("email_outcome_links", {
 export const insertEmailOutcomeLinkSchema = createInsertSchema(emailOutcomeLinks).omit({ id: true, createdAt: true });
 export type InsertEmailOutcomeLink = z.infer<typeof insertEmailOutcomeLinkSchema>;
 export type EmailOutcomeLink = typeof emailOutcomeLinks.$inferSelect;
+
+// ─── Carrier Intel Suggestions (Task #193) ───────────────────────────────────
+
+export const carrierIntelSuggestionStatuses = ["pending", "accepted", "rejected", "auto_accepted"] as const;
+export type CarrierIntelSuggestionStatus = typeof carrierIntelSuggestionStatuses[number];
+
+export const carrierIntelSuggestionTypes = [
+  "lane_preference",
+  "capacity_available",
+  "capacity_unavailable",
+  "equipment_capability",
+  "region_preference",
+  "price_sensitivity",
+  "service_risk",
+] as const;
+export type CarrierIntelSuggestionType = typeof carrierIntelSuggestionTypes[number];
+
+export const carrierIntelSuggestionSourceTypes = ["email_signal", "market_signal"] as const;
+export type CarrierIntelSuggestionSourceType = typeof carrierIntelSuggestionSourceTypes[number];
+
+/**
+ * carrier_intel_suggestions — staged AI-derived enrichment suggestions for a carrier.
+ * Ops reviews and accepts or rejects each suggestion; accepted suggestions build
+ * the carrier's intelligence profile over time.
+ */
+export const carrierIntelSuggestions = pgTable("carrier_intel_suggestions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carrierId: varchar("carrier_id").notNull(),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  sourceType: text("source_type").notNull(),
+  emailSignalId: varchar("email_signal_id").references(() => emailSignals.id, { onDelete: "set null" }),
+  marketSignalId: varchar("market_signal_id"),
+  suggestionType: text("suggestion_type").notNull(),
+  payload: jsonb("payload").notNull().default({}),
+  confidenceScore: integer("confidence_score").notNull().default(50),
+  status: text("status").notNull().default("pending"),
+  comment: text("comment"),
+  acceptedByUserId: varchar("accepted_by_user_id"),
+  rejectedByUserId: varchar("rejected_by_user_id"),
+  acceptedAt: timestamp("accepted_at"),
+  rejectedAt: timestamp("rejected_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertCarrierIntelSuggestionSchema = createInsertSchema(carrierIntelSuggestions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  acceptedAt: true,
+  rejectedAt: true,
+});
+export type InsertCarrierIntelSuggestion = z.infer<typeof insertCarrierIntelSuggestionSchema>;
+export type CarrierIntelSuggestion = typeof carrierIntelSuggestions.$inferSelect;

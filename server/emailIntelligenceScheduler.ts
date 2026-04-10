@@ -20,6 +20,7 @@ import { generateNbasFromEmailSignals, generateAccountEmailNbas } from "./nextBe
 import { generateCarrierEmailNbas } from "./carrierEmailNbaService";
 import { stageCarrierEmailEnrichment } from "./carrierEmailEnrichmentService";
 import { processWinLossEvidence } from "./emailWinLossService";
+import { processCarrierEmailSignals } from "./services/carrierIntelSuggestions";
 import type { InsertEmailSignal } from "@shared/schema";
 
 const BATCH_SIZE = parseInt(process.env.EMAIL_INTEL_BATCH_SIZE ?? "50", 10);
@@ -93,6 +94,13 @@ async function runEmailIntelligenceBatch(): Promise<void> {
             console.error(`[emailIntelligenceScheduler] carrier enrichment error for ${msg.id}:`, err)
           );
         }
+      }
+
+      // Non-blocking: map carrier email signals → intel suggestions
+      if (saved.length > 0 && msg.linkedCarrierId && msg.orgId) {
+        processCarrierEmailSignals(storage, msg.linkedCarrierId, msg.orgId, msg, saved).catch(err => {
+          console.error(`[emailIntelligenceScheduler] carrier intel mapper error for message ${msg.id}:`, err);
+        });
       }
     } catch (err) {
       console.error(`[emailIntelligenceScheduler] fatal error for message ${msg.id}:`, err);

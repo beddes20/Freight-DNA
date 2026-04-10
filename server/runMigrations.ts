@@ -1748,6 +1748,40 @@ export async function runMigrations() {
     await clientEmailIntel.query(`
       ALTER TABLE crm_opportunities ADD COLUMN IF NOT EXISTS outcome text
     `);
+    // carrier_intel_suggestions table (Task #193)
+    await clientEmailIntel.query(`
+      CREATE TABLE IF NOT EXISTS carrier_intel_suggestions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        carrier_id varchar NOT NULL,
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        source_type text NOT NULL,
+        email_signal_id varchar REFERENCES email_signals(id) ON DELETE SET NULL,
+        market_signal_id varchar,
+        suggestion_type text NOT NULL,
+        payload jsonb NOT NULL DEFAULT '{}',
+        confidence_score integer NOT NULL DEFAULT 50,
+        status text NOT NULL DEFAULT 'pending',
+        comment text,
+        accepted_by_user_id varchar,
+        rejected_by_user_id varchar,
+        accepted_at timestamp,
+        rejected_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_carrier_intel_suggestions_carrier_id
+        ON carrier_intel_suggestions(carrier_id)
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_carrier_intel_suggestions_status
+        ON carrier_intel_suggestions(carrier_id, status)
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_carrier_intel_suggestions_email_signal
+        ON carrier_intel_suggestions(email_signal_id) WHERE email_signal_id IS NOT NULL
+    `);
     // Add provider_message_id for inbound idempotency (Task #190 rev)
     await clientEmailIntel.query(`
       ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS provider_message_id text

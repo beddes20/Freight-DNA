@@ -19,6 +19,8 @@ import {
   carriers,
   carrierContacts,
   carrierClaimedLanes,
+  carrierMarketNbas,
+  marketSignals,
   insertCarrierSchema,
   insertCarrierContactSchema,
   insertCarrierClaimedLaneSchema,
@@ -665,6 +667,160 @@ export function registerCarrierHubRoutes(app: Express) {
     } catch (err) {
       console.error("[carrier-hub] delete claimed lane error:", err);
       res.status(500).json({ error: "Failed to delete claimed lane" });
+    }
+  });
+
+  // ── INTELLIGENCE SUMMARY ──────────────────────────────────────────────────
+  // GET /api/carrier-hub/:id/intelligence
+  // Returns carrier basics, lane history snapshot, declared preferences,
+  // active market NBAs, and suggestions split by status.
+  app.get("/api/carrier-hub/:id/intelligence", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const { id } = req.params;
+
+      const [carrier] = await db
+        .select()
+        .from(carriers)
+        .where(and(eq(carriers.id, id), eq(carriers.orgId, org)));
+      if (!carrier) return res.status(404).json({ error: "Carrier not found" });
+
+      const [claimedLanes, allSuggestions] = await Promise.all([
+        db.select().from(carrierClaimedLanes)
+          .where(eq(carrierClaimedLanes.carrierId, id))
+          .orderBy(asc(carrierClaimedLanes.laneType), asc(carrierClaimedLanes.originState)),
+        storage.getSuggestionsForCarrier(id),
+      ]);
+
+      // Build lane history snapshot from lane_carrier_interest + carrier profile
+      const historyResult = await storage.pool.query<{
+        top_origin: string | null;
+        top_dest: string | null;
+        equipment: string | null;
+        load_count: string;
+      }>(
+        `SELECT
+          rl.origin_state AS top_origin,
+          rl.dest_state AS top_dest,
+          rl.equipment_type AS equipment,
+          COUNT(*) AS load_count
+        FROM lane_carrier_interest lci
+        JOIN recurring_lanes rl ON rl.id = lci.lane_id
+        WHERE lci.carrier_id = $1
+        GROUP BY rl.origin_state, rl.dest_state, rl.equipment_type
+        ORDER BY load_count DESC
+        LIMIT 10`,
+        [id]
+      );
+
+      // Active market NBAs for this carrier (joined with signals for labels)
+      const activeNbas = await db
+        .select({
+          id: carrierMarketNbas.id,
+          recommendationType: carrierMarketNbas.recommendationType,
+          status: carrierMarketNbas.status,
+          urgencyScore: carrierMarketNbas.urgencyScore,
+          explanation: carrierMarketNbas.explanation,
+          createdAt: carrierMarketNbas.createdAt,
+          signalType: marketSignals.signalType,
+          signalScopeKey: marketSignals.scopeKey,
+          signalEquipmentType: marketSignals.equipmentType,
+          signalSeverity: marketSignals.severity,
+        })
+        .from(carrierMarketNbas)
+        .leftJoin(marketSignals, eq(marketSignals.id, carrierMarketNbas.marketSignalId))
+        .where(and(
+          eq(carrierMarketNbas.carrierId, id),
+          inArray(carrierMarketNbas.status, ["pending", "in_progress"])
+        ))
+        .orderBy(desc(carrierMarketNbas.urgencyScore))
+        .limit(10);
+
+      const pending = allSuggestions.filter(s => s.status === "pending");
+      const accepted = allSuggestions.filter(s => s.status === "accepted" || s.status === "auto_accepted");
+      const rejected = allSuggestions.filter(s => s.status === "rejected");
+
+      res.json({
+        carrier: {
+          id: carrier.id,
+          name: carrier.name,
+          mcDot: carrier.mcDot,
+          status: carrier.status,
+        },
+        historySnapshot: {
+          topLanes: historyResult.rows.map(r => ({
+            origin: r.top_origin,
+            destination: r.top_dest,
+            equipment: r.equipment,
+            loadCount: parseInt(r.load_count),
+          })),
+          equipmentTypes: carrier.equipmentTypes ?? [],
+          regions: carrier.regions ?? [],
+          statesServed: carrier.statesServed ?? [],
+        },
+        declaredPreferences: claimedLanes,
+        activeMarketNbas: activeNbas,
+        suggestions: { pending, accepted, rejected },
+      });
+    } catch (err) {
+      console.error("[carrier-hub] intelligence error:", err);
+      res.status(500).json({ error: "Failed to load carrier intelligence" });
+    }
+  });
+
+  // ── SUGGESTIONS: ACCEPT / REJECT ─────────────────────────────────────────
+  // PATCH /api/carrier-hub/suggestions/:suggestionId/accept
+  app.patch("/api/carrier-hub/suggestions/:suggestionId/accept", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const { suggestionId } = req.params;
+      const { comment } = req.body ?? {};
+      const userId = (req as any).session?.userId as string | undefined;
+
+      const suggestion = await storage.getSuggestionById(suggestionId);
+      if (!suggestion) return res.status(404).json({ error: "Suggestion not found" });
+
+      // Org scope check via carrier
+      const [carrier] = await db.select({ id: carriers.id })
+        .from(carriers)
+        .where(and(eq(carriers.id, suggestion.carrierId), eq(carriers.orgId, org)));
+      if (!carrier) return res.status(403).json({ error: "Forbidden" });
+
+      const updated = await storage.updateSuggestionStatus(suggestionId, "accepted", {
+        userId,
+        comment: typeof comment === "string" ? comment : undefined,
+      });
+      res.json(updated);
+    } catch (err) {
+      console.error("[carrier-hub] accept suggestion error:", err);
+      res.status(500).json({ error: "Failed to accept suggestion" });
+    }
+  });
+
+  // PATCH /api/carrier-hub/suggestions/:suggestionId/reject
+  app.patch("/api/carrier-hub/suggestions/:suggestionId/reject", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const { suggestionId } = req.params;
+      const { comment } = req.body ?? {};
+      const userId = (req as any).session?.userId as string | undefined;
+
+      const suggestion = await storage.getSuggestionById(suggestionId);
+      if (!suggestion) return res.status(404).json({ error: "Suggestion not found" });
+
+      const [carrier] = await db.select({ id: carriers.id })
+        .from(carriers)
+        .where(and(eq(carriers.id, suggestion.carrierId), eq(carriers.orgId, org)));
+      if (!carrier) return res.status(403).json({ error: "Forbidden" });
+
+      const updated = await storage.updateSuggestionStatus(suggestionId, "rejected", {
+        userId,
+        comment: typeof comment === "string" ? comment : undefined,
+      });
+      res.json(updated);
+    } catch (err) {
+      console.error("[carrier-hub] reject suggestion error:", err);
+      res.status(500).json({ error: "Failed to reject suggestion" });
     }
   });
 }

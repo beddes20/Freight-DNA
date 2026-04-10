@@ -24,7 +24,7 @@ import {
   Truck, Building2, Phone, Mail, MapPin, Search, Plus, X, ChevronRight,
   AlertTriangle, CheckCircle2, Star, User, Route, Activity, Settings,
   Globe, Loader2, Edit2, Trash2, Shield, History, Zap, ExternalLink,
-  HelpCircle,
+  HelpCircle, Brain, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -166,6 +166,54 @@ interface CarrierDetail {
   provenHistory: ProvenLane[];
   outreachActivity: any[];
   stats: { provenLaneCount: number; outreachSentCount: number; positiveOutcomes: number; lastUsed: string | null; contactReadiness: string };
+}
+
+interface CarrierIntelSuggestion {
+  id: string;
+  carrierId: string;
+  orgId: string;
+  sourceType: string;
+  emailSignalId: string | null;
+  marketSignalId: string | null;
+  suggestionType: string;
+  payload: Record<string, unknown>;
+  confidenceScore: number;
+  status: string;
+  comment: string | null;
+  acceptedByUserId: string | null;
+  rejectedByUserId: string | null;
+  acceptedAt: string | null;
+  rejectedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface CarrierIntelligence {
+  carrier: { id: string; name: string; mcDot: string | null; status: string };
+  historySnapshot: {
+    topLanes: Array<{ origin: string | null; destination: string | null; equipment: string | null; loadCount: number }>;
+    equipmentTypes: string[];
+    regions: string[];
+    statesServed: string[];
+  };
+  declaredPreferences: CarrierClaimedLane[];
+  activeMarketNbas: Array<{
+    id: string;
+    recommendationType: string;
+    status: string;
+    urgencyScore: number;
+    explanation: Record<string, unknown>;
+    createdAt: string;
+    signalType: string | null;
+    signalScopeKey: string | null;
+    signalEquipmentType: string | null;
+    signalSeverity: string | null;
+  }>;
+  suggestions: {
+    pending: CarrierIntelSuggestion[];
+    accepted: CarrierIntelSuggestion[];
+    rejected: CarrierIntelSuggestion[];
+  };
 }
 
 // ── Small helpers ──────────────────────────────────────────────────────────────
@@ -477,6 +525,98 @@ function ClaimedLaneForm({ carrierId, onSave, onCancel }: { carrierId: string; o
   );
 }
 
+// ── Intelligence helpers ───────────────────────────────────────────────────────
+
+const SUGGESTION_TYPE_LABELS: Record<string, string> = {
+  lane_preference: "Lane Preference",
+  capacity_available: "Capacity Available",
+  capacity_unavailable: "Capacity Unavailable",
+  equipment_capability: "Equipment Capability",
+  region_preference: "Region Preference",
+  price_sensitivity: "Price Sensitivity",
+  service_risk: "Service Risk",
+};
+
+function SuggestionCard({
+  suggestion,
+  onAccept,
+  onReject,
+  isPending,
+}: {
+  suggestion: CarrierIntelSuggestion;
+  onAccept: (id: string, comment?: string) => void;
+  onReject: (id: string, comment?: string) => void;
+  isPending: boolean;
+}) {
+  const [note, setNote] = useState("");
+  const p = suggestion.payload;
+
+  const payloadSummary: string[] = [];
+  if (p.origin || p.originState) payloadSummary.push(`From: ${[p.origin, p.originState].filter(Boolean).join(", ")}`);
+  if (p.destination || p.destState) payloadSummary.push(`To: ${[p.destination, p.destState].filter(Boolean).join(", ")}`);
+  if (p.equipment) payloadSummary.push(`Equip: ${p.equipment}`);
+  if (p.region) payloadSummary.push(`Region: ${p.region}`);
+  if (p.availableDate) payloadSummary.push(`Available: ${p.availableDate}`);
+  if (p.timeWindow) payloadSummary.push(`Window: ${p.timeWindow}`);
+  if (p.rate) payloadSummary.push(`Rate: ${p.rate}`);
+  if (p.notes) payloadSummary.push(`${p.notes}`);
+
+  const sourceLabel = suggestion.sourceType === "email_signal"
+    ? `Email signal · ${formatDate(suggestion.createdAt)}`
+    : suggestion.marketSignalId
+    ? `Market signal`
+    : "Unknown source";
+
+  return (
+    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-2" data-testid={`suggestion-card-${suggestion.id}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-foreground">
+              {SUGGESTION_TYPE_LABELS[suggestion.suggestionType] ?? suggestion.suggestionType}
+            </span>
+            <Badge variant="outline" className="text-[9px] py-0 px-1 border-amber-500/30 text-amber-400">
+              {suggestion.confidenceScore}% confidence
+            </Badge>
+          </div>
+          {payloadSummary.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-0.5">{payloadSummary.join(" · ")}</p>
+          )}
+          <p className="text-[10px] text-muted-foreground/60 mt-1">{sourceLabel}</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          className="h-7 text-xs flex-1"
+          placeholder="Optional note…"
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          data-testid={`input-suggestion-note-${suggestion.id}`}
+        />
+        <Button
+          size="sm"
+          className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white gap-1"
+          onClick={() => onAccept(suggestion.id, note || undefined)}
+          disabled={isPending}
+          data-testid={`btn-accept-suggestion-${suggestion.id}`}
+        >
+          <ThumbsUp className="w-3 h-3" /> Accept
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs gap-1 text-muted-foreground"
+          onClick={() => onReject(suggestion.id, note || undefined)}
+          disabled={isPending}
+          data-testid={`btn-reject-suggestion-${suggestion.id}`}
+        >
+          <ThumbsDown className="w-3 h-3" /> Reject
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ── Carrier Profile Drawer ─────────────────────────────────────────────────────
 
 function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () => void }) {
@@ -488,6 +628,7 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
   const [addingClaimedLane, setAddingClaimedLane] = useState(false);
   const [profileForm, setProfileForm] = useState<Partial<CarrierDetail["carrier"]>>({});
   const [activeTab, setActiveTab] = useState("overview");
+  const [showRejectedSuggestions, setShowRejectedSuggestions] = useState(false);
 
   const { data, isLoading } = useQuery<CarrierDetail>({
     queryKey: ["/api/carrier-hub", carrierId],
@@ -534,6 +675,36 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
     queryKey: ["/api/carrier-hub", carrierId, "best-lanes"],
     queryFn: () => fetch(`/api/carrier-hub/${carrierId}/best-lanes`).then(r => r.json()),
     enabled: !!carrierId && activeTab === "lanes",
+  });
+
+  const { data: intelData, isLoading: intelLoading } = useQuery<CarrierIntelligence>({
+    queryKey: ["/api/carrier-hub", carrierId, "intelligence"],
+    queryFn: async () => {
+      const r = await fetch(`/api/carrier-hub/${carrierId}/intelligence`);
+      if (!r.ok) throw new Error(`Failed to load intelligence (${r.status})`);
+      return r.json();
+    },
+    enabled: !!carrierId && activeTab === "intelligence",
+  });
+
+  const acceptSuggestion = useMutation({
+    mutationFn: ({ id, comment }: { id: string; comment?: string }) =>
+      apiRequest("PATCH", `/api/carrier-hub/suggestions/${id}/accept`, { comment }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/carrier-hub", carrierId, "intelligence"] });
+      toast({ title: "Suggestion accepted" });
+    },
+    onError: () => toast({ title: "Failed to accept suggestion", variant: "destructive" }),
+  });
+
+  const rejectSuggestion = useMutation({
+    mutationFn: ({ id, comment }: { id: string; comment?: string }) =>
+      apiRequest("PATCH", `/api/carrier-hub/suggestions/${id}/reject`, { comment }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/carrier-hub", carrierId, "intelligence"] });
+      toast({ title: "Suggestion rejected" });
+    },
+    onError: () => toast({ title: "Failed to reject suggestion", variant: "destructive" }),
   });
 
   const updateCarrier = useMutation({
@@ -659,6 +830,9 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
             Lanes <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{data!.claimedLanes.length + (activityData?.provenHistory.length ?? 0)}</Badge>
           </TabsTrigger>
           <TabsTrigger value="activity" className="text-xs h-7" data-testid="tab-activity">Activity</TabsTrigger>
+          <TabsTrigger value="intelligence" className="text-xs h-7" data-testid="tab-intelligence">
+            <Brain className="w-3 h-3 mr-1" />Intelligence
+          </TabsTrigger>
         </TabsList>
 
         <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -1065,6 +1239,149 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                 </div>
               ))}
             </div>
+          </TabsContent>
+
+          {/* ── Intelligence Tab ── */}
+          <TabsContent value="intelligence" className="mt-0 space-y-5" data-testid="tab-content-intelligence">
+            {intelLoading && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground py-4">
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading carrier intelligence…
+              </div>
+            )}
+
+            {!intelLoading && intelData && (
+              <>
+                {/* ── Section A: History Snapshot ── */}
+                <div data-testid="intel-section-history">
+                  <div className="mb-2">
+                    <h3 className="text-sm font-semibold flex items-center gap-2">
+                      Historical Lane Activity
+                      <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 bg-blue-500/10">Read-only</Badge>
+                    </h3>
+                    <p className="text-[11px] text-muted-foreground">Aggregated from proven lane engagement history</p>
+                  </div>
+
+                  {intelData.historySnapshot.topLanes.length === 0 && (
+                    <p className="text-xs text-muted-foreground italic">No historical lane data yet.</p>
+                  )}
+
+                  {intelData.historySnapshot.topLanes.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {intelData.historySnapshot.topLanes.map((l, i) => (
+                        <Badge key={i} variant="outline" className="text-[10px] py-0.5 px-2 border-border text-foreground" data-testid={`intel-lane-chip-${i}`}>
+                          {l.origin ?? "?"} → {l.destination ?? "?"}{l.equipment ? ` · ${l.equipment}` : ""}
+                          <span className="ml-1 text-muted-foreground">×{l.loadCount}</span>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+
+                  {(intelData.historySnapshot.equipmentTypes.length > 0 || intelData.historySnapshot.regions.length > 0 || intelData.historySnapshot.statesServed.length > 0) && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {intelData.historySnapshot.equipmentTypes.map(e => (
+                        <Badge key={e} variant="secondary" className="text-[10px]">{e}</Badge>
+                      ))}
+                      {intelData.historySnapshot.regions.map(r => (
+                        <Badge key={r} variant="outline" className="text-[10px] border-purple-500/30 text-purple-400">{r}</Badge>
+                      ))}
+                      {intelData.historySnapshot.statesServed.slice(0, 8).map(s => (
+                        <Badge key={s} variant="outline" className="text-[10px] text-muted-foreground">{s}</Badge>
+                      ))}
+                      {intelData.historySnapshot.statesServed.length > 8 && (
+                        <Badge variant="outline" className="text-[10px] text-muted-foreground">+{intelData.historySnapshot.statesServed.length - 8} states</Badge>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Section B: Declared Preferences ── */}
+                <div data-testid="intel-section-preferences">
+                  <h3 className="text-sm font-semibold mb-1.5">Declared Preferences</h3>
+                  <p className="text-[11px] text-muted-foreground mb-2">User-maintained lane preferences from the carrier profile</p>
+                  {intelData.declaredPreferences.length === 0 && (
+                    <p className="text-xs text-muted-foreground italic">No declared lane preferences yet.</p>
+                  )}
+                  <div className="space-y-1">
+                    {intelData.declaredPreferences.map(l => (
+                      <div key={l.id} className={`flex items-center gap-2 rounded px-2.5 py-1.5 border text-xs ${l.laneType === "avoid" ? "border-red-500/20 bg-red-500/5 text-red-300" : "border-green-500/20 bg-green-500/5 text-green-300"}`} data-testid={`intel-pref-${l.id}`}>
+                        <Route className="w-3 h-3 shrink-0" />
+                        <span>{laneLabel(l)}{l.equipment ? ` · ${l.equipment}` : ""}</span>
+                        <Badge variant="outline" className={`ml-auto text-[9px] py-0 px-1 shrink-0 ${l.laneType === "avoid" ? "border-red-500/30 text-red-400" : "border-green-500/30 text-green-400"}`}>
+                          {l.laneType === "avoid" ? "Avoid" : "Prefers"}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ── Section C: Pending Suggestions ── */}
+                <div data-testid="intel-section-suggestions">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <h3 className="text-sm font-semibold">Suggestions</h3>
+                      <p className="text-[11px] text-muted-foreground">AI-derived enrichment staged for review</p>
+                    </div>
+                    {intelData.suggestions.pending.length > 0 && (
+                      <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 text-[10px]">
+                        {intelData.suggestions.pending.length} pending
+                      </Badge>
+                    )}
+                  </div>
+
+                  {intelData.suggestions.pending.length === 0 && (
+                    <p className="text-xs text-muted-foreground italic" data-testid="intel-no-pending">No pending suggestions. Suggestions appear automatically when email signals are processed for this carrier.</p>
+                  )}
+
+                  <div className="space-y-3">
+                    {intelData.suggestions.pending.map(s => (
+                      <SuggestionCard
+                        key={s.id}
+                        suggestion={s}
+                        onAccept={(id, comment) => acceptSuggestion.mutate({ id, comment })}
+                        onReject={(id, comment) => rejectSuggestion.mutate({ id, comment })}
+                        isPending={acceptSuggestion.isPending || rejectSuggestion.isPending}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Accepted + Rejected history */}
+                  {(intelData.suggestions.accepted.length > 0 || intelData.suggestions.rejected.length > 0) && (
+                    <div className="mt-4">
+                      <button
+                        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => setShowRejectedSuggestions(v => !v)}
+                        data-testid="btn-toggle-suggestion-history"
+                      >
+                        {showRejectedSuggestions ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        Decision history ({intelData.suggestions.accepted.length} accepted, {intelData.suggestions.rejected.length} rejected)
+                      </button>
+
+                      {showRejectedSuggestions && (
+                        <div className="mt-2 space-y-2" data-testid="intel-suggestion-history">
+                          {[...intelData.suggestions.accepted, ...intelData.suggestions.rejected]
+                            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+                            .map(s => (
+                              <div key={s.id} className={`rounded-lg border px-3 py-2 text-xs ${s.status === "accepted" || s.status === "auto_accepted" ? "border-green-500/20 bg-green-500/5" : "border-muted-foreground/20 bg-muted/10 opacity-60"}`} data-testid={`intel-history-${s.id}`}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-medium text-foreground">{SUGGESTION_TYPE_LABELS[s.suggestionType] ?? s.suggestionType}</span>
+                                  <Badge variant="outline" className={`text-[9px] py-0 px-1 ${s.status === "accepted" || s.status === "auto_accepted" ? "border-green-500/30 text-green-400" : "border-muted-foreground/30 text-muted-foreground"}`}>
+                                    {s.status}
+                                  </Badge>
+                                </div>
+                                <p className="text-muted-foreground mt-0.5">{formatDate(s.updatedAt)}{s.comment ? ` · ${s.comment}` : ""}</p>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {!intelLoading && !intelData && (
+              <p className="text-sm text-muted-foreground italic py-4 text-center">Unable to load intelligence data.</p>
+            )}
           </TabsContent>
         </div>
       </Tabs>
