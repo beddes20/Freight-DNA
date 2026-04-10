@@ -2335,47 +2335,105 @@ export function CarrierOutreachPanel({
               ) : (
                 <div className="flex flex-col gap-3">
                   {outreachHistory.map(log => {
+                    const isInbound = (log as Record<string, unknown>).direction === "inbound";
                     const status = log.deliveryStatus ?? "draft";
-                    const statusConfig = {
-                      sent:    { label: "Sent",   color: "text-emerald-400", icon: <CheckCircle2 className="w-3 h-3" /> },
-                      partial: { label: "Partial", color: "text-amber-400",  icon: <AlertCircle className="w-3 h-3" /> },
-                      failed:  { label: "Failed",  color: "text-red-400",    icon: <XCircle className="w-3 h-3" /> },
-                      draft:   { label: "Logged",  color: "text-muted-foreground", icon: <ClipboardCheck className="w-3 h-3" /> },
-                    }[status] ?? { label: status, color: "text-muted-foreground", icon: <Clock className="w-3 h-3" /> };
+                    const statusConfig = isInbound
+                      ? { label: "Reply", color: "text-blue-400", icon: <Mail className="w-3 h-3" /> }
+                      : ({
+                          sent:     { label: "Sent",     color: "text-emerald-400", icon: <CheckCircle2 className="w-3 h-3" /> },
+                          partial:  { label: "Partial",  color: "text-amber-400",  icon: <AlertCircle className="w-3 h-3" /> },
+                          failed:   { label: "Failed",   color: "text-red-400",    icon: <XCircle className="w-3 h-3" /> },
+                          received: { label: "Received", color: "text-blue-400",   icon: <Mail className="w-3 h-3" /> },
+                          draft:    { label: "Logged",   color: "text-muted-foreground", icon: <ClipboardCheck className="w-3 h-3" /> },
+                        }[status] ?? { label: status, color: "text-muted-foreground", icon: <Clock className="w-3 h-3" /> });
+
+                    const matchConfidence = (log as Record<string, unknown>).matchConfidence as string | null | undefined;
+                    const bodyPreview = (log as Record<string, unknown>).bodyPreview as string | null | undefined;
+                    const receivedAt = (log as Record<string, unknown>).receivedAt as string | null | undefined;
+                    const matchConfidenceConfig: Record<string, { label: string; color: string }> = {
+                      exact:             { label: "Exact match",     color: "text-emerald-400" },
+                      alternate_contact: { label: "Alt contact",     color: "text-blue-400" },
+                      ambiguous:         { label: "Ambiguous",       color: "text-amber-400" },
+                      unmatched:         { label: "Unmatched",       color: "text-muted-foreground" },
+                    };
+                    const matchCfg = matchConfidence ? matchConfidenceConfig[matchConfidence] : null;
+
                     return (
-                      <div key={log.id} className="bg-muted/10 rounded-lg border border-border p-3" data-testid={`outreach-log-${log.id}`}>
+                      <div
+                        key={log.id}
+                        className={`rounded-lg border p-3 ${isInbound ? "bg-blue-500/5 border-blue-500/20" : "bg-muted/10 border-border"}`}
+                        data-testid={`outreach-log-${log.id}`}
+                      >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className={`flex items-center gap-1 text-[10px] font-semibold ${statusConfig.color}`}>
                                 {statusConfig.icon} {statusConfig.label}
                               </span>
-                              <span className="text-[9px] text-muted-foreground">·</span>
-                              <span className="text-[9px] text-muted-foreground">{log.outreachMode === "immediate_plus_lane" ? "Immediate + Lane" : "Lane-Building"}</span>
-                              {log.replyReceivedAt && (
-                                <span className="flex items-center gap-0.5 text-[10px] font-semibold text-blue-400 bg-blue-500/10 border border-blue-500/20 rounded px-1 py-0.5" data-testid={`reply-received-badge-${log.id}`}>
-                                  <MailOpen className="w-2.5 h-2.5" /> Reply Received
+                              {isInbound && (
+                                <span className="px-1 py-0.5 rounded text-[8px] font-medium bg-blue-500/15 border border-blue-500/20 text-blue-400" data-testid={`log-direction-inbound-${log.id}`}>
+                                  Inbound
+                                </span>
+                              )}
+                              {!isInbound && (
+                                <>
+                                  <span className="text-[9px] text-muted-foreground">·</span>
+                                  <span className="text-[9px] text-muted-foreground">{log.outreachMode === "immediate_plus_lane" ? "Immediate + Lane" : "Lane-Building"}</span>
+                                  {log.replyReceivedAt && (
+                                    <span className="flex items-center gap-0.5 text-[10px] font-semibold text-blue-400 bg-blue-500/10 border border-blue-500/20 rounded px-1 py-0.5" data-testid={`reply-received-badge-${log.id}`}>
+                                      <MailOpen className="w-2.5 h-2.5" /> Reply Received
+                                    </span>
+                                  )}
+                                </>
+                              )}
+                              {matchCfg && (
+                                <span className={`text-[8px] ${matchCfg.color}`} data-testid={`log-match-confidence-${log.id}`}>
+                                  · {matchCfg.label}
                                 </span>
                               )}
                             </div>
-                            <p className="text-[10px] text-foreground/70 mt-1 font-medium">{log.carrierNames.join(", ")}</p>
-                            {log.sentAt && <p className="text-[9px] text-muted-foreground mt-0.5">Sent {new Date(log.sentAt).toLocaleString()}</p>}
-                            {!log.sentAt && <p className="text-[9px] text-muted-foreground mt-0.5">Logged {new Date(log.timestamp).toLocaleString()}</p>}
-                            {log.replyReceivedAt && (
-                              <p className="text-[9px] text-blue-400/80 mt-0.5" data-testid={`reply-timestamp-${log.id}`}>
-                                Reply received {new Date(log.replyReceivedAt).toLocaleString()}
-                              </p>
+                            {isInbound ? (
+                              <>
+                                {(log as Record<string, unknown>).fromEmail && (
+                                  <p className="text-[10px] text-foreground/70 mt-1 font-medium" data-testid={`log-from-email-${log.id}`}>
+                                    From: {(log as Record<string, unknown>).fromEmail as string}
+                                  </p>
+                                )}
+                                {bodyPreview && (
+                                  <p className="text-[9px] text-muted-foreground mt-0.5 italic truncate" data-testid={`log-body-preview-${log.id}`}>
+                                    "{bodyPreview}"
+                                  </p>
+                                )}
+                                {receivedAt && (
+                                  <p className="text-[9px] text-muted-foreground mt-0.5" data-testid={`log-received-at-${log.id}`}>
+                                    Received {new Date(receivedAt).toLocaleString()}
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                <p className="text-[10px] text-foreground/70 mt-1 font-medium">{log.carrierNames.join(", ")}</p>
+                                {log.sentAt && <p className="text-[9px] text-muted-foreground mt-0.5">Sent {new Date(log.sentAt).toLocaleString()}</p>}
+                                {!log.sentAt && <p className="text-[9px] text-muted-foreground mt-0.5">Logged {new Date(log.timestamp).toLocaleString()}</p>}
+                                {log.replyReceivedAt && (
+                                  <p className="text-[9px] text-blue-400/80 mt-0.5" data-testid={`reply-timestamp-${log.id}`}>
+                                    Reply received {new Date(log.replyReceivedAt).toLocaleString()}
+                                  </p>
+                                )}
+                                {log.replySnippet && (
+                                  <p className="text-[9px] text-muted-foreground mt-0.5 italic truncate" data-testid={`reply-snippet-${log.id}`}>
+                                    "{log.replySnippet}"
+                                  </p>
+                                )}
+                                {log.failureReason && <p className="text-[9px] text-red-400/70 mt-0.5">Error: {log.failureReason}</p>}
+                              </>
                             )}
-                            {log.replySnippet && (
-                              <p className="text-[9px] text-muted-foreground mt-0.5 italic truncate" data-testid={`reply-snippet-${log.id}`}>
-                                "{log.replySnippet}"
-                              </p>
-                            )}
-                            {log.failureReason && <p className="text-[9px] text-red-400/70 mt-0.5">Error: {log.failureReason}</p>}
                           </div>
-                          <span className="text-[9px] text-muted-foreground shrink-0">{log.carrierNames.length} carrier{log.carrierNames.length !== 1 ? "s" : ""}</span>
+                          {!isInbound && (
+                            <span className="text-[9px] text-muted-foreground shrink-0">{log.carrierNames.length} carrier{log.carrierNames.length !== 1 ? "s" : ""}</span>
+                          )}
                         </div>
-                        {log.recipients && log.recipients.length > 0 && (
+                        {!isInbound && log.recipients && log.recipients.length > 0 && (
                           <div className="mt-2 flex flex-col gap-1">
                             {log.recipients.map((r, ri) => {
                               const isAdHoc = r.carrierId === null && r.carrierName.startsWith("Ad-hoc:");
@@ -2392,7 +2450,7 @@ export function CarrierOutreachPanel({
                             })}
                           </div>
                         )}
-                        {log.emailDrafts && log.emailDrafts.length > 0 && (
+                        {!isInbound && log.emailDrafts && log.emailDrafts.length > 0 && (
                           <div className="mt-2 flex flex-col gap-0.5">
                             {log.emailDrafts.map((d, di) => (
                               <p key={di} className="text-[9px] text-muted-foreground truncate">

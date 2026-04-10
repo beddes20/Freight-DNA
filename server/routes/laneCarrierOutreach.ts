@@ -1761,6 +1761,12 @@ Rules for suggestions:
 
     // Create outreach log with send-tracking fields
     const now = new Date();
+    const fromAddr = process.env.SMTP_FROM || process.env.OUTLOOK_FROM_EMAIL || "noreply@freight-dna.com";
+    const toAddresses = results.filter(r => r.email).map(r => r.email).join(", ");
+    const primarySubject = emailDrafts[0]?.subject ?? null;
+    const bodySnippet = emailDrafts[0]?.body
+      ? emailDrafts[0].body.replace(/<[^>]+>/g, "").slice(0, 255)
+      : null;
     const log = await storage.createCarrierOutreachLog({
       orgId: user.organizationId,
       laneId: req.params.laneId,
@@ -1779,6 +1785,11 @@ Rules for suggestions:
       // threadId = first sent message ID (fast lookup for single-recipient case).
       // Multi-recipient matching uses recipients JSONB lookup in storage.
       threadId: primaryThreadId,
+      direction: "outbound",
+      fromEmail: fromAddr,
+      toEmail: toAddresses || null,
+      subject: primarySubject,
+      bodyPreview: bodySnippet,
     });
 
     // Upsert bench entries for carriers that were contacted (sent or no_email still = attempt)

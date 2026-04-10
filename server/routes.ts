@@ -14,6 +14,7 @@ import { registerCarrierHubRoutes } from "./routes/carrierHub";
 import { registerMyProcurementRoutes } from "./routes/myProcurement";
 import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach";
 import { registerIntelRoutes } from "./routes/intel";
+import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -505,6 +506,8 @@ export async function registerRoutes(
     // Outlook reply webhook — Microsoft Graph calls this endpoint directly (no session cookie)
     // Security is handled by clientState secret validation inside the handler
     if (req.path === "/webhooks/outlook-reply") return next();
+    // Microsoft Graph webhook endpoints — public (Graph calls without session cookies)
+    if (req.path.startsWith("/webhooks/graph/")) return next();
     requireAuth(req, res, next);
   });
 
@@ -3014,6 +3017,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerMyProcurementRoutes(app);
   registerProcurementOutreachRoutes(app);
   registerIntelRoutes(app);
+  registerGraphWebhookRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
 

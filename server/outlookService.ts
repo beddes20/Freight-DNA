@@ -1,9 +1,11 @@
 /**
  * Microsoft Graph API — Outlook email sender
  *
- * Uses the Client Credentials (app-only) flow with Mail.Send application permission.
- * Sends from the logged-in user's own Outlook mailbox via /users/{userEmail}/messages
- * so the email appears to come from them natively (shows in their Sent Items, etc.).
+ * Uses the Client Credentials (app-only) flow with delegated "send on behalf of"
+ * semantics. The app impersonates the logged-in user's Outlook mailbox using
+ * either:
+ *   (a) Two-step: POST /users/{email}/messages → POST .../send  (captures messageId + conversationId)
+ *   (b) One-step: POST /users/{email}/sendMail                  (HTTP 202, no body — legacy fallback)
  * A Reply-To header pointing at OUTLOOK_REPLY_EMAIL funnels all carrier replies to
  * one central monitored mailbox for reply-tracking regardless of who sent the email.
  *
@@ -44,13 +46,18 @@ export interface OutlookSendResult {
   ok: boolean;
   error?: string;
   internetMessageId?: string;
+  providerMessageId?: string;
+  conversationId?: string;
 }
 
+/**
+ * Send an email via Microsoft Graph and return the message + conversation IDs.
+ *
+ * Strategy: two-step create-then-send so we can read the Graph-assigned
+ * messageId and conversationId from the created draft before sending.
+ * Falls back to the simpler one-step sendMail if the draft create fails.
+ */
 export async function sendOutlookEmail(opts: OutlookSendOptions): Promise<OutlookSendResult> {
-  if (!outlookEnabled()) {
-    return { ok: false, error: "Outlook not configured. Set OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID, and OUTLOOK_CLIENT_SECRET." };
-  }
-
   if (!isEmailLiveModeOn()) {
     log(`[SUPPRESSED] Live mode is OFF — Outlook email to ${opts.toEmail} ("${opts.subject}") was blocked. Enable Email Live Mode in Admin to send for real.`);
     return { ok: true };
@@ -91,63 +98,75 @@ export async function sendOutlookEmail(opts: OutlookSendOptions): Promise<Outloo
       message.replyTo = [{ emailAddress: { address: opts.replyToEmail } }];
     }
 
-    // Send via /sendMail — only requires Mail.Send (no Mail.ReadWrite needed).
-    const sendMailUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(opts.fromEmail)}/sendMail`;
-    const sendRes = await fetch(sendMailUrl, {
+    const encodedFrom = encodeURIComponent(opts.fromEmail);
+
+    // ── Two-step: create draft → read IDs → send ──────────────────────────
+    try {
+      const createUrl = `https://graph.microsoft.com/v1.0/users/${encodedFrom}/messages`;
+      const createRes = await fetch(createUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(message),
+      });
+
+      if (createRes.ok) {
+        const draft = await createRes.json() as { id?: string; conversationId?: string; internetMessageId?: string };
+        const draftId = draft.id;
+        const conversationId = draft.conversationId;
+        const internetMessageId = draft.internetMessageId ? draft.internetMessageId.replace(/[<>]/g, "") : undefined;
+
+        if (!draftId) {
+          throw new Error("Graph createMessage returned no id");
+        }
+
+        // Send the draft
+        const sendUrl = `https://graph.microsoft.com/v1.0/users/${encodedFrom}/messages/${encodeURIComponent(draftId)}/send`;
+        const sendRes = await fetch(sendUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (sendRes.status === 202) {
+          log(`Email sent (two-step) from ${opts.fromEmail} to ${opts.toEmail}: "${opts.subject}" [msgId=${draftId}]`);
+          return { ok: true, providerMessageId: draftId, conversationId, internetMessageId };
+        }
+
+        const errText = await sendRes.text();
+        log(`Graph send error ${sendRes.status} for draft ${draftId}: ${errText}`);
+        // Fall through to one-step sendMail
+      } else {
+        const errText = await createRes.text();
+        log(`Graph createMessage error ${createRes.status}: ${errText} — falling back to sendMail`);
+        // Fall through to one-step sendMail
+      }
+    } catch (draftErr) {
+      log(`Two-step send failed: ${draftErr instanceof Error ? draftErr.message : String(draftErr)} — falling back to sendMail`);
+    }
+
+    // ── Fallback: one-step sendMail (HTTP 202, no IDs returned) ──────────
+    const url = `https://graph.microsoft.com/v1.0/users/${encodedFrom}/sendMail`;
+    const res = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ message, saveToSentItems: true }),
+      body: JSON.stringify({ message, saveToSentItems: opts.saveToSentItems !== false }),
     });
 
-    if (sendRes.status !== 202) {
-      const errorText = await sendRes.text();
-      log(`Graph API error ${sendRes.status} sending to ${opts.toEmail}: ${errorText}`);
-      return { ok: false, error: `Graph API error ${sendRes.status}: ${errorText}` };
+    if (res.status === 202) {
+      log(`Email sent (one-step) from ${opts.fromEmail} to ${opts.toEmail}: "${opts.subject}"`);
+      return { ok: true };
     }
 
-    log(`Email sent from ${opts.fromEmail} to ${opts.toEmail}: "${opts.subject}"`);
-
-    // After a successful send, query SentItems to retrieve the internetMessageId for
-    // reply tracking. This uses Mail.Read (already required for reply tracking) and
-    // avoids the Mail.ReadWrite permission that create-draft would require.
-    // The time-bound filter (sentDateTime in the last 60s) prevents mis-association
-    // with older messages sharing the same recipient/subject.
-    // If the query fails (e.g. Mail.Read not yet granted), degrade gracefully.
-    let internetMessageId: string | undefined;
-    try {
-      // Bound the search to messages sent from 5s before this call to allow for
-      // slight clock skew — Graph typically makes sent messages available within seconds.
-      const windowStart = new Date(Date.now() - 5_000).toISOString();
-      // OData string literals use single-quote escaping ('' for '); do NOT
-      // URI-encode individual predicate values — only encode the final $filter once.
-      const odataRecipient = opts.toEmail.replace(/'/g, "''");
-      const odataSubject = opts.subject.replace(/'/g, "''");
-      const filter = [
-        `toRecipients/any(r:r/emailAddress/address eq '${odataRecipient}')`,
-        `subject eq '${odataSubject}'`,
-        `sentDateTime ge ${windowStart}`,
-      ].join(" and ");
-      const sentQuery = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(opts.fromEmail)}/mailFolders/sentitems/messages` +
-        `?$filter=${encodeURIComponent(filter)}&$orderby=sentDateTime desc&$top=1&$select=internetMessageId`;
-      const sentRes = await fetch(sentQuery, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (sentRes.ok) {
-        const sentData = await sentRes.json() as { value: Array<{ internetMessageId?: string }> };
-        const raw = sentData.value?.[0]?.internetMessageId;
-        if (raw) {
-          internetMessageId = raw.replace(/[<>]/g, "");
-          log(`Captured internetMessageId for outbound email to ${opts.toEmail}: ${internetMessageId}`);
-        }
-      }
-    } catch {
-      // Non-fatal — outbound send succeeded; reply tracking will fall back to subject matching
-    }
-
-    return { ok: true, internetMessageId };
+    const errorText = await res.text();
+    log(`Graph API error ${res.status} sending to ${opts.toEmail}: ${errorText}`);
+    return { ok: false, error: `Graph API error ${res.status}: ${errorText}` };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Exception sending email: ${msg}`);

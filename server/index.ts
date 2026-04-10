@@ -57,6 +57,36 @@ app.post(
   }
 );
 
+// Microsoft Graph webhook — registered BEFORE express.json() so malformed JSON
+// does not cause Express to reject with 400 before reaching the route handler.
+// Graph requires HTTP 200 acknowledgement even for bad payloads.
+app.post(
+  '/api/webhooks/graph/email',
+  express.raw({ type: '*/*' }),
+  async (req, res) => {
+    // Immediately acknowledge — Graph times out if response is slow
+    res.status(200).json({ received: true });
+
+    let body: unknown;
+    try {
+      const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body ?? '');
+      body = JSON.parse(raw);
+    } catch {
+      // Malformed payload — safely ignore after 200 acknowledgement
+      return;
+    }
+
+    // Defer to the full handler in graphWebhook.ts via dynamic import
+    try {
+      const { processGraphNotifications } = await import('./routes/graphWebhook');
+      await processGraphNotifications(body);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[graphWebhook] processNotifications error:', message);
+    }
+  }
+);
+
 app.use(
   express.json({
     limit: "15mb",

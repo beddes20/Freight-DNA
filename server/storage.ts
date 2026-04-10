@@ -114,6 +114,8 @@ import {
   carriers,
   type Carrier,
   type InsertCarrier,
+  carrierContacts,
+  type CarrierContact,
   recurringLanes,
   type RecurringLane,
   type InsertRecurringLane,
@@ -587,6 +589,15 @@ export interface IStorage {
   /** Fetch all outreach logs for a given procurement task, ordered newest first. */
   getCarrierOutreachLogsByProcurementTaskId(orgId: string, procurementTaskId: string): Promise<CarrierOutreachLog[]>;
   recordOutreachReply(logId: string, replySnippet: string, replyReceivedAt: Date): Promise<CarrierOutreachLog>;
+
+  // Two-way email foundation — Task #183
+  getCarrierOutreachLogByProviderMessageId(providerMessageId: string): Promise<CarrierOutreachLog | undefined>;
+  getCarrierOutreachLogByConversationId(conversationId: string, orgId: string): Promise<CarrierOutreachLog | undefined>;
+  getCarriersByPrimaryEmail(email: string, orgId: string): Promise<Carrier[]>;
+  getCarrierContactByEmail(email: string, orgId: string): Promise<CarrierContact | undefined>;
+  getFirstOrg(): Promise<{ id: string; name: string } | undefined>;
+  getFirstOrgAdmin(orgId: string): Promise<{ id: string } | undefined>;
+  getOrgByOutlookMailbox(mailbox: string): Promise<{ id: string } | undefined>;
 
   // Lane Carrier Outreach v1 — Feature Flags
   getFeatureFlag(orgId: string, flagKey: string): Promise<boolean>;
@@ -4096,6 +4107,86 @@ export class DatabaseStorage implements IStorage {
 
   async deleteLaneCoverageProfileCarriers(profileId: string): Promise<void> {
     await db.delete(laneCoverageProfileCarriers).where(eq(laneCoverageProfileCarriers.profileId, profileId));
+  }
+
+  // ── Two-way email foundation — Task #183 ─────────────────────────────────
+
+  async getCarrierOutreachLogByProviderMessageId(providerMessageId: string): Promise<CarrierOutreachLog | undefined> {
+    const [row] = await db.select().from(carrierOutreachLogs)
+      .where(eq(carrierOutreachLogs.providerMessageId, providerMessageId));
+    return row;
+  }
+
+  async getCarrierOutreachLogByConversationId(conversationId: string, orgId: string): Promise<CarrierOutreachLog | undefined> {
+    const [row] = await db.select().from(carrierOutreachLogs)
+      .where(
+        and(
+          eq(carrierOutreachLogs.conversationId, conversationId),
+          eq(carrierOutreachLogs.orgId, orgId),
+          eq(carrierOutreachLogs.direction, "outbound")
+        )
+      )
+      .orderBy(desc(carrierOutreachLogs.timestamp))
+      .limit(1);
+    return row;
+  }
+
+  async getCarriersByPrimaryEmail(email: string, orgId: string): Promise<Carrier[]> {
+    return db.select().from(carriers)
+      .where(and(eq(carriers.orgId, orgId), ilike(carriers.primaryEmail, email)));
+  }
+
+  async getCarrierContactByEmail(email: string, orgId: string): Promise<CarrierContact | undefined> {
+    const results = await db.select({
+      id: carrierContacts.id,
+      carrierId: carrierContacts.carrierId,
+      name: carrierContacts.name,
+      role: carrierContacts.role,
+      email: carrierContacts.email,
+      phone: carrierContacts.phone,
+      extension: carrierContacts.extension,
+      preferredMethod: carrierContacts.preferredMethod,
+      notes: carrierContacts.notes,
+      isPrimary: carrierContacts.isPrimary,
+      isActive: carrierContacts.isActive,
+      createdAt: carrierContacts.createdAt,
+      updatedAt: carrierContacts.updatedAt,
+    })
+      .from(carrierContacts)
+      .innerJoin(carriers, eq(carrierContacts.carrierId, carriers.id))
+      .where(
+        and(
+          eq(carriers.orgId, orgId),
+          ilike(carrierContacts.email, email),
+          eq(carrierContacts.isActive, true)
+        )
+      )
+      .limit(1);
+    return results[0];
+  }
+
+  async getFirstOrg(): Promise<{ id: string; name: string } | undefined> {
+    const [row] = await db.select({ id: organizations.id, name: organizations.name })
+      .from(organizations)
+      .orderBy(asc(organizations.createdAt))
+      .limit(1);
+    return row;
+  }
+
+  async getFirstOrgAdmin(orgId: string): Promise<{ id: string } | undefined> {
+    const [row] = await db.select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.organizationId, orgId)))
+      .orderBy(asc(users.createdAt))
+      .limit(1);
+    return row;
+  }
+
+  async getOrgByOutlookMailbox(_mailbox: string): Promise<{ id: string } | undefined> {
+    // In the current schema there is no explicit outlook_mailbox field on organizations.
+    // This is a hook for future multi-tenant subscription routing.
+    // For now we return undefined so the caller falls back to getFirstOrg().
+    return undefined;
   }
 }
 

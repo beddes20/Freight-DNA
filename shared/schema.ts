@@ -1410,6 +1410,29 @@ export const carrierOutreachLogs = pgTable("carrier_outreach_logs", {
   // Graph internetMessageId stored at send time for reply matching
   replyReceivedAt: timestamp("reply_received_at"),
   replySnippet: text("reply_snippet"),
+
+  // Two-way email tracking fields (Task #183)
+  direction: varchar("direction").default("outbound"),
+  // outbound | inbound
+  providerMessageId: text("provider_message_id"),
+  // Microsoft Graph message ID (internet message ID or Graph message GUID)
+  conversationId: text("conversation_id"),
+  // Microsoft Graph conversationId — links replies to original outbound thread
+  fromEmail: text("from_email"),
+  toEmail: text("to_email"),
+  subject: text("subject"),
+  bodyPreview: text("body_preview"),
+  // First ~255 chars of the email body (inbound snippet or outbound subject line preview)
+  rawPayloadRef: text("raw_payload_ref"),
+  // Optional storage key for the full raw webhook payload (for audit)
+  receivedAt: timestamp("received_at"),
+  // Timestamp when inbound email was received (from Graph message receivedDateTime)
+  processStatus: varchar("process_status"),
+  // pending | processed | duplicate | error — inbound processing state
+  matchedCarrierId: varchar("matched_carrier_id").references(() => carriers.id, { onDelete: "set null" }),
+  matchedLaneId: varchar("matched_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
+  matchConfidence: varchar("match_confidence"),
+  // exact | alternate_contact | ambiguous | unmatched
 });
 export const insertCarrierOutreachLogSchema = createInsertSchema(carrierOutreachLogs).omit({ id: true, timestamp: true });
 export type InsertCarrierOutreachLog = z.infer<typeof insertCarrierOutreachLogSchema>;

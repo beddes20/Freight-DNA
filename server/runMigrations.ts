@@ -1474,4 +1474,35 @@ export async function runMigrations() {
   } finally {
     clientReply.release();
   }
+
+  // Task #183 — Two-way email foundation: add direction, providerMessageId, conversationId, and inbound tracking columns
+  const clientTwoWayEmail = await pool.connect();
+  try {
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS direction varchar NOT NULL DEFAULT 'outbound'`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS provider_message_id text`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS conversation_id text`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS from_email text`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS to_email text`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS subject text`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS body_preview text`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS raw_payload_ref text`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS received_at timestamp`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS process_status varchar`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS matched_carrier_id varchar REFERENCES carriers(id) ON DELETE SET NULL`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS matched_lane_id varchar REFERENCES recurring_lanes(id) ON DELETE SET NULL`);
+    await clientTwoWayEmail.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS match_confidence varchar`);
+    // Unique index on provider_message_id for idempotent inbound processing (partial — only for non-null)
+    await clientTwoWayEmail.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_outreach_logs_provider_message_id
+      ON carrier_outreach_logs (provider_message_id)
+      WHERE provider_message_id IS NOT NULL
+    `);
+    await clientTwoWayEmail.query(`CREATE INDEX IF NOT EXISTS idx_carrier_outreach_logs_conversation_id ON carrier_outreach_logs(conversation_id) WHERE conversation_id IS NOT NULL`);
+    await clientTwoWayEmail.query(`CREATE INDEX IF NOT EXISTS idx_carrier_outreach_logs_org_direction ON carrier_outreach_logs(org_id, direction)`);
+    console.log("[migrations] carrier_outreach_logs: two-way email columns added (Task #183)");
+  } catch (err) {
+    console.error("[migrations] carrier_outreach_logs two-way email migration error:", err);
+  } finally {
+    clientTwoWayEmail.release();
+  }
 }
