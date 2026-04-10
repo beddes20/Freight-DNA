@@ -59,6 +59,8 @@ import {
   Filter,
   ExternalLink,
 } from "lucide-react";
+import { InfoTooltip } from "@/components/info-tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const LWQ_SOURCES = ["dat", "loadsmart", "csv_paste", "manual", "other"];
 const LWQ_SOURCE_LABELS: Record<string, string> = {
@@ -381,8 +383,19 @@ export default function AdminCarriers() {
           </div>
           <div>
             <h1 className="text-lg font-bold">Carrier Catalog</h1>
-            <p className="text-xs text-muted-foreground">
-              Upload your <strong>freight file</strong> first to discover carriers, then upload your <strong>carrier rolodex</strong> to enrich them with MC#, phone, and email.
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              The master list of carriers available for lane outreach and procurement.
+              <InfoTooltip
+                title="How the Carrier Catalog works"
+                items={[
+                  "Upload your TMS/freight file to auto-discover carriers by payee code.",
+                  "Upload a carrier rolodex to enrich them with MC#, phone, email, and city/state.",
+                  "The HQ location (city/state) powers the proximity ranking — carriers based near a lane's origin or destination rank higher.",
+                  "Carriers must have an email or phone to receive outreach.",
+                ]}
+                side="bottom"
+                wide
+              />
             </p>
           </div>
         </div>
@@ -390,6 +403,18 @@ export default function AdminCarriers() {
           {/* Feature flag toggle */}
           <div className="flex items-center gap-2 border border-border rounded-lg px-3 py-1.5">
             <span className="text-xs text-muted-foreground">Outreach Feature</span>
+            <InfoTooltip
+              title="Lane Carrier Outreach"
+              text="When enabled, reps can open the Outreach Panel on any recurring lane to select and contact carriers directly from the Lane Work Queue."
+              items={[
+                "The system ranks carriers by TMS load history, equipment match, geographic proximity, and prior outreach outcomes.",
+                "Reps draft AI-assisted lane-building emails and send or log them in one step.",
+                "Contacted carriers move to the lane's 'Bench' — a tracked list per lane.",
+                "The goal is to secure 3+ committed carriers per lane.",
+              ]}
+              side="bottom"
+              wide
+            />
             <button
               onClick={() => flagMutation.mutate(!flagEnabled)}
               disabled={flagMutation.isPending}
@@ -400,16 +425,39 @@ export default function AdminCarriers() {
             </button>
           </div>
 
-          <Button variant="outline" size="sm" onClick={() => engineMutation.mutate()} disabled={engineMutation.isPending} className="text-xs" data-testid="btn-run-engine">
-            {engineMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <RefreshCw className="w-3 h-3 mr-1" />}
-            Run Lane Engine
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="sm" onClick={() => engineMutation.mutate()} disabled={engineMutation.isPending} className="text-xs" data-testid="btn-run-engine">
+              {engineMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <RefreshCw className="w-3 h-3 mr-1" />}
+              Run Lane Engine
+            </Button>
+            <InfoTooltip
+              title="Lane Capacity Engine"
+              text="Scans all recurring lanes and auto-creates any missing Lane Work Queue entries based on freight history."
+              items={[
+                "Run this after uploading new TMS financial data to keep the LWQ current.",
+                "The engine identifies which lanes need carrier procurement and assigns them to reps.",
+              ]}
+            />
+          </div>
 
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileChange} data-testid="file-input-seed" />
-          <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={seedMutation.isPending} className="text-xs" data-testid="btn-seed-excel">
-            {seedMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Upload className="w-3 h-3 mr-1" />}
-            Import File
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={seedMutation.isPending} className="text-xs" data-testid="btn-seed-excel">
+              {seedMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Upload className="w-3 h-3 mr-1" />}
+              Import File
+            </Button>
+            <InfoTooltip
+              title="Import Carriers from File"
+              text="Upload an Excel or CSV file. The system auto-detects the format:"
+              items={[
+                "TMS / Financial file — has a Payee Code column + load-level data. Creates one carrier per unique payee code.",
+                "Carrier Rolodex — has Payee Code + MC#, phone, email. Enriches existing carriers with contact info.",
+                "Carrier Directory — one row per carrier with name-based deduplication. Captures MC#, email, city/state, equipment type.",
+              ]}
+              side="bottom"
+              wide
+            />
+          </div>
 
           <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
             <DialogTrigger asChild>
@@ -433,6 +481,15 @@ export default function AdminCarriers() {
         </div>
         <div className="flex items-center gap-1.5">
           <Filter className="w-3.5 h-3.5 text-muted-foreground" />
+          <InfoTooltip
+            title="Filter by Source"
+            items={[
+              "Lane Upload — carrier was brought in via a DAT/Loadsmart import while working a lane.",
+              "Catalog Import — added via bulk Excel/CSV upload on this page.",
+              "Engine Discovery — auto-surfaced by the lane capacity engine.",
+              "Manual Add — added by hand through the Add Carrier form.",
+            ]}
+          />
           <Select value={sourceFilter} onValueChange={v => setSourceFilter(v as typeof sourceFilter)} data-testid="select-source-filter">
             <SelectTrigger className="h-9 text-xs w-44">
               <SelectValue />
@@ -500,10 +557,54 @@ export default function AdminCarriers() {
                     }}
                   />
                 </th>
-                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Carrier</th>
-                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden sm:table-cell">Contact</th>
-                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden md:table-cell">Location</th>
-                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden lg:table-cell">Equipment</th>
+                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">
+                  <span className="flex items-center gap-1">
+                    Carrier
+                    <InfoTooltip
+                      title="Carrier Identity"
+                      items={[
+                        "Name — the carrier's trading name as stored in your TMS.",
+                        "Payee code — links this carrier to TMS load history and financial data.",
+                        "MC# — FMCSA authority number, used for compliance and identity matching.",
+                        "Source badge — shows how this carrier was added (TMS upload, catalog import, or engine discovery).",
+                      ]}
+                      side="bottom"
+                      wide
+                    />
+                  </span>
+                </th>
+                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden sm:table-cell">
+                  <span className="flex items-center gap-1">
+                    Contact
+                    <InfoTooltip
+                      title="Contact Info"
+                      text="Email and phone used for lane outreach. Carriers without either show a 'No contact' warning and cannot receive outreach emails."
+                      side="bottom"
+                    />
+                  </span>
+                </th>
+                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden md:table-cell">
+                  <span className="flex items-center gap-1">
+                    HQ Location
+                    <InfoTooltip
+                      title="Carrier Home Base"
+                      text="The carrier's headquarters city and state. Used by the proximity ranking engine — carriers based within 75 miles of a lane's origin or destination receive a score boost in the Lane Work Queue."
+                      side="bottom"
+                      wide
+                    />
+                  </span>
+                </th>
+                <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground hidden lg:table-cell">
+                  <span className="flex items-center gap-1">
+                    Equipment
+                    <InfoTooltip
+                      title="Equipment Types"
+                      text="Trailer types this carrier operates. When a lane specifies equipment (e.g. Dry Van, Reefer, Flatbed), only carriers with a matching type are promoted to the top of the ranked list."
+                      side="bottom"
+                      wide
+                    />
+                  </span>
+                </th>
                 <th className="px-4 py-2.5 w-20" />
               </tr>
             </thead>
@@ -519,19 +620,67 @@ export default function AdminCarriers() {
                     <td className="px-4 py-3">
                       <div className="font-medium text-foreground">{c.name}</div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        {c.payeeCode && <span className="text-[10px] text-amber-600 dark:text-amber-400">Payee: {c.payeeCode}</span>}
-                        {c.mcDot && <span className="text-[10px] text-muted-foreground">MC: {c.mcDot}</span>}
-                        {!hasContact && <span className="text-[10px] text-destructive">No contact</span>}
+                        {c.payeeCode && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-[10px] text-amber-600 dark:text-amber-400 cursor-help">Payee: {c.payeeCode}</span>
+                            </TooltipTrigger>
+                            <TooltipContent className="text-xs max-w-[220px]">
+                              TMS payee code — links this carrier to all load history in your financial uploads.
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                        {c.mcDot && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-[10px] text-muted-foreground cursor-help">MC: {c.mcDot}</span>
+                            </TooltipTrigger>
+                            <TooltipContent className="text-xs max-w-[220px]">
+                              FMCSA Motor Carrier authority number. Used for DOT compliance verification.
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                        {!hasContact && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-[10px] text-destructive cursor-help">No contact</span>
+                            </TooltipTrigger>
+                            <TooltipContent className="text-xs max-w-[240px]">
+                              No email or phone on file. This carrier cannot receive outreach until contact info is added. Import a carrier rolodex file with their details to fill in the gap.
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
                         {(() => {
                           const { label, category } = getSourceInfo(c.sourceChannel);
                           if (category === "lwq") return (
-                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-sky-500/40 text-sky-600 dark:text-sky-400">{label}</Badge>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="outline" className="text-[9px] py-0 px-1 border-sky-500/40 text-sky-600 dark:text-sky-400 cursor-help">{label}</Badge>
+                              </TooltipTrigger>
+                              <TooltipContent className="text-xs max-w-[240px]">
+                                Discovered via the Lane Work Queue — a rep imported this carrier from a load board (DAT, Loadsmart, etc.) while working a specific lane.
+                              </TooltipContent>
+                            </Tooltip>
                           );
                           if (category === "catalog") return (
-                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-green-500/40 text-green-600 dark:text-green-400">{label}</Badge>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="outline" className="text-[9px] py-0 px-1 border-green-500/40 text-green-600 dark:text-green-400 cursor-help">{label}</Badge>
+                              </TooltipTrigger>
+                              <TooltipContent className="text-xs max-w-[240px]">
+                                Added via a bulk Excel/CSV upload through this Carrier Catalog page. Includes carriers from rolodex files, directory imports, and TMS financial data.
+                              </TooltipContent>
+                            </Tooltip>
                           );
                           if (category === "engine") return (
-                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-purple-500/40 text-purple-600 dark:text-purple-400">{label}</Badge>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="outline" className="text-[9px] py-0 px-1 border-purple-500/40 text-purple-600 dark:text-purple-400 cursor-help">{label}</Badge>
+                              </TooltipTrigger>
+                              <TooltipContent className="text-xs max-w-[240px]">
+                                Surfaced automatically by the lane capacity engine based on regional freight history and equipment match. Not yet in the rolodex.
+                              </TooltipContent>
+                            </Tooltip>
                           );
                           if (c.sourceChannel) return (
                             <Badge variant="outline" className="text-[9px] py-0 px-1 text-muted-foreground/50">{label}</Badge>

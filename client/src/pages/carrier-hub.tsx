@@ -26,6 +26,8 @@ import {
   Globe, Loader2, Edit2, Trash2, Shield, History, Zap, ExternalLink,
   HelpCircle,
 } from "lucide-react";
+import { InfoTooltip } from "@/components/info-tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 // ── Source channel helpers ─────────────────────────────────────────────────────
 
@@ -872,7 +874,21 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
             <div>
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <h3 className="text-sm font-semibold">Claimed Lanes</h3>
+                  <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                    Claimed Lanes
+                    <InfoTooltip
+                      title="Claimed Lanes"
+                      text="Lanes that this carrier has told your team they prefer or regularly run — maintained manually by reps."
+                      items={[
+                        "Green (Preferred) — carrier actively wants loads on this lane.",
+                        "Red (Avoid) — carrier has indicated they won't run this lane.",
+                        "These are separate from TMS-confirmed loads. They reflect what the carrier says, not what they've hauled.",
+                        "Use this to skip outreach for lanes the carrier has already declined.",
+                      ]}
+                      side="right"
+                      wide
+                    />
+                  </h3>
                   <p className="text-[11px] text-muted-foreground">What this carrier says they run — user-maintained</p>
                 </div>
                 <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setAddingClaimedLane(true)} data-testid="btn-add-claimed-lane">
@@ -983,9 +999,24 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                           {l.equipmentType && (
                             <Badge variant="outline" className="text-[9px] py-0 px-1 border-muted-foreground/30 text-muted-foreground">{l.equipmentType}</Badge>
                           )}
-                          <Badge variant="outline" className={`text-[9px] py-0 px-1 ${l.fitScore >= 60 ? "border-emerald-500/30 text-emerald-400" : "border-amber-500/30 text-amber-400"}`}>
-                            {l.fitScore}% fit
-                          </Badge>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge variant="outline" className={`text-[9px] py-0 px-1 cursor-help ${l.fitScore >= 60 ? "border-emerald-500/30 text-emerald-400" : "border-amber-500/30 text-amber-400"}`}>
+                                {l.fitScore}% fit
+                              </Badge>
+                            </TooltipTrigger>
+                            <TooltipContent className="text-xs max-w-[280px] space-y-1 p-3">
+                              <p className="font-semibold">Carrier Fit Score</p>
+                              <p className="text-muted-foreground">How well this carrier matches the lane based on TMS history, equipment, and geographic proximity. Higher = stronger candidate for outreach.</p>
+                              <ul className="space-y-0.5 text-muted-foreground">
+                                <li>• 85–100: Exact lane match, 10+ loads</li>
+                                <li>• 60–84: Confirmed history on this lane</li>
+                                <li>• 48–59: Nearby lane history (within 75 mi)</li>
+                                <li>• 35–47: Same state corridor history</li>
+                                <li>• 1–34: Region/equipment match only</li>
+                              </ul>
+                            </TooltipContent>
+                          </Tooltip>
                         </div>
                         <p className="text-[10px] text-muted-foreground mt-0.5">{l.whyThisLane}</p>
                         {l.companyName && (

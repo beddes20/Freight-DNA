@@ -75,6 +75,8 @@ import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
+import { InfoTooltip } from "@/components/info-tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   resolveLaneLocationWithConfidence,
   normalizeStateAbbr,
@@ -236,14 +238,22 @@ function CoverageStatusBadge({
     const topLoads = carriers ? carriers.reduce((sum, c) => sum + c.successfulLoadCount, 0) : Math.round(share * total);
     return (
       <div className="flex items-center gap-1.5 flex-wrap">
-        <Badge
-          variant="outline"
-          className="text-[10px] py-0 px-1.5 border-emerald-500/60 text-emerald-400 bg-emerald-500/10 gap-0.5"
-          data-testid={`badge-coverage-status-${laneId}`}
-        >
-          <Shield className="w-2.5 h-2.5" />
-          Stable
-        </Badge>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge
+              variant="outline"
+              className="text-[10px] py-0 px-1.5 border-emerald-500/60 text-emerald-400 bg-emerald-500/10 gap-0.5 cursor-help"
+              data-testid={`badge-coverage-status-${laneId}`}
+            >
+              <Shield className="w-2.5 h-2.5" />
+              Stable
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent className="text-xs max-w-[260px] space-y-1 p-3">
+            <p className="font-semibold text-emerald-400">Stable Coverage</p>
+            <p className="text-muted-foreground">This lane has one or more carriers hauling the majority of recent loads. Capacity risk is low — monitor but no immediate outreach required.</p>
+          </TooltipContent>
+        </Tooltip>
         {total > 0 && (
           <span
             className="text-[10px] text-emerald-600 dark:text-emerald-500"
@@ -258,25 +268,41 @@ function CoverageStatusBadge({
 
   if (effectiveStatus === "watch") {
     return (
-      <Badge
-        variant="outline"
-        className="text-[10px] py-0 px-1.5 border-amber-500/50 text-amber-400 bg-amber-500/10 gap-0.5"
-        data-testid={`badge-coverage-status-${laneId}`}
-      >
-        <TrendingUp className="w-2.5 h-2.5" />
-        Watch
-      </Badge>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant="outline"
+            className="text-[10px] py-0 px-1.5 border-amber-500/50 text-amber-400 bg-amber-500/10 gap-0.5 cursor-help"
+            data-testid={`badge-coverage-status-${laneId}`}
+          >
+            <TrendingUp className="w-2.5 h-2.5" />
+            Watch
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent className="text-xs max-w-[260px] space-y-1 p-3">
+          <p className="font-semibold text-amber-400">Watch — Rising Risk</p>
+          <p className="text-muted-foreground">Coverage is thin or concentrated in a single carrier. Consider proactive outreach to build a backup bench before this lane becomes critical.</p>
+        </TooltipContent>
+      </Tooltip>
     );
   }
 
   return (
-    <Badge
-      variant="outline"
-      className="text-[10px] py-0 px-1.5 border-slate-500/30 text-slate-400 gap-0.5"
-      data-testid={`badge-coverage-status-${laneId}`}
-    >
-      Unstable
-    </Badge>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          className="text-[10px] py-0 px-1.5 border-slate-500/30 text-slate-400 gap-0.5 cursor-help"
+          data-testid={`badge-coverage-status-${laneId}`}
+        >
+          Unstable
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="text-xs max-w-[260px] space-y-1 p-3">
+        <p className="font-semibold text-slate-300">Unstable Coverage</p>
+        <p className="text-muted-foreground">No reliable carrier pattern detected from TMS history. This lane needs active outreach to build a committed carrier bench.</p>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -509,15 +535,35 @@ function LaneRow({
 
           {/* Metrics row */}
           <div className="flex items-center gap-4 mt-2 flex-wrap">
-            <span className="text-[11px] text-muted-foreground">
-              Score: <span className="text-foreground font-medium">{item.lane.laneScore ?? "—"}</span>
-            </span>
-            <span className="text-[11px] text-muted-foreground">
-              Bench: <span className="text-foreground font-medium">{item.totalBenchCount}</span>
-              {item.historicalCount > 0 && (
-                <span className="text-blue-500 ml-1">({item.historicalCount} historical)</span>
-              )}
-            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-[11px] text-muted-foreground cursor-help">
+                  Score: <span className="text-foreground font-medium">{item.lane.laneScore ?? "—"}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="text-xs max-w-[240px] space-y-1 p-3">
+                <p className="font-semibold">Lane Score</p>
+                <p className="text-muted-foreground">Composite priority score based on weekly load frequency and revenue potential. Higher-scored lanes are sorted to the top of each bucket so you work the most impactful lanes first.</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-[11px] text-muted-foreground cursor-help">
+                  Bench: <span className="text-foreground font-medium">{item.totalBenchCount}</span>
+                  {item.historicalCount > 0 && (
+                    <span className="text-blue-500 ml-1">({item.historicalCount} historical)</span>
+                  )}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="text-xs max-w-[260px] space-y-1 p-3">
+                <p className="font-semibold">The Bench</p>
+                <p className="text-muted-foreground">Carriers who have received outreach for this lane and are being tracked. The goal is 3+ committed carriers per lane.</p>
+                <ul className="space-y-0.5 text-muted-foreground">
+                  <li>• Active bench — carriers contacted in this outreach cycle.</li>
+                  <li>• Historical — carriers who responded positively in a prior cycle and are pre-qualified candidates.</li>
+                </ul>
+              </TooltipContent>
+            </Tooltip>
             {item.contactableCount > 0 ? (
               <span className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
                 <Phone className="w-3 h-3" />
@@ -1573,7 +1619,22 @@ export default function LaneWorkQueuePage() {
             <ListFilter className="w-5 h-5 text-amber-500" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-foreground">Lane Work Queue</h1>
+            <h1 className="text-lg font-bold text-foreground flex items-center gap-1.5">
+              Lane Work Queue
+              <InfoTooltip
+                title="Lane Work Queue"
+                text="Your prioritized list of recurring freight lanes that need carrier coverage. Lanes are scored and sorted by freight volume and urgency."
+                items={[
+                  "Unassigned — no rep owns this lane yet. Managers assign lanes to their team.",
+                  "No Contactable Carriers — a rep is assigned but the bench has no carriers with email or phone.",
+                  "Assigned Untouched — has contactable carriers but no outreach has been sent.",
+                  "In Progress — outreach is underway; the goal is 3+ contacted carriers per lane.",
+                  "Click any lane to open the Outreach Panel and start contacting carriers.",
+                ]}
+                side="bottom"
+                wide
+              />
+            </h1>
             <p className="text-xs text-muted-foreground">
               {isLoading ? "Loading…" : `${totalLanes} eligible lane${totalLanes !== 1 ? "s" : ""} needing attention`}
             </p>
