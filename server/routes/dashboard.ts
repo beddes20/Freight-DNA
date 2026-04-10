@@ -138,10 +138,12 @@ export function registerDashboardRoutes(app: Express): void {
         deltas.push({ alias, delta: cur - paceExpected, curMargin: cur, priorMargin: avgPrior, isNew });
       }
 
-      // Match to company names — optionally scoped
-      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+      // Match to company names — optionally scoped; fetch both in parallel
+      const [allCompanies, allUsers] = await Promise.all([
+        storage.getCompanies(req.session.organizationId!),
+        storage.getUsers(req.session.organizationId!),
+      ]);
       const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
-      const allUsers = isDirectorOnlyRole || isNamRole || isAmRole || (isDirectorRole && req.query.directorId) ? await storage.getUsers(req.session.organizationId!) : [];
 
       // Build scoped alias filter for Director (non-admin) / NAM / AM
       // Admins can also filter by a specific director via ?directorId=<userId>
@@ -213,13 +215,17 @@ export function registerDashboardRoutes(app: Express): void {
       if (!isAmRole && !isNamRole) return res.json({ stale: [] });
 
       const STALE_DAYS = 21;
-      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+
+      // Fetch companies and users in parallel; AM ignores users but the fetch is cheap
+      const [allCompanies, allUsers] = await Promise.all([
+        storage.getCompanies(req.session.organizationId!),
+        storage.getUsers(req.session.organizationId!),
+      ]);
 
       let myCompanies: any[];
       if (isAmRole) {
         myCompanies = getAmCompanies(user.id, allCompanies).filter((c: any) => !c.archivedAt);
       } else {
-        const allUsers = await storage.getUsers(req.session.organizationId!);
         myCompanies = getNamTeamCompanies(user.id, allUsers, allCompanies).filter((c: any) => !c.archivedAt);
       }
 
@@ -430,7 +436,13 @@ export function registerDashboardRoutes(app: Express): void {
       const orgId = req.session.organizationId!;
       const today = new Date().toISOString().slice(0, 10);
 
-      const orgCompanies = await storage.getCompanies(orgId);
+      // Fetch all data in parallel — companies, users, touchpoints, and contacts are independent
+      const [orgCompanies, allUsers, allTouchpoints, allContacts] = await Promise.all([
+        storage.getCompanies(orgId),
+        storage.getUsers(orgId),
+        storage.getTouchpoints(),
+        storage.getContacts(),
+      ]);
 
       // For Director (non-admin)/NAM: scope to their team's companies
       // Admins can filter by a specific director via ?directorId=<userId>
@@ -438,27 +450,22 @@ export function registerDashboardRoutes(app: Express): void {
       const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
       let scopedCompanyIds: Set<string>;
       if (isNamRole) {
-        const allUsers = await storage.getUsers(orgId);
         const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
         scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
       } else if (directorIdParam) {
-        const allUsers = await storage.getUsers(orgId);
         const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, orgCompanies);
         scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
       } else if (isDirectorOnlyRole) {
-        const allUsers = await storage.getUsers(orgId);
         const teamCompanies = getDirectorTeamCompanies(user.id, allUsers, orgCompanies);
         scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
       } else {
         scopedCompanyIds = new Set(orgCompanies.map(c => c.id));
       }
 
-      const allTouchpoints = await storage.getTouchpoints();
       const todayTouchpoints = allTouchpoints.filter(t => t.date === today && scopedCompanyIds.has(t.companyId));
       const touches = todayTouchpoints.length;
       const meaningful = todayTouchpoints.filter(t => t.isMeaningful).length;
 
-      const allContacts = await storage.getContacts();
       const newContacts = allContacts.filter(c =>
         c.createdAt &&
         c.createdAt.slice(0, 10) === today &&
@@ -486,8 +493,10 @@ export function registerDashboardRoutes(app: Express): void {
       const now = new Date();
       const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 
-      const orgCompanies = await storage.getCompanies(orgId);
-      const allUsers = await storage.getUsers(orgId);
+      const [orgCompanies, allUsers] = await Promise.all([
+        storage.getCompanies(orgId),
+        storage.getUsers(orgId),
+      ]);
       const companyMap = new Map(orgCompanies.map(c => [c.id, c]));
       const userMap = new Map(allUsers.map(u => [u.id, u]));
 
@@ -530,8 +539,10 @@ export function registerDashboardRoutes(app: Express): void {
       }
 
       if (type === "touches" || type === "meaningful") {
-        const allTouchpoints = await storage.getTouchpoints();
-        const allContacts = await storage.getContacts();
+        const [allTouchpoints, allContacts] = await Promise.all([
+          storage.getTouchpoints(),
+          storage.getContacts(),
+        ]);
         const contactMap = new Map(allContacts.map(c => [c.id, c]));
         let tps = allTouchpoints.filter(t => t.date === today && scopedCompanyIds.has(t.companyId));
         if (type === "meaningful") tps = tps.filter(t => t.isMeaningful);
@@ -671,10 +682,13 @@ export function registerDashboardRoutes(app: Express): void {
         byRepId[rep] = (byRepId[rep] || 0) + margin;
       }
 
-      const allUsers = await storage.getUsers(req.session.organizationId!);
+      // Fetch users and goals in parallel — both independent of upload data processing
+      const [allUsers, allGoalsRaw] = await Promise.all([
+        storage.getUsers(req.session.organizationId!),
+        storage.getGoals({}),
+      ]);
       // Scope goals to org users only — filter after fetching to avoid cross-tenant leakage
       const orgUserIds = new Set(allUsers.map(u => u.id));
-      const allGoalsRaw = await storage.getGoals({});
       const allGoals = allGoalsRaw.filter(g =>
         (g.namId && orgUserIds.has(g.namId)) || (g.amId && orgUserIds.has(g.amId))
       );
@@ -783,13 +797,15 @@ export function registerDashboardRoutes(app: Express): void {
       const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 
       const orgId = req.session.organizationId!;
-      const allCompanies = await storage.getCompanies(orgId);
+
+      // Fetch companies and contacts in parallel — both independent
+      const [allCompanies, allContacts] = await Promise.all([
+        storage.getCompanies(orgId),
+        storage.getContacts(),
+      ]);
       // Own accounts = companies where salesPersonId === current user
       const myCompanies = allCompanies.filter(c => c.salesPersonId === user.id);
       const myCompanyIds = new Set(myCompanies.map(c => c.id));
-
-      // Relationships moved up this month in my accounts
-      const allContacts = await storage.getContacts();
       const advancedCompanyIds = new Set(
         allContacts
           .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && myCompanyIds.has(c.companyId))

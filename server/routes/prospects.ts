@@ -105,8 +105,10 @@ export function registerProspectRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const isSalesDirectorOrAdmin = user.role === "admin" || user.role === "sales_director";
       const ownerId = isSalesDirectorOrAdmin ? undefined : user.id;
-      const items = await storage.getProspects(user.organizationId, ownerId);
-      const allUsers = await storage.getUsers(user.organizationId);
+      const [items, allUsers] = await Promise.all([
+        storage.getProspects(user.organizationId, ownerId),
+        storage.getUsers(user.organizationId),
+      ]);
       const enriched = items.map(p => ({
         ...p,
         ownerName: allUsers.find(u => u.id === p.ownerId)?.name ?? null,
@@ -144,11 +146,13 @@ export function registerProspectRoutes(app: Express) {
         return res.status(403).json({ error: "Access restricted to sales directors and admins" });
       }
 
-      const allProspects = await storage.getProspects(user.organizationId);
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const prospectIds = allProspects.map(p => p.id);
-      const recentActivities = await storage.getOrgProspectActivitiesSince(prospectIds, thirtyDaysAgo);
-      const allUsers = await storage.getUsers(user.organizationId);
+      // Fetch prospects and users in parallel; activities need prospect IDs so run after
+      const [allProspects, allUsers] = await Promise.all([
+        storage.getProspects(user.organizationId),
+        storage.getUsers(user.organizationId),
+      ]);
+      const recentActivities = await storage.getOrgProspectActivitiesSince(allProspects.map(p => p.id), thirtyDaysAgo);
       const userMap = new Map(allUsers.map(u => [u.id, u.name]));
 
       const ACTIVE_STAGES = ["new_lead", "intro_scheduled", "intro_completed", "follow_up", "opportunity_sent", "first_load_won"];

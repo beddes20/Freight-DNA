@@ -541,7 +541,7 @@ export function registerFinancialRoutes(app: Express): void {
       // Auto-run lane capacity engine after each financial upload (fire-and-forget)
       const orgId = req.session.organizationId;
       if (orgId) {
-        runRecurringLaneEngineForOrg(orgId).then(result => {
+        runRecurringLaneEngineForOrg(orgId, storage).then(result => {
           console.log(`[lane-engine] auto-run after upload for org=${orgId}: ${result.upserted} upserted, ${result.total} total`);
         }).catch(err => {
           console.error(`[lane-engine] auto-run error for org=${orgId}:`, err);
