@@ -1,0 +1,267 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+We have just added a Market Signal middle layer to the Value Truck app.
+This engine:
+- ingests normalized market_events
+- aggregates them into durable market_signals with lifecycle and severity
+- runs on a scheduler
+- exposes internal routes with a service token
+- is covered by tests and is already running cleanly
+
+Now we want to build on top of this by wiring **customer-side Next Best Actions (NBAs)** off active Market Signals.
+
+Important:
+Do NOT change the Market Signal engine behavior in this task.
+Treat it as an upstream dependency.
+We are now adding the *consumer* side for accounts.
+
+Business goal:
+When a regional/equipment market heats up (for example, outbound GA/FL dry van), the system should:
+- identify accounts exposed to that market
+- generate clear, actionable NBAs for account owners
+- surface those NBAs with enough context and explainability that reps can call/email with a strong, value-add message
+
+This should be:
+- targeted (only accounts truly exposed)
+- explainable (why this account, why now)
+- aligned with the existing NBA / account scoring philosophy (leading indicators, daily work, accountability)
+
+Scope for this task:
+1) Extend data model / types for account-facing NBAs if needed
+2) Implement a service that converts active Market Signals into account-specific NBA candidates
+3) Implement basic dedupe & lifecycle for these account-level NBAs
+4) Add minimal internal APIs or hooks to fetch these NBAs for later UI use
+5) Add tests
+
+Do NOT build UI in this task.
+We only need the backend logic and retrieval surface.
+
+--------------------------------------------------
+1. ASSUME EXISTING CONTEXT
+--------------------------------------------------
+
+Assume:
+- market_signals table and engine are already in place (as implemented in the previous task)
+- accounts/customers exist in the schema
+- there is already some notion of:
+  - lane history
+  - account-level freight history
+  - account ownership (AM/rep)
+- there is already an NBA / task system, or at least a pattern for lane tasks and account tasks
+
+You should:
+- reuse existing NBA/task primitives where possible
+- avoid creating a totally separate “random NBAs” system
+
+If you need to add a new table/model for account-level market NBAs, do so carefully and minimally.
+
+--------------------------------------------------
+2. WHAT THE CUSTOMER-SIDE NBA SHOULD DO
+--------------------------------------------------
+
+When a Market Signal is active (e.g., demand_surge or regional_heat):
+- find accounts that are exposed to that market
+- create/maintain account-level NBA records like:
+  - “Call [Account X] about outbound GA dry van tightening”
+- attach:
+  - the signal id
+  - the account id
+  - the owning rep/user id
+  - severity
+  - explanation payload
+  - status (pending, in_progress, completed, dismissed)
+
+You should define a reasonable schema for something like:
+- account_market_nbas (or extend an existing NBA/task concept if present)
+
+Fields should minimally include:
+- id
+- accountId
+- ownerUserId (AM/rep for the account)
+- marketSignalId
+- nbaType (e.g., market_surge_customer_outreach)
+- status (pending, in_progress, completed, dismissed)
+- createdAt
+- updatedAt
+- firstSeenAt (optional if useful)
+- dueAt (optional)
+- lastActionAt (optional)
+- explanation JSON (see section 4)
+- suppressionReason nullable
+
+--------------------------------------------------
+3. HOW TO MATCH ACCOUNTS TO MARKET SIGNALS
+--------------------------------------------------
+
+We need a deterministic function to say:
+“Account A is exposed to this Market Signal, Account B is not.”
+
+Start simple and explicit.
+
+For each active signal:
+- scope by:
+  - originRegion / destinationRegion
+  - equipmentType
+  - signalType (likely focus on demand_surge / regional_heat / demand_capacity_imbalance first)
+
+Account exposure inputs:
+- historical lane data (lanes the account has shipped in last N days)
+- recent spot quote events from that account
+- saved / attributed lanes tied to that account
+
+Example exposure rule:
+An account is “exposed” to a Southeast demand_surge signal if:
+- they have shipped outbound from that region in the last 90 days, OR
+- they have requested spot quotes from that region in the last 60 days, OR
+- they have attributed lanes whose originRegion matches the signal’s originRegion
+
+Implement exposure matching as a separate helper/service so we can iterate on rules.
+
+Keep the matching:
+- explainable
+- configurable (constants in one place)
+- not overly loose (false positives are costly here)
+
+--------------------------------------------------
+4. NBA PAYLOAD / EXPLANATION
+--------------------------------------------------
+
+Each account-level NBA must be explainable.
+
+Include:
+- marketSignal summary:
+  - type, severity, scope (region/equipment), percentChange, supportingEventCount
+- why THIS account:
+  - recent shipments or quotes in that region
+  - count / last-shipped dates / last-quoted dates
+- suggested action framing (deterministic, not LLM):
+  - “Proactively call [Account] to discuss outbound [Region / lanes] as the market is tightening. Goal: help them plan ahead and position Value Truck as a partner.”
+
+Store this explanation as structured JSON and/or preformatted text in the NBA record.
+Do not use an LLM here — keep it rule-based and transparent.
+
+This explanation will let downstream UI show:
+- why this account was selected
+- what the rep should talk about
+- where the data came from
+
+--------------------------------------------------
+5. NBA LIFECYCLE & DEDUPE
+--------------------------------------------------
+
+We don’t want spammy duplicate NBAs.
+
+Behavior expectations:
+- For a given (accountId, marketSignalId, nbaType), only one active NBA should exist at a time.
+- If an NBA is already pending or in_progress, do not create another.
+- If the existing NBA is completed or dismissed, a future new signal (new id) can create a new NBA, but not the same signal.
+
+Status semantics:
+- pending: suggested, not yet explicitly acted on
+- in_progress: rep has actively picked it up
+- completed: rep took the suggested action (call/email etc.)
+- dismissed: rep explicitly chose to ignore or not pursue
+
+You can:
+- implement simple status transitions via code in this task
+- or just define the data model and leave status writing to existing task/NBA systems if they exist
+
+Lifecycle relative to signals:
+- When a signal resolves, account NBAs tied to that signal can either:
+  - remain as historical completed items, or
+  - auto-dismiss any still-pending NBAs if business logic says they’re no longer relevant
+
+Implement whichever is simplest and consistent with existing patterns.
+
+--------------------------------------------------
+6. INTEGRATION POINTS
+--------------------------------------------------
+
+Add a service that:
+- regularly (on scheduler or via explicit trigger) looks at active Market Signals
+- finds exposed accounts
+- upserts account-market NBAs accordingly
+
+This could be:
+- a function invoked from the existing Market Signal scheduler
+- or a separate scheduler/worker
+
+Prefer reusing existing scheduling patterns used by the Market Signals engine.
+
+Also add:
+- an internal route or storage method to fetch account-level NBAs for:
+  - a given account
+  - a given user/owner
+  - or all NBAs tied to a given Market Signal
+
+These will support future UI and debugging.
+
+--------------------------------------------------
+7. GUARDRAILS
+--------------------------------------------------
+
+Important constraints:
+
+- DO NOT over-generate NBAs.
+  Use thresholds:
+  - cap the number of accounts per signal in v1 if needed (e.g., top N by recency or volume)
+  - or limit to certain account tiers if such data exists (e.g., named book / A/B accounts)
+
+- DO NOT mutate the Market Signal “truth”.
+  This task should read from signals, not change them.
+
+- Keep configuration values (lookback windows, exposure thresholds, per-signal caps) together and documented.
+
+- Keep everything explainable.
+  At every step, we should be able to answer:
+  - why this signal?
+  - why this account?
+  - what action is suggested?
+
+--------------------------------------------------
+8. TESTS
+--------------------------------------------------
+
+Add tests for at least:
+
+1) Exposure matching:
+   - accounts with recent Southeast shipments are matched to a Southeast demand_surge
+   - accounts with no history in that region are not matched
+   - accounts with very old shipments fall outside the exposure window
+
+2) NBA creation:
+   - active Market Signal + exposed account ⇒ one pending NBA created
+   - repeated evaluation does NOT create duplicates for the same (account, signal, type)
+   - a new signal with a new id can create a new NBA even if a previous one for that market was completed
+
+3) Lifecycle with signals:
+   - when a signal is resolved, pending NBAs behave according to the chosen rule (e.g., remain or auto-dismiss)
+
+4) Explanation payload:
+   - explanation JSON includes signal stats and account-specific exposure data
+   - explanation is stable/deterministic (no random/LLM behavior)
+
+5) Integration:
+   - scheduler/trigger correctly calls the service and creates NBAs
+   - account-level NBA fetch functions/route return the right data
+
+--------------------------------------------------
+9. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. short summary of what you changed
+2. exact files changed
+3. new/updated schema for account-level NBAs (if added)
+4. exposure matching rules implemented (and their config constants)
+5. how dedupe/lifecycle for account NBAs works
+6. how this ties into the Market Signal scheduler/engine
+7. how to fetch NBAs for a given account or user
+8. tests added/updated
+9. assumptions and edge cases
+
+Success criteria:
+- active Market Signals now produce targeted account-level NBAs
+- NBAs are explainable (why this account, why now, what to do)
+- behavior is conservative (no spammy duplication)
+- Market Signal engine remains unchanged and trusted as the single source of “market condition” truth
