@@ -305,12 +305,12 @@ function CoverageStatusBadge({
           className="text-[10px] py-0 px-1.5 border-slate-500/30 text-slate-400 gap-0.5 cursor-help"
           data-testid={`badge-coverage-status-${laneId}`}
         >
-          Unstable
+          No History
         </Badge>
       </TooltipTrigger>
       <TooltipContent className="text-xs max-w-[260px] space-y-1 p-3">
-        <p className="font-semibold text-slate-300">Unstable Coverage</p>
-        <p className="text-muted-foreground">No reliable carrier pattern detected from TMS history. This lane needs active outreach to build a committed carrier bench.</p>
+        <p className="font-semibold text-slate-300">No Carrier History</p>
+        <p className="text-muted-foreground">No recurring carrier was found in TMS data for this lane. Open the lane to see carrier suggestions and start outreach — you don't need to do anything special first.</p>
       </TooltipContent>
     </Tooltip>
   );

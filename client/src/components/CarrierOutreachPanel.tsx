@@ -426,6 +426,8 @@ export function CarrierOutreachPanel({
     queryKey: ["/api/lanes", laneId, "carrier-suggestions", suggestionsQueryParams],
     queryFn: () => fetch(`/api/lanes/${laneId}/carrier-suggestions?${suggestionsQueryParams}`).then(r => r.json()),
     enabled: !!laneId && open,
+    staleTime: 2 * 60 * 1000,   // cache for 2 min — TMS ranking is expensive, avoid re-running on every panel open
+    gcTime: 5 * 60 * 1000,
   });
 
   // Pre-populate capturedEmails from carrier primaryEmail so the email input
@@ -1203,7 +1205,7 @@ export function CarrierOutreachPanel({
                             <span className={`text-[11px] font-semibold ${
                               isStable ? "text-emerald-400" : isWatch ? "text-amber-400" : "text-muted-foreground"
                             }`}>
-                              {isStable ? "Stable Coverage" : isWatch ? "Coverage Watch" : "Unstable Coverage"}
+                              {isStable ? "Stable Coverage" : isWatch ? "Coverage Watch" : "No Carrier History"}
                               {profile.manualOverrideStatus && <span className="ml-1 text-[9px] text-violet-400 font-normal">(override)</span>}
                             </span>
                             {coverCarriers.length > 0 && (
@@ -1238,55 +1240,65 @@ export function CarrierOutreachPanel({
                           </div>
                         )}
                         {/* Action buttons */}
-                        <div className="flex items-center gap-1.5 flex-wrap px-3 pb-2">
-                          {isStable && !profile.broadenSearchActive && (
-                            <Button size="sm" variant="outline" className="h-6 text-[9px] px-2 border-emerald-500/30 text-emerald-400" data-testid="button-use-incumbent-flow" title="Incumbent flow active">
-                              <ShieldCheck className="w-2.5 h-2.5 mr-1" /> Incumbent Flow Active
-                            </Button>
-                          )}
+                        <div className="flex flex-col gap-1.5 px-3 pb-2">
                           {!isStable && (
+                            <p className="text-[9px] text-muted-foreground italic">
+                              {effectiveStatus === "unstable"
+                                ? "No recurring carrier found in TMS data — you can still contact carriers below. Use these options to update the status if you know this lane is covered."
+                                : "Coverage is thin. Contact carriers below, or use these options to update the lane status."}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {isStable && !profile.broadenSearchActive && (
+                              <Button size="sm" variant="outline" className="h-6 text-[9px] px-2 border-emerald-500/30 text-emerald-400" data-testid="button-use-incumbent-flow" title="Incumbent flow active">
+                                <ShieldCheck className="w-2.5 h-2.5 mr-1" /> Incumbent Flow Active
+                              </Button>
+                            )}
+                            {!isStable && (
+                              <Button size="sm" variant="outline"
+                                className="h-6 text-[9px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                                data-testid="button-confirm-stable-inline"
+                                onClick={async () => {
+                                  try {
+                                    await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, { status: "stable", reason: "Manually confirmed stable by user" });
+                                    await refetchCoverage();
+                                    toast({ title: "Coverage marked as stable" });
+                                  } catch { toast({ title: "Failed to confirm stable status", variant: "destructive" }); }
+                                }}
+                              >
+                                <ShieldCheck className="w-2.5 h-2.5 mr-1" /> Mark as Covered
+                              </Button>
+                            )}
                             <Button size="sm" variant="outline"
-                              className="h-6 text-[9px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                              data-testid="button-confirm-stable-inline"
+                              className={`h-6 text-[9px] px-2 ${profile.broadenSearchActive ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/10" : "border-border text-muted-foreground hover:bg-muted/40"}`}
+                              data-testid="button-broaden-search-inline"
                               onClick={async () => {
                                 try {
-                                  await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, { status: "stable", reason: "Manually confirmed stable by user" });
+                                  await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/broaden`, { active: !profile.broadenSearchActive });
                                   await refetchCoverage();
-                                  toast({ title: "Coverage marked as stable" });
-                                } catch { toast({ title: "Failed to confirm stable status", variant: "destructive" }); }
+                                  toast({ title: profile.broadenSearchActive ? "Broaden search disabled" : "Showing all carriers" });
+                                } catch { toast({ title: "Failed to toggle broaden search", variant: "destructive" }); }
                               }}
+                              title={profile.broadenSearchActive ? "Currently showing all carriers in the region — click to revert to historical matches only" : "Expand carrier suggestions beyond TMS history to include all regional carriers"}
                             >
-                              <ShieldCheck className="w-2.5 h-2.5 mr-1" /> Confirm Stable
+                              <Search className="w-2.5 h-2.5 mr-1" /> {profile.broadenSearchActive ? "Showing All Carriers" : "Show More Carriers"}
                             </Button>
-                          )}
-                          <Button size="sm" variant="outline"
-                            className={`h-6 text-[9px] px-2 ${profile.broadenSearchActive ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/10" : "border-border text-muted-foreground hover:bg-muted/40"}`}
-                            data-testid="button-broaden-search-inline"
-                            onClick={async () => {
-                              try {
-                                await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/broaden`, { active: !profile.broadenSearchActive });
-                                await refetchCoverage();
-                                toast({ title: profile.broadenSearchActive ? "Broaden search disabled" : "Broaden search enabled" });
-                              } catch { toast({ title: "Failed to toggle broaden search", variant: "destructive" }); }
-                            }}
-                          >
-                            <Search className="w-2.5 h-2.5 mr-1" /> {profile.broadenSearchActive ? "Disable Broaden" : "Broaden Search"}
-                          </Button>
-                          {isStable && (
-                            <Button size="sm" variant="outline"
-                              className="h-6 text-[9px] px-2 border-border text-muted-foreground hover:text-red-400 hover:border-red-400/30"
-                              data-testid="button-remove-stable-status"
-                              onClick={async () => {
-                                try {
-                                  await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, { status: "watch", reason: "Stable status removed by user" });
-                                  await refetchCoverage();
-                                  toast({ title: "Stable status removed" });
-                                } catch { toast({ title: "Failed to remove stable status", variant: "destructive" }); }
-                              }}
-                            >
-                              Remove Stable
-                            </Button>
-                          )}
+                            {isStable && (
+                              <Button size="sm" variant="outline"
+                                className="h-6 text-[9px] px-2 border-border text-muted-foreground hover:text-red-400 hover:border-red-400/30"
+                                data-testid="button-remove-stable-status"
+                                onClick={async () => {
+                                  try {
+                                    await apiRequest("POST", `/api/lanes/${laneId}/coverage-profile/override`, { status: "watch", reason: "Stable status removed by user" });
+                                    await refetchCoverage();
+                                    toast({ title: "Stable status removed" });
+                                  } catch { toast({ title: "Failed to remove stable status", variant: "destructive" }); }
+                                }}
+                              >
+                                Remove Stable
+                              </Button>
+                            )}
+                          </div>
                         </div>
                         {/* Expanded coverage detail */}
                         {coverageExpanded && (
