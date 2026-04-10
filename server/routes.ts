@@ -502,6 +502,9 @@ export async function registerRoutes(
     if (req.path === "/stripe/checkout" && req.method === "POST") return next();
     if (req.path === "/stripe/confirm-checkout" && req.method === "GET") return next();
     if (req.path === "/marketing-chat" && req.method === "POST") return next();
+    // Outlook reply webhook — Microsoft Graph calls this endpoint directly (no session cookie)
+    // Security is handled by clientState secret validation inside the handler
+    if (req.path === "/webhooks/outlook-reply") return next();
     requireAuth(req, res, next);
   });
 

@@ -22,6 +22,7 @@ import {
   buildFallbackEmail,
 } from "../laneOutreachEmailBuilder";
 import { sendEmail } from "../emailService";
+import { sendOutlookEmail, outlookEnabled } from "../outlookService";
 import type { RecurringLane } from "@shared/schema";
 import { z } from "zod";
 
@@ -419,9 +420,16 @@ House style — follow every rule:
       error?: string;
       subject: string;
       body: string;
+      internetMessageId?: string;
     }> = [];
     let sentCount = 0;
     let failedCount = 0;
+
+    // Use the logged-in user's own Outlook mailbox when available, mirroring the LWQ send path.
+    // username is the email address in this system.
+    const outlookFromEmail = user.username?.trim() ?? null;
+    const outlookReplyTo = process.env.OUTLOOK_REPLY_EMAIL?.trim() || null;
+    const useOutlook = outlookEnabled() && !!outlookFromEmail;
 
     for (const draft of emailDrafts) {
       const key = draft.carrierId ?? draft.carrierName;
@@ -459,35 +467,73 @@ House style — follow every rule:
         continue;
       }
 
-      const _fromName = process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
+      const _fromName = user.name?.trim() || process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
       const plainText = draft.body.replace(/<[^>]+>/g, "").trim();
       const htmlBody = `<div style="font-family:Arial,sans-serif;max-width:600px;line-height:1.6">${draft.body.replace(/\n/g, "<br/>")}</div><br/><p style="color:#888;font-size:12px">— ${_fromName}</p>`;
 
       try {
-        const ok = await sendEmail({ to: email, subject: draft.subject, html: htmlBody, text: plainText });
-        if (ok) {
-          results.push({
-            carrierId: draft.carrierId,
-            carrierName: draft.carrierName,
-            laneCarrierId: draft.laneCarrierId,
-            email,
-            status: "sent",
+        if (useOutlook && outlookFromEmail) {
+          const result = await sendOutlookEmail({
+            fromEmail: outlookFromEmail,
+            toEmail: email,
             subject: draft.subject,
-            body: draft.body,
+            body: htmlBody,
+            isHtml: true,
+            replyToEmail: outlookReplyTo ?? undefined,
           });
-          sentCount++;
+          if (result.ok) {
+            // Strip RFC 2822 angle brackets so stored IDs match inbound In-Reply-To headers
+            const cleanMsgId = result.internetMessageId?.replace(/[<>]/g, "") ?? undefined;
+            results.push({
+              carrierId: draft.carrierId,
+              carrierName: draft.carrierName,
+              laneCarrierId: draft.laneCarrierId,
+              email,
+              status: "sent",
+              subject: draft.subject,
+              body: draft.body,
+              internetMessageId: cleanMsgId,
+            });
+            sentCount++;
+          } else {
+            results.push({
+              carrierId: draft.carrierId,
+              carrierName: draft.carrierName,
+              laneCarrierId: draft.laneCarrierId,
+              email,
+              status: "failed",
+              error: result.error ?? "Outlook send failed",
+              subject: draft.subject,
+              body: draft.body,
+            });
+            failedCount++;
+          }
         } else {
-          results.push({
-            carrierId: draft.carrierId,
-            carrierName: draft.carrierName,
-            laneCarrierId: draft.laneCarrierId,
-            email,
-            status: "failed",
-            error: "Email provider returned failure",
-            subject: draft.subject,
-            body: draft.body,
-          });
-          failedCount++;
+          const ok = await sendEmail({ to: email, subject: draft.subject, html: htmlBody, text: plainText });
+          if (ok) {
+            results.push({
+              carrierId: draft.carrierId,
+              carrierName: draft.carrierName,
+              laneCarrierId: draft.laneCarrierId,
+              email,
+              status: "sent",
+              subject: draft.subject,
+              body: draft.body,
+            });
+            sentCount++;
+          } else {
+            results.push({
+              carrierId: draft.carrierId,
+              carrierName: draft.carrierName,
+              laneCarrierId: draft.laneCarrierId,
+              email,
+              status: "failed",
+              error: "Email provider returned failure",
+              subject: draft.subject,
+              body: draft.body,
+            });
+            failedCount++;
+          }
         }
       } catch (sendErr: unknown) {
         const errMsg = sendErr instanceof Error ? sendErr.message : "Send error";
@@ -607,6 +653,9 @@ House style — follow every rule:
         }
       }
 
+      // Capture the primary internetMessageId for reply-thread matching
+      const primaryThreadId = results.find(r => r.internetMessageId)?.internetMessageId ?? null;
+
       await storage.createCarrierOutreachLog({
         orgId: user.organizationId,
         laneId: outreachLaneId ?? null,
@@ -624,6 +673,8 @@ House style — follow every rule:
         recipients: JSON.parse(JSON.stringify(results)),
         procurementTaskId: taskId,
         procurementLane: lane,
+        // Store threadId so reply tracking can match inbound replies for procurement sends too
+        threadId: primaryThreadId,
       });
     } catch (err) {
       console.warn("[procurement/send] carrier_outreach_logs write failed (non-fatal):", err);

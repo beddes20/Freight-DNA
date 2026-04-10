@@ -20,6 +20,9 @@ import { z } from "zod";
 import { inArray, eq } from "drizzle-orm";
 import { sendEmail } from "../emailService";
 import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "../emailGate";
+import { sendOutlookEmail, outlookEnabled } from "../outlookService";
+import { getGraphAccessToken } from "../graphService";
+import { getReplyTrackingStatus } from "../graphSubscriptionService";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -1664,11 +1667,22 @@ Rules for suggestions:
       email: string | null;
       status: "sent" | "failed" | "no_email";
       error?: string;
+      internetMessageId?: string;
     };
 
     const results: RecipientResult[] = [];
     let sentCount = 0;
     let failedCount = 0;
+
+    // Send from the logged-in user's own Outlook mailbox so the email looks native
+    // (appears in their Sent Items, shows their name/address to the carrier).
+    // If OUTLOOK_REPLY_EMAIL is configured, a Reply-To header funnels carrier replies
+    // to that monitored mailbox so reply tracking works. When not configured, replies
+    // go directly back to the sending rep's inbox.
+    // username is the user's email address in this system
+    const outlookFromEmail = user.username?.trim() ?? null;
+    const outlookReplyTo = process.env.OUTLOOK_REPLY_EMAIL?.trim() || null;
+    const useOutlook = outlookEnabled() && !!outlookFromEmail;
 
     for (const draft of emailDrafts) {
       // Resolve email: captured > catalog primary > catalog backup
@@ -1691,18 +1705,39 @@ Rules for suggestions:
       }
 
       // Build plain-text version by stripping any HTML
-      const _fromName = process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
+      const _fromName = user.name?.trim() || process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
       const plainText = draft.body.replace(/<[^>]+>/g, "").trim();
       const htmlBody = `<div style="font-family:Arial,sans-serif;max-width:600px;line-height:1.6">${draft.body.replace(/\n/g, "<br/>")}</div><br/><p style="color:#888;font-size:12px">— ${_fromName}</p>`;
 
       try {
-        const ok = await sendEmail({ to: email, subject: draft.subject, html: htmlBody, text: plainText });
-        if (ok) {
-          results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "sent" });
-          sentCount++;
+        if (useOutlook && outlookFromEmail) {
+          const result = await sendOutlookEmail({
+            fromEmail: outlookFromEmail,
+            toEmail: email,
+            subject: draft.subject,
+            body: htmlBody,
+            isHtml: true,
+            // Only set Reply-To when a monitored mailbox is configured
+            replyToEmail: outlookReplyTo ?? undefined,
+          });
+          if (result.ok) {
+            // Strip RFC 2822 angle brackets so stored IDs match inbound In-Reply-To headers
+            const cleanMsgId = result.internetMessageId?.replace(/[<>]/g, "") ?? undefined;
+            results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "sent", internetMessageId: cleanMsgId });
+            sentCount++;
+          } else {
+            results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "failed", error: result.error ?? "Outlook send failed" });
+            failedCount++;
+          }
         } else {
-          results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "failed", error: "Email provider returned failure" });
-          failedCount++;
+          const ok = await sendEmail({ to: email, subject: draft.subject, html: htmlBody, text: plainText });
+          if (ok) {
+            results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "sent" });
+            sentCount++;
+          } else {
+            results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "failed", error: "Email provider returned failure" });
+            failedCount++;
+          }
         }
       } catch (err: any) {
         results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "failed", error: err?.message ?? "Send error" });
@@ -1714,6 +1749,15 @@ Rules for suggestions:
       sentCount === emailDrafts.length ? "sent" :
       sentCount === 0 ? "failed" :
       "partial";
+
+    // Collect all internetMessageIds returned across recipients for reply-thread matching.
+    // We store the first ID on threadId (for simple single-recipient cases) and all IDs
+    // are preserved per-recipient in the recipients JSONB so multi-carrier batches can
+    // still be matched when any recipient replies.
+    const allInternetMessageIds = results
+      .map(r => r.internetMessageId)
+      .filter((id): id is string => !!id);
+    const primaryThreadId = allInternetMessageIds[0] ?? null;
 
     // Create outreach log with send-tracking fields
     const now = new Date();
@@ -1732,6 +1776,9 @@ Rules for suggestions:
       deliveryStatus: overallStatus,
       failureReason: failedCount > 0 ? results.filter(r => r.error).map(r => `${r.carrierName}: ${r.error}`).join("; ") : null,
       recipients: JSON.parse(JSON.stringify(results)),
+      // threadId = first sent message ID (fast lookup for single-recipient case).
+      // Multi-recipient matching uses recipients JSONB lookup in storage.
+      threadId: primaryThreadId,
     });
 
     // Upsert bench entries for carriers that were contacted (sent or no_email still = attempt)
@@ -2045,6 +2092,201 @@ Rules for suggestions:
       console.error("[coverage-profile/broaden] error:", err);
       res.status(500).json({ error: "Failed to update broaden search flag" });
     }
+  });
+
+  // ── Outlook Reply Webhook — Task #182 ─────────────────────────────────────
+  // Handles Microsoft Graph change notification handshakes and inbound reply events.
+  // No auth required (Graph calls this endpoint directly); validated by clientState secret.
+
+  app.post("/api/webhooks/outlook-reply", async (req, res) => {
+    // ── Graph validation handshake ──────────────────────────────────────────
+    const validationToken = req.query.validationToken as string | undefined;
+    if (validationToken) {
+      res.setHeader("Content-Type", "text/plain");
+      return res.status(200).send(validationToken);
+    }
+
+    try {
+      const notifications = req.body?.value;
+      if (!Array.isArray(notifications) || notifications.length === 0) {
+        return res.status(200).json({ received: 0 });
+      }
+
+      // In production, OUTLOOK_WEBHOOK_SECRET must be set to a strong unique value.
+      // Without it we refuse to process notifications to prevent unauthenticated replay.
+      if (!process.env.OUTLOOK_WEBHOOK_SECRET && process.env.NODE_ENV === "production") {
+        console.error("[outlook-webhook] OUTLOOK_WEBHOOK_SECRET is not set — refusing to process notifications in production. Set this secret to enable reply tracking.");
+        return res.status(200).json({ skipped: "OUTLOOK_WEBHOOK_SECRET not configured" });
+      }
+      // In development a predictable fallback is allowed so the subscription validation
+      // handshake and local testing can proceed without requiring a configured secret.
+      const expectedSecret = process.env.OUTLOOK_WEBHOOK_SECRET ?? "freight-dna-reply-tracker";
+      const replyMailbox = process.env.OUTLOOK_REPLY_EMAIL?.trim();
+      if (!replyMailbox) {
+        return res.status(200).json({ skipped: "OUTLOOK_REPLY_EMAIL not configured" });
+      }
+
+      // Resolve the org that owns this monitored mailbox for scoped subject matching
+      const mailboxUser = await storage.getUserByUsername(replyMailbox);
+      const replyMailboxOrgId = mailboxUser?.organizationId ?? null;
+
+      let processed = 0;
+
+      for (const notification of notifications) {
+        if (notification.clientState !== expectedSecret) {
+          console.warn("[outlook-webhook] clientState mismatch — skipping notification");
+          continue;
+        }
+
+        const resourceId = notification.resourceData?.id as string | undefined;
+        if (!resourceId) continue;
+
+        try {
+          const token = await getGraphAccessToken();
+          const msgUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(replyMailbox)}/messages/${resourceId}?$select=id,internetMessageId,internetMessageHeaders,subject,bodyPreview,from,conversationId,toRecipients,receivedDateTime`;
+          const msgRes = await fetch(msgUrl, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (!msgRes.ok) {
+            console.warn(`[outlook-webhook] Failed to fetch message ${resourceId}: ${msgRes.status}`);
+            continue;
+          }
+
+          const msg = await msgRes.json() as {
+            id: string;
+            internetMessageId?: string;
+            internetMessageHeaders?: Array<{ name: string; value: string }>;
+            subject?: string;
+            bodyPreview?: string;
+            conversationId?: string;
+            receivedDateTime?: string;
+          };
+
+          const msgHeaders = msg.internetMessageHeaders ?? [];
+          const inReplyTo = msgHeaders.find(h => h.name.toLowerCase() === "in-reply-to")?.value?.trim();
+          const references = msgHeaders.find(h => h.name.toLowerCase() === "references")?.value?.trim();
+
+          const candidateIds: string[] = [];
+          if (inReplyTo) candidateIds.push(inReplyTo.replace(/[<>]/g, ""));
+          if (references) {
+            references.split(/\s+/).forEach(ref => {
+              const id = ref.replace(/[<>]/g, "").trim();
+              if (id) candidateIds.push(id);
+            });
+          }
+
+          let matchedLog = null;
+
+          // Primary: match by thread/message IDs from email headers.
+          // Deterministic order: prefer the exact In-Reply-To ID first (most direct
+          // indicator of the message being replied to), then fall back to any Reference
+          // chain IDs. Within each tier, prefer the most recently sent log.
+          if (candidateIds.length > 0) {
+            // Separate In-Reply-To (first candidate) from References (remaining)
+            const inReplyToId = inReplyTo ? inReplyTo.replace(/[<>]/g, "") : null;
+            const refIds = candidateIds.filter(id => id !== inReplyToId);
+
+            const tryLookup = async (ids: string[]) => {
+              if (!ids.length) return null;
+              if (replyMailboxOrgId) {
+                const matches = await storage.getCarrierOutreachLogsByOrgAndThreadIds(replyMailboxOrgId, ids);
+                // Sort by most recently sent to pick the best match when multiple logs match
+                return matches.sort((a, b) =>
+                  new Date(b.timestamp ?? 0).getTime() - new Date(a.timestamp ?? 0).getTime()
+                )[0] ?? null;
+              }
+              for (const tid of ids) {
+                const found = await storage.getCarrierOutreachLogByThreadId(tid);
+                if (found) return found;
+              }
+              return null;
+            };
+
+            // Try In-Reply-To first, then References
+            if (inReplyToId) matchedLog = await tryLookup([inReplyToId]);
+            if (!matchedLog && refIds.length > 0) matchedLog = await tryLookup(refIds);
+          }
+
+          // Fallback: subject-line correlation — strip "Re: " prefix and search
+          // within the last 30 days of outreach logs scoped to the mailbox owner's org.
+          // Note: subject fallback is only attempted when replyMailboxOrgId is resolved
+          // (i.e. OUTLOOK_REPLY_EMAIL maps to a platform user via getUserByUsername).
+          // For shared mailboxes not registered as platform users, thread-ID matching
+          // still works; only this secondary fallback is skipped.
+          if (!matchedLog && msg.subject && replyMailboxOrgId) {
+            const rawSubject = msg.subject.replace(/^(Re:\s*)+/i, "").trim().toLowerCase();
+            if (rawSubject) {
+              matchedLog = await storage.getCarrierOutreachLogBySubjectFallback(replyMailboxOrgId, rawSubject);
+            }
+          }
+
+          if (!matchedLog || matchedLog.replyReceivedAt) {
+            continue;
+          }
+
+          const snippet = (msg.bodyPreview ?? "").slice(0, 300);
+          const receivedAt = msg.receivedDateTime ? new Date(msg.receivedDateTime) : new Date();
+
+          await storage.recordOutreachReply(matchedLog.id, snippet, receivedAt);
+          processed++;
+          console.log(`[outlook-webhook] Reply recorded for outreach log ${matchedLog.id}`);
+        } catch (innerErr) {
+          console.error(`[outlook-webhook] Error processing notification for resource ${resourceId}:`, innerErr);
+        }
+      }
+
+      res.status(200).json({ received: notifications.length, processed });
+    } catch (err) {
+      console.error("[outlook-webhook] Unhandled error:", err);
+      res.status(200).json({ error: "Internal error" });
+    }
+  });
+
+  // ── Procurement Task Outreach Logs ────────────────────────────────────────
+  // Returns carrier_outreach_logs records written by the procurement send flow
+  // for a given task, so the procurement workspace can display reply status.
+  app.get("/api/procurement/:taskId/outreach-logs", requireAuth, async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const task = await storage.getTask(req.params.taskId);
+    if (!task) return res.status(404).json({ error: "Task not found" });
+    // Org-scope: the task must belong to the user's org (via task.orgId or linked user)
+    let taskOrgId: string | null | undefined = task.orgId;
+    if (!taskOrgId) {
+      const taskUserId = task.assignedTo || task.assignedBy;
+      if (taskUserId) {
+        const taskUser = await storage.getUser(taskUserId);
+        taskOrgId = taskUser?.organizationId;
+      }
+    }
+    if (!taskOrgId || taskOrgId !== user.organizationId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    const logs = await storage.getCarrierOutreachLogsByProcurementTaskId(user.organizationId, req.params.taskId);
+    return res.json(logs);
+  });
+
+  // ── Admin: Graph Reply Tracking Health Check ─────────────────────────────
+  // Returns the current Mail.Read permission status and subscription state.
+  // Accessible to any authenticated admin user. Does not expose secrets.
+  app.get("/api/admin/graph-reply-status", requireAuth, async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (user.role !== "admin" && user.role !== "owner") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    const status = getReplyTrackingStatus();
+    return res.json(status);
+  });
+
+  app.get("/api/webhooks/outlook-reply", (req, res) => {
+    const validationToken = req.query.validationToken as string | undefined;
+    if (validationToken) {
+      res.setHeader("Content-Type", "text/plain");
+      return res.status(200).send(validationToken);
+    }
+    res.status(200).json({ status: "ready" });
   });
 }
 

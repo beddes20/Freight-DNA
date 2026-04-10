@@ -65,6 +65,7 @@ import {
   TrendingUp,
   Star,
   Clock,
+  MailOpen,
 } from "lucide-react";
 
 interface TeamMember {
@@ -245,8 +246,11 @@ interface OutreachLog {
     email: string | null;
     status: "sent" | "failed" | "no_email";
     error?: string;
+    internetMessageId?: string;
   }> | null;
   emailDrafts: EmailDraft[] | null;
+  replyReceivedAt: string | null;
+  replySnippet: string | null;
 }
 
 type PerDraftSendStatus = "idle" | "sending" | "sent" | "failed" | "no_email";
@@ -593,6 +597,19 @@ export function CarrierOutreachPanel({
       return r.json();
     },
     enabled: !!laneId && open,
+  });
+
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "owner";
+  const { data: replyTrackingStatus } = useQuery<{
+    enabled: boolean;
+    mailbox: string | null;
+    subscriptionActive: boolean;
+    missingPermissions: string[];
+    warnings: string[];
+  }>({
+    queryKey: ["/api/admin/graph-reply-status"],
+    enabled: isAdmin && open && activeMainTab === "history",
+    staleTime: 5 * 60 * 1000,
   });
 
   const importCarriersMutation = useMutation({
@@ -2277,6 +2294,26 @@ export function CarrierOutreachPanel({
           {/* ══════════════════════════════════════════════════════════════ */}
           {activeMainTab === "history" && (
             <div className="flex-1 px-5 pt-4 pb-20 overflow-y-auto">
+              {/* Admin-only: non-blocking notice when inbound reply tracking is not active */}
+              {isAdmin && replyTrackingStatus && !replyTrackingStatus.enabled && (
+                <div
+                  className="mb-3 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[10px] text-amber-400/80"
+                  data-testid="reply-tracking-warning"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="font-semibold mb-0.5">Inbound reply tracking inactive</p>
+                    {(replyTrackingStatus.missingPermissions?.length ?? 0) > 0 && (
+                      <p className="text-amber-400/60">
+                        Missing: {replyTrackingStatus.missingPermissions.join(" · ")}
+                      </p>
+                    )}
+                    {(replyTrackingStatus.warnings ?? []).map((w, i) => (
+                      <p key={i} className="text-amber-400/60">{w}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
               {isHistoryLoading ? (
                 <div className="flex flex-col gap-3 animate-pulse" data-testid="history-loading">
                   {[1, 2, 3].map(i => <div key={i} className="h-16 rounded-lg bg-muted/30 border border-border" />)}
@@ -2315,10 +2352,25 @@ export function CarrierOutreachPanel({
                               </span>
                               <span className="text-[9px] text-muted-foreground">·</span>
                               <span className="text-[9px] text-muted-foreground">{log.outreachMode === "immediate_plus_lane" ? "Immediate + Lane" : "Lane-Building"}</span>
+                              {log.replyReceivedAt && (
+                                <span className="flex items-center gap-0.5 text-[10px] font-semibold text-blue-400 bg-blue-500/10 border border-blue-500/20 rounded px-1 py-0.5" data-testid={`reply-received-badge-${log.id}`}>
+                                  <MailOpen className="w-2.5 h-2.5" /> Reply Received
+                                </span>
+                              )}
                             </div>
                             <p className="text-[10px] text-foreground/70 mt-1 font-medium">{log.carrierNames.join(", ")}</p>
                             {log.sentAt && <p className="text-[9px] text-muted-foreground mt-0.5">Sent {new Date(log.sentAt).toLocaleString()}</p>}
                             {!log.sentAt && <p className="text-[9px] text-muted-foreground mt-0.5">Logged {new Date(log.timestamp).toLocaleString()}</p>}
+                            {log.replyReceivedAt && (
+                              <p className="text-[9px] text-blue-400/80 mt-0.5" data-testid={`reply-timestamp-${log.id}`}>
+                                Reply received {new Date(log.replyReceivedAt).toLocaleString()}
+                              </p>
+                            )}
+                            {log.replySnippet && (
+                              <p className="text-[9px] text-muted-foreground mt-0.5 italic truncate" data-testid={`reply-snippet-${log.id}`}>
+                                "{log.replySnippet}"
+                              </p>
+                            )}
                             {log.failureReason && <p className="text-[9px] text-red-400/70 mt-0.5">Error: {log.failureReason}</p>}
                           </div>
                           <span className="text-[9px] text-muted-foreground shrink-0">{log.carrierNames.length} carrier{log.carrierNames.length !== 1 ? "s" : ""}</span>

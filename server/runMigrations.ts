@@ -1460,4 +1460,18 @@ export async function runMigrations() {
   } finally {
     clientOutreachLog.release();
   }
+
+  // ── Task #182: Inbound Email Reply Tracking ──────────────────────────────
+  const clientReply = await pool.connect();
+  try {
+    await clientReply.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS thread_id text`);
+    await clientReply.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS reply_received_at timestamp`);
+    await clientReply.query(`ALTER TABLE carrier_outreach_logs ADD COLUMN IF NOT EXISTS reply_snippet text`);
+    await clientReply.query(`CREATE INDEX IF NOT EXISTS idx_outreach_thread_id ON carrier_outreach_logs(thread_id) WHERE thread_id IS NOT NULL`);
+    console.log("[migrations] carrier_outreach_logs reply tracking columns ensured");
+  } catch (err) {
+    console.error("[migrations] reply tracking migration error:", err);
+  } finally {
+    clientReply.release();
+  }
 }

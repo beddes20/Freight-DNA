@@ -35,6 +35,7 @@ import {
   ChevronRight,
   Phone,
   Mail,
+  MailOpen,
   CheckCircle2,
   XCircle,
   Clock,
@@ -106,6 +107,14 @@ interface OutreachLogEntry {
   bodyPreview: string;
   email: string | null;
   status: "sent" | "failed" | "no_email";
+}
+
+interface ProcurementOutreachLog {
+  id: string;
+  carrierNames: string[];
+  procurementLane: string | null;
+  replyReceivedAt: string | null;
+  replySnippet: string | null;
 }
 
 const STATUS_CONFIG = {
@@ -322,9 +331,10 @@ interface CarrierRowProps {
   taskId: string;
   awardId: string;
   onEmail: (carrier: LaneCarrier) => void;
+  replyInfo?: { replyReceivedAt: string; replySnippet: string | null } | null;
 }
 
-function CarrierRow({ carrier, taskId, awardId, onEmail }: CarrierRowProps) {
+function CarrierRow({ carrier, taskId, awardId, onEmail, replyInfo }: CarrierRowProps) {
   const { toast } = useToast();
   const [editingStatus, setEditingStatus] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -420,6 +430,22 @@ function CarrierRow({ carrier, taskId, awardId, onEmail }: CarrierRowProps) {
           </div>
           {carrier.notes && (
             <p className="text-xs text-muted-foreground mt-1 italic">{carrier.notes}</p>
+          )}
+          {replyInfo && (
+            <div className="flex items-center gap-1.5 mt-1" data-testid={`badge-reply-received-${carrier.id}`}>
+              <Badge className="text-xs bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 gap-1">
+                <MailOpen className="h-3 w-3" />
+                Reply Received
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                {new Date(replyInfo.replyReceivedAt).toLocaleString()}
+              </span>
+            </div>
+          )}
+          {replyInfo?.replySnippet && (
+            <p className="text-xs text-muted-foreground mt-0.5 italic line-clamp-2" data-testid={`text-reply-snippet-${carrier.id}`}>
+              "{replyInfo.replySnippet}"
+            </p>
           )}
           {lastEmail && (
             <div className="flex items-center gap-1.5 mt-1 text-xs text-muted-foreground">
@@ -780,6 +806,27 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
     queryKey: ["/api/tasks", taskId, "lane-carriers"],
     enabled: !!taskId,
   });
+
+  const { data: procurementOutreachLogs = [] } = useQuery<ProcurementOutreachLog[]>({
+    queryKey: ["/api/procurement", taskId, "outreach-logs"],
+    enabled: !!taskId,
+    staleTime: 30 * 1000,
+  });
+
+  // Build a lookup from carrier name (lowercase) → most recent reply info.
+  // Filter to this specific lane so the same carrier on another lane doesn't
+  // show a false-positive "Reply Received" badge here.
+  const replyByCarrierName = new Map<string, { replyReceivedAt: string; replySnippet: string | null }>();
+  for (const log of procurementOutreachLogs) {
+    if (!log.replyReceivedAt) continue;
+    if (log.procurementLane && log.procurementLane !== laneInfo.lane) continue;
+    for (const name of log.carrierNames) {
+      const key = name.toLowerCase();
+      if (!replyByCarrierName.has(key)) {
+        replyByCarrierName.set(key, { replyReceivedAt: log.replyReceivedAt, replySnippet: log.replySnippet });
+      }
+    }
+  }
 
   const laneScopedCarriers = carriers.filter(c => c.lane === laneInfo.lane);
 
@@ -1255,6 +1302,7 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
               taskId={taskId}
               awardId={laneInfo.awardId}
               onEmail={handleEmailCarrier}
+              replyInfo={replyByCarrierName.get(carrier.carrierName.toLowerCase()) ?? null}
             />
           ))}
         </div>

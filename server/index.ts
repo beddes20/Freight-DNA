@@ -16,6 +16,7 @@ import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { startIntelEmailScheduler } from "./intelEmailScheduler";
+import { initGraphSubscriptionService } from "./graphSubscriptionService";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
@@ -199,6 +200,9 @@ async function initStripe() {
       initLmCheckinScheduler();
       initNbaPhase1Scheduler();
       startIntelEmailScheduler();
+      initGraphSubscriptionService().catch(err => {
+        console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));
+      });
     },
   );
 })();

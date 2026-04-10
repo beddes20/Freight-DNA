@@ -580,6 +580,13 @@ export interface IStorage {
   createCarrierOutreachLog(data: InsertCarrierOutreachLog): Promise<CarrierOutreachLog>;
   getCarrierOutreachLogs(laneId: string): Promise<CarrierOutreachLog[]>;
   updateCarrierOutreachLog(id: string, fields: Partial<InsertCarrierOutreachLog>): Promise<CarrierOutreachLog>;
+  getCarrierOutreachLogByThreadId(threadId: string): Promise<CarrierOutreachLog | undefined>;
+  getCarrierOutreachLogsByOrgAndThreadIds(orgId: string, threadIds: string[]): Promise<CarrierOutreachLog[]>;
+  /** Subject-line fallback: find the most recent outreach log within 30 days whose email drafts contain a matching subject (case-insensitive, re: prefix stripped). Scoped to the given orgId to prevent cross-tenant mis-association. */
+  getCarrierOutreachLogBySubjectFallback(orgId: string, normalizedSubject: string): Promise<CarrierOutreachLog | undefined>;
+  /** Fetch all outreach logs for a given procurement task, ordered newest first. */
+  getCarrierOutreachLogsByProcurementTaskId(orgId: string, procurementTaskId: string): Promise<CarrierOutreachLog[]>;
+  recordOutreachReply(logId: string, replySnippet: string, replyReceivedAt: Date): Promise<CarrierOutreachLog>;
 
   // Lane Carrier Outreach v1 — Feature Flags
   getFeatureFlag(orgId: string, flagKey: string): Promise<boolean>;
@@ -3757,6 +3764,91 @@ export class DatabaseStorage implements IStorage {
   async updateCarrierOutreachLog(id: string, fields: Partial<InsertCarrierOutreachLog>): Promise<CarrierOutreachLog> {
     const [row] = await db.update(carrierOutreachLogs).set(fields).where(eq(carrierOutreachLogs.id, id)).returning();
     return row;
+  }
+
+  async getCarrierOutreachLogByThreadId(threadId: string): Promise<CarrierOutreachLog | undefined> {
+    // First try the fast path: threadId column (stores the primary/first recipient's ID)
+    const [byColumn] = await db.select().from(carrierOutreachLogs)
+      .where(eq(carrierOutreachLogs.threadId, threadId));
+    if (byColumn) return byColumn;
+
+    // Fallback: search the recipients JSONB array for any recipient whose
+    // internetMessageId matches (covers multi-carrier batch outreach logs).
+    // Uses a raw SQL jsonb operator for efficiency; safe because threadId is
+    // sanitized by the caller (stripped of angle brackets).
+    const [byRecipient] = await db.select().from(carrierOutreachLogs)
+      .where(sql`recipients @> ${JSON.stringify([{ internetMessageId: threadId }])}::jsonb`)
+      .limit(1);
+    return byRecipient;
+  }
+
+  async getCarrierOutreachLogsByOrgAndThreadIds(orgId: string, threadIds: string[]): Promise<CarrierOutreachLog[]> {
+    if (threadIds.length === 0) return [];
+    // Build a filter that matches any record where:
+    //   1) threadId column is one of the candidate IDs, OR
+    //   2) recipients JSONB contains a recipient with a matching internetMessageId
+    const conditions = threadIds.map(tid =>
+      or(
+        eq(carrierOutreachLogs.threadId, tid),
+        sql`recipients @> ${JSON.stringify([{ internetMessageId: tid }])}::jsonb`
+      )
+    );
+    return db.select().from(carrierOutreachLogs)
+      .where(and(eq(carrierOutreachLogs.orgId, orgId), or(...conditions)));
+  }
+
+  async getCarrierOutreachLogsByProcurementTaskId(orgId: string, procurementTaskId: string): Promise<CarrierOutreachLog[]> {
+    return db.select().from(carrierOutreachLogs)
+      .where(
+        and(
+          eq(carrierOutreachLogs.orgId, orgId),
+          eq(carrierOutreachLogs.procurementTaskId, procurementTaskId),
+        )
+      )
+      .orderBy(desc(carrierOutreachLogs.timestamp));
+  }
+
+  async getCarrierOutreachLogBySubjectFallback(orgId: string, normalizedSubject: string): Promise<CarrierOutreachLog | undefined> {
+    // Search recent outreach logs (last 30 days, unmatched) for a draft whose subject
+    // matches when lower-cased. Scoped to the org to prevent cross-tenant mis-association.
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const rows = await db.select().from(carrierOutreachLogs)
+      .where(
+        and(
+          eq(carrierOutreachLogs.orgId, orgId),
+          isNull(carrierOutreachLogs.replyReceivedAt),
+          gte(carrierOutreachLogs.timestamp, cutoff),
+          isNotNull(carrierOutreachLogs.sentAt),
+        )
+      )
+      .orderBy(desc(carrierOutreachLogs.timestamp))
+      .limit(200);
+
+    for (const row of rows) {
+      const drafts = Array.isArray(row.emailDrafts) ? row.emailDrafts as Array<{ subject?: string }> : [];
+      const matched = drafts.some(d =>
+        typeof d.subject === "string" &&
+        d.subject.replace(/^(Re:\s*)+/i, "").trim().toLowerCase() === normalizedSubject
+      );
+      if (matched) return row;
+    }
+    return undefined;
+  }
+
+  async recordOutreachReply(logId: string, replySnippet: string, replyReceivedAt: Date): Promise<CarrierOutreachLog> {
+    // Guard is idempotent: only write if replyReceivedAt is still null.
+    // This prevents double-writes when Graph delivers the same notification
+    // more than once (e.g. transient retry) or when two concurrent webhook
+    // deliveries race for the same message.
+    const [row] = await db.update(carrierOutreachLogs)
+      .set({ replyReceivedAt, replySnippet })
+      .where(and(eq(carrierOutreachLogs.id, logId), isNull(carrierOutreachLogs.replyReceivedAt)))
+      .returning();
+    // If row is undefined the reply was already recorded; fetch the current state
+    if (row) return row;
+    const [existing] = await db.select().from(carrierOutreachLogs)
+      .where(eq(carrierOutreachLogs.id, logId));
+    return existing;
   }
 
   // ── Lane Carrier Outreach v1 — Feature Flags ──────────────────────────────

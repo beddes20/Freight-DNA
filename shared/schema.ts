@@ -1405,6 +1405,11 @@ export const carrierOutreachLogs = pgTable("carrier_outreach_logs", {
   // FK-less reference to tasks.id — set for procurement workflow sends
   procurementLane: text("procurement_lane"),
   // lane label string (e.g. "Chicago, IL → Dallas, TX") for procurement-task context
+  // Reply-tracking fields (Task #182)
+  threadId: text("thread_id"),
+  // Graph internetMessageId stored at send time for reply matching
+  replyReceivedAt: timestamp("reply_received_at"),
+  replySnippet: text("reply_snippet"),
 });
 export const insertCarrierOutreachLogSchema = createInsertSchema(carrierOutreachLogs).omit({ id: true, timestamp: true });
 export type InsertCarrierOutreachLog = z.infer<typeof insertCarrierOutreachLogSchema>;
