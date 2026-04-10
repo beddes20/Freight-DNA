@@ -30,11 +30,20 @@ import {
   MapPin,
   AlertCircle,
   ExternalLink,
+  MessageCircle,
+  Zap,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
+
+interface LaneReplySummary {
+  totalReplied: number;
+  hotCount: number;
+  topStatus: string | null;
+  topCarrierName: string | null;
+}
 
 interface LwqLane {
   laneId: string;
@@ -51,6 +60,7 @@ interface LwqLane {
   assignedAt: string | null;
   carriersContactedCount: number;
   isManual: boolean;
+  replySummary?: LaneReplySummary;
 }
 
 interface AwardTask {
@@ -76,6 +86,13 @@ interface MyProcurementData {
 }
 
 const COMPLETION_THRESHOLD = 3;
+
+const REPLY_STATUS_LABELS: Record<string, string> = {
+  available_now: "Available Now",
+  available_next_week: "Available Next Week",
+  future_interest: "Future Interest",
+  not_fit: "Not a Fit",
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -166,10 +183,14 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
   const avgLoads = item.avgLoadsPerWeek
     ? `~${parseFloat(item.avgLoadsPerWeek).toFixed(1)} loads/wk`
     : null;
+  const reply = item.replySummary;
+  const hasHotReply = (reply?.hotCount ?? 0) > 0;
 
   return (
     <div
-      className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors"
+      className={`flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors ${
+        hasHotReply ? "border-green-500/40 bg-green-950/5" : ""
+      }`}
       data-testid={`card-lwq-lane-${item.laneId}`}
     >
       {/* Source badge */}
@@ -205,6 +226,26 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
           </span>
           {avgLoads && <span>{avgLoads}</span>}
           <AgeBadge dateStr={item.assignedAt} label="Assigned" />
+          {reply && reply.totalReplied > 0 && (
+            hasHotReply ? (
+              <span
+                className="flex items-center gap-1 text-green-400 font-medium"
+                data-testid={`text-reply-hot-${item.laneId}`}
+                title={reply.topCarrierName ? `${reply.topCarrierName}: ${REPLY_STATUS_LABELS[reply.topStatus ?? ""] ?? reply.topStatus}` : undefined}
+              >
+                <Zap className="w-3 h-3" />
+                {reply.hotCount} available — {REPLY_STATUS_LABELS[reply.topStatus ?? ""] ?? reply.topStatus}
+              </span>
+            ) : (
+              <span
+                className="flex items-center gap-1 text-slate-400"
+                data-testid={`text-reply-${item.laneId}`}
+              >
+                <MessageCircle className="w-3 h-3" />
+                {reply.totalReplied} replied
+              </span>
+            )
+          )}
         </div>
         <div className="mt-2">
           <ProgressPips contacted={contacted} threshold={COMPLETION_THRESHOLD} />

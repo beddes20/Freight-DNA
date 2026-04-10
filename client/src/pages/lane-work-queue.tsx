@@ -60,6 +60,7 @@ import {
   Trash2,
   Pencil,
   X,
+  MessageCircle,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -105,6 +106,13 @@ interface CoverageProfileCarrier {
   isCurrentPrimary: boolean;
 }
 
+interface LaneReplySummary {
+  totalReplied: number;
+  hotCount: number;
+  topStatus: string | null;
+  topCarrierName: string | null;
+}
+
 interface LaneItem {
   lane: {
     id: string;
@@ -128,6 +136,7 @@ interface LaneItem {
   totalBenchCount: number;
   historicalCount: number;
   missingContactCount: number;
+  replySummary?: LaneReplySummary;
 }
 
 interface WorkQueue {
@@ -316,6 +325,73 @@ function sortItems(items: LaneItem[]): LaneItem[] {
   });
 }
 
+// ── Reply Badge ───────────────────────────────────────────────────────────────
+
+const STATUS_LABELS: Record<string, string> = {
+  available_now: "Available Now",
+  available_next_week: "Available Next Week",
+  future_interest: "Future Interest",
+  not_fit: "Not a Fit",
+};
+
+function ReplyBadge({ summary, laneId }: { summary: LaneReplySummary; laneId: string }) {
+  if (summary.totalReplied === 0) return null;
+
+  const isHot = summary.hotCount > 0;
+  const topLabel = summary.topStatus ? STATUS_LABELS[summary.topStatus] : null;
+
+  if (isHot) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant="outline"
+            className="text-[10px] py-0 px-1.5 border-green-500/60 text-green-400 bg-green-500/10 gap-0.5 cursor-help"
+            data-testid={`badge-reply-hot-${laneId}`}
+          >
+            <MessageCircle className="w-2.5 h-2.5" />
+            {summary.hotCount} {summary.hotCount === 1 ? "reply" : "replies"} — {summary.hotCount === 1 && topLabel ? topLabel : `${summary.hotCount} hot`}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent className="text-xs max-w-[240px] space-y-1 p-3">
+          <p className="font-semibold text-green-400">Carrier Replies Received</p>
+          {summary.topCarrierName && (
+            <p className="text-muted-foreground">
+              Top: <span className="text-foreground">{summary.topCarrierName}</span> — {topLabel}
+            </p>
+          )}
+          <p className="text-muted-foreground">
+            {summary.totalReplied} carrier{summary.totalReplied !== 1 ? "s" : ""} responded · {summary.hotCount} available
+          </p>
+          <p className="text-muted-foreground text-[10px]">Open the lane workspace to act on replies.</p>
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          className="text-[10px] py-0 px-1.5 border-slate-500/40 text-slate-400 gap-0.5 cursor-help"
+          data-testid={`badge-reply-${laneId}`}
+        >
+          <MessageCircle className="w-2.5 h-2.5" />
+          {summary.totalReplied} replied
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="text-xs max-w-[240px] space-y-1 p-3">
+        <p className="font-semibold">Carrier Replies</p>
+        {summary.topCarrierName && (
+          <p className="text-muted-foreground">Latest: <span className="text-foreground">{summary.topCarrierName}</span> — {topLabel}</p>
+        )}
+        <p className="text-muted-foreground">{summary.totalReplied} carrier{summary.totalReplied !== 1 ? "s" : ""} responded. Open the lane workspace for details.</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 // ── Assign-to Dropdown ────────────────────────────────────────────────────────
 
 function AssignToDropdown({
@@ -477,10 +553,12 @@ function LaneRow({
   const loadsNum = avgLoadsNum(item.lane.avgLoadsPerWeek);
   const isHighFreq = loadsNum >= HIGH_FREQ_THRESHOLD;
 
+  const hasHotReply = (item.replySummary?.hotCount ?? 0) > 0;
+
   return (
     <div
       className={`bg-card border rounded-lg p-4 hover:border-amber-500/30 transition-colors cursor-pointer group ${
-        isHighFreq ? "border-amber-500/20" : "border-border"
+        hasHotReply ? "border-green-500/40 bg-green-950/5" : isHighFreq ? "border-amber-500/20" : "border-border"
       }`}
       onClick={() => onOpen(item.lane.id)}
       data-testid={`work-queue-row-${item.lane.id}`}
@@ -522,16 +600,19 @@ function LaneRow({
             </Badge>
           </div>
 
-          {/* Coverage status badge */}
-          {coverageData?.profile && (
-            <div className="mt-1.5">
+          {/* Coverage status + reply badges */}
+          <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+            {coverageData?.profile && (
               <CoverageStatusBadge
                 profile={coverageData.profile}
                 carriers={coverageData.carriers}
                 laneId={item.lane.id}
               />
-            </div>
-          )}
+            )}
+            {item.replySummary && item.replySummary.totalReplied > 0 && (
+              <ReplyBadge summary={item.replySummary} laneId={item.lane.id} />
+            )}
+          </div>
 
           {/* Metrics row */}
           <div className="flex items-center gap-4 mt-2 flex-wrap">

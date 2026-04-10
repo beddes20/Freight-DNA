@@ -1,7 +1,9 @@
 import type { Express } from "express";
-import { storage } from "../storage";
+import { storage, db } from "../storage";
 import { getCurrentUser } from "../auth";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
+import { laneCarrierInterest } from "@shared/schema";
+import { inArray } from "drizzle-orm";
 
 /**
  * SQL expression that applies the same normalization as normalizeLaneLocation() to a column.
@@ -71,6 +73,40 @@ export function registerMyProcurementRoutes(app: Express) {
         [user.id, user.organizationId]
       );
 
+      // ── 1b. Enrich each LWQ lane with a reply summary ─────────────────────
+      const lwqLaneIds = laneRows.rows.map((r) => r.id);
+      type BenchRow = { laneId: string; interestStatus: string; carrierName: string };
+      let benchRows: BenchRow[] = [];
+      if (lwqLaneIds.length > 0) {
+        benchRows = (await db.select({
+          laneId: laneCarrierInterest.laneId,
+          interestStatus: laneCarrierInterest.interestStatus,
+          carrierName: laneCarrierInterest.carrierName,
+        }).from(laneCarrierInterest).where(inArray(laneCarrierInterest.laneId, lwqLaneIds))) as BenchRow[];
+      }
+      const benchByLane = new Map<string, BenchRow[]>();
+      for (const b of benchRows) {
+        if (!benchByLane.has(b.laneId)) benchByLane.set(b.laneId, []);
+        benchByLane.get(b.laneId)!.push(b);
+      }
+      const HOT_STATUSES = new Set(["available_now", "available_next_week"]);
+      const STATUS_PRIORITY: Record<string, number> = { available_now: 4, available_next_week: 3, future_interest: 2, not_fit: 1 };
+      function computeReplySummary(bench: BenchRow[]) {
+        const replied = bench.filter(b => b.interestStatus !== "needs_follow_up");
+        let topEntry: BenchRow | null = null;
+        let topPriority = -1;
+        for (const b of replied) {
+          const p = STATUS_PRIORITY[b.interestStatus] ?? 0;
+          if (p > topPriority) { topPriority = p; topEntry = b; }
+        }
+        return {
+          totalReplied: replied.length,
+          hotCount: replied.filter(b => HOT_STATUSES.has(b.interestStatus)).length,
+          topStatus: topEntry?.interestStatus ?? null,
+          topCarrierName: topEntry?.carrierName ?? null,
+        };
+      }
+
       const lwqLanes = laneRows.rows.map((r) => ({
         laneId: r.id,
         origin: r.origin,
@@ -86,6 +122,7 @@ export function registerMyProcurementRoutes(app: Express) {
         assignedAt: r.assigned_at,
         carriersContactedCount: r.carriers_contacted_count ?? 0,
         isManual: r.is_manual,
+        replySummary: computeReplySummary(benchByLane.get(r.id) ?? []),
       }));
 
       // ── 2. Award carrier-procurement tasks assigned to me ──────────────────

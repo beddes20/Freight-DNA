@@ -165,12 +165,20 @@ export interface RepReportData {
   teamMembers: TeamMemberSummary[];
 }
 
+export interface LaneReplySummary {
+  totalReplied: number;       // carriers with interestStatus != 'needs_follow_up'
+  hotCount: number;           // carriers with available_now | available_next_week
+  topStatus: string | null;   // highest-priority status among replied carriers
+  topCarrierName: string | null;
+}
+
 export interface LaneWorkQueueItem {
   lane: RecurringLane & { ownerName: string | null };
   contactableCount: number;   // carriers with phone or email in catalog
   totalBenchCount: number;    // all bench entries
   historicalCount: number;    // bench entries where sourceType = 'historical'
   missingContactCount: number; // historical carriers with no phone/email
+  replySummary: LaneReplySummary;
 }
 
 export interface LaneWorkQueueResult {
@@ -628,6 +636,7 @@ export interface IStorage {
     scopeLabel: string;
   }>;
   getLaneWorkQueue(orgId: string, completionThreshold: number, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<LaneWorkQueueResult>;
+  getUnactionedHotReplyCount(orgId: string, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<number>;
 
   // Lane Coverage Profiles
   getLaneCoverageProfile(orgId: string, laneKey: string): Promise<import('@shared/schema').LaneCoverageProfile | undefined>;
@@ -3937,6 +3946,31 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  async getUnactionedHotReplyCount(orgId: string, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<number> {
+    const today = new Date().toISOString().split("T")[0];
+    const visibleSet = new Set(visibleUserIds);
+    const allLanes = await db.select({ id: recurringLanes.id, ownerUserId: recurringLanes.ownerUserId })
+      .from(recurringLanes)
+      .where(and(
+        eq(recurringLanes.orgId, orgId),
+        eq(recurringLanes.isEligible, true),
+        isNull(recurringLanes.resolvedAt),
+        or(isNull(recurringLanes.snoozedUntil), sql`${recurringLanes.snoozedUntil} <= ${today}`),
+      ));
+    const visibleLaneIds = allLanes
+      .filter(l => l.ownerUserId ? visibleSet.has(l.ownerUserId) : canSeeUnassigned)
+      .map(l => l.id);
+    if (visibleLaneIds.length === 0) return 0;
+    const hotStatuses = ["available_now", "available_next_week"];
+    const rows = await db.selectDistinct({ laneId: laneCarrierInterest.laneId })
+      .from(laneCarrierInterest)
+      .where(and(
+        inArray(laneCarrierInterest.laneId, visibleLaneIds),
+        inArray(laneCarrierInterest.interestStatus, hotStatuses),
+      ));
+    return rows.length;
+  }
+
   async getLaneWorkQueue(orgId: string, completionThreshold: number, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<LaneWorkQueueResult> {
     // Fetch all eligible, non-snoozed, non-preferred lanes for the org
     const today = new Date().toISOString().split("T")[0];
@@ -4000,12 +4034,30 @@ export class DatabaseStorage implements IStorage {
       const contactableCount = bench.filter(b => b.carrierId && carrierContactMap.get(b.carrierId)?.hasContact).length;
       const missingContactCount = historicalBench.filter(b => !b.carrierId || !carrierContactMap.get(b.carrierId)?.hasContact).length;
 
+      // Compute reply summary from bench entries
+      const HOT_STATUSES = new Set(["available_now", "available_next_week"]);
+      const STATUS_PRIORITY: Record<string, number> = { available_now: 4, available_next_week: 3, future_interest: 2, not_fit: 1 };
+      const replied = bench.filter(b => b.interestStatus !== "needs_follow_up");
+      let topEntry: (typeof bench)[0] | null = null;
+      let topPriority = -1;
+      for (const b of replied) {
+        const p = STATUS_PRIORITY[b.interestStatus] ?? 0;
+        if (p > topPriority) { topPriority = p; topEntry = b; }
+      }
+      const replySummary: LaneReplySummary = {
+        totalReplied: replied.length,
+        hotCount: replied.filter(b => HOT_STATUSES.has(b.interestStatus)).length,
+        topStatus: topEntry?.interestStatus ?? null,
+        topCarrierName: topEntry?.carrierName ?? null,
+      };
+
       const item: LaneWorkQueueItem = {
         lane: { ...lane, ownerName: lane.ownerUserId ? (userNameMap.get(lane.ownerUserId) ?? null) : null },
         contactableCount,
         totalBenchCount: bench.length,
         historicalCount: historicalBench.length,
         missingContactCount,
+        replySummary,
       };
 
       const contacted = lane.carriersContactedCount ?? 0;

@@ -671,6 +671,25 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
   });
 
+  // ── Unactioned Hot Reply Count (for sidebar badge) ──────────────────────────
+
+  app.get("/api/recurring-lanes/unactioned-reply-count", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    try {
+      const { visibleUserIds, canSeeUnassigned } = await storage.resolveVisibleUserIds(
+        user.id, user.organizationId, user.role
+      );
+      const count = await storage.getUnactionedHotReplyCount(
+        user.organizationId, visibleUserIds, canSeeUnassigned
+      );
+      res.json({ count });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error)?.message ?? "Failed to get reply count" });
+    }
+  });
+
   /** Read-only: returns the metadata from the last engine run for admin debug panel. */
   app.get("/api/recurring-lanes/engine-status", async (req, res) => {
     const user = await getCurrentUser(req);

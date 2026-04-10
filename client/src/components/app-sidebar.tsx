@@ -1,6 +1,6 @@
 import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, type LucideIcon } from "lucide-react";
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -116,11 +116,12 @@ const ROLE_LABELS: Record<string, string> = {
   logistics_coordinator: "Logistics Coordinator",
 };
 
-function NotificationBadge({ count }: { count: number }) {
+function NotificationBadge({ count, color = "red" }: { count: number; color?: "red" | "green" }) {
   if (count <= 0) return null;
+  const bg = color === "green" ? "bg-green-600" : "bg-red-500";
   return (
     <span
-      className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:-top-1 group-data-[collapsible=icon]:-right-1 group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:min-w-4 group-data-[collapsible=icon]:text-[9px]"
+      className={`ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full ${bg} px-1 text-[10px] font-semibold leading-none text-white group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:-top-1 group-data-[collapsible=icon]:-right-1 group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:min-w-4 group-data-[collapsible=icon]:text-[9px]`}
       data-testid="badge-notification-count"
     >
       {count > 99 ? "99+" : count}
@@ -128,7 +129,7 @@ function NotificationBadge({ count }: { count: number }) {
   );
 }
 
-function NavLink({ item, isActive, badge }: { item: NavItem; isActive: boolean; badge?: number }) {
+function NavLink({ item, isActive, badge, badgeColor }: { item: NavItem; isActive: boolean; badge?: number; badgeColor?: "red" | "green" }) {
   const Icon = item.icon;
   return (
     <SidebarMenuItem>
@@ -136,17 +137,30 @@ function NavLink({ item, isActive, badge }: { item: NavItem; isActive: boolean; 
         <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`} className="relative">
           <Icon className="h-4 w-4" />
           <span>{item.title}</span>
-          {badge !== undefined && <NotificationBadge count={badge} />}
+          {badge !== undefined && <NotificationBadge count={badge} color={badgeColor} />}
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
 }
 
+function useUnactionedReplyCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/recurring-lanes/unactioned-reply-count"],
+    enabled: !!user,
+    refetchInterval: 60_000,
+    staleTime: 50_000,
+    retry: false,
+  });
+  return data?.count ?? 0;
+}
+
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const { taskCount, suggestionCount } = useNotificationCounts();
+  const unactionedReplyCount = useUnactionedReplyCount();
   const { toast } = useToast();
   const [profileOpen, setProfileOpen] = useState(false);
   const [signature, setSignature] = useState("");
@@ -296,7 +310,19 @@ export function AppSidebar() {
               <SidebarGroupLabel>Lane Tools</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  {visibleLaneTools.map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
+                  {visibleLaneTools.map(item => (
+                    <NavLink
+                      key={item.title}
+                      item={item}
+                      isActive={isActive(item.url)}
+                      badge={
+                        (item.title === "Lane Work Queue" || item.title === "My Procurement")
+                          ? unactionedReplyCount
+                          : undefined
+                      }
+                      badgeColor="green"
+                    />
+                  ))}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>

@@ -187,6 +187,46 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
   });
 
   log(`Inbound email logged: from=${fromEmail} confidence=${match.confidence} laneId=${laneId ?? "none"} msgId=${providerMessageId}`);
+
+  // Auto-create a follow-up task when the reply is matched to a lane
+  if (laneId && match.confidence !== "unmatched") {
+    try {
+      const lane = await storage.getRecurringLane(laneId);
+      const assignedUserId = lane?.ownerUserId ?? systemUser.id;
+      const carrierLabel = match.carrierId
+        ? (await storage.getCarrier(match.carrierId))?.name ?? fromEmail
+        : fromEmail;
+      const laneLabel = lane
+        ? `${lane.origin}${lane.originState ? `, ${lane.originState}` : ""} → ${lane.destination}${lane.destinationState ? `, ${lane.destinationState}` : ""}`
+        : "Unknown lane";
+
+      // Dedupe: skip if a task already exists for this providerMessageId
+      const dedupeKey = `carrier_reply:${providerMessageId}`;
+      const existingTask = await storage.pool.query(
+        `SELECT id FROM tasks WHERE org_id = $1 AND lane_context->>'dedupeKey' = $2 LIMIT 1`,
+        [orgId, dedupeKey]
+      );
+      if (existingTask.rows.length === 0) {
+        await storage.createTask({
+          title: `Carrier reply: ${carrierLabel} — ${laneLabel}`,
+          notes: bodyPreview ? bodyPreview.slice(0, 500) : null,
+          description: `Inbound carrier reply received from ${fromEmail}. Lane: ${laneLabel}. Review the reply and follow up as needed.`,
+          status: "open",
+          assignedTo: assignedUserId,
+          assignedBy: systemUser.id,
+          orgId,
+          laneContext: { type: "carrier_reply_follow_up", dedupeKey, laneId, carrierId: match.carrierId, fromEmail },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        log(`Auto-task created for carrier reply: carrier=${carrierLabel} lane=${laneLabel} assignedTo=${assignedUserId}`);
+      } else {
+        log(`Auto-task skipped (duplicate): dedupeKey=${dedupeKey}`);
+      }
+    } catch (taskErr) {
+      log(`Auto-task creation failed: ${taskErr instanceof Error ? taskErr.message : String(taskErr)}`);
+    }
+  }
 }
 
 /**
