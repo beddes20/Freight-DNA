@@ -784,6 +784,12 @@ export interface IStorage {
   findDuplicateSuggestion(carrierId: string, suggestionType: string, emailSignalId: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
   getCarrierIntelSuggestionByDedup(carrierId: string, suggestionType: string, emailSignalId: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
   getCarrierIntelSuggestions(carrierId: string, status?: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
+
+  // Carrier Intel Suggestions — accepted preference helpers (Task #195)
+  // Used by ranking and NBA services to consume accepted intelligence.
+  getAcceptedLanePreferencesForCarrier(carrierId: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
+  getAcceptedRegionPreferencesForCarrier(carrierId: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
+  getAcceptedEquipmentCapabilitiesForCarrier(carrierId: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
 }
 
 const pool = new Pool({
@@ -5229,6 +5235,36 @@ export class DatabaseStorage implements IStorage {
       .from(carrierIntelSuggestions)
       .where(and(...conditions))
       .orderBy(desc(carrierIntelSuggestions.createdAt));
+  }
+
+  async getAcceptedLanePreferencesForCarrier(carrierId: string): Promise<CarrierIntelSuggestion[]> {
+    return db.select().from(carrierIntelSuggestions)
+      .where(and(
+        eq(carrierIntelSuggestions.carrierId, carrierId),
+        inArray(carrierIntelSuggestions.status, ['accepted', 'auto_accepted']),
+        eq(carrierIntelSuggestions.suggestionType, 'lane_preference'),
+      ))
+      .orderBy(desc(carrierIntelSuggestions.acceptedAt));
+  }
+
+  async getAcceptedRegionPreferencesForCarrier(carrierId: string): Promise<CarrierIntelSuggestion[]> {
+    return db.select().from(carrierIntelSuggestions)
+      .where(and(
+        eq(carrierIntelSuggestions.carrierId, carrierId),
+        inArray(carrierIntelSuggestions.status, ['accepted', 'auto_accepted']),
+        eq(carrierIntelSuggestions.suggestionType, 'region_preference'),
+      ))
+      .orderBy(desc(carrierIntelSuggestions.acceptedAt));
+  }
+
+  async getAcceptedEquipmentCapabilitiesForCarrier(carrierId: string): Promise<CarrierIntelSuggestion[]> {
+    return db.select().from(carrierIntelSuggestions)
+      .where(and(
+        eq(carrierIntelSuggestions.carrierId, carrierId),
+        inArray(carrierIntelSuggestions.status, ['accepted', 'auto_accepted']),
+        eq(carrierIntelSuggestions.suggestionType, 'equipment_capability'),
+      ))
+      .orderBy(desc(carrierIntelSuggestions.acceptedAt));
   }
 }
 
