@@ -148,6 +148,9 @@ export interface RankedCarrier {
   nearbyLaneLoads: number;             // loads within NEARBY_RADIUS_MILES of both lane endpoints
   statePairLoads: number;              // loads on same state-to-state corridor
   hasAnyCompanyHistory: boolean;       // true if carrier has ANY loads in our TMS data
+  hqCity: string | null;              // carrier's HQ city (from Carrier Hub profile)
+  hqState: string | null;             // carrier's HQ state (from Carrier Hub profile)
+  hqProximityBonus: number;           // points added for HQ proximity to lane endpoints
 }
 
 function normStr(s: string): string {
@@ -484,6 +487,45 @@ export async function rankCarriersForLane(
       // Region catalog is now a secondary signal, not pushed as primary reason
     }
 
+    // ── HQ Proximity bonus ────────────────────────────────────────────────
+    // Carriers whose home base (city/state) is physically close to the lane
+    // endpoints get a geographic affinity boost — they're more likely to have
+    // trucks in the area and be receptive to backhaul opportunities.
+    // Bonuses: within 75mi of BOTH endpoints (+10), one endpoint (+7), same
+    // state only (+4).  These are tie-breakers that cannot change the history
+    // tier assignment but do affect ordering within a tier.
+    let hqProximityBonus = 0;
+    const hqCityRaw = normStr(carrier.city ?? "");
+    const hqStateRaw = normStr(carrier.state ?? "");
+    if (hqCityRaw && hqStateRaw) {
+      const hqCityState = `${hqCityRaw}, ${hqStateRaw}`;
+      const distToOrigin = cityDistanceMiles(hqCityState, normStr(lane.origin));
+      const distToDest   = cityDistanceMiles(hqCityState, normStr(lane.destination));
+      const nearOrigin = distToOrigin !== null && distToOrigin <= NEARBY_RADIUS_MILES;
+      const nearDest   = distToDest   !== null && distToDest   <= NEARBY_RADIUS_MILES;
+
+      if (nearOrigin && nearDest) {
+        hqProximityBonus = 10;
+        reasons.push(`HQ near both endpoints (within 75mi of origin & destination)`);
+      } else if (nearOrigin) {
+        hqProximityBonus = 7;
+        reasons.push(`HQ near origin (within 75mi of ${toTitleCase(lane.origin)})`);
+      } else if (nearDest) {
+        hqProximityBonus = 7;
+        reasons.push(`HQ near destination (within 75mi of ${toTitleCase(lane.destination)})`);
+      } else if (hqStateRaw === laneOriginState || hqStateRaw === laneDestState) {
+        hqProximityBonus = 4;
+        const stateLabel = hqStateRaw === laneOriginState ? "origin" : "destination";
+        reasons.push(`HQ in ${hqStateRaw.toUpperCase()} — same state as ${stateLabel}`);
+      }
+
+      if (hqProximityBonus > 0) {
+        fitScore += hqProximityBonus;
+        // Promote catalog-only carriers so the visibility guard keeps them
+        if (historyMatch === "none") historyMatch = "region";
+      }
+    }
+
     // Capture the pre-decay signal baseline.
     // Used for the visibility guard below: any carrier with at least one positive signal
     // (history, region, equipment) should remain visible even after staleness penalty.
@@ -648,6 +690,9 @@ export async function rankCarriersForLane(
       nearbyLaneLoads: hist?.nearbyLoads ?? 0,
       statePairLoads: hist?.statePairLoads ?? 0,
       hasAnyCompanyHistory: (hist?.loads ?? 0) > 0,
+      hqCity: carrier.city ?? null,
+      hqState: carrier.state ?? null,
+      hqProximityBonus,
     });
   }
 
@@ -804,6 +849,9 @@ export async function rankCarriersForLane(
       nearbyLaneLoads: hist.nearbyLoads,
       statePairLoads: hist.statePairLoads,
       hasAnyCompanyHistory: true,
+      hqCity: null,
+      hqState: null,
+      hqProximityBonus: 0,
     });
   }
 

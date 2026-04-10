@@ -91,6 +91,22 @@ TMS month fields arrive as `"2026 M03"` (year + space + M + zero-padded month). 
 
 All recency scoring and `lastUsedMonth` values must be in canonical `"YYYY-MM"` form.
 
+### HQ Proximity Bonus (additive tie-breaker, added April 2026)
+
+The `carriers.city` and `carriers.state` fields represent each carrier's home-base HQ. After the 5-tier history scoring and equipment/region signals, an additive bonus is applied:
+
+| Condition | Bonus |
+|---|---|
+| HQ within 75 miles of **both** origin and destination | +10 |
+| HQ within 75 miles of **one** endpoint (origin or destination) | +7 |
+| HQ **state** matches origin or destination state (beyond 75 miles) | +4 |
+
+- Bonus is computed via `cityDistanceMiles()` using the same 75-mile radius constant (`NEARBY_RADIUS_MILES`).
+- Catalog-only carriers with an HQ proximity bonus but no other signals are promoted to `historyMatch = "region"` so they survive the visibility guard.
+- TMS-only carriers (no catalog entry) receive `hqCity: null, hqState: null, hqProximityBonus: 0`.
+- `RankedCarrier` exposes `hqCity`, `hqState`, and `hqProximityBonus` for UI display.
+- The bonus reason is appended to `fitReason` (e.g. `"HQ near origin (within 75mi of Phoenix, Az)"`).
+
 ### Ranking Guarantee (5-tier geo-aware system, locked April 2026)
 
 Carriers with confirmed TMS history **must** outrank catalog-region-only carriers. The five tiers and their guaranteed `fitScore` floor bands are:
