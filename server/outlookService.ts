@@ -13,6 +13,7 @@
  */
 
 import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService";
+import { isEmailLiveModeOn } from "./emailGate";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -35,6 +36,11 @@ export interface OutlookSendOptions {
 }
 
 export async function sendOutlookEmail(opts: OutlookSendOptions): Promise<{ ok: boolean; error?: string }> {
+  if (!isEmailLiveModeOn()) {
+    log(`[SUPPRESSED] Live mode is OFF — Outlook email to ${opts.toEmail} ("${opts.subject}") was blocked. Enable Email Live Mode in Admin to send for real.`);
+    return { ok: true };
+  }
+
   if (!outlookEnabled()) {
     return { ok: false, error: "Outlook not configured. Set OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID, and OUTLOOK_CLIENT_SECRET." };
   }

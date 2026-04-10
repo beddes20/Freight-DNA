@@ -19,6 +19,7 @@ import { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType, build
 import { z } from "zod";
 import { inArray, eq } from "drizzle-orm";
 import { sendEmail } from "../emailService";
+import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "../emailGate";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -83,6 +84,10 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     const { enabled } = req.body;
     if (typeof enabled !== "boolean") return res.status(400).json({ error: "enabled must be boolean" });
     await storage.setFeatureFlag(user.organizationId, req.params.key, enabled, user.id);
+    // Keep the in-memory email gate in sync whenever the live-mode flag is toggled.
+    if (req.params.key === EMAIL_LIVE_MODE_FLAG) {
+      setEmailLiveMode(enabled);
+    }
     res.json({ success: true });
   });
 

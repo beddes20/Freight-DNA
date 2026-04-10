@@ -58,6 +58,10 @@ import {
   MapPin,
   Filter,
   ExternalLink,
+  AlertTriangle,
+  CheckCircle2,
+  Send,
+  BellOff,
 } from "lucide-react";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -237,6 +241,11 @@ export default function AdminCarriers() {
     enabled: isAdmin,
   });
 
+  const { data: emailFlagData } = useQuery<{ key: string; enabled: boolean }>({
+    queryKey: ["/api/feature-flags/email_live_mode"],
+    enabled: isAdmin,
+  });
+
   // ── Mutations ─────────────────────────────────────────────────────────────
 
   const createMutation = useMutation({
@@ -319,6 +328,21 @@ export default function AdminCarriers() {
     onError: () => toast({ title: "Failed to toggle flag", variant: "destructive" }),
   });
 
+  const emailFlagMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      apiRequest("PATCH", "/api/feature-flags/email_live_mode", { enabled }),
+    onSuccess: (_, enabled) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/feature-flags/email_live_mode"] });
+      toast({
+        title: enabled ? "Email Sending LIVE" : "Email Sending SUPPRESSED",
+        description: enabled
+          ? "Outbound emails will now reach recipients."
+          : "All outbound emails are now blocked — safe to develop.",
+      });
+    },
+    onError: () => toast({ title: "Failed to update email setting", variant: "destructive" }),
+  });
+
   if (user && !ADMIN_ROLES.includes(user.role)) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 py-24 text-center">
@@ -370,10 +394,76 @@ export default function AdminCarriers() {
   function openEdit(c: Carrier) { setEditTarget(c); setForm(carrierToForm(c)); }
 
   const flagEnabled = flagData?.enabled ?? false;
+  const emailLiveMode = emailFlagData?.enabled ?? false;
   const selectedCount = selected.size;
 
   return (
     <div className="min-h-screen bg-background text-foreground p-6">
+
+      {/* ── Email Sending Control Banner ── */}
+      <div className={`rounded-xl border-2 p-4 mb-6 flex items-start justify-between gap-4 flex-wrap transition-colors ${
+        emailLiveMode
+          ? "border-emerald-500/40 bg-emerald-500/5"
+          : "border-amber-500/50 bg-amber-500/10"
+      }`}>
+        <div className="flex items-start gap-3">
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
+            emailLiveMode ? "bg-emerald-500/15" : "bg-amber-500/15"
+          }`}>
+            {emailLiveMode
+              ? <Send className="w-5 h-5 text-emerald-400" />
+              : <BellOff className="w-5 h-5 text-amber-400" />
+            }
+          </div>
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={`text-sm font-bold ${emailLiveMode ? "text-emerald-400" : "text-amber-400"}`}>
+                Email Sending — {emailLiveMode ? "LIVE" : "SUPPRESSED"}
+              </span>
+              {emailLiveMode
+                ? <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                : <AlertTriangle className="w-4 h-4 text-amber-400" />
+              }
+              <InfoTooltip
+                title="Email Sending Control"
+                text="This is a master kill switch for all outbound emails from the system."
+                items={[
+                  "SUPPRESSED (default) — every email call is blocked and logged. No emails reach anyone — carriers, reps, or scheduled digests.",
+                  "LIVE — all outbound emails are dispatched normally, including carrier outreach, weekly reports, RFP reminders, and 1:1 recaps.",
+                  "This setting persists across server restarts. Always suppress before developing new email features.",
+                ]}
+                side="right"
+                wide
+              />
+            </div>
+            <p className="text-xs text-muted-foreground max-w-xl">
+              {emailLiveMode
+                ? "Outbound emails are active. Carrier outreach, automated reports, and all scheduled digests are reaching recipients."
+                : "All outbound emails are blocked — safe for development and testing. No emails are reaching anyone right now."
+              }
+            </p>
+          </div>
+        </div>
+        <Button
+          size="sm"
+          variant={emailLiveMode ? "outline" : "default"}
+          className={`shrink-0 ${emailLiveMode
+            ? "border-destructive/50 text-destructive hover:bg-destructive/10 text-xs"
+            : "bg-emerald-600 hover:bg-emerald-500 text-white text-xs"
+          }`}
+          onClick={() => emailFlagMutation.mutate(!emailLiveMode)}
+          disabled={emailFlagMutation.isPending}
+          data-testid="btn-email-live-mode-toggle"
+        >
+          {emailFlagMutation.isPending
+            ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" />
+            : emailLiveMode
+              ? <BellOff className="w-3 h-3 mr-1.5" />
+              : <Send className="w-3 h-3 mr-1.5" />
+          }
+          {emailLiveMode ? "Suppress Email Sending" : "Enable Live Email Sending"}
+        </Button>
+      </div>
 
       {/* Header */}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">

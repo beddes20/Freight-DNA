@@ -19,6 +19,7 @@ import { startIntelEmailScheduler } from "./intelEmailScheduler";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
+import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "./emailGate";
 
 const app = express();
 const httpServer = createServer(app);
@@ -136,6 +137,16 @@ async function initStripe() {
 (async () => {
   await runMigrations();
   await storage.deleteEmptyFinancialUploads();
+
+  // Load email live mode flag from DB and initialize the in-memory gate.
+  // Default is OFF (safe) — emails are suppressed until an admin enables live mode.
+  try {
+    const rows = await storage.getEmailLiveModeAcrossOrgs();
+    setEmailLiveMode(rows);
+  } catch {
+    setEmailLiveMode(false);
+  }
+
   setupAuth(app);
   await registerRoutes(httpServer, app);
   await initStripe();

@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
+import { isEmailLiveModeOn } from "./emailGate";
 
 function logMessage(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -38,6 +39,11 @@ export interface EmailOptions {
 }
 
 export async function sendEmail(opts: EmailOptions): Promise<boolean> {
+  if (!isEmailLiveModeOn()) {
+    logMessage(`[SUPPRESSED] Live mode is OFF — email to ${opts.to} ("${opts.subject}") was blocked. Enable Email Live Mode in Admin to send for real.`);
+    return false;
+  }
+
   const fromAddr = process.env.SMTP_FROM || "noreply@freight-dna.com";
   const fromName = process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
   const from = `${fromName} <${fromAddr}>`;

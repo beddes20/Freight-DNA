@@ -584,6 +584,7 @@ export interface IStorage {
   // Lane Carrier Outreach v1 — Feature Flags
   getFeatureFlag(orgId: string, flagKey: string): Promise<boolean>;
   setFeatureFlag(orgId: string, flagKey: string, enabled: boolean, updatedById?: string): Promise<void>;
+  getEmailLiveModeAcrossOrgs(): Promise<boolean>;
 
   // Lane Carrier Outreach v2 — External Import + Sourcing
   importCarriersForLane(
@@ -3773,6 +3774,12 @@ export class DatabaseStorage implements IStorage {
         target: [featureFlags.orgId, featureFlags.flagKey],
         set: { enabled, updatedAt: new Date(), updatedById: updatedById ?? null },
       });
+  }
+
+  async getEmailLiveModeAcrossOrgs(): Promise<boolean> {
+    const rows = await db.select().from(featureFlags)
+      .where(eq(featureFlags.flagKey, "email_live_mode"));
+    return rows.some(r => r.enabled);
   }
 
   // ── Lane Carrier Outreach v1.5 — Assignment + Work Queue ──────────────────
