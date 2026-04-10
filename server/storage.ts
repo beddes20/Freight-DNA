@@ -685,6 +685,34 @@ export interface IStorage {
   upsertCarrierMarketNba(data: InsertCarrierMarketNba): Promise<CarrierMarketNba>;
   getCarrierMarketNbasBySignal(marketSignalId: string): Promise<CarrierMarketNba[]>;
   getCarrierMarketNbasByCarrier(carrierId: string): Promise<CarrierMarketNba[]>;
+  /** Batch fetch NBAs for multiple carriers in a single query (Task #188, avoids N+1). */
+  getCarrierMarketNbasBatch(carrierIds: string[]): Promise<CarrierMarketNba[]>;
+  /**
+   * Batch fetch active market-surge NBAs for multiple carriers, joined with their
+   * market_signals to enable lane equipment-type and origin-region matching.
+   * Returns only demand_surge_capacity / imbalance_outreach NBAs with status
+   * pending/in_progress. Caller should filter by equipment+region using the returned
+   * signalEquipmentType / signalScopeType / signalScopeKey fields.
+   */
+  getActiveCarrierMarketNbasBatch(
+    carrierIds: string[],
+    laneEquipmentType: string | null,
+    laneOriginState: string | null,
+  ): Promise<Array<{ carrierId: string; signalEquipmentType: string | null; signalScopeType: string | null; signalScopeKey: string | null }>>;
+  /**
+   * Fetch the most recent carrier_outreach_log row for each carrierId on a given lane.
+   * Used to populate outreachHistory in CarrierFitExplanation.
+   */
+  getLatestCarrierOutreachLogsForLane(
+    laneId: string,
+    carrierIds: string[],
+  ): Promise<Map<string, { deliveryStatus: string | null; sentAt: Date | null }>>;
+  /**
+   * Return the set of carrier IDs that were SUCCESSFULLY outreached on a given lane
+   * within the specified time window (ms). Used for dedup guard to avoid blocking
+   * on transient failures — only prevents re-contact after confirmed successful sends.
+   */
+  getRecentSuccessfulOutreachCarrierIds(laneId: string, windowMs: number): Promise<Set<string>>;
   getCarrierMarketNbaByDedup(carrierId: string, marketSignalId: string, recommendationType: string): Promise<CarrierMarketNba | undefined>;
   getCarriersByOrgForMarketSignal(orgId: string): Promise<import('@shared/schema').Carrier[]>;
   getCarrierClaimedLanesByCarrierId(carrierId: string): Promise<import('@shared/schema').CarrierClaimedLane[]>;
@@ -4564,6 +4592,112 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(carrierMarketNbas)
       .where(eq(carrierMarketNbas.carrierId, carrierId))
       .orderBy(desc(carrierMarketNbas.updatedAt));
+  }
+
+  async getCarrierMarketNbasBatch(carrierIds: string[]): Promise<CarrierMarketNba[]> {
+    if (carrierIds.length === 0) return [];
+    return db.select().from(carrierMarketNbas)
+      .where(inArray(carrierMarketNbas.carrierId, carrierIds))
+      .orderBy(desc(carrierMarketNbas.updatedAt));
+  }
+
+  async getActiveCarrierMarketNbasBatch(
+    carrierIds: string[],
+    laneEquipmentType: string | null,
+    laneOriginState: string | null,
+  ): Promise<Array<{ carrierId: string; signalEquipmentType: string | null; signalScopeType: string | null; signalScopeKey: string | null }>> {
+    if (carrierIds.length === 0) return [];
+    const MARKET_SURGE_TYPES = ["demand_surge_capacity", "imbalance_outreach"];
+    const ACTIVE_STATUSES = ["pending", "in_progress"];
+    // Single join query: carrier_market_nbas → market_signals for equipment+region filtering
+    const rows = await db
+      .select({
+        carrierId: carrierMarketNbas.carrierId,
+        signalEquipmentType: marketSignals.equipmentType,
+        signalScopeType: marketSignals.scopeType,
+        signalScopeKey: marketSignals.scopeKey,
+      })
+      .from(carrierMarketNbas)
+      .leftJoin(marketSignals, eq(carrierMarketNbas.marketSignalId, marketSignals.id))
+      .where(and(
+        inArray(carrierMarketNbas.carrierId, carrierIds),
+        inArray(carrierMarketNbas.recommendationType, MARKET_SURGE_TYPES),
+        inArray(carrierMarketNbas.status, ACTIVE_STATUSES),
+      ));
+    // Application-level filter: match on equipment type (if lane has one)
+    let filtered = laneEquipmentType
+      ? rows.filter(r => !r.signalEquipmentType || r.signalEquipmentType.toLowerCase().trim() === laneEquipmentType.toLowerCase().trim())
+      : rows;
+    // Application-level filter: match on origin region (if lane has a state and signal has scope)
+    if (laneOriginState) {
+      const originSt = laneOriginState.toUpperCase().trim();
+      filtered = filtered.filter(r => {
+        if (!r.signalScopeType || r.signalScopeType === "national") return true;
+        if (!r.signalScopeKey) return true;
+        // For region/equipment_region: scopeKey should include the state code
+        if (r.signalScopeType === "region" || r.signalScopeType === "equipment_region") {
+          return r.signalScopeKey.toUpperCase().includes(originSt);
+        }
+        // For corridor: scopeKey format "IL-TX" — origin state appears in corridor key
+        if (r.signalScopeType === "corridor") {
+          return r.signalScopeKey.toUpperCase().includes(originSt);
+        }
+        return true;
+      });
+    }
+    return filtered;
+  }
+
+  async getLatestCarrierOutreachLogsForLane(
+    laneId: string,
+    carrierIds: string[],
+  ): Promise<Map<string, { deliveryStatus: string | null; sentAt: Date | null }>> {
+    if (carrierIds.length === 0) return new Map();
+    // Fetch outreach logs for this lane, look for any log that includes the carrierId
+    const logs = await db
+      .select({
+        carrierIds: carrierOutreachLogs.carrierIds,
+        deliveryStatus: carrierOutreachLogs.deliveryStatus,
+        sentAt: carrierOutreachLogs.sentAt,
+      })
+      .from(carrierOutreachLogs)
+      .where(eq(carrierOutreachLogs.laneId, laneId))
+      .orderBy(desc(carrierOutreachLogs.sentAt));
+    // Build a map: carrierId → most recent log (first match wins due to desc order)
+    const result = new Map<string, { deliveryStatus: string | null; sentAt: Date | null }>();
+    for (const log of logs) {
+      const ids = log.carrierIds ?? [];
+      for (const cid of ids) {
+        if (carrierIds.includes(cid) && !result.has(cid)) {
+          result.set(cid, { deliveryStatus: log.deliveryStatus, sentAt: log.sentAt });
+        }
+      }
+    }
+    return result;
+  }
+
+  async getRecentSuccessfulOutreachCarrierIds(laneId: string, windowMs: number): Promise<Set<string>> {
+    const cutoff = new Date(Date.now() - windowMs);
+    // Query outreach logs where deliveryStatus indicates confirmed delivery (not draft/failed)
+    const logs = await db
+      .select({ carrierIds: carrierOutreachLogs.carrierIds })
+      .from(carrierOutreachLogs)
+      .where(and(
+        eq(carrierOutreachLogs.laneId, laneId),
+        or(
+          eq(carrierOutreachLogs.deliveryStatus, "sent"),
+          eq(carrierOutreachLogs.deliveryStatus, "delivered"),
+          eq(carrierOutreachLogs.deliveryStatus, "opened"),
+        ),
+        gte(carrierOutreachLogs.sentAt, cutoff),
+      ));
+    const result = new Set<string>();
+    for (const log of logs) {
+      for (const cid of log.carrierIds ?? []) {
+        result.add(cid);
+      }
+    }
+    return result;
   }
 
   async getCarrierMarketNbaByDedup(

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, decimal, jsonb, boolean, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, decimal, jsonb, boolean, timestamp, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -1443,7 +1443,24 @@ export const carrierOutreachLogs = pgTable("carrier_outreach_logs", {
   matchedLaneId: varchar("matched_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
   matchConfidence: varchar("match_confidence"),
   // exact | alternate_contact | ambiguous | unmatched
-});
+}, (table) => ({
+  // Index for HF dedup guard: efficient lookup of recent successful outreach per lane
+  // Filters: WHERE lane_id = ? AND delivery_status IN ('sent','delivered','opened') AND sent_at > ?
+  laneDeliveryStatusIdx: index("carrier_outreach_logs_lane_delivery_idx").on(
+    table.laneId,
+    table.deliveryStatus,
+    table.sentAt,
+  ),
+  // Index for outreach history queries: WHERE lane_id = ? ORDER BY sent_at DESC
+  // Note: carrierIds is a text[] array column so a scalar (laneId, carrierId) B-tree index is not
+  // applicable here. These two indexes together cover all per-lane lookup patterns.
+  // The lane_carrier_interest table has a unique scalar (laneId, carrierId) index that covers
+  // per-carrier history when a resolved carrierId is available.
+  laneSentAtIdx: index("carrier_outreach_logs_lane_sent_at_idx").on(
+    table.laneId,
+    table.sentAt,
+  ),
+}));
 export const insertCarrierOutreachLogSchema = createInsertSchema(carrierOutreachLogs).omit({ id: true, timestamp: true });
 export type InsertCarrierOutreachLog = z.infer<typeof insertCarrierOutreachLogSchema>;
 export type CarrierOutreachLog = typeof carrierOutreachLogs.$inferSelect;

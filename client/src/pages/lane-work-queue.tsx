@@ -563,7 +563,9 @@ function LaneRow({
   const contacted = item.lane.carriersContactedCount ?? 0;
   const progressPct = Math.min(100, (contacted / completionThreshold) * 100);
   const loadsNum = avgLoadsNum(item.lane.avgLoadsPerWeek);
-  const isHighFreq = loadsNum >= HIGH_FREQ_THRESHOLD;
+  // Prefer server-stamped isHighFrequency (Task #188) with avgLoadsPerWeek as fallback
+  const isHighFreq = (item.lane as { isHighFrequency?: boolean }).isHighFrequency
+    ?? (loadsNum >= HIGH_FREQ_THRESHOLD);
 
   const hasHotReply = (item.replySummary?.hotCount ?? 0) > 0;
   const replyNeedsAction = item.replySummary?.needsAction ?? false;
@@ -603,6 +605,18 @@ function LaneRow({
             <span className="text-sm font-semibold text-foreground">{laneLabel(item.lane)}</span>
             {/* Frequency badge — prominent, always first */}
             <FrequencyBadge val={item.lane.avgLoadsPerWeek} />
+            {/* High-frequency lane badge (Task #188): shown when ≥2 loads/week */}
+            {isHighFreq && (
+              <Badge
+                variant="outline"
+                className="text-[10px] py-0 px-1.5 border-orange-500/50 text-orange-400 bg-orange-500/10 gap-0.5 font-semibold"
+                data-testid={`badge-hf-lane-${item.lane.id}`}
+                title="High-frequency lane: 2+ loads/week — enhanced carrier ranking and bulk outreach enabled"
+              >
+                <Zap className="w-2.5 h-2.5" />
+                HF Lane
+              </Badge>
+            )}
             {item.lane.isManual && (
               <Badge
                 variant="outline"

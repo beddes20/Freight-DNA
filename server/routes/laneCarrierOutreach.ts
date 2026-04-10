@@ -10,7 +10,7 @@ import multer from "multer";
 import XLSX from "xlsx";
 import { storage, db } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
-import { rankCarriersForLane } from "../carrierRankingService";
+import { rankCarriersForLane, isHighFrequencyLane, HIGH_FREQUENCY_CONFIG } from "../carrierRankingService";
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
 import { getLaneCoverageProfile, shouldUseIncumbentFirstFlow } from "../laneCoverageService";
@@ -664,8 +664,28 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           .filter((n): n is string => !!n && n.trim() !== "")
       )].sort((a, b) => a.localeCompare(b));
 
+      // Stamp isHighFrequency on each lane item so the UI can show the HF badge.
+      // Loads org uploads once then uses the canonical isHighFrequencyLane(lane, uploads)
+      // which checks both avgLoadsPerWeek (fast) and TMS lookback (accurate when avg is stale).
+      const orgUploads = await storage.getFinancialUploadsForOrg(user.organizationId);
+      const stampHf = (items: typeof queue.unassigned) =>
+        items.map(item => ({
+          ...item,
+          lane: {
+            ...item.lane,
+            isHighFrequency: isHighFrequencyLane(item.lane, orgUploads),
+          },
+        }));
+
       console.log(`[work-queue] org=${user.organizationId} scope=${scopeLabel} buckets=${JSON.stringify(totals)} requestedBy=${user.id}(${user.role})`);
-      res.json({ ...queue, scopeLabel, customers });
+      res.json({
+        unassigned: stampHf(queue.unassigned),
+        noContactable: stampHf(queue.noContactable),
+        assignedUntouched: stampHf(queue.assignedUntouched),
+        inProgress: stampHf(queue.inProgress),
+        scopeLabel,
+        customers,
+      });
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Failed to load work queue" });
     }
@@ -1054,6 +1074,10 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         // Non-fatal: coverage profile is optional
       }
 
+      // Load org uploads here — passed to isHighFrequencyLane for accurate HF detection
+      // (same uploads are used internally by rankCarriersForLane for history extraction)
+      const suggUploads = await storage.getFinancialUploadsForOrg(user.organizationId);
+
       let ranked = await rankCarriersForLane(lane, storage, bench, coverageProfile, coverageCarriers);
 
       // ── Query parameter parsing ──────────────────────────────────────────
@@ -1237,9 +1261,14 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
             equipmentMatch: c.equipmentMatch,
             isIncumbent: c.isIncumbent,
             suppressionReasons: c.suppressionReasons,
+            hasMarketNbaBoost: c.hasMarketNbaBoost,
           },
+          carrierFitExplanation: c.carrierFitExplanation ?? null,
         };
       });
+
+      // Use canonical HF detection with uploads for accuracy (consistent with ranking path)
+      const isHfLane = isHighFrequencyLane(lane, suggUploads);
 
       res.json({
         carriers: carriersWithWhy,
@@ -1247,6 +1276,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         page,
         pageSize: pageSize === 0 ? totalCount : pageSize,
         totalPages: pageSize === 0 ? 1 : Math.ceil(totalCount / pageSize),
+        isHighFrequencyLane: isHfLane,
+        highFrequencyConfig: isHfLane ? HIGH_FREQUENCY_CONFIG : undefined,
       });
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Failed to rank carriers" });
@@ -1793,14 +1824,37 @@ Rules for suggestions:
       }
     }
 
+    // ── Dedup guard ──────────────────────────────────────────────
+    // For high-frequency lanes, block re-sending to a carrier that was already
+    // SUCCESSFULLY contacted on this lane within outreachDedupWindowHours.
+    // Uses carrierOutreachLogs (deliveryStatus=sent) not bench timestamps — ensures
+    // transient provider failures do NOT trigger a 48h block.
+    // Non-HF lanes skip this check to preserve existing behavior.
+    const sendUploads = await storage.getFinancialUploadsForOrg(user.organizationId);
+    const isHfLane = isHighFrequencyLane(lane, sendUploads);
+    const dedupWindowMs = HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours * 60 * 60 * 1000;
+    const dedupBlockedCarrierIds = new Set<string>();
+
+    if (isHfLane) {
+      // Fetch carrier IDs that were SUCCESSFULLY contacted within the dedup window
+      const successfulIds = await storage.getRecentSuccessfulOutreachCarrierIds(
+        req.params.laneId,
+        dedupWindowMs,
+      );
+      for (const cid of successfulIds) {
+        dedupBlockedCarrierIds.add(cid);
+      }
+    }
+
     // Build per-carrier recipients list by resolving email addresses
     type RecipientResult = {
       carrierId: string | null;
       carrierName: string;
       email: string | null;
-      status: "sent" | "failed" | "no_email";
+      status: "sent" | "failed" | "no_email" | "dedup_skipped";
       error?: string;
       internetMessageId?: string;
+      dedupBlocked?: boolean;
     };
 
     const results: RecipientResult[] = [];
@@ -1818,6 +1872,22 @@ Rules for suggestions:
     const useOutlook = outlookEnabled() && !!outlookFromEmail;
 
     for (const draft of emailDrafts) {
+      // ── Dedup check: skip carriers successfully contacted within the dedup window ─────
+      // Only triggers for HF lanes; only blocks on confirmed successful sends (not failures).
+      if (isHfLane && dedupBlockedCarrierIds.size > 0 && draft.carrierId) {
+        if (dedupBlockedCarrierIds.has(draft.carrierId)) {
+          results.push({
+            carrierId: draft.carrierId,
+            carrierName: draft.carrierName,
+            email: null,
+            status: "dedup_skipped",
+            error: `Carrier already successfully contacted within ${HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours}h dedup window`,
+            dedupBlocked: true,
+          });
+          continue;
+        }
+      }
+
       // Resolve email: captured > catalog primary > catalog backup
       let email: string | null = null;
       const key = draft.carrierId ?? draft.carrierName;
@@ -1878,57 +1948,57 @@ Rules for suggestions:
       }
     }
 
+    const dedupSkippedCount = results.filter(r => r.status === "dedup_skipped").length;
+    const effectiveTotalCount = emailDrafts.length - dedupSkippedCount;
     const overallStatus =
-      sentCount === emailDrafts.length ? "sent" :
+      sentCount === 0 && effectiveTotalCount === 0 ? "sent" : // all were dedup-skipped
+      sentCount === effectiveTotalCount ? "sent" :
       sentCount === 0 ? "failed" :
       "partial";
 
-    // Collect all internetMessageIds returned across recipients for reply-thread matching.
-    // We store the first ID on threadId (for simple single-recipient cases) and all IDs
-    // are preserved per-recipient in the recipients JSONB so multi-carrier batches can
-    // still be matched when any recipient replies.
-    const allInternetMessageIds = results
-      .map(r => r.internetMessageId)
-      .filter((id): id is string => !!id);
-    const primaryThreadId = allInternetMessageIds[0] ?? null;
-
-    // Create outreach log with send-tracking fields
+    // Create one outreach log per carrier (bulk sends emit N per-carrier records so
+    // each carrier's delivery status is independently queryable in the audit trail).
     const now = new Date();
     const fromAddr = process.env.SMTP_FROM || process.env.OUTLOOK_FROM_EMAIL || "noreply@freight-dna.com";
-    const toAddresses = results.filter(r => r.email).map(r => r.email).join(", ");
-    const primarySubject = emailDrafts[0]?.subject ?? null;
-    const bodySnippet = emailDrafts[0]?.body
-      ? emailDrafts[0].body.replace(/<[^>]+>/g, "").slice(0, 255)
-      : null;
-    const log = await storage.createCarrierOutreachLog({
-      orgId: user.organizationId,
-      laneId: req.params.laneId,
-      companyId: lane.companyId ?? null,
-      carrierIds: emailDrafts.map(d => d.carrierId).filter((id): id is string => id !== null),
-      carrierNames: emailDrafts.map(d => d.carrierName),
-      actorUserId: user.id,
-      ownerUserId: lane.ownerUserId ?? null,
-      overseerUserId: lane.overseerUserId ?? null,
-      outreachMode,
-      emailDrafts: JSON.parse(JSON.stringify(emailDrafts)),
-      sentAt: sentCount > 0 ? now : null,
-      deliveryStatus: overallStatus,
-      failureReason: failedCount > 0 ? results.filter(r => r.error).map(r => `${r.carrierName}: ${r.error}`).join("; ") : null,
-      recipients: JSON.parse(JSON.stringify(results)),
-      // threadId = first sent message ID (fast lookup for single-recipient case).
-      // Multi-recipient matching uses recipients JSONB lookup in storage.
-      threadId: primaryThreadId,
-      direction: "outbound",
-      fromEmail: fromAddr,
-      toEmail: toAddresses || null,
-      subject: primarySubject,
-      bodyPreview: bodySnippet,
-    });
+    const logs: Awaited<ReturnType<typeof storage.createCarrierOutreachLog>>[] = [];
+    for (let i = 0; i < emailDrafts.length; i++) {
+      const draft = emailDrafts[i];
+      const result = results[i];
+      if (!result) continue;
+      const perCarrierStatus = result.status === "sent" ? "sent" :
+        result.status === "dedup_skipped" ? "dedup_skipped" :
+        result.status === "failed" ? "failed" : "draft";
+      const internetMsgId = (result as { internetMessageId?: string }).internetMessageId ?? null;
+      const log = await storage.createCarrierOutreachLog({
+        orgId: user.organizationId,
+        laneId: req.params.laneId,
+        companyId: lane.companyId ?? null,
+        carrierIds: draft.carrierId ? [draft.carrierId] : [],
+        carrierNames: [draft.carrierName],
+        actorUserId: user.id,
+        ownerUserId: lane.ownerUserId ?? null,
+        overseerUserId: lane.overseerUserId ?? null,
+        outreachMode,
+        emailDrafts: [JSON.parse(JSON.stringify(draft))],
+        sentAt: result.status === "sent" ? now : null,
+        deliveryStatus: perCarrierStatus,
+        failureReason: result.error ?? null,
+        recipients: [JSON.parse(JSON.stringify(result))],
+        threadId: internetMsgId,
+        direction: "outbound",
+        fromEmail: fromAddr,
+        toEmail: result.email ?? null,
+        subject: draft.subject ?? null,
+        bodyPreview: draft.body ? draft.body.replace(/<[^>]+>/g, "").slice(0, 255) : null,
+      });
+      logs.push(log);
+    }
 
     // Upsert bench entries for carriers that were contacted (sent or no_email still = attempt)
     const sentAt = now.toISOString();
     for (const r of results) {
       if (r.status === "no_email") continue; // don't mark as contacted if no email existed
+      if (r.status === "dedup_skipped") continue; // dedup-blocked carriers are not re-marked
       await storage.upsertLaneCarrierInterest({
         laneId: req.params.laneId,
         carrierId: r.carrierId,
@@ -1962,7 +2032,7 @@ Rules for suggestions:
       resolved = true;
     }
 
-    res.json({ log, results, sentCount, failedCount, carriersContactedCount: newCount, resolved, overallStatus });
+    res.json({ logs, results, sentCount, failedCount, dedupSkippedCount, carriersContactedCount: newCount, resolved, overallStatus });
   });
 
   // ── Outreach Log & Card Completion ────────────────────────────────────────

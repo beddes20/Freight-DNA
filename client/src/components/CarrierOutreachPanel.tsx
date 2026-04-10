@@ -106,6 +106,20 @@ interface WhyThisCarrier {
   priorPositiveOutreach: boolean;
   recentlyContacted: boolean;
   recentlyContactedNote?: string;
+  hasMarketNbaBoost?: boolean;
+}
+
+interface CarrierFitExplanation {
+  exactLaneHistory: { runCount: number; lastRunDate: string | null };
+  regionalHistory: { runCount: number };
+  customerHistory: { hasHistory: boolean; runCount: number };
+  outreachHistory: { lastStatus: string | null; lastDate: string | null };
+  fitSignals: {
+    regionEquipmentFitScore: number;
+    laneHistoryScore: number;
+    customerHistoryScore: number;
+    hasMarketNbaBoost: boolean;
+  };
 }
 
 interface RankedCarrier {
@@ -126,7 +140,9 @@ interface RankedCarrier {
   sourceChannel: string | null;
   suppressionReasons: string[];
   customerHistoryLoads: number;
+  hasMarketNbaBoost?: boolean;
   whyThisCarrier?: WhyThisCarrier;
+  carrierFitExplanation?: CarrierFitExplanation | null;
 }
 
 interface SuggestionsResponse {
@@ -135,6 +151,13 @@ interface SuggestionsResponse {
   page: number;
   pageSize: number;
   totalPages: number;
+  isHighFrequencyLane?: boolean;
+  highFrequencyConfig?: {
+    minLoadsPerWeek: number;
+    frequencyLookbackDays: number;
+    maxCandidates: number;
+    outreachDedupWindowHours: number;
+  };
 }
 
 interface CoverageProfile {
@@ -253,7 +276,7 @@ interface OutreachLog {
   replySnippet: string | null;
 }
 
-type PerDraftSendStatus = "idle" | "sending" | "sent" | "failed" | "no_email";
+type PerDraftSendStatus = "idle" | "sending" | "sent" | "failed" | "no_email" | "dedup_skipped";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -336,7 +359,7 @@ export function CarrierOutreachPanel({
   const [activeOnly, setActiveOnly] = useState(false);
   const [excludeServiceFlags, setExcludeServiceFlags] = useState(false);
   // New: filter/sort/pagination state
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(25);
   const [currentPage, setCurrentPage] = useState(1);
   const [sortOption, setSortOption] = useState("recommended");
   const [filterExactOnly, setFilterExactOnly] = useState(false);
@@ -637,6 +660,7 @@ export function CarrierOutreachPanel({
   const rankedCarriers = suggestionsData?.carriers ?? [];
   const totalCount = suggestionsData?.totalCount ?? 0;
   const totalPages = suggestionsData?.totalPages ?? 1;
+  const isHighFrequencyLane = suggestionsData?.isHighFrequencyLane ?? false;
 
   // Apply remaining frontend-only filters (service flags — not in server params)
   const filteredCarriers = rankedCarriers.filter(c => {
@@ -1460,6 +1484,16 @@ export function CarrierOutreachPanel({
                       <button onClick={selectAllFiltered} className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors" data-testid="btn-select-all-filtered">
                         All
                       </button>
+                      {isHighFrequencyLane && (
+                        <button
+                          onClick={() => selectTopN(30)}
+                          className="text-[10px] px-2 py-0.5 rounded-full border border-orange-500/40 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-colors font-medium"
+                          data-testid="btn-select-top-30-hf"
+                          title="High-frequency lane: select top 30 carriers for bulk outreach"
+                        >
+                          Top 30 (HF)
+                        </button>
+                      )}
                       <button onClick={() => selectTopN(20)} className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors" data-testid="btn-select-top-20">
                         Top 20
                       </button>
@@ -1561,6 +1595,7 @@ export function CarrierOutreachPanel({
                       if (c.primaryEmail || c.backupEmail || capturedEmails[key]) signals.push("Has email");
                       if (c.whyThisCarrier?.claimedLaneMatch) signals.push("Claimed lane");
                       if (c.whyThisCarrier?.priorPositiveOutreach) signals.push("Prior positive");
+                      if (c.hasMarketNbaBoost || c.whyThisCarrier?.hasMarketNbaBoost) signals.push("Market signal ↑");
 
                       return (
                         <div key={key} className="flex flex-col">
@@ -1601,6 +1636,37 @@ export function CarrierOutreachPanel({
                                     </span>
                                   )}
                                 </div>
+                                {/* Why this carrier? — HF lane structured explanation */}
+                                {c.carrierFitExplanation && (
+                                  <div className="mt-1 flex flex-col gap-0.5" data-testid={`carrier-fit-explanation-${idx}`}>
+                                    {c.carrierFitExplanation.exactLaneHistory.runCount > 0 && (
+                                      <span className="flex items-center gap-1 text-[9px] text-emerald-400/80">
+                                        <TrendingUp className="w-2.5 h-2.5 shrink-0" />
+                                        {c.carrierFitExplanation.exactLaneHistory.runCount} exact run{c.carrierFitExplanation.exactLaneHistory.runCount !== 1 ? "s" : ""}
+                                        {c.carrierFitExplanation.exactLaneHistory.lastRunDate && ` · last ${c.carrierFitExplanation.exactLaneHistory.lastRunDate}`}
+                                      </span>
+                                    )}
+                                    {c.carrierFitExplanation.customerHistory.hasHistory && (
+                                      <span className="flex items-center gap-1 text-[9px] text-blue-400/80">
+                                        <ShieldCheck className="w-2.5 h-2.5 shrink-0" />
+                                        Customer relationship · {c.carrierFitExplanation.customerHistory.runCount} load{c.carrierFitExplanation.customerHistory.runCount !== 1 ? "s" : ""}
+                                      </span>
+                                    )}
+                                    {c.carrierFitExplanation.outreachHistory.lastStatus && (
+                                      <span className="flex items-center gap-1 text-[9px] text-amber-400/60">
+                                        <MailOpen className="w-2.5 h-2.5 shrink-0" />
+                                        Last contact: {c.carrierFitExplanation.outreachHistory.lastStatus}
+                                        {c.carrierFitExplanation.outreachHistory.lastDate && ` · ${new Date(c.carrierFitExplanation.outreachHistory.lastDate).toLocaleDateString()}`}
+                                      </span>
+                                    )}
+                                    {c.carrierFitExplanation.fitSignals.hasMarketNbaBoost && (
+                                      <span className="flex items-center gap-1 text-[9px] text-yellow-400/80">
+                                        <Star className="w-2.5 h-2.5 shrink-0" />
+                                        Market demand signal boost
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                                 {/* Source / prospect badges */}
                                 {(c.isNewProspect || (c.sourceChannel && SOURCE_LABELS[c.sourceChannel])) && (
                                   <div className="flex flex-wrap gap-1 mt-1">
@@ -2200,6 +2266,7 @@ export function CarrierOutreachPanel({
                           status === "sent" ? "bg-emerald-500/5 border-emerald-500/20" :
                           status === "failed" ? "bg-red-500/5 border-red-500/20" :
                           status === "no_email" ? "bg-orange-500/5 border-orange-500/20" :
+                          status === "dedup_skipped" ? "bg-yellow-500/5 border-yellow-500/20" :
                           "bg-muted/10 border-border"
                         }`}>
                           <div className="flex items-center justify-between mb-2">
@@ -2211,6 +2278,7 @@ export function CarrierOutreachPanel({
                               {status === "sent" && <span className="text-[9px] text-emerald-400 flex items-center gap-0.5" data-testid={`draft-status-sent-${i}`}><CheckCircle2 className="w-2.5 h-2.5" /> Sent</span>}
                               {status === "failed" && <span className="text-[9px] text-red-400 flex items-center gap-0.5" data-testid={`draft-status-failed-${i}`}><XCircle className="w-2.5 h-2.5" /> Failed</span>}
                               {status === "no_email" && <span className="text-[9px] text-orange-400 flex items-center gap-0.5" data-testid={`draft-status-no-email-${i}`}><AlertCircle className="w-2.5 h-2.5" /> No email</span>}
+                              {status === "dedup_skipped" && <span className="text-[9px] text-yellow-400 flex items-center gap-0.5" data-testid={`draft-status-dedup-skipped-${i}`}><AlertCircle className="w-2.5 h-2.5" /> Already contacted (48h)</span>}
                               {status === "sending" && <span className="text-[9px] text-blue-400 flex items-center gap-0.5" data-testid={`draft-status-sending-${i}`}><Loader2 className="w-2.5 h-2.5 animate-spin" /> Sending</span>}
                             </div>
                           </div>

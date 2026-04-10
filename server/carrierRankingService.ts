@@ -11,6 +11,7 @@
  * Returns a ranked list with a short human-readable reason per carrier.
  *
  * V1 uses rule-based scoring; AI enrichment is additive.
+ * V2 adds high-frequency lane ranking path.
  */
 
 import type { RecurringLane, Carrier, FinancialUpload, LaneCarrierInterest, LaneCoverageProfile, LaneCoverageProfileCarrier } from "@shared/schema";
@@ -20,6 +21,94 @@ import { cityDistanceMiles } from "./cityCoordinates";
 
 /** Carriers whose historical origin AND destination are within this radius count as "nearby". */
 const NEARBY_RADIUS_MILES = 75;
+
+// ── High-Frequency Lane Configuration ─────────────────────────────
+
+/**
+ * Central configuration for high-frequency lane detection and ranking.
+ * minLoadsPerWeek: lanes averaging at least this many loads/week are "high-frequency".
+ * frequencyLookbackDays: how far back to check historical loads when detecting frequency.
+ * maxCandidates: hard cap on ranked set size — prevents unbounded iteration.
+ * outreachDedupWindowHours: re-sending to same carrier within this window is blocked/flagged.
+ */
+export const HIGH_FREQUENCY_CONFIG = {
+  minLoadsPerWeek: 2,           // ≥ 2 loads/week = high-frequency lane
+  frequencyLookbackDays: 30,    // 30-day lookback window for detection
+  maxCandidates: 30,            // cap on total candidates ranked for any lane
+  outreachDedupWindowHours: 48, // re-send dedup guard: 48 hours
+} as const;
+
+/**
+ * High-frequency scoring floors for exact-lane history.
+ * These scores are HIGHER than the standard path to ensure exact-lane carriers
+ * always rank at the top for high-frequency lanes.
+ *
+ * Tier gap between exact (≥10: 95) and best regional-only (max ~70 with all bonuses)
+ * guarantees exact-lane carriers always outscore pure regional carriers.
+ */
+export const HF_EXACT_FLOOR_HIGH   = 95; // ≥10 exact-lane runs
+export const HF_EXACT_FLOOR_MED    = 85; // ≥5  exact-lane runs
+export const HF_EXACT_FLOOR_ANY    = 72; // ≥1  exact-lane run (always above regional ceiling)
+const HF_MARKET_NBA_BOOST   = 8;  // score boost when carrier has matching market NBA
+
+/**
+ * Canonical HF detector — determines whether a lane qualifies as high-frequency.
+ *
+ * Uses two complementary signals (either is sufficient):
+ *   1. lane.avgLoadsPerWeek — stored value pre-computed by the capacity engine (fast path)
+ *   2. TMS upload scan — counts exact-lane rows within frequencyLookbackDays from the
+ *      most recent uploads, divided by weeks-in-window (accurate when avg is stale/null)
+ *
+ * Pass `uploads` wherever upload data is already available to enable the historical path.
+ * When omitted, the function falls back to avgLoadsPerWeek only (safe default).
+ */
+export function isHighFrequencyLane(
+  lane: Pick<RecurringLane, "avgLoadsPerWeek" | "origin" | "destination">,
+  uploads?: FinancialUpload[],
+): boolean {
+  const minLoads = HIGH_FREQUENCY_CONFIG.minLoadsPerWeek;
+  // Fast path: stored avgLoadsPerWeek
+  const val = lane.avgLoadsPerWeek;
+  if (val !== null && val !== undefined) {
+    const n = typeof val === "number" ? val : parseFloat(String(val));
+    if (!isNaN(n) && n >= minLoads) return true;
+  }
+  // Historical path: scan TMS rows within the lookback window
+  if (uploads && uploads.length > 0) {
+    return computeHfFromUploads(uploads, lane as RecurringLane);
+  }
+  return false;
+}
+
+// ── Carrier Fit Explanation ───────────────────────────────
+
+/**
+ * Structured explanation of why a carrier is recommended for a lane.
+ * Returned as part of the ranked carrier entry for high-frequency lanes.
+ */
+export interface CarrierFitExplanation {
+  exactLaneHistory: {
+    runCount: number;
+    lastRunDate: string | null;
+  };
+  regionalHistory: {
+    runCount: number; // nearby + state-pair loads
+  };
+  customerHistory: {
+    hasHistory: boolean;
+    runCount: number;
+  };
+  outreachHistory: {
+    lastStatus: string | null;
+    lastDate: string | null;
+  };
+  fitSignals: {
+    regionEquipmentFitScore: number;
+    laneHistoryScore: number;
+    customerHistoryScore: number;
+    hasMarketNbaBoost: boolean;
+  };
+}
 
 /**
  * Raw TMS row from financial upload JSONB.
@@ -151,6 +240,9 @@ export interface RankedCarrier {
   hqCity: string | null;              // carrier's HQ city (from Carrier Hub profile)
   hqState: string | null;             // carrier's HQ state (from Carrier Hub profile)
   hqProximityBonus: number;           // points added for HQ proximity to lane endpoints
+  // ── High-frequency lane fields ────────────────────────────────
+  hasMarketNbaBoost: boolean;         // true when carrier received +8 boost from market NBA match
+  carrierFitExplanation?: CarrierFitExplanation; // structured explanation (populated for HF lanes)
 }
 
 function normStr(s: string): string {
@@ -693,6 +785,7 @@ export async function rankCarriersForLane(
       hqCity: carrier.city ?? null,
       hqState: carrier.state ?? null,
       hqProximityBonus,
+      hasMarketNbaBoost: false, // set during high-frequency post-processing
     });
   }
 
@@ -852,6 +945,7 @@ export async function rankCarriersForLane(
       hqCity: null,
       hqState: null,
       hqProximityBonus: 0,
+      hasMarketNbaBoost: false, // set during high-frequency post-processing
     });
   }
 
@@ -931,7 +1025,180 @@ Respond ONLY with JSON array: [{"name": "<carrier name>", "reason": "<1 sentence
     // Silent fallback to rule-based ranking
   }
 
+  // ── High-Frequency Post-Processing ────────────────────────────
+  // Uses the canonical isHighFrequencyLane(lane, uploads) which checks both
+  // avgLoadsPerWeek (fast) and TMS upload history (accurate when avg is stale).
+  if (isHighFrequencyLane(lane, uploads)) {
+    const hfSort = (a: RankedCarrier, b: RankedCarrier) => {
+      const scoreDiff = b.fitScore - a.fitScore;
+      if (scoreDiff !== 0) return scoreDiff;
+      const matchRank: Record<string, number> = { exact: 0, nearby: 1, state_pair: 2, region: 3, none: 4 };
+      return (matchRank[a.historyMatch] ?? 4) - (matchRank[b.historyMatch] ?? 4);
+    };
+
+    // Step 1: Apply HF exact-lane floor scores + service quality adjustments.
+    // Service quality (on-time %, margin) applies within the HF path to differentiate
+    // carriers that meet the frequency floor but differ in execution quality.
+    for (const c of ranked) {
+      if (c.historyMatch === "exact" && c.exactLaneLoads > 0) {
+        let hfFloor: number;
+        if (c.exactLaneLoads >= 10) hfFloor = HF_EXACT_FLOOR_HIGH;
+        else if (c.exactLaneLoads >= 5) hfFloor = HF_EXACT_FLOOR_MED;
+        else hfFloor = HF_EXACT_FLOOR_ANY;
+        if (c.fitScore < hfFloor) {
+          c.fitScore = hfFloor;
+        }
+        // Service quality micro-adjustments for HF lanes (applied within the floor-raised range)
+        if (c.estimatedOnTimePct !== null) {
+          if (c.estimatedOnTimePct >= 95) c.fitScore = Math.min(100, c.fitScore + 3);
+          else if (c.estimatedOnTimePct >= 85) c.fitScore = Math.min(100, c.fitScore + 1);
+          else if (c.estimatedOnTimePct < 70) c.fitScore = Math.max(0, c.fitScore - 3);
+        }
+        if (c.marginContribution !== null && c.marginContribution >= 500) {
+          c.fitScore = Math.min(100, c.fitScore + 2);
+        }
+      }
+    }
+
+    // Step 1.5: Sort and cap to MAX_CANDIDATES *before* NBA boost so the boost
+    // only operates on the top candidates (guards against unbounded iteration).
+    ranked.sort(hfSort);
+    if (ranked.length > HIGH_FREQUENCY_CONFIG.maxCandidates) {
+      ranked.splice(HIGH_FREQUENCY_CONFIG.maxCandidates);
+    }
+
+    // Step 2: Market NBA boost — batch-fetch active carrier_market_nbas joined with
+    // market_signals for lane equipment-type AND origin-region matching.
+    // Only boosts carriers with demand_surge_capacity / imbalance_outreach NBAs
+    // whose signal's region includes the lane's origin state (or has no region constraint).
+    try {
+      const carrierIds = [...new Set(
+        ranked.flatMap(c => c.carrierId ? [c.carrierId] : [])
+      )];
+
+      if (carrierIds.length > 0) {
+        // Single join query — equipment+region aware, avoids N+1
+        const matchingNbas = await storage.getActiveCarrierMarketNbasBatch(
+          carrierIds,
+          lane.equipmentType ?? null,
+          lane.originState ?? null,
+        );
+
+        const boostedCarrierIds = new Set(matchingNbas.map(n => n.carrierId));
+        for (const c of ranked) {
+          if (c.carrierId && boostedCarrierIds.has(c.carrierId)) {
+            c.fitScore = Math.min(100, c.fitScore + HF_MARKET_NBA_BOOST);
+            c.hasMarketNbaBoost = true;
+          }
+        }
+      }
+    } catch {
+      // Non-fatal: NBA boost is additive, proceed without it
+    }
+
+    // Step 3: Re-sort after NBA boost adjustments
+    ranked.sort(hfSort);
+
+    // Step 4: Batch-fetch outreach history for the HF carriers, then build explanations.
+    // Outreach history (lastStatus, lastDate) is surfaced in CarrierFitExplanation so the
+    // dispatcher can see the last outreach outcome at a glance.
+    let outreachMap = new Map<string, { deliveryStatus: string | null; sentAt: Date | null }>();
+    if (lane.id) {
+      try {
+        const carrierIds = ranked.flatMap(c => c.carrierId ? [c.carrierId] : []);
+        outreachMap = await storage.getLatestCarrierOutreachLogsForLane(lane.id, carrierIds);
+      } catch {
+        // Non-fatal: explanations render without outreach data
+      }
+    }
+
+    for (const c of ranked) {
+      const outreachEntry = c.carrierId ? outreachMap.get(c.carrierId) : undefined;
+      c.carrierFitExplanation = buildCarrierFitExplanation(c, outreachEntry ?? null);
+    }
+  }
+
   return ranked;
+}
+
+/**
+ * Compute whether a lane qualifies as high-frequency by counting exact-lane TMS rows
+ * within the frequencyLookbackDays window from financial uploads.
+ *
+ * Complements isHighFrequencyLane(lane) which reads the stored avgLoadsPerWeek.
+ * Uses the uploads already loaded for ranking — no additional DB query.
+ */
+export function computeHfFromUploads(
+  uploads: FinancialUpload[],
+  lane: RecurringLane,
+): boolean {
+  const lookbackMs = HIGH_FREQUENCY_CONFIG.frequencyLookbackDays * 24 * 60 * 60 * 1000;
+  const cutoffDate = new Date(Date.now() - lookbackMs);
+  // e.g. "2025-10" — only count TMS rows whose month falls within the lookback window
+  const cutoffMonth = `${cutoffDate.getFullYear()}-${String(cutoffDate.getMonth() + 1).padStart(2, "0")}`;
+
+  const originNorm = normStr(lane.origin);
+  const destNorm = normStr(lane.destination);
+
+  let count = 0;
+  // Match the same 3-upload scan used by extractCarrierHistoryFromUploads
+  const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+  for (const upload of sorted.slice(0, 3)) {
+    const rows = (upload.rows as TmsRow[]) ?? [];
+    for (const row of rows) {
+      const rawMonth = readTmsField(row, "month", "Month");
+      const month = normalizeTmsMonth(rawMonth);
+      if (!month || month < cutoffMonth) continue;
+
+      const rawOriginCity = readTmsField(row, "shipperCity", "originCity", "Shipper city", "Origin city");
+      const rowOrigin = normStr(rawOriginCity);
+      const rawDestCity = readTmsField(row, "consigneeCity", "destinationCity", "Consignee city", "Destination city");
+      const rowDest = normStr(rawDestCity);
+
+      if (rowOrigin === originNorm && rowDest === destNorm) count++;
+    }
+  }
+
+  const weeksInWindow = HIGH_FREQUENCY_CONFIG.frequencyLookbackDays / 7;
+  const computedLoadsPerWeek = count / weeksInWindow;
+  return computedLoadsPerWeek >= HIGH_FREQUENCY_CONFIG.minLoadsPerWeek;
+}
+
+/**
+ * Build a structured CarrierFitExplanation from a ranked carrier entry.
+ * Called during high-frequency post-processing.
+ */
+function buildCarrierFitExplanation(
+  c: RankedCarrier,
+  outreach: { deliveryStatus: string | null; sentAt: Date | null } | null,
+): CarrierFitExplanation {
+  return {
+    exactLaneHistory: {
+      runCount: c.exactLaneLoads,
+      lastRunDate: c.lastUsedMonth,
+    },
+    regionalHistory: {
+      runCount: c.nearbyLaneLoads + c.statePairLoads,
+    },
+    customerHistory: {
+      hasHistory: c.customerHistoryLoads > 0,
+      runCount: c.customerHistoryLoads,
+    },
+    outreachHistory: {
+      lastStatus: outreach?.deliveryStatus ?? null,
+      lastDate: outreach?.sentAt ? outreach.sentAt.toISOString().slice(0, 10) : null,
+    },
+    fitSignals: {
+      regionEquipmentFitScore: (c.regionMatch ? 15 : 0) + (c.equipmentMatch ? 10 : 0) + c.hqProximityBonus,
+      laneHistoryScore: c.exactLaneLoads > 0
+        ? c.fitScore
+        : c.nearbyLaneLoads + c.statePairLoads > 0
+          ? c.fitScore
+          : 0,
+      customerHistoryScore: c.customerHistoryLoads > 0 ? Math.min(10, c.customerHistoryLoads * 2) : 0,
+      hasMarketNbaBoost: c.hasMarketNbaBoost,
+    },
+  };
 }
 
 // extractExactLaneLoads removed: per-tier load counts are now tracked directly in
