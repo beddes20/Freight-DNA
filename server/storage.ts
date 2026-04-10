@@ -142,6 +142,10 @@ import {
   marketSignals,
   type MarketSignal,
   type InsertMarketSignal,
+  carrierMarketNbas,
+  type CarrierMarketNba,
+  type InsertCarrierMarketNba,
+  carrierClaimedLanes,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -676,6 +680,15 @@ export interface IStorage {
     status?: string | string[];
   }): Promise<import('@shared/schema').MarketSignal[]>;
   getMarketSignalById(id: string): Promise<import('@shared/schema').MarketSignal | undefined>;
+
+  // Carrier Market NBAs (Task #187)
+  upsertCarrierMarketNba(data: InsertCarrierMarketNba): Promise<CarrierMarketNba>;
+  getCarrierMarketNbasBySignal(marketSignalId: string): Promise<CarrierMarketNba[]>;
+  getCarrierMarketNbasByCarrier(carrierId: string): Promise<CarrierMarketNba[]>;
+  getCarrierMarketNbaByDedup(carrierId: string, marketSignalId: string, recommendationType: string): Promise<CarrierMarketNba | undefined>;
+  getCarriersByOrgForMarketSignal(orgId: string): Promise<import('@shared/schema').Carrier[]>;
+  getCarrierClaimedLanesByCarrierId(carrierId: string): Promise<import('@shared/schema').CarrierClaimedLane[]>;
+  getFinancialRowsForCarrierSignal(orgId: string, originRegion: string, equipmentType: string | null, since: Date): Promise<Array<{ carrierId: string | null; originRegion: string | null; occurredAt: Date }>>;
 }
 
 const pool = new Pool({
@@ -4501,6 +4514,133 @@ export class DatabaseStorage implements IStorage {
   async getMarketSignalById(id: string): Promise<MarketSignal | undefined> {
     const [row] = await db.select().from(marketSignals).where(eq(marketSignals.id, id));
     return row;
+  }
+
+  // ── Carrier Market NBAs (Task #187) ─────────────────────────────────────────
+
+  async upsertCarrierMarketNba(data: InsertCarrierMarketNba): Promise<CarrierMarketNba> {
+    const existing = await this.getCarrierMarketNbaByDedup(
+      data.carrierId,
+      data.marketSignalId,
+      data.recommendationType,
+    );
+
+    const now = new Date();
+
+    if (existing) {
+      // Skip completed/dismissed rows — they remain as history
+      if (existing.status === "completed" || existing.status === "dismissed") {
+        return existing;
+      }
+      // Update pending/in_progress rows
+      const [updated] = await db.update(carrierMarketNbas)
+        .set({
+          urgencyScore: data.urgencyScore ?? existing.urgencyScore,
+          explanation: data.explanation ?? existing.explanation,
+          updatedAt: now,
+        })
+        .where(eq(carrierMarketNbas.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db.insert(carrierMarketNbas).values({
+      ...data,
+      status: data.status ?? "pending",
+      createdAt: now,
+      updatedAt: now,
+      firstSeenAt: now,
+    }).returning();
+    return created;
+  }
+
+  async getCarrierMarketNbasBySignal(marketSignalId: string): Promise<CarrierMarketNba[]> {
+    return db.select().from(carrierMarketNbas)
+      .where(eq(carrierMarketNbas.marketSignalId, marketSignalId))
+      .orderBy(desc(carrierMarketNbas.urgencyScore));
+  }
+
+  async getCarrierMarketNbasByCarrier(carrierId: string): Promise<CarrierMarketNba[]> {
+    return db.select().from(carrierMarketNbas)
+      .where(eq(carrierMarketNbas.carrierId, carrierId))
+      .orderBy(desc(carrierMarketNbas.updatedAt));
+  }
+
+  async getCarrierMarketNbaByDedup(
+    carrierId: string,
+    marketSignalId: string,
+    recommendationType: string,
+  ): Promise<CarrierMarketNba | undefined> {
+    const [row] = await db.select().from(carrierMarketNbas)
+      .where(and(
+        eq(carrierMarketNbas.carrierId, carrierId),
+        eq(carrierMarketNbas.marketSignalId, marketSignalId),
+        eq(carrierMarketNbas.recommendationType, recommendationType),
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async getCarriersByOrgForMarketSignal(orgId: string): Promise<import('@shared/schema').Carrier[]> {
+    return this.getCarriers(orgId);
+  }
+
+  async getCarrierClaimedLanesByCarrierId(carrierId: string): Promise<import('@shared/schema').CarrierClaimedLane[]> {
+    return db.select().from(carrierClaimedLanes)
+      .where(eq(carrierClaimedLanes.carrierId, carrierId));
+  }
+
+  async getFinancialRowsForCarrierSignal(
+    orgId: string,
+    originRegion: string,
+    equipmentType: string | null,
+    since: Date,
+  ): Promise<Array<{ carrierId: string | null; originRegion: string | null; occurredAt: Date }>> {
+    // Scope to carriers belonging to this org — prevents cross-tenant data bleed.
+    const orgCarriers = await db.select({ id: carriers.id })
+      .from(carriers)
+      .where(eq(carriers.orgId, orgId));
+    const orgCarrierIds = orgCarriers.map(c => c.id);
+
+    if (orgCarrierIds.length === 0) return [];
+
+    // Query market_events for carrier_capacity_declaration events within the lookback window
+    // for carriers known to this org.
+    const conditions: SQL[] = [
+      eq(marketEvents.eventType, "carrier_capacity_declaration"),
+      gte(marketEvents.occurredAt, since),
+      inArray(marketEvents.carrierId, orgCarrierIds),
+    ];
+
+    // Apply equipment type filter at the query level when available.
+    // market_events.equipmentType holds the normalized equipment string.
+    if (equipmentType) {
+      conditions.push(eq(marketEvents.equipmentType, equipmentType));
+    }
+
+    const rows = await db.select({
+      carrierId: marketEvents.carrierId,
+      originRegion: marketEvents.originRegion,
+      equipmentType: marketEvents.equipmentType,
+      occurredAt: marketEvents.occurredAt,
+    })
+      .from(marketEvents)
+      .where(and(...conditions));
+
+    // Filter by origin region in application code (normalized substring/token matching).
+    const normalizeR = (r: string | null | undefined): string =>
+      (r ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    const sigRegion = normalizeR(originRegion);
+
+    return rows.filter(row => {
+      const rowRegion = normalizeR(row.originRegion);
+      if (!rowRegion || !sigRegion) return false;
+      if (rowRegion === sigRegion) return true;
+      if (rowRegion.includes(sigRegion) || sigRegion.includes(rowRegion)) return true;
+      const sigTokens = sigRegion.split("_").filter((t: string) => t.length === 2);
+      const rowTokens = rowRegion.split("_").filter((t: string) => t.length === 2);
+      return sigTokens.some((t: string) => rowTokens.includes(t));
+    });
   }
 }
 

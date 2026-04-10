@@ -15,6 +15,13 @@
       "when": 1744315200000,
       "tag": "0002_market_signal_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1744401600000,
+      "tag": "0003_carrier_market_nbas",
+      "breakpoints": true
     }
   ]
 }

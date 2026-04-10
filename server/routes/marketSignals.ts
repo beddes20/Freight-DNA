@@ -41,6 +41,7 @@ export function registerMarketSignalRoutes(app: Express): void {
   app.use("/api/internal/market-events", requireServiceToken);
   app.use("/api/internal/market-signals", requireServiceToken);
   app.use("/api/internal/market-nbas", requireServiceToken);
+  app.use("/api/internal/carriers", requireServiceToken);
 
   // ── POST /api/internal/market-events ──────────────────────────────────────
   // Record a normalized inbound event.
@@ -164,6 +165,38 @@ export function registerMarketSignalRoutes(app: Express): void {
       return res.status(400).json({ error: "Provide one of: companyId, userId, signalId" });
     } catch (err: any) {
       console.error("[market-nbas route]", err?.message ?? err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── GET /api/internal/market-signals/carrier-nbas ─────────────────────────
+  // Carrier NBAs for a specific market signal.
+  app.get("/api/internal/market-signals/carrier-nbas", async (req, res) => {
+    try {
+      const { marketSignalId } = req.query as Record<string, string | undefined>;
+      if (!marketSignalId) {
+        return res.status(400).json({ error: "marketSignalId query parameter is required" });
+      }
+      const nbas = await storage.getCarrierMarketNbasBySignal(marketSignalId);
+      res.json({ nbas, total: nbas.length });
+    } catch (err: any) {
+      console.error("[carrier-market-nbas by signal]", err?.message ?? err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── GET /api/internal/carriers/:carrierId/market-nbas ─────────────────────
+  // All carrier market NBAs for a specific carrier.
+  app.get("/api/internal/carriers/:carrierId/market-nbas", async (req, res) => {
+    try {
+      const { carrierId } = req.params;
+      if (!carrierId) {
+        return res.status(400).json({ error: "carrierId path parameter is required" });
+      }
+      const nbas = await storage.getCarrierMarketNbasByCarrier(carrierId);
+      res.json({ nbas, total: nbas.length });
+    } catch (err: any) {
+      console.error("[carrier-market-nbas by carrier]", err?.message ?? err);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

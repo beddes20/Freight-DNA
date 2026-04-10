@@ -8,6 +8,8 @@
 import cron from "node-cron";
 import { storage } from "./storage";
 import { MarketSignalEngine } from "./marketSignalEngine";
+import { syncCarrierMarketNbas } from "./carrierMarketNbaService";
+import type { IStorage } from "./storage";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -16,14 +18,48 @@ function log(msg: string) {
 
 const engine = new MarketSignalEngine(storage);
 
-async function runMarketSignalEvaluation(): Promise<void> {
+type CarrierNbaSync = typeof syncCarrierMarketNbas;
+type EngineEvaluate = () => Promise<void>;
+
+/**
+ * Injectable evaluation function — accepts collaborators explicitly.
+ * Used in production (with module-level singletons) and in tests (with mocks).
+ */
+export async function runEvaluationWithDeps(
+  evaluate: EngineEvaluate,
+  storageRef: Pick<IStorage, "getOrganizations">,
+  carrierSync: CarrierNbaSync,
+): Promise<void> {
   log("Starting market signal evaluation run…");
   try {
-    await engine.evaluateMarketSignals();
+    await evaluate();
     log("Market signal evaluation complete.");
+
+    // Sync carrier market NBAs immediately after evaluation
+    try {
+      const orgs = (await storageRef.getOrganizations?.()) ?? [];
+      const EXCLUDED_ORG_ID = "da3ed822";
+      const activeOrgs = orgs.filter((o: any) => o.id && !o.id.startsWith(EXCLUDED_ORG_ID));
+      for (const org of activeOrgs) {
+        const { created, updated } = await carrierSync(org.id, storageRef as IStorage);
+        if (created > 0 || updated > 0) {
+          log(`Org ${org.id}: carrier market NBAs created=${created}, updated=${updated}`);
+        }
+      }
+    } catch (carrierErr: any) {
+      log(`WARNING: carrier NBA sync failed (non-fatal): ${carrierErr?.message ?? carrierErr}`);
+    }
   } catch (err: any) {
     log(`ERROR during evaluation: ${err?.message ?? err}`);
   }
+}
+
+export async function runMarketSignalEvaluation(): Promise<void> {
+  await runEvaluationWithDeps(
+    () => engine.evaluateMarketSignals(),
+    storage,
+    syncCarrierMarketNbas,
+  );
 }
 
 export function initMarketSignalScheduler(): void {

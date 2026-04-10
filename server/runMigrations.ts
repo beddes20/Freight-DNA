@@ -1639,4 +1639,45 @@ export async function runMigrations() {
   } finally {
     clientMarketSignal.release();
   }
+
+  // Task #187 — Carrier-Side Market Signal NBAs: carrier_market_nbas table
+  const clientCarrierNbas = await pool.connect();
+  try {
+    await clientCarrierNbas.query(`
+      CREATE TABLE IF NOT EXISTS carrier_market_nbas (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        carrier_id varchar NOT NULL,
+        market_signal_id varchar NOT NULL,
+        recommendation_type text NOT NULL,
+        status text NOT NULL DEFAULT 'pending',
+        urgency_score integer NOT NULL DEFAULT 0,
+        explanation jsonb NOT NULL DEFAULT '{}',
+        suppression_reason text,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now(),
+        first_seen_at timestamp NOT NULL DEFAULT now(),
+        last_action_at timestamp
+      )
+    `);
+    await clientCarrierNbas.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_market_nbas_status_check') THEN
+          ALTER TABLE carrier_market_nbas ADD CONSTRAINT carrier_market_nbas_status_check
+            CHECK (status IN ('pending','in_progress','completed','dismissed'));
+        END IF;
+      END $$
+    `);
+    await clientCarrierNbas.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_market_nbas_dedup
+        ON carrier_market_nbas (carrier_id, market_signal_id, recommendation_type)
+    `);
+    await clientCarrierNbas.query(`CREATE INDEX IF NOT EXISTS idx_carrier_market_nbas_signal ON carrier_market_nbas(market_signal_id)`);
+    await clientCarrierNbas.query(`CREATE INDEX IF NOT EXISTS idx_carrier_market_nbas_carrier ON carrier_market_nbas(carrier_id)`);
+    await clientCarrierNbas.query(`CREATE INDEX IF NOT EXISTS idx_carrier_market_nbas_status ON carrier_market_nbas(status)`);
+    console.log("[migrations] carrier_market_nbas table ensured (Task #187)");
+  } catch (err) {
+    console.error("[migrations] carrier_market_nbas migration error:", err);
+  } finally {
+    clientCarrierNbas.release();
+  }
 }
