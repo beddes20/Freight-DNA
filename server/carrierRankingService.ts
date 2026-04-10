@@ -83,6 +83,65 @@ export const HIGH_FREQUENCY_CONFIG = {
   minExactLaneRunsForFloor: 1,
 } as const;
 
+/**
+ * Configuration for accepted carrier intelligence scoring.
+ *
+ * Weights are deliberately conservative to preserve the principle that historical
+ * executed lane history is the strongest signal. Accepted intel is an additive
+ * boost that cannot push a low-history carrier above a carrier with strong
+ * exact-lane history.
+ *
+ * @property acceptedExactLanePreferenceBoost   - Score boost when carrier has an accepted
+ *                                               lane_preference suggestion with an exact
+ *                                               corridor matching the lane. Default 8.
+ * @property acceptedRegionPreferenceBoost      - Score boost when carrier has an accepted
+ *                                               region_preference suggestion whose region
+ *                                               overlaps the lane origin or dest. Default 4.
+ * @property acceptedEquipmentCapabilityBoost   - Score boost when carrier has an accepted
+ *                                               equipment_capability suggestion matching
+ *                                               the lane equipment type. Default 3.
+ * @property acceptedCapacityAvailableBoost     - Score boost for a fresh accepted
+ *                                               capacity_available signal. Default 5.
+ * @property acceptedCapacityUnavailablePenalty - Score penalty for a fresh accepted
+ *                                               capacity_unavailable signal. Default 6.
+ * @property acceptedIntelFreshnessDays         - Accepted capacity signals (available /
+ *                                               unavailable) are only applied when they
+ *                                               were accepted/updated within this window.
+ *                                               Stale signals have no effect. Default 21.
+ * @property intelCapExactHighLoads            - Minimum exact-lane loads for the "no cap"
+ *                                               tier (≥ this → Infinity cap). Default 10.
+ * @property intelCapExact                     - Max total positive intel for carriers with
+ *                                               some exact-lane history but below the
+ *                                               intelCapExactHighLoads threshold. Default 10.
+ * @property intelCapNearby                    - Max total positive intel for carriers whose
+ *                                               best history match is nearby / state_pair.
+ *                                               Default 8.
+ * @property intelCapRegionOrNone              - Max total positive intel for carriers with
+ *                                               only region-level or no history. Default 6.
+ */
+export const ACCEPTED_INTEL_CONFIG = {
+  acceptedExactLanePreferenceBoost: 8,
+  acceptedRegionPreferenceBoost: 4,
+  acceptedEquipmentCapabilityBoost: 3,
+  acceptedCapacityAvailableBoost: 5,
+  acceptedCapacityUnavailablePenalty: 6,
+  acceptedIntelFreshnessDays: 21,
+  /** Minimum exact-lane loads for uncapped intel contribution. */
+  intelCapExactHighLoads: 10,
+  /** Max positive intel contribution for exact-history carriers below the high-loads threshold. */
+  intelCapExact: 10,
+  /** Max positive intel contribution for nearby / state_pair history carriers. */
+  intelCapNearby: 8,
+  /** Max positive intel contribution for region-level or no-history carriers. */
+  intelCapRegionOrNone: 6,
+  /**
+   * Score boost when a carrier has an accepted lane_preference whose corridor matches
+   * only at the region/state level (not an exact city-to-city match).
+   * Treated as a partial region boost — deliberately lower than acceptedRegionPreferenceBoost.
+   */
+  acceptedLaneRegionFallbackBoost: 2,
+} as const;
+
 /** @deprecated Use HIGH_FREQUENCY_CONFIG.hfExactLaneFloorHigh */
 export const HF_EXACT_FLOOR_HIGH = HIGH_FREQUENCY_CONFIG.hfExactLaneFloorHigh;
 /** @deprecated Use HIGH_FREQUENCY_CONFIG.hfExactLaneFloorMed */
@@ -149,6 +208,13 @@ export interface CarrierFitExplanation {
     customerHistoryScore: number;
     hasMarketNbaBoost: boolean;
   };
+  /**
+   * Human-readable phrases derived from accepted carrier intelligence.
+   * Each phrase clearly identifies it as a declared preference, not historical execution.
+   * E.g. "Accepted preference: Phoenix → Kent, Dry Van"
+   * Only populated when accepted intel is present.
+   */
+  acceptedIntelPhrases?: string[];
 }
 
 /**
@@ -260,6 +326,17 @@ export interface CarrierDebugScores {
   hfAdjustmentApplied: boolean;
   /** Final fitScore after all adjustments */
   finalScore: number;
+  // ── Accepted-Intel sub-scores (Task #196) ────────────────────────────────
+  /** Boost from an accepted exact lane_preference corridor match (0 if none) */
+  acceptedLanePreferenceScore: number;
+  /** Boost from an accepted region_preference overlapping lane origin/dest (0 if none) */
+  acceptedRegionPreferenceScore: number;
+  /** Boost from an accepted equipment_capability matching lane equipment (0 if none) */
+  acceptedEquipmentCapabilityScore: number;
+  /** Boost from a fresh accepted capacity_available signal (0 if none or stale) */
+  acceptedCapacityAvailabilityScore: number;
+  /** Penalty from a fresh accepted capacity_unavailable signal (0 if none or stale) */
+  acceptedCapacitySuppressionPenalty: number;
 }
 
 export interface RankedCarrier {
@@ -308,6 +385,13 @@ export interface RankedCarrier {
   // ── High-frequency lane fields ────────────────────────────────
   hasMarketNbaBoost: boolean;         // true when carrier received +8 boost from market NBA match
   carrierFitExplanation?: CarrierFitExplanation; // structured explanation (populated for HF lanes)
+  // ── Accepted-intel signals (Task #196) ─────────────────────────────────────
+  acceptedIntelPhrases?: string[];    // human-readable phrases from accepted suggestions
+  cautionFlags?: {                    // caution signals from accepted intel
+    hasAcceptedCapacityUnavailable: boolean;
+    hasAcceptedServiceRisk: boolean;
+    hasAcceptedPriceSensitivity: boolean;
+  };
   // ── Debug instrumentation (only populated when debug=true requested) ────────
   debugScores?: CarrierDebugScores;
 }
@@ -482,6 +566,251 @@ function extractCustomerHistoryLoads(
     }
   }
   return count;
+}
+
+// ── Accepted-Intel Helpers (Task #196) ─────────────────────────────────────
+
+/**
+ * Whether an accepted suggestion was accepted/updated within the freshness window.
+ * Uses acceptedAt when available, falls back to updatedAt, then createdAt.
+ */
+function isAcceptedIntelFresh(
+  suggestion: import('@shared/schema').CarrierIntelSuggestion,
+  freshnessDays: number,
+): boolean {
+  const ts = suggestion.acceptedAt ?? suggestion.updatedAt ?? suggestion.createdAt;
+  if (!ts) return false;
+  const ageMs = Date.now() - new Date(ts).getTime();
+  return ageMs <= freshnessDays * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * Check if an accepted lane_preference suggestion's origin/destination matches
+ * the lane using normalized city and/or state comparison.
+ * Returns "exact" when the suggestion specifies both origin+destination and both match,
+ * "region" when only origin or destination (state) matches, or "none" when no match.
+ */
+function matchAcceptedLanePreference(
+  payload: Record<string, unknown>,
+  laneOriginNorm: string,
+  laneDestNorm: string,
+  laneOriginStateNorm: string,
+  laneDestStateNorm: string,
+): "exact" | "region" | "none" {
+  const origin = normStr(String(payload.origin ?? payload.originState ?? ""));
+  const dest = normStr(String(payload.destination ?? payload.destState ?? ""));
+  const originState = normStr(String(payload.originState ?? ""));
+  const destState = normStr(String(payload.destState ?? ""));
+
+  if (!origin && !dest && !originState && !destState) return "none";
+
+  const originMatch = origin && (
+    laneOriginNorm.includes(origin) || origin.includes(laneOriginNorm)
+  );
+  const destMatch = dest && (
+    laneDestNorm.includes(dest) || dest.includes(laneDestNorm)
+  );
+  const originStateMatch = originState && laneOriginStateNorm === originState;
+  const destStateMatch = destState && laneDestStateNorm === destState;
+
+  // Exact: both origin and destination are specified and match
+  const hasOriginSignal = originMatch || originStateMatch;
+  const hasDestSignal = destMatch || destStateMatch;
+
+  const bothSpecified = (origin || originState) && (dest || destState);
+  if (bothSpecified && hasOriginSignal && hasDestSignal) return "exact";
+
+  // Region: at least one side matches
+  if (hasOriginSignal || hasDestSignal) return "region";
+
+  return "none";
+}
+
+/**
+ * Check if an accepted region_preference suggestion overlaps the lane origin or dest state.
+ */
+function matchAcceptedRegionPreference(
+  payload: Record<string, unknown>,
+  laneOriginNorm: string,
+  laneDestNorm: string,
+  laneOriginStateNorm: string,
+  laneDestStateNorm: string,
+): boolean {
+  const region = normStr(String(payload.region ?? payload.state ?? ""));
+  const originState = normStr(String(payload.originState ?? ""));
+  const destState = normStr(String(payload.destState ?? ""));
+
+  // Try all geo terms in the suggestion against all lane geo terms
+  const laneGeoTerms = [laneOriginNorm, laneDestNorm, laneOriginStateNorm, laneDestStateNorm]
+    .filter(Boolean);
+  const suggGeoTerms = [region, originState, destState].filter(Boolean);
+
+  if (suggGeoTerms.length === 0) return false;
+
+  return suggGeoTerms.some(sg =>
+    laneGeoTerms.some(lg => sg.includes(lg) || lg.includes(sg))
+  );
+}
+
+/**
+ * Check if an accepted equipment_capability suggestion matches the lane equipment type.
+ */
+function matchAcceptedEquipmentCapability(
+  payload: Record<string, unknown>,
+  laneEquipNorm: string,
+): boolean {
+  if (!laneEquipNorm) return false;
+  const equipment = normStr(String(payload.equipment ?? payload.equipmentType ?? ""));
+  if (!equipment) return false;
+  return equipment.includes(laneEquipNorm) || laneEquipNorm.includes(equipment);
+}
+
+/**
+ * Accepted-intel carrier type for batch fetching.
+ */
+interface CarrierAcceptedIntel {
+  lanePrefs: import('@shared/schema').CarrierIntelSuggestion[];
+  regionPrefs: import('@shared/schema').CarrierIntelSuggestion[];
+  equipCaps: import('@shared/schema').CarrierIntelSuggestion[];
+  capacitySignals: import('@shared/schema').CarrierIntelSuggestion[];
+  cautionFlags: import('@shared/schema').CarrierIntelSuggestion[];
+}
+
+/**
+ * Compute the five accepted-intel sub-scores for a carrier on a lane.
+ * Returns scores and human-readable phrases.
+ * Enforces signal hierarchy: accepted intel cannot push a low-history carrier above
+ * a carrier with strong exact-lane history (see maxIntelContribution below).
+ */
+function computeAcceptedIntelScores(
+  intel: CarrierAcceptedIntel,
+  laneOriginNorm: string,
+  laneDestNorm: string,
+  laneOriginStateNorm: string,
+  laneDestStateNorm: string,
+  laneEquipNorm: string,
+  historyMatch: RankedCarrier["historyMatch"],
+  exactLaneLoads: number,
+): {
+  lanePreferenceScore: number;
+  regionPreferenceScore: number;
+  equipmentCapabilityScore: number;
+  capacityAvailabilityScore: number;
+  capacitySuppressionPenalty: number;
+  phrases: string[];
+} {
+  const cfg = ACCEPTED_INTEL_CONFIG;
+  const freshnessDays = cfg.acceptedIntelFreshnessDays;
+
+  let lanePreferenceScore = 0;
+  let regionPreferenceScore = 0;
+  let equipmentCapabilityScore = 0;
+  let capacityAvailabilityScore = 0;
+  let capacitySuppressionPenalty = 0;
+  const phrases: string[] = [];
+
+  // ── Lane preference boosts ──────────────────────────────────────────────
+  for (const pref of intel.lanePrefs) {
+    const payload = (pref.payload ?? {}) as Record<string, unknown>;
+    const match = matchAcceptedLanePreference(
+      payload, laneOriginNorm, laneDestNorm, laneOriginStateNorm, laneDestStateNorm
+    );
+    if (match === "exact" && lanePreferenceScore === 0) {
+      lanePreferenceScore = cfg.acceptedExactLanePreferenceBoost;
+      const origin = String(payload.origin ?? payload.originState ?? laneOriginNorm);
+      const dest = String(payload.destination ?? payload.destState ?? laneDestNorm);
+      const equip = payload.equipment ? `, ${String(payload.equipment)}` : "";
+      phrases.push(`Accepted preference: ${origin} → ${dest}${equip}`);
+    } else if (match === "region" && lanePreferenceScore === 0 && regionPreferenceScore === 0) {
+      // Region-level lane pref still counts as a smaller region boost
+      regionPreferenceScore = Math.max(regionPreferenceScore, cfg.acceptedLaneRegionFallbackBoost);
+    }
+  }
+
+  // ── Region preference boosts ────────────────────────────────────────────
+  for (const pref of intel.regionPrefs) {
+    const payload = (pref.payload ?? {}) as Record<string, unknown>;
+    if (matchAcceptedRegionPreference(
+      payload, laneOriginNorm, laneDestNorm, laneOriginStateNorm, laneDestStateNorm
+    )) {
+      if (regionPreferenceScore === 0) {
+        regionPreferenceScore = cfg.acceptedRegionPreferenceBoost;
+        const region = String(payload.region ?? payload.state ?? payload.originState ?? "this region");
+        phrases.push(`Accepted region preference: ${region}`);
+      }
+      break;
+    }
+  }
+
+  // ── Equipment capability boost ──────────────────────────────────────────
+  for (const cap of intel.equipCaps) {
+    const payload = (cap.payload ?? {}) as Record<string, unknown>;
+    if (matchAcceptedEquipmentCapability(payload, laneEquipNorm)) {
+      if (equipmentCapabilityScore === 0) {
+        equipmentCapabilityScore = cfg.acceptedEquipmentCapabilityBoost;
+        const equip = String(payload.equipment ?? payload.equipmentType ?? laneEquipNorm);
+        phrases.push(`Accepted equipment capability: ${equip}`);
+      }
+      break;
+    }
+  }
+
+  // ── Capacity signals (freshness-gated) ──────────────────────────────────
+  // Both capacity_available and capacity_unavailable are evaluated independently
+  // in a single pass — no early break — so that a fresh capacity_unavailable
+  // always applies its penalty even when a capacity_available also exists.
+  for (const sig of intel.capacitySignals) {
+    const fresh = isAcceptedIntelFresh(sig, freshnessDays);
+    if (!fresh) continue;
+
+    if (sig.suggestionType === "capacity_available" && capacityAvailabilityScore === 0) {
+      capacityAvailabilityScore = cfg.acceptedCapacityAvailableBoost;
+      phrases.push("Accepted capacity available signal");
+      // Do NOT break — continue scanning for capacity_unavailable
+    } else if (sig.suggestionType === "capacity_unavailable" && capacitySuppressionPenalty === 0) {
+      capacitySuppressionPenalty = cfg.acceptedCapacityUnavailablePenalty;
+      phrases.push("Accepted capacity unavailable signal");
+    }
+    // Stop once both have been found (optimization)
+    if (capacityAvailabilityScore > 0 && capacitySuppressionPenalty > 0) break;
+  }
+
+  // ── Signal hierarchy cap ─────────────────────────────────────────────────
+  // Accepted intel cannot push a low-history carrier above a carrier with strong
+  // exact-lane history. The ceiling for accepted-intel contribution depends on
+  // the carrier's actual lane history tier (thresholds in ACCEPTED_INTEL_CONFIG):
+  //   exact (≥ intelCapExactHighLoads loads): no cap — intel is additive to already-strong score
+  //   exact (< intelCapExactHighLoads loads): cap total positive intel at intelCapExact
+  //   nearby/state_pair: cap total positive intel at intelCapNearby
+  //   region/none: cap total positive intel at intelCapRegionOrNone
+  let maxPositiveIntel: number;
+  if (historyMatch === "exact" && exactLaneLoads >= cfg.intelCapExactHighLoads) {
+    maxPositiveIntel = Infinity; // already strong; no cap
+  } else if (historyMatch === "exact") {
+    maxPositiveIntel = cfg.intelCapExact;
+  } else if (historyMatch === "nearby" || historyMatch === "state_pair") {
+    maxPositiveIntel = cfg.intelCapNearby;
+  } else {
+    maxPositiveIntel = cfg.intelCapRegionOrNone;
+  }
+
+  const totalPositive = lanePreferenceScore + regionPreferenceScore + equipmentCapabilityScore + capacityAvailabilityScore;
+  if (totalPositive > maxPositiveIntel) {
+    const scale = maxPositiveIntel / totalPositive;
+    lanePreferenceScore = Math.round(lanePreferenceScore * scale);
+    regionPreferenceScore = Math.round(regionPreferenceScore * scale);
+    equipmentCapabilityScore = Math.round(equipmentCapabilityScore * scale);
+    capacityAvailabilityScore = Math.round(capacityAvailabilityScore * scale);
+  }
+
+  return {
+    lanePreferenceScore,
+    regionPreferenceScore,
+    equipmentCapabilityScore,
+    capacityAvailabilityScore,
+    capacitySuppressionPenalty,
+    phrases,
+  };
 }
 
 /**
@@ -878,6 +1207,11 @@ export async function rankCarriersForLane(
         hfFloorApplied: 0,      // filled in during HF post-processing
         hfAdjustmentApplied: false,
         finalScore: fitScore,
+        acceptedLanePreferenceScore: 0,   // filled in during accepted-intel pass
+        acceptedRegionPreferenceScore: 0,
+        acceptedEquipmentCapabilityScore: 0,
+        acceptedCapacityAvailabilityScore: 0,
+        acceptedCapacitySuppressionPenalty: 0,
       } : undefined,
     });
   }
@@ -1050,8 +1384,110 @@ export async function rankCarriersForLane(
         hfFloorApplied: 0,
         hfAdjustmentApplied: false,
         finalScore: fitScore,
+        acceptedLanePreferenceScore: 0,
+        acceptedRegionPreferenceScore: 0,
+        acceptedEquipmentCapabilityScore: 0,
+        acceptedCapacityAvailabilityScore: 0,
+        acceptedCapacitySuppressionPenalty: 0,
       } : undefined,
     });
+  }
+
+  // ── Accepted-Intel Scoring Pass (Task #196) ─────────────────────────────────
+  // Single batch query fetches all accepted intel for all catalog carriers at once.
+  // TMS-only carriers have no carrierId so they cannot have accepted intel.
+  try {
+    const catalogRanked = ranked.filter(c => c.carrierId !== null);
+    if (catalogRanked.length > 0) {
+      const laneOriginNorm = normStr(lane.origin);
+      const laneDestNorm = normStr(lane.destination);
+      const laneOriginStateNorm = normStr(lane.originState ?? "");
+      const laneDestStateNorm = normStr(lane.destinationState ?? "");
+      const laneEquipNorm = normStr(lane.equipmentType ?? "");
+
+      // ONE query for all carrier IDs — eliminates per-carrier N+1 pattern
+      const carrierIds = catalogRanked.map(c => c.carrierId as string);
+      const batchIntelMap = await storage.getBatchAcceptedIntelForCarriers(carrierIds);
+
+      for (const c of catalogRanked) {
+        if (!c.carrierId) continue;
+        try {
+          const allRows = batchIntelMap.get(c.carrierId) ?? [];
+
+          const lanePrefs      = allRows.filter(r => r.suggestionType === "lane_preference");
+          const regionPrefs    = allRows.filter(r => r.suggestionType === "region_preference");
+          const equipCaps      = allRows.filter(r => r.suggestionType === "equipment_capability");
+          const capacitySignals = allRows.filter(r =>
+            r.suggestionType === "capacity_available" || r.suggestionType === "capacity_unavailable"
+          );
+          const cautionFlagSuggs = allRows.filter(r =>
+            r.suggestionType === "service_risk" || r.suggestionType === "price_sensitivity"
+          );
+
+          const intel: CarrierAcceptedIntel = { lanePrefs, regionPrefs, equipCaps, capacitySignals, cautionFlags: cautionFlagSuggs };
+          const intelScores = computeAcceptedIntelScores(
+            intel,
+            laneOriginNorm, laneDestNorm, laneOriginStateNorm, laneDestStateNorm, laneEquipNorm,
+            c.historyMatch,
+            c.exactLaneLoads,
+          );
+
+          const intelBoost = intelScores.lanePreferenceScore + intelScores.regionPreferenceScore +
+            intelScores.equipmentCapabilityScore + intelScores.capacityAvailabilityScore -
+            intelScores.capacitySuppressionPenalty;
+
+          if (intelBoost !== 0) {
+            c.fitScore = Math.max(0, Math.min(100, c.fitScore + intelBoost));
+          }
+
+          // Attach accepted intel phrases (for explanation/whyThisCarrier)
+          if (intelScores.phrases.length > 0) {
+            c.acceptedIntelPhrases = intelScores.phrases;
+          }
+
+          // Caution flags from accepted capacity_unavailable, service_risk, and price_sensitivity
+          const hasAcceptedCapacityUnavailable = capacitySignals.some(s =>
+            s.suggestionType === "capacity_unavailable" &&
+            isAcceptedIntelFresh(s, ACCEPTED_INTEL_CONFIG.acceptedIntelFreshnessDays)
+          );
+          const hasAcceptedServiceRisk = cautionFlagSuggs.some(s => s.suggestionType === "service_risk");
+          const hasAcceptedPriceSensitivity = cautionFlagSuggs.some(s => s.suggestionType === "price_sensitivity");
+
+          if (hasAcceptedCapacityUnavailable || hasAcceptedServiceRisk || hasAcceptedPriceSensitivity) {
+            c.cautionFlags = {
+              hasAcceptedCapacityUnavailable,
+              hasAcceptedServiceRisk,
+              hasAcceptedPriceSensitivity,
+            };
+          }
+
+          // Update debug scores if debug mode is active
+          if (debugMode && c.debugScores) {
+            c.debugScores.acceptedLanePreferenceScore = intelScores.lanePreferenceScore;
+            c.debugScores.acceptedRegionPreferenceScore = intelScores.regionPreferenceScore;
+            c.debugScores.acceptedEquipmentCapabilityScore = intelScores.equipmentCapabilityScore;
+            c.debugScores.acceptedCapacityAvailabilityScore = intelScores.capacityAvailabilityScore;
+            c.debugScores.acceptedCapacitySuppressionPenalty = intelScores.capacitySuppressionPenalty;
+            c.debugScores.finalScore = c.fitScore;
+          }
+        } catch (err) {
+          // Per-carrier intel scoring failure is non-fatal — log for observability
+          console.warn(JSON.stringify({
+            event: "acceptedIntelScoringError",
+            carrierId: c.carrierId,
+            error: err instanceof Error ? err.message : String(err),
+          }));
+        }
+      }
+    }
+  } catch (err) {
+    // Accepted-intel batch fetch failure is non-fatal — proceed without it
+    console.warn(JSON.stringify({
+      event: "acceptedIntelBatchFetchError",
+      laneId: lane.id ?? null,
+      orgId: lane.orgId,
+      error: err instanceof Error ? err.message : String(err),
+    }));
   }
 
   // Sort by fitScore descending — scores encode history quality + recency + all signals.
@@ -1335,7 +1771,7 @@ function buildCarrierFitExplanation(
   c: RankedCarrier,
   outreach: { deliveryStatus: string | null; sentAt: Date | null } | null,
 ): CarrierFitExplanation {
-  return {
+  const explanation: CarrierFitExplanation = {
     exactLaneHistory: {
       runCount: c.exactLaneLoads,
       lastRunDate: c.lastUsedMonth,
@@ -1362,6 +1798,10 @@ function buildCarrierFitExplanation(
       hasMarketNbaBoost: c.hasMarketNbaBoost,
     },
   };
+  if (c.acceptedIntelPhrases && c.acceptedIntelPhrases.length > 0) {
+    explanation.acceptedIntelPhrases = c.acceptedIntelPhrases;
+  }
+  return explanation;
 }
 
 // extractExactLaneLoads removed: per-tier load counts are now tracked directly in

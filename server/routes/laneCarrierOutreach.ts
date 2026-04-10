@@ -1265,8 +1265,12 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
             isIncumbent: c.isIncumbent,
             suppressionReasons: c.suppressionReasons,
             hasMarketNbaBoost: c.hasMarketNbaBoost,
+            // Accepted-intel signals (Task #196)
+            acceptedIntelPhrases: c.acceptedIntelPhrases ?? undefined,
           },
           carrierFitExplanation: c.carrierFitExplanation ?? null,
+          // Caution flags from accepted intelligence (backward-compatible optional field)
+          cautionFlags: c.cautionFlags ?? undefined,
         // debug field: only present when ?debug=true; omitted entirely otherwise
         ...(debugMode && c.debugScores ? { debug: c.debugScores } : {}),
         };

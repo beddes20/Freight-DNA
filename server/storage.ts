@@ -790,6 +790,15 @@ export interface IStorage {
   getAcceptedLanePreferencesForCarrier(carrierId: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
   getAcceptedRegionPreferencesForCarrier(carrierId: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
   getAcceptedEquipmentCapabilitiesForCarrier(carrierId: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
+  // Task #196: capacity and caution flag helpers
+  getAcceptedCapacitySignalsForCarrier(carrierId: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
+  getAcceptedCautionFlagsForCarrier(carrierId: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
+  /**
+   * Task #196: Batch-fetch all accepted intel suggestions for a list of carrier IDs in a
+   * single query. Used by the ranking engine to eliminate per-carrier N+1 query patterns.
+   * Returns a Map keyed by carrierId with all accepted intel rows.
+   */
+  getBatchAcceptedIntelForCarriers(carrierIds: string[]): Promise<Map<string, import('@shared/schema').CarrierIntelSuggestion[]>>;
 }
 
 const pool = new Pool({
@@ -5265,6 +5274,53 @@ export class DatabaseStorage implements IStorage {
         eq(carrierIntelSuggestions.suggestionType, 'equipment_capability'),
       ))
       .orderBy(desc(carrierIntelSuggestions.acceptedAt));
+  }
+
+  async getAcceptedCapacitySignalsForCarrier(carrierId: string): Promise<CarrierIntelSuggestion[]> {
+    return db.select().from(carrierIntelSuggestions)
+      .where(and(
+        eq(carrierIntelSuggestions.carrierId, carrierId),
+        inArray(carrierIntelSuggestions.status, ['accepted', 'auto_accepted']),
+        inArray(carrierIntelSuggestions.suggestionType, ['capacity_available', 'capacity_unavailable']),
+      ))
+      .orderBy(desc(carrierIntelSuggestions.acceptedAt));
+  }
+
+  async getAcceptedCautionFlagsForCarrier(carrierId: string): Promise<CarrierIntelSuggestion[]> {
+    return db.select().from(carrierIntelSuggestions)
+      .where(and(
+        eq(carrierIntelSuggestions.carrierId, carrierId),
+        inArray(carrierIntelSuggestions.status, ['accepted', 'auto_accepted']),
+        inArray(carrierIntelSuggestions.suggestionType, ['price_sensitivity', 'service_risk']),
+      ))
+      .orderBy(desc(carrierIntelSuggestions.acceptedAt));
+  }
+
+  async getBatchAcceptedIntelForCarriers(carrierIds: string[]): Promise<Map<string, CarrierIntelSuggestion[]>> {
+    const result = new Map<string, CarrierIntelSuggestion[]>();
+    if (carrierIds.length === 0) return result;
+
+    const rows = await db.select().from(carrierIntelSuggestions)
+      .where(and(
+        inArray(carrierIntelSuggestions.carrierId, carrierIds),
+        inArray(carrierIntelSuggestions.status, ['accepted', 'auto_accepted']),
+        inArray(carrierIntelSuggestions.suggestionType, [
+          'lane_preference', 'region_preference', 'equipment_capability',
+          'capacity_available', 'capacity_unavailable',
+          'price_sensitivity', 'service_risk',
+        ]),
+      ))
+      .orderBy(desc(carrierIntelSuggestions.acceptedAt));
+
+    for (const row of rows) {
+      const existing = result.get(row.carrierId);
+      if (existing) {
+        existing.push(row);
+      } else {
+        result.set(row.carrierId, [row]);
+      }
+    }
+    return result;
   }
 }
 
