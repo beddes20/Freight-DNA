@@ -237,6 +237,11 @@ async function initStripe() {
       initGraphSubscriptionService().catch(err => {
         console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));
       });
+      // Pre-warm the financial uploads cache so the first carrier-suggestions
+      // request doesn't trigger a cold full-table JSONB scan in production.
+      setTimeout(() => {
+        storage.preWarmFinancialUploadsCache().catch(() => {});
+      }, 5000); // 5-second delay so migrations complete and pool is settled
     },
   );
 })();

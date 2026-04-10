@@ -828,6 +828,40 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  /**
+   * Pre-warm the cache by loading uploads for the org that owns `userId`.
+   * Intended to be called fire-and-forget after an upload so the new data
+   * is in cache before the next user request arrives.
+   */
+  private async _preWarmFinCacheForOrg(userId: string): Promise<void> {
+    const [user] = await db.select({ organizationId: users.organizationId })
+      .from(users).where(eq(users.id, userId)).limit(1);
+    if (user?.organizationId) {
+      await this.getFinancialUploadsForOrg(user.organizationId);
+    }
+  }
+
+  /**
+   * Pre-warm the financial uploads cache for all orgs at startup.
+   * Called once in the background after the server is ready so the first
+   * carrier-suggestions request doesn't hit a cold DB scan.
+   */
+  async preWarmFinancialUploadsCache(): Promise<void> {
+    try {
+      const orgs = await this.getOrganizations();
+      for (const org of orgs) {
+        try {
+          await this.getFinancialUploadsForOrg(org.id);
+          console.log(`[fin-cache] pre-warmed org ${org.slug ?? org.id}`);
+        } catch {
+          // Non-fatal — cache will miss for this org on first request
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
+  }
+
   async getDefaultOrganization(): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, "valuetruck"));
     return org;
@@ -1200,13 +1234,18 @@ export class DatabaseStorage implements IStorage {
       );
     }
 
-    this._invalidateFinCache();
+    // Refresh the cache for this org immediately after upload so the new data
+    // is available without waiting for TTL expiry. We do this asynchronously
+    // so the upload response is not delayed by the re-load.
+    this._invalidateFinCache(); // clear stale entry
+    // Background refresh — don't await; caller gets a fast response
+    this._preWarmFinCacheForOrg(created.uploadedBy).catch(() => {});
     return created;
   }
 
   async deleteFinancialUpload(id: string): Promise<boolean> {
     const result = await db.delete(financialUploads).where(eq(financialUploads.id, id)).returning();
-    if (result.length > 0) this._invalidateFinCache();
+    // Let TTL handle cache expiry on delete — avoid forcing an expensive reload
     return result.length > 0;
   }
 
