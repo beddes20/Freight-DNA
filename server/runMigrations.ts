@@ -678,6 +678,9 @@ export async function runMigrations() {
     await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to            ON tasks(assigned_to)`);
     await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_tasks_company_id             ON tasks(company_id)`);
     await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_tasks_status                 ON tasks(status)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_financial_uploads_uploaded_by ON financial_uploads(uploaded_by)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_touchpoints_logged_by_date    ON touchpoints(logged_by_id, date DESC)`);
+    await clientIdx.query(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_status         ON tasks(assigned_to, status)`);
     console.log("[migrations] performance indexes ensured");
   } catch (err) {
     console.error("[migrations] performance index error:", err);

@@ -811,6 +811,23 @@ export { db };
 export class DatabaseStorage implements IStorage {
   readonly pool = pool;
 
+  // ── Financial uploads in-memory cache ──────────────────────────────────────
+  // getFinancialUploadsForOrg loads potentially megabytes of JSONB on every
+  // call and is used in 12+ routes (carrier ranking, historical data, lane
+  // work queue, carrier hub, etc.).  A 5-minute TTL cache per org keeps the
+  // data fresh enough while eliminating redundant full-table scans.
+  private _finUploadsCache = new Map<string, { data: FinancialUpload[]; expiresAt: number }>();
+  private readonly _FIN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+  /** Invalidate the financial uploads cache for an org (or all orgs). */
+  private _invalidateFinCache(organizationId?: string) {
+    if (organizationId) {
+      this._finUploadsCache.delete(organizationId);
+    } else {
+      this._finUploadsCache.clear();
+    }
+  }
+
   async getDefaultOrganization(): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, "valuetruck"));
     return org;
@@ -1108,11 +1125,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getFinancialUploadsForOrg(organizationId: string): Promise<FinancialUpload[]> {
+    const cached = this._finUploadsCache.get(organizationId);
+    if (cached && Date.now() < cached.expiresAt) return cached.data;
+
     const orgUserIds = (await this.getUsers(organizationId)).map(u => u.id);
     if (orgUserIds.length === 0) return [];
-    return db.select().from(financialUploads)
+    const data = await db.select().from(financialUploads)
       .where(inArray(financialUploads.uploadedBy, orgUserIds))
       .orderBy(asc(financialUploads.uploadedAt));
+    this._finUploadsCache.set(organizationId, { data, expiresAt: Date.now() + this._FIN_CACHE_TTL });
+    return data;
   }
 
   async getLatestFinancialUpload(): Promise<FinancialUpload | undefined> {
@@ -1178,15 +1200,18 @@ export class DatabaseStorage implements IStorage {
       );
     }
 
+    this._invalidateFinCache();
     return created;
   }
 
   async deleteFinancialUpload(id: string): Promise<boolean> {
     const result = await db.delete(financialUploads).where(eq(financialUploads.id, id)).returning();
+    if (result.length > 0) this._invalidateFinCache();
     return result.length > 0;
   }
 
   async deleteAllFinancialUploads(): Promise<void> {
+    this._invalidateFinCache();
     await db.delete(financialUploads);
   }
 
@@ -1724,19 +1749,28 @@ export class DatabaseStorage implements IStorage {
       )
     ).orderBy(desc(oneOnOneSessions.startDate));
 
-    const results: { session: OneOnOneSession; topics: OneOnOneTopic[] }[] = [];
-    for (const session of sessions) {
-      const actionTopics = await db.select().from(oneOnOneTopics).where(
-        and(
-          eq(oneOnOneTopics.sessionId, session.id),
-          eq(oneOnOneTopics.tag, "action_item")
-        )
-      ).orderBy(desc(oneOnOneTopics.createdAt));
-      if (actionTopics.length > 0) {
-        results.push({ session, topics: actionTopics });
-      }
+    if (sessions.length === 0) return [];
+
+    // Load all action-item topics for all sessions in a single query instead
+    // of one query per session (eliminates N+1 pattern).
+    const sessionIds = sessions.map(s => s.id);
+    const allTopics = await db.select().from(oneOnOneTopics).where(
+      and(
+        inArray(oneOnOneTopics.sessionId, sessionIds),
+        eq(oneOnOneTopics.tag, "action_item")
+      )
+    ).orderBy(desc(oneOnOneTopics.createdAt));
+
+    const topicsBySession = new Map<number, OneOnOneTopic[]>();
+    for (const topic of allTopics) {
+      const list = topicsBySession.get(topic.sessionId) ?? [];
+      list.push(topic);
+      topicsBySession.set(topic.sessionId, list);
     }
-    return results;
+
+    return sessions
+      .map(session => ({ session, topics: topicsBySession.get(session.id) ?? [] }))
+      .filter(r => r.topics.length > 0);
   }
 
   async searchContacts(query: string, organizationId: string): Promise<Contact[]> {
