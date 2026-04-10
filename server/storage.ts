@@ -553,6 +553,14 @@ export interface IStorage {
     ruleType: string; firedCount: number; shownCount: number; actionedCount: number;
     dismissedCount: number; avgHoursToAction: number | null; outcomeLinkCount: number;
   }>>;
+  // Market Signal NBA methods
+  getNbaCardsByMarketSignal(signalId: string): Promise<NbaCard[]>;
+  getNbaCardsByCompanyAndRuleType(companyId: string, ruleType: string): Promise<NbaCard[]>;
+  getNbaCardsByUserId(userId: string, ruleType?: string): Promise<NbaCard[]>;
+  getNbaCardByMarketSignalDedup(companyId: string, signalId: string, ruleType: string): Promise<NbaCard | undefined>;
+  dismissNbaCardsByMarketSignal(signalId: string): Promise<number>;
+  // Recurring lanes by company (for exposure matching)
+  getRecurringLanesByCompany(companyId: string): Promise<RecurringLane[]>;
 
   // Forced Focus
   createForcedFocus(data: import('../shared/schema').InsertForcedFocus): Promise<import('../shared/schema').ForcedFocus>;
@@ -3268,6 +3276,69 @@ export class DatabaseStorage implements IStorage {
         : null,
       outcomeLinkCount: e.outcomeLinkCount,
     }));
+  }
+
+  // ── Market Signal NBA methods ─────────────────────────────────────────────────
+
+  async getNbaCardsByMarketSignal(signalId: string): Promise<NbaCard[]> {
+    return db.select().from(nbaCards)
+      .where(eq(nbaCards.marketSignalId, signalId))
+      .orderBy(desc(nbaCards.createdAt));
+  }
+
+  async getNbaCardsByCompanyAndRuleType(companyId: string, ruleType: string): Promise<NbaCard[]> {
+    return db.select().from(nbaCards)
+      .where(and(eq(nbaCards.companyId, companyId), eq(nbaCards.ruleType, ruleType)))
+      .orderBy(desc(nbaCards.createdAt));
+  }
+
+  async getNbaCardsByUserId(userId: string, ruleType?: string): Promise<NbaCard[]> {
+    const cond = ruleType
+      ? and(eq(nbaCards.userId, userId), eq(nbaCards.ruleType, ruleType))
+      : eq(nbaCards.userId, userId);
+    return db.select().from(nbaCards)
+      .where(cond)
+      .orderBy(desc(nbaCards.createdAt));
+  }
+
+  async getNbaCardByMarketSignalDedup(
+    companyId: string,
+    signalId: string,
+    ruleType: string,
+  ): Promise<NbaCard | undefined> {
+    const rows = await db.select().from(nbaCards)
+      .where(
+        and(
+          eq(nbaCards.companyId, companyId),
+          eq(nbaCards.marketSignalId, signalId),
+          eq(nbaCards.ruleType, ruleType),
+          sql`${nbaCards.status} NOT IN ('dismissed', 'resolved', 'expired', 'superseded', 'actioned')`,
+        )
+      )
+      .orderBy(desc(nbaCards.createdAt))
+      .limit(1);
+    return rows[0];
+  }
+
+  async dismissNbaCardsByMarketSignal(signalId: string): Promise<number> {
+    const now = new Date().toISOString();
+    const result = await db.update(nbaCards)
+      .set({ status: "dismissed", dismissReason: "market_signal_resolved", resolvedAt: now } as any)
+      .where(
+        and(
+          eq(nbaCards.marketSignalId, signalId),
+          sql`${nbaCards.status} IN ('generated', 'visible')`,
+        )
+      );
+    return result.rowCount ?? 0;
+  }
+
+  // ── Recurring lanes by company ────────────────────────────────────────────────
+
+  async getRecurringLanesByCompany(companyId: string): Promise<RecurringLane[]> {
+    return db.select().from(recurringLanes)
+      .where(eq(recurringLanes.companyId, companyId))
+      .orderBy(desc(recurringLanes.updatedAt));
   }
 
   // ── Forced Focus ─────────────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ import { storage } from "./storage";
 import { runPhase1EngineForOrg } from "./nbaPhase1Engine";
 import { runRecurringLaneEngineForOrg } from "./recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes } from "./laneScoringService";
+import { syncMarketSignalNbas } from "./marketNbaService";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -124,6 +125,17 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
             linkedLaneId: spec.laneId,
           });
           totalGenerated++;
+        }
+
+        // ── Market Signal NBAs ────────────────────────────────────────────────
+        try {
+          const { created } = await syncMarketSignalNbas(org.id, storage);
+          if (created > 0) {
+            log(`Org ${org.id}: market signal NBAs created=${created}`);
+            totalGenerated += created;
+          }
+        } catch (marketErr: any) {
+          log(`Org ${org.id}: market NBA sync warning (non-fatal): ${marketErr?.message ?? marketErr}`);
         }
 
         log(`Org ${org.id}: ${totalGenerated} generated this pass, ${totalSkipped} skipped`);

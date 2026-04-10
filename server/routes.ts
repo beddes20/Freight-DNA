@@ -3028,6 +3028,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerProcurementOutreachRoutes(app);
   registerIntelRoutes(app);
   registerGraphWebhookRoutes(app);
+  registerMarketSignalRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
   registerMarketSignalRoutes(app);

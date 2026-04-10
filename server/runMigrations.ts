@@ -1548,6 +1548,16 @@ export async function runMigrations() {
         resolved_at timestamp
       )
     `);
+    // Ensure Task #185 columns exist if table was previously created with Task #186's simpler schema
+    await clientMarketSignal.query(`ALTER TABLE market_signals ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'region'`);
+    await clientMarketSignal.query(`ALTER TABLE market_signals ADD COLUMN IF NOT EXISTS scope_key text NOT NULL DEFAULT ''`);
+    await clientMarketSignal.query(`ALTER TABLE market_signals ADD COLUMN IF NOT EXISTS confidence decimal(5,4) NOT NULL DEFAULT 0`);
+    await clientMarketSignal.query(`ALTER TABLE market_signals ADD COLUMN IF NOT EXISTS evidence_payload jsonb NOT NULL DEFAULT '{}'`);
+    await clientMarketSignal.query(`ALTER TABLE market_signals ADD COLUMN IF NOT EXISTS explanation text NOT NULL DEFAULT ''`);
+    await clientMarketSignal.query(`ALTER TABLE market_signals ADD COLUMN IF NOT EXISTS first_detected_at timestamp NOT NULL DEFAULT now()`);
+    await clientMarketSignal.query(`ALTER TABLE market_signals ADD COLUMN IF NOT EXISTS last_evaluated_at timestamp NOT NULL DEFAULT now()`);
+    await clientMarketSignal.query(`ALTER TABLE market_signals ADD COLUMN IF NOT EXISTS cooling_started_at timestamp`);
+
     await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_signals_scope ON market_signals(scope_type, scope_key)`);
     await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_signals_status ON market_signals(status)`);
     await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_signals_signal_type ON market_signals(signal_type)`);
@@ -1615,7 +1625,15 @@ export async function runMigrations() {
       END $$
     `);
 
-    console.log("[migrations] market_events and market_signals tables ensured");
+    // Task #186 — add market_signal_id to nba_cards (nullable)
+    await clientMarketSignal.query(`
+      ALTER TABLE nba_cards ADD COLUMN IF NOT EXISTS market_signal_id varchar
+    `);
+    await clientMarketSignal.query(`
+      CREATE INDEX IF NOT EXISTS idx_nba_cards_market_signal_id ON nba_cards(market_signal_id) WHERE market_signal_id IS NOT NULL
+    `);
+
+    console.log("[migrations] market_events and market_signals tables ensured (+ Task #186 nba_cards columns)");
   } catch (err) {
     console.error("[migrations] market signal tables migration error:", err);
   } finally {

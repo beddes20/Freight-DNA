@@ -1,24 +1,47 @@
 /**
  * Internal Market Signal API Routes
  *
- * All routes require the `x-internal-token` header matching the INTERNAL_SERVICE_TOKEN
- * environment variable. Requests without a valid token receive 401.
+ * All routes require the `x-internal-token` header (or `Authorization: Bearer <token>`)
+ * matching the INTERNAL_SERVICE_TOKEN environment variable. 
+ * Requests without a valid token receive 401.
  *
  * POST /api/internal/market-events               — record a normalized event
  * POST /api/internal/market-signals/evaluate     — trigger evaluation manually
  * POST /api/internal/market-signals/:id/suppress — suppress a signal
  * GET  /api/internal/market-signals              — list active signals with filters
  * GET  /api/internal/market-signals/:id          — signal detail with full evidence payload
+ * GET  /api/internal/market-nbas                 — NBAs for a specific account, user, or signal
  */
 
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
 import { MarketSignalEngine } from "../marketSignalEngine";
 import type { MarketScopeType, MarketSignalType, MarketSignalStatus } from "@shared/schema";
 
 const engine = new MarketSignalEngine(storage);
+const SERVICE_TOKEN = process.env.INTERNAL_SERVICE_TOKEN;
+
+function requireServiceToken(req: Request, res: Response, next: NextFunction) {
+  if (!SERVICE_TOKEN) {
+    return res.status(503).json({ error: "Internal service token not configured" });
+  }
+  
+  // Support both Task #185's x-internal-token and Task #186's Bearer token patterns
+  const token = (req.headers["x-internal-token"] as string) || 
+                (req.headers["authorization"]?.startsWith("Bearer ") ? req.headers["authorization"].slice(7) : "");
+
+  if (!token || token !== SERVICE_TOKEN) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+}
 
 export function registerMarketSignalRoutes(app: Express): void {
+  // All internal routes are protected
+  app.use("/api/internal/market-events", requireServiceToken);
+  app.use("/api/internal/market-signals", requireServiceToken);
+  app.use("/api/internal/market-nbas", requireServiceToken);
+
   // ── POST /api/internal/market-events ──────────────────────────────────────
   // Record a normalized inbound event.
   app.post("/api/internal/market-events", async (req, res) => {
@@ -108,6 +131,40 @@ export function registerMarketSignalRoutes(app: Express): void {
     } catch (err) {
       console.error("[market-signals] detail error:", err);
       res.status(500).json({ error: "Failed to load market signal" });
+    }
+  });
+
+  // ── GET /api/internal/market-nbas ─────────────────────────────────────────
+  // NBAs tied to a specific account, user, or signal (Task #186).
+  app.get("/api/internal/market-nbas", async (req, res) => {
+    try {
+      const { companyId, userId, signalId } = req.query as Record<string, string | undefined>;
+
+      if (signalId) {
+        const cards = await storage.getNbaCardsByMarketSignal(signalId);
+        return res.json({ cards });
+      }
+
+      if (companyId) {
+        const cards = await storage.getNbaCardsByCompanyAndRuleType(
+          companyId,
+          "market_surge_customer_outreach",
+        );
+        return res.json({ cards });
+      }
+
+      if (userId) {
+        const cards = await storage.getNbaCardsByUserId(
+          userId,
+          "market_surge_customer_outreach",
+        );
+        return res.json({ cards });
+      }
+
+      return res.status(400).json({ error: "Provide one of: companyId, userId, signalId" });
+    } catch (err: any) {
+      console.error("[market-nbas route]", err?.message ?? err);
+      return res.status(500).json({ error: "Internal server error" });
     }
   });
 }
