@@ -1,11 +1,12 @@
 /**
- * Email Intelligence Internal Debug Routes (Task #191)
+ * Email Intelligence Internal Debug Routes (Task #191 / #194)
  *
  * All routes gated by INTERNAL_SERVICE_TOKEN (x-internal-token header or
  * Authorization: Bearer <token>). Returns raw data for debugging and analysis.
  *
  * GET /internal/accounts/:accountId/email-signals
  * GET /internal/carriers/:carrierId/email-signals
+ * GET /internal/opportunities/:id/email-signals       (Task #194)
  * GET /internal/email-intelligence/thread/:threadId
  * GET /internal/carriers/:carrierId/email-suggestions
  * GET /internal/email-intelligence/win-loss
@@ -36,6 +37,7 @@ export function registerEmailIntelligenceRoutes(app: Express): void {
   app.use("/api/internal/accounts/:accountId/email-signals", requireServiceToken);
   app.use("/api/internal/carriers/:carrierId/email-signals", requireServiceToken);
   app.use("/api/internal/carriers/:carrierId/email-suggestions", requireServiceToken);
+  app.use("/api/internal/opportunities/:id/email-signals", requireServiceToken);
   app.use("/api/internal/email-intelligence", requireServiceToken);
 
   // ── GET /api/internal/accounts/:accountId/email-signals ───────────────────
@@ -102,6 +104,36 @@ export function registerEmailIntelligenceRoutes(app: Express): void {
     } catch (err) {
       console.error("[emailIntelligence] /win-loss error:", err);
       res.status(500).json({ error: "Failed to fetch win/loss signals" });
+    }
+  });
+
+  // ── GET /api/internal/opportunities/:id/email-signals (Task #194) ─────────
+  // Returns email signals linked to an opportunity via linkedOpportunityId
+  // or via email_messages.linkedLoadId (proxy for opportunityId).
+  app.get("/api/internal/opportunities/:id/email-signals", async (req: Request, res: Response) => {
+    try {
+      const opportunityId = req.params.id as string;
+      const limit = parseInt((req.query.limit as string) ?? "100", 10);
+      const signals = await storage.getEmailSignalsForOpportunity(opportunityId, limit);
+      res.json({
+        opportunityId,
+        count: signals.length,
+        signals: signals.map(s => ({
+          id: s.id,
+          intentType: s.intentType,
+          intentSubtype: s.intentSubtype,
+          actorType: s.actorType,
+          confidence: s.confidence,
+          createdAt: s.createdAt,
+          linkedAccountId: s.linkedAccountId,
+          linkedCarrierId: s.linkedCarrierId,
+          linkedLaneId: s.linkedLaneId,
+          linkedOpportunityId: s.linkedOpportunityId,
+        })),
+      });
+    } catch (err) {
+      console.error("[emailIntelligence] /opportunities/:id/email-signals error:", err);
+      res.status(500).json({ error: "Failed to fetch opportunity email signals" });
     }
   });
 }

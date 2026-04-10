@@ -1791,10 +1791,112 @@ export async function runMigrations() {
         ON email_messages(org_id, provider_message_id)
         WHERE provider_message_id IS NOT NULL
     `);
+    // Add linked entity columns to email_signals (Task #191)
+    await clientEmailIntel.query(`
+      ALTER TABLE email_signals ADD COLUMN IF NOT EXISTS linked_account_id varchar REFERENCES companies(id) ON DELETE SET NULL
+    `);
+    await clientEmailIntel.query(`
+      ALTER TABLE email_signals ADD COLUMN IF NOT EXISTS linked_carrier_id varchar REFERENCES carriers(id) ON DELETE SET NULL
+    `);
+    await clientEmailIntel.query(`
+      ALTER TABLE email_signals ADD COLUMN IF NOT EXISTS linked_lane_id varchar REFERENCES recurring_lanes(id) ON DELETE SET NULL
+    `);
+    await clientEmailIntel.query(`
+      ALTER TABLE email_signals ADD COLUMN IF NOT EXISTS linked_opportunity_id varchar
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_signals_linked_account ON email_signals(linked_account_id) WHERE linked_account_id IS NOT NULL
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_signals_linked_carrier ON email_signals(linked_carrier_id) WHERE linked_carrier_id IS NOT NULL
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_signals_linked_opportunity ON email_signals(linked_opportunity_id) WHERE linked_opportunity_id IS NOT NULL
+    `);
+    // carrier_email_suggestions staging table (Task #191)
+    await clientEmailIntel.query(`
+      CREATE TABLE IF NOT EXISTS carrier_email_suggestions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        carrier_id varchar NOT NULL REFERENCES carriers(id) ON DELETE CASCADE,
+        email_message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        thread_id text,
+        suggestion_type text NOT NULL,
+        payload jsonb DEFAULT '{}',
+        confidence integer NOT NULL DEFAULT 50,
+        payload_hash text,
+        status text NOT NULL DEFAULT 'pending',
+        created_at timestamp DEFAULT NOW() NOT NULL
+      )
+    `);
+    await clientEmailIntel.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_email_suggestions_dedup
+        ON carrier_email_suggestions(carrier_id, suggestion_type, payload_hash, thread_id)
+        WHERE thread_id IS NOT NULL AND payload_hash IS NOT NULL
+    `);
+    // email_outcome_links join table (Task #191)
+    await clientEmailIntel.query(`
+      CREATE TABLE IF NOT EXISTS email_outcome_links (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        email_signal_id varchar NOT NULL REFERENCES email_signals(id) ON DELETE CASCADE,
+        entity_type text NOT NULL,
+        entity_id varchar NOT NULL,
+        outcome_type text NOT NULL,
+        created_at timestamp DEFAULT NOW() NOT NULL
+      )
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_outcome_links_signal ON email_outcome_links(email_signal_id)
+    `);
+    await clientEmailIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_email_outcome_links_entity ON email_outcome_links(entity_type, entity_id)
+    `);
     console.log("[migrations] email_messages, email_signals tables ensured, crm_opportunities.outcome added (Task #190)");
   } catch (err) {
     console.error("[migrations] email intelligence migration error:", err);
   } finally {
     clientEmailIntel.release();
+  }
+
+  // Task #193 / #194: Carrier Intel Suggestions staging table
+  const clientCarrierIntel = await pool.connect();
+  try {
+    await clientCarrierIntel.query(`
+      CREATE TABLE IF NOT EXISTS carrier_intel_suggestions (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        carrier_id VARCHAR NOT NULL,
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        source_type TEXT NOT NULL DEFAULT 'email_signal',
+        email_signal_id VARCHAR REFERENCES email_signals(id) ON DELETE SET NULL,
+        market_signal_id VARCHAR,
+        suggestion_type TEXT NOT NULL,
+        payload JSONB NOT NULL DEFAULT '{}',
+        confidence_score INTEGER NOT NULL DEFAULT 50,
+        status TEXT NOT NULL DEFAULT 'pending',
+        comment TEXT,
+        accepted_by_user_id VARCHAR,
+        rejected_by_user_id VARCHAR,
+        accepted_at TIMESTAMP,
+        rejected_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await clientCarrierIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_carrier_intel_suggestions_carrier
+        ON carrier_intel_suggestions(carrier_id)
+    `);
+    await clientCarrierIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_carrier_intel_suggestions_org
+        ON carrier_intel_suggestions(org_id)
+    `);
+    await clientCarrierIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_carrier_intel_suggestions_status
+        ON carrier_intel_suggestions(status)
+    `);
+    console.log("[migrations] carrier_intel_suggestions table ensured (Task #193/#194)");
+  } catch (err) {
+    console.error("[migrations] carrier_intel_suggestions migration error:", err);
+  } finally {
+    clientCarrierIntel.release();
   }
 }

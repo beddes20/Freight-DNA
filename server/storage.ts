@@ -155,6 +155,9 @@ import {
   carrierEmailSuggestions,
   type CarrierEmailSuggestion,
   type InsertCarrierEmailSuggestion,
+  carrierIntelSuggestions,
+  type CarrierIntelSuggestion,
+  type InsertCarrierIntelSuggestion,
   emailOutcomeLinks,
   type EmailOutcomeLink,
   type InsertEmailOutcomeLink,
@@ -772,13 +775,15 @@ export interface IStorage {
   getEmailOutcomeLinksByEntity(entityType: string, entityId: string): Promise<import('@shared/schema').EmailOutcomeLink[]>;
   getWinLossEmailSignals(outcomeType: 'won' | 'lost'): Promise<Array<{ signal: import('@shared/schema').EmailSignal; links: import('@shared/schema').EmailOutcomeLink[] }>>;
   updateEmailSignalLinks(signalId: string, links: { linkedAccountId?: string | null; linkedCarrierId?: string | null; linkedLaneId?: string | null; linkedOpportunityId?: string | null }): Promise<void>;
-
-  // Carrier Intel Suggestions (Task #193)
+  // Carrier Intel Suggestions (Task #193 / #194)
+  getEmailSignalsForOpportunity(opportunityId: string, limit?: number): Promise<import('@shared/schema').EmailSignal[]>;
   insertCarrierIntelSuggestion(data: import('@shared/schema').InsertCarrierIntelSuggestion): Promise<import('@shared/schema').CarrierIntelSuggestion>;
   getSuggestionsForCarrier(carrierId: string, status?: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
   getSuggestionById(id: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
   updateSuggestionStatus(id: string, status: 'accepted' | 'rejected' | 'auto_accepted', opts: { userId?: string; comment?: string }): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
   findDuplicateSuggestion(carrierId: string, suggestionType: string, emailSignalId: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
+  getCarrierIntelSuggestionByDedup(carrierId: string, suggestionType: string, emailSignalId: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
+  getCarrierIntelSuggestions(carrierId: string, status?: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
 }
 
 const pool = new Pool({
@@ -5109,10 +5114,54 @@ export class DatabaseStorage implements IStorage {
       .where(eq(emailSignals.id, signalId));
   }
 
-  // ── Carrier Intel Suggestions (Task #193) ──────────────────────────────────
+  // ── Carrier Intel Suggestions (Task #193 / #194) ────────────────────────────
+
+  /**
+   * Returns all email signals tied to a given opportunityId.
+   * Looks up signals by:
+   *   1. linkedOpportunityId on email_signals directly
+   *   2. linkedLoadId on email_messages (load IDs are used as opportunityId proxies)
+   * Results are deduped and ordered by createdAt desc.
+   */
+  async getEmailSignalsForOpportunity(opportunityId: string, limit = 100): Promise<EmailSignal[]> {
+    // Path 1: direct signal link
+    const directSignals = await db.select()
+      .from(emailSignals)
+      .where(eq(emailSignals.linkedOpportunityId, opportunityId))
+      .orderBy(desc(emailSignals.createdAt))
+      .limit(limit);
+
+    // Path 2: via email_messages.linkedLoadId (load IDs often equal opportunityId)
+    const msgs = await db.select({ id: emailMessages.id })
+      .from(emailMessages)
+      .where(eq(emailMessages.linkedLoadId, opportunityId));
+
+    if (msgs.length === 0) {
+      return directSignals.slice(0, limit);
+    }
+
+    const msgIds = msgs.map(m => m.id);
+    const messageSignals = await db.select()
+      .from(emailSignals)
+      .where(inArray(emailSignals.messageId, msgIds))
+      .orderBy(desc(emailSignals.createdAt))
+      .limit(limit);
+
+    // Merge, dedup by id, sort, truncate
+    const allById = new Map<string, EmailSignal>();
+    for (const s of [...directSignals, ...messageSignals]) {
+      allById.set(s.id, s);
+    }
+    return [...allById.values()]
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
 
   async insertCarrierIntelSuggestion(data: InsertCarrierIntelSuggestion): Promise<CarrierIntelSuggestion> {
-    const [row] = await db.insert(carrierIntelSuggestions).values(data).returning();
+    const [row] = await db.insert(carrierIntelSuggestions).values({
+      ...data,
+      updatedAt: new Date(),
+    }).returning();
     return row;
   }
 
@@ -5163,6 +5212,23 @@ export class DatabaseStorage implements IStorage {
       ))
       .limit(1);
     return row;
+  }
+
+  async getCarrierIntelSuggestionByDedup(
+    carrierId: string,
+    suggestionType: string,
+    emailSignalId: string,
+  ): Promise<CarrierIntelSuggestion | undefined> {
+    return this.findDuplicateSuggestion(carrierId, suggestionType, emailSignalId);
+  }
+
+  async getCarrierIntelSuggestions(carrierId: string, status?: string): Promise<CarrierIntelSuggestion[]> {
+    const conditions: SQL[] = [eq(carrierIntelSuggestions.carrierId, carrierId)];
+    if (status) conditions.push(eq(carrierIntelSuggestions.status, status));
+    return db.select()
+      .from(carrierIntelSuggestions)
+      .where(and(...conditions))
+      .orderBy(desc(carrierIntelSuggestions.createdAt));
   }
 }
 
