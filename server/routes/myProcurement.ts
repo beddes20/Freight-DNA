@@ -276,7 +276,31 @@ export function registerMyProcurementRoutes(app: Express) {
         }
       }
 
-      return res.json({ lwqLanes, awardTasks: rawTasks });
+      // ── 4. Enrich award tasks with reply summaries for matched lanes ──────
+      const awardMatchedLaneIds = rawTasks.map((t) => t.matchedLaneId).filter((id): id is string => !!id);
+      const awardBenchRows: { laneId: string; interestStatus: string; carrierName: string }[] =
+        awardMatchedLaneIds.length > 0
+          ? ((await db.select({
+              laneId: laneCarrierInterest.laneId,
+              interestStatus: laneCarrierInterest.interestStatus,
+              carrierName: laneCarrierInterest.carrierName,
+            }).from(laneCarrierInterest).where(inArray(laneCarrierInterest.laneId, awardMatchedLaneIds))) as {
+              laneId: string;
+              interestStatus: string;
+              carrierName: string;
+            }[])
+          : [];
+      const awardBenchByLane = new Map<string, { laneId: string; interestStatus: string; carrierName: string }[]>();
+      for (const b of awardBenchRows) {
+        if (!awardBenchByLane.has(b.laneId)) awardBenchByLane.set(b.laneId, []);
+        awardBenchByLane.get(b.laneId)!.push(b);
+      }
+      const awardTasks = rawTasks.map((t) => ({
+        ...t,
+        replySummary: t.matchedLaneId ? computeReplySummary(awardBenchByLane.get(t.matchedLaneId) ?? []) : null,
+      }));
+
+      return res.json({ lwqLanes, awardTasks });
     } catch (err) {
       console.error("[my-procurement]", err);
       return res.status(500).json({ error: "Failed to load procurement data" });

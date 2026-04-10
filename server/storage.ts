@@ -3961,14 +3961,28 @@ export class DatabaseStorage implements IStorage {
       .filter(l => l.ownerUserId ? visibleSet.has(l.ownerUserId) : canSeeUnassigned)
       .map(l => l.id);
     if (visibleLaneIds.length === 0) return 0;
+    // Lanes with at least one hot-status carrier reply
     const hotStatuses = ["available_now", "available_next_week"];
-    const rows = await db.selectDistinct({ laneId: laneCarrierInterest.laneId })
+    const hotRows = await db.selectDistinct({ laneId: laneCarrierInterest.laneId })
       .from(laneCarrierInterest)
       .where(and(
         inArray(laneCarrierInterest.laneId, visibleLaneIds),
         inArray(laneCarrierInterest.interestStatus, hotStatuses),
       ));
-    return rows.length;
+    if (hotRows.length === 0) return 0;
+    const hotLaneIds = hotRows.map(r => r.laneId);
+    // Subtract lanes that already have a closed/completed follow-up task
+    const actionedResult = await this.pool.query<{ lane_id: string }>(
+      `SELECT DISTINCT (lane_context->>'laneId')::text AS lane_id
+         FROM tasks
+        WHERE org_id = $1
+          AND status IN ('closed', 'done', 'completed')
+          AND lane_context->>'type' = 'carrier_reply_follow_up'
+          AND (lane_context->>'laneId') = ANY($2::text[])`,
+      [orgId, hotLaneIds]
+    );
+    const actionedLaneIds = new Set(actionedResult.rows.map(r => r.lane_id));
+    return hotLaneIds.filter(id => !actionedLaneIds.has(id)).length;
   }
 
   async getLaneWorkQueue(orgId: string, completionThreshold: number, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<LaneWorkQueueResult> {

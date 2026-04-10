@@ -78,6 +78,7 @@ interface AwardTask {
   awardTitle: string | null;
   customerName: string | null;
   matchedLaneId: string | null;
+  replySummary?: LaneReplySummary | null;
 }
 
 interface MyProcurementData {
@@ -284,6 +285,8 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
     item.volume && item.volume > 0
       ? `${item.volume.toLocaleString()} loads/yr`
       : null;
+  const reply = item.replySummary;
+  const hasHotReply = (reply?.hotCount ?? 0) > 0;
 
   // Primary action: open LWQ at the matched lane.
   // If no match found, go to LWQ root with a ?noMatch= hint so the rep gets a toast
@@ -297,7 +300,9 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
 
   return (
     <div
-      className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors"
+      className={`flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors ${
+        hasHotReply ? "border-green-500/40 bg-green-950/5" : ""
+      }`}
       data-testid={`card-award-task-${item.taskId}`}
     >
       {/* Lane identity */}
@@ -352,6 +357,26 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
               <Clock className="w-3 h-3" />
               Due {new Date(item.dueDate).toLocaleDateString()}
             </span>
+          )}
+          {reply && reply.totalReplied > 0 && (
+            hasHotReply ? (
+              <span
+                className="flex items-center gap-1 text-green-400 font-medium"
+                data-testid={`text-reply-hot-award-${item.taskId}`}
+                title={reply.topCarrierName ? `${reply.topCarrierName}: ${REPLY_STATUS_LABELS[reply.topStatus ?? ""] ?? reply.topStatus}` : undefined}
+              >
+                <Zap className="w-3 h-3" />
+                {reply.hotCount} available — {REPLY_STATUS_LABELS[reply.topStatus ?? ""] ?? reply.topStatus}
+              </span>
+            ) : (
+              <span
+                className="flex items-center gap-1 text-slate-400"
+                data-testid={`text-reply-award-${item.taskId}`}
+              >
+                <MessageCircle className="w-3 h-3" />
+                {reply.totalReplied} replied
+              </span>
+            )
           )}
         </div>
       </div>

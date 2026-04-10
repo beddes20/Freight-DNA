@@ -1515,6 +1515,43 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
       });
     }
 
+    // When a carrier is classified as hot (available now/next week), ensure a follow-up task exists
+    const HOT_CLASSIFICATIONS = new Set(["available_now", "available_next_week"]);
+    if (HOT_CLASSIFICATIONS.has(classification) && carrierId) {
+      try {
+        const lane = await storage.getRecurringLane(req.params.laneId);
+        const assignedUserId = lane?.ownerUserId ?? user.id;
+        const carrier = await storage.getCarrier(carrierId);
+        const carrierLabel = carrier?.name ?? carrierName;
+        const laneLabel = lane
+          ? `${lane.origin}${lane.originState ? `, ${lane.originState}` : ""} → ${lane.destination}${lane.destinationState ? `, ${lane.destinationState}` : ""}`
+          : "Unknown lane";
+        const statusLabel = classification === "available_now" ? "available NOW" : "available next week";
+        const dedupeKey = `carrier_hot:${req.params.laneId}:${carrierId}`;
+        const existingHotTask = await storage.pool.query(
+          `SELECT id FROM tasks WHERE org_id = $1 AND lane_context->>'dedupeKey' = $2 AND status != 'closed' LIMIT 1`,
+          [user.organizationId, dedupeKey]
+        );
+        if (existingHotTask.rows.length === 0) {
+          const carrierHubLink = `/carrier-hub/${carrierId}`;
+          await storage.createTask({
+            title: `Confirm carrier: ${carrierLabel} is ${statusLabel} — ${laneLabel}`,
+            description: `${carrierLabel} has been classified as "${statusLabel}" for lane ${laneLabel}. Confirm booking details and secure the load.\n\nCarrier Hub: ${carrierHubLink}`,
+            status: "open",
+            assignedTo: assignedUserId,
+            assignedBy: user.id,
+            orgId: user.organizationId,
+            laneContext: { type: "carrier_reply_follow_up", dedupeKey, laneId: req.params.laneId, carrierId, carrierHubPath: carrierHubLink },
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      } catch (taskErr) {
+        // Non-fatal — classification still succeeds even if task creation fails
+        console.error("[classify-reply] Hot-status task creation failed:", taskErr instanceof Error ? taskErr.message : taskErr);
+      }
+    }
+
     res.json({ classification, confidence, replyText: replyText.slice(0, 500) });
   });
 
