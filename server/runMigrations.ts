@@ -1505,4 +1505,120 @@ export async function runMigrations() {
   } finally {
     clientTwoWayEmail.release();
   }
+
+  // Task #185 — Market Signal Intelligence Layer: market_events and market_signals tables
+  const clientMarketSignal = await pool.connect();
+  try {
+    await clientMarketSignal.query(`
+      CREATE TABLE IF NOT EXISTS market_events (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_type text NOT NULL,
+        scope_type text NOT NULL,
+        scope_key text NOT NULL,
+        equipment_type text,
+        origin_region text,
+        destination_region text,
+        account_id varchar,
+        carrier_id varchar,
+        event_value decimal(14,4),
+        metadata jsonb,
+        occurred_at timestamp NOT NULL DEFAULT now(),
+        recorded_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_events_scope ON market_events(scope_type, scope_key)`);
+    await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_events_occurred_at ON market_events(occurred_at DESC)`);
+    await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_events_event_type ON market_events(event_type)`);
+
+    await clientMarketSignal.query(`
+      CREATE TABLE IF NOT EXISTS market_signals (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        signal_type text NOT NULL,
+        scope_type text NOT NULL,
+        scope_key text NOT NULL,
+        equipment_type text,
+        status text NOT NULL DEFAULT 'active',
+        severity text NOT NULL DEFAULT 'medium',
+        confidence decimal(5,4) NOT NULL DEFAULT 0,
+        evidence_payload jsonb NOT NULL DEFAULT '{}',
+        explanation text NOT NULL DEFAULT '',
+        first_detected_at timestamp NOT NULL DEFAULT now(),
+        last_evaluated_at timestamp NOT NULL DEFAULT now(),
+        cooling_started_at timestamp,
+        resolved_at timestamp
+      )
+    `);
+    await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_signals_scope ON market_signals(scope_type, scope_key)`);
+    await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_signals_status ON market_signals(status)`);
+    await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_signals_signal_type ON market_signals(signal_type)`);
+    await clientMarketSignal.query(`CREATE INDEX IF NOT EXISTS idx_market_signals_last_evaluated ON market_signals(last_evaluated_at DESC)`);
+
+    // Partial unique index: enforce one active/cooling signal per (signal_type, scope_type, scope_key, equipment_type).
+    // Uses COALESCE on equipment_type so NULL values are included in the uniqueness check.
+    await clientMarketSignal.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_market_signals_active_dedup
+        ON market_signals (signal_type, scope_type, scope_key, COALESCE(equipment_type, ''))
+        WHERE status IN ('active', 'cooling')
+    `);
+
+    // CHECK constraints for enum-like columns (idempotent via pg_constraint lookup).
+    // Drop-and-recreate pattern handles the case where the constraint was previously
+    // created with incorrect values (e.g., rate_change/lane_award instead of load_posted/load_covered).
+    await clientMarketSignal.query(`
+      DO $$ BEGIN
+        -- Drop the constraint if it exists (regardless of value set) then re-add correct values
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'market_events_event_type_check') THEN
+          ALTER TABLE market_events DROP CONSTRAINT market_events_event_type_check;
+        END IF;
+        ALTER TABLE market_events ADD CONSTRAINT market_events_event_type_check
+          CHECK (event_type IN ('demand_request','carrier_capacity_declaration','quote_submission','load_posted','load_covered'));
+      END $$
+    `);
+    await clientMarketSignal.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'market_events_scope_type_check') THEN
+          ALTER TABLE market_events ADD CONSTRAINT market_events_scope_type_check
+            CHECK (scope_type IN ('region','corridor','equipment_region','national'));
+        END IF;
+      END $$
+    `);
+    await clientMarketSignal.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'market_signals_signal_type_check') THEN
+          ALTER TABLE market_signals ADD CONSTRAINT market_signals_signal_type_check
+            CHECK (signal_type IN ('demand_surge','capacity_shortage','demand_capacity_imbalance','quote_activity_spike','carrier_capacity_declaration'));
+        END IF;
+      END $$
+    `);
+    await clientMarketSignal.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'market_signals_scope_type_check') THEN
+          ALTER TABLE market_signals ADD CONSTRAINT market_signals_scope_type_check
+            CHECK (scope_type IN ('region','corridor','equipment_region','national'));
+        END IF;
+      END $$
+    `);
+    await clientMarketSignal.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'market_signals_status_check') THEN
+          ALTER TABLE market_signals ADD CONSTRAINT market_signals_status_check
+            CHECK (status IN ('active','cooling','resolved','suppressed'));
+        END IF;
+      END $$
+    `);
+    await clientMarketSignal.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'market_signals_severity_check') THEN
+          ALTER TABLE market_signals ADD CONSTRAINT market_signals_severity_check
+            CHECK (severity IN ('low','medium','high','critical'));
+        END IF;
+      END $$
+    `);
+
+    console.log("[migrations] market_events and market_signals tables ensured");
+  } catch (err) {
+    console.error("[migrations] market signal tables migration error:", err);
+  } finally {
+    clientMarketSignal.release();
+  }
 }

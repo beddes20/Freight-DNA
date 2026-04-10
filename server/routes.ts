@@ -15,6 +15,7 @@ import { registerMyProcurementRoutes } from "./routes/myProcurement";
 import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach";
 import { registerIntelRoutes } from "./routes/intel";
 import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
+import { registerMarketSignalRoutes } from "./routes/marketSignals";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -508,6 +509,15 @@ export async function registerRoutes(
     if (req.path === "/webhooks/outlook-reply") return next();
     // Microsoft Graph webhook endpoints — public (Graph calls without session cookies)
     if (req.path.startsWith("/webhooks/graph/")) return next();
+    // Internal service endpoints — validated by INTERNAL_SERVICE_TOKEN header
+    if (req.path.startsWith("/internal/")) {
+      const token = process.env.INTERNAL_SERVICE_TOKEN;
+      const provided = req.headers["x-internal-token"];
+      if (!token || !provided || provided !== token) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      return next();
+    }
     requireAuth(req, res, next);
   });
 
@@ -3020,6 +3030,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerGraphWebhookRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
+  registerMarketSignalRoutes(app);
 
   registerFinancialRoutes(app);
   // ── Company Historical Trends ─────────────────────────────────────────────

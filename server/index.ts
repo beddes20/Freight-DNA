@@ -15,6 +15,7 @@ import { initPtoReturnScheduler } from "./ptoReturnScheduler";
 import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
+import { initMarketSignalScheduler } from "./marketSignalScheduler";
 import { startIntelEmailScheduler } from "./intelEmailScheduler";
 import { initGraphSubscriptionService } from "./graphSubscriptionService";
 import { runMigrations } from "./runMigrations";
@@ -229,6 +230,7 @@ async function initStripe() {
       initWeeklyGoalRecapScheduler();
       initLmCheckinScheduler();
       initNbaPhase1Scheduler();
+      initMarketSignalScheduler();
       startIntelEmailScheduler();
       initGraphSubscriptionService().catch(err => {
         console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));

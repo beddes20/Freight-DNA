@@ -1438,6 +1438,116 @@ export const insertCarrierOutreachLogSchema = createInsertSchema(carrierOutreach
 export type InsertCarrierOutreachLog = z.infer<typeof insertCarrierOutreachLogSchema>;
 export type CarrierOutreachLog = typeof carrierOutreachLogs.$inferSelect;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Market Signal Intelligence Layer (Task #185)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const marketSignalTypes = [
+  "demand_surge",
+  "capacity_shortage",
+  "demand_capacity_imbalance",
+  "quote_activity_spike",
+  "carrier_capacity_declaration",
+] as const;
+export type MarketSignalType = typeof marketSignalTypes[number];
+
+export const marketScopeTypes = [
+  "region",
+  "corridor",
+  "equipment_region",
+  "national",
+] as const;
+export type MarketScopeType = typeof marketScopeTypes[number];
+
+export const marketSignalStatuses = [
+  "active",
+  "cooling",
+  "resolved",
+  "suppressed",
+] as const;
+export type MarketSignalStatus = typeof marketSignalStatuses[number];
+
+export const marketSignalSeverities = [
+  "low",
+  "medium",
+  "high",
+  "critical",
+] as const;
+export type MarketSignalSeverity = typeof marketSignalSeverities[number];
+
+export const marketEventTypes = [
+  "demand_request",
+  "carrier_capacity_declaration",
+  "quote_submission",
+  "load_posted",
+  "load_covered",
+] as const;
+export type MarketEventType = typeof marketEventTypes[number];
+
+/**
+ * market_events — raw inbound operational events that feed signal evaluation.
+ * One row per event (demand request, carrier declaration, quote, etc.).
+ */
+export const marketEvents = pgTable("market_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventType: text("event_type").notNull(),
+  // demand_request | carrier_capacity_declaration | quote_submission | load_posted | load_covered
+  scopeType: text("scope_type").notNull(),
+  // region | corridor | equipment_region | national
+  scopeKey: text("scope_key").notNull(),
+  // normalized scope identifier, e.g. "TX" or "chicago-il|dallas-tx" or "dry van|TX"
+  equipmentType: text("equipment_type"),
+  // normalized via normalizeEquipmentType
+  originRegion: text("origin_region"),
+  destinationRegion: text("destination_region"),
+  accountId: varchar("account_id"),
+  // customer/shipper account id (for distinct-account counting)
+  carrierId: varchar("carrier_id"),
+  // carrier id for capacity events
+  eventValue: decimal("event_value", { precision: 14, scale: 4 }),
+  // numeric value (load count, rate, etc.) if applicable
+  metadata: jsonb("metadata"),
+  // arbitrary extra fields (rate, miles, lane, etc.)
+  occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+  recordedAt: timestamp("recorded_at").defaultNow().notNull(),
+});
+export const insertMarketEventSchema = createInsertSchema(marketEvents).omit({ id: true, recordedAt: true });
+export type InsertMarketEvent = z.infer<typeof insertMarketEventSchema>;
+export type MarketEvent = typeof marketEvents.$inferSelect;
+
+/**
+ * market_signals — durable, deduplicated, lifecycle-managed conditions.
+ * Evaluation collapses raw events into one signal per scope/type/equipment.
+ */
+export const marketSignals = pgTable("market_signals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  signalType: text("signal_type").notNull(),
+  // demand_surge | capacity_shortage | demand_capacity_imbalance | etc.
+  scopeType: text("scope_type").notNull(),
+  scopeKey: text("scope_key").notNull(),
+  equipmentType: text("equipment_type"),
+  status: text("status").notNull().default("active"),
+  // active | cooling | resolved | suppressed
+  severity: text("severity").notNull().default("medium"),
+  // low | medium | high | critical
+  confidence: decimal("confidence", { precision: 5, scale: 4 }).notNull().default("0"),
+  // 0.0 – 1.0 confidence score
+
+  // Evidence payload — stored counts and percent change for deterministic explanation
+  evidencePayload: jsonb("evidence_payload").notNull().default({}),
+  // { recentCount, baselineCount, percentChange, distinctAccounts, distinctCarriers, ... }
+  explanation: text("explanation").notNull().default(""),
+  // Deterministic plain-English summary generated from evidencePayload
+
+  firstDetectedAt: timestamp("first_detected_at").defaultNow().notNull(),
+  lastEvaluatedAt: timestamp("last_evaluated_at").defaultNow().notNull(),
+  coolingStartedAt: timestamp("cooling_started_at"),
+  resolvedAt: timestamp("resolved_at"),
+});
+export const insertMarketSignalSchema = createInsertSchema(marketSignals).omit({ id: true, firstDetectedAt: true });
+export type InsertMarketSignal = z.infer<typeof insertMarketSignalSchema>;
+export type MarketSignal = typeof marketSignals.$inferSelect;
+
 /**
  * Feature flags — org-level key/value toggle for feature gating.
  * lane_carrier_outreach_v1: true/false

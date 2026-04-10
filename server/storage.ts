@@ -1,4 +1,4 @@
-import { eq, inArray, ilike, or, and, asc, desc, isNull, isNotNull, gte, lte, sql } from "drizzle-orm";
+import { eq, inArray, ilike, or, and, asc, desc, isNull, isNotNull, gte, lte, sql, SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
@@ -136,6 +136,12 @@ import {
   laneCoverageProfileCarriers,
   type LaneCoverageProfileCarrier,
   type InsertLaneCoverageProfileCarrier,
+  marketEvents,
+  type MarketEvent,
+  type InsertMarketEvent,
+  marketSignals,
+  type MarketSignal,
+  type InsertMarketSignal,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -648,6 +654,20 @@ export interface IStorage {
   getLaneCoverageProfileCarriers(profileId: string): Promise<import('@shared/schema').LaneCoverageProfileCarrier[]>;
   upsertLaneCoverageProfileCarrier(data: import('@shared/schema').InsertLaneCoverageProfileCarrier): Promise<import('@shared/schema').LaneCoverageProfileCarrier>;
   deleteLaneCoverageProfileCarriers(profileId: string): Promise<void>;
+
+  // Market Signal Intelligence Layer (Task #185)
+  insertMarketEvent(data: import('@shared/schema').InsertMarketEvent): Promise<import('@shared/schema').MarketEvent>;
+  getMarketEventsSince(since: Date, scope?: { scopeType?: string; scopeKey?: string }): Promise<import('@shared/schema').MarketEvent[]>;
+  upsertMarketSignal(data: Omit<import('@shared/schema').InsertMarketSignal, 'firstDetectedAt'> & { lastEvaluatedAt: Date }, cooldownHours?: number): Promise<import('@shared/schema').MarketSignal>;
+  updateMarketSignalStatus(id: string, status: string, now: Date): Promise<void>;
+  getActiveMarketSignals(filters: {
+    scopeType?: string;
+    scopeKey?: string;
+    equipmentType?: string | null;
+    signalType?: string;
+    status?: string | string[];
+  }): Promise<import('@shared/schema').MarketSignal[]>;
+  getMarketSignalById(id: string): Promise<import('@shared/schema').MarketSignal | undefined>;
 }
 
 const pool = new Pool({
@@ -4271,6 +4291,145 @@ export class DatabaseStorage implements IStorage {
     // This is a hook for future multi-tenant subscription routing.
     // For now we return undefined so the caller falls back to getFirstOrg().
     return undefined;
+  }
+
+  // ── Market Signal Intelligence Layer (Task #185) ───────────────────────────
+
+  async insertMarketEvent(data: InsertMarketEvent): Promise<MarketEvent> {
+    const [row] = await db.insert(marketEvents).values(data).returning();
+    return row;
+  }
+
+  async getMarketEventsSince(
+    since: Date,
+    scope?: { scopeType?: string; scopeKey?: string },
+  ): Promise<MarketEvent[]> {
+    const conditions: SQL[] = [gte(marketEvents.occurredAt, since)];
+    if (scope?.scopeType) conditions.push(eq(marketEvents.scopeType, scope.scopeType));
+    if (scope?.scopeKey) conditions.push(eq(marketEvents.scopeKey, scope.scopeKey));
+    return db.select().from(marketEvents).where(and(...conditions));
+  }
+
+  async upsertMarketSignal(
+    data: Omit<InsertMarketSignal, 'firstDetectedAt'> & { lastEvaluatedAt: Date },
+    cooldownHours?: number,
+  ): Promise<MarketSignal> {
+    const { lastEvaluatedAt, ...rest } = data;
+
+    // Find an existing active/cooling signal for this scope/type/equipment
+    const baseConditions = [
+      eq(marketSignals.signalType, rest.signalType),
+      eq(marketSignals.scopeType, rest.scopeType),
+      eq(marketSignals.scopeKey, rest.scopeKey),
+      or(eq(marketSignals.status, "active"), eq(marketSignals.status, "cooling")),
+    ] as const;
+
+    const equipCondition = rest.equipmentType != null
+      ? eq(marketSignals.equipmentType, rest.equipmentType)
+      : isNull(marketSignals.equipmentType);
+
+    const [existing] = await db.select().from(marketSignals)
+      .where(and(...baseConditions, equipCondition))
+      .limit(1);
+
+    if (existing) {
+      // Enforce cooldown: if the signal is "cooling" and coolingStartedAt is within
+      // the cooldown window, do not allow it to transition back to "active" yet.
+      if (
+        existing.status === "cooling" &&
+        cooldownHours != null &&
+        existing.coolingStartedAt != null
+      ) {
+        const cooledMs = lastEvaluatedAt.getTime() - new Date(existing.coolingStartedAt).getTime();
+        const cooledHours = cooledMs / 3_600_000;
+        if (cooledHours < cooldownHours) {
+          // Still within cooldown — return existing signal without updating
+          return existing;
+        }
+      }
+
+      const [updated] = await db.update(marketSignals)
+        .set({
+          status: rest.status ?? "active",
+          severity: rest.severity ?? "medium",
+          confidence: rest.confidence,
+          evidencePayload: rest.evidencePayload,
+          explanation: rest.explanation,
+          lastEvaluatedAt,
+        })
+        .where(eq(marketSignals.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const insertData: InsertMarketSignal = {
+      signalType: rest.signalType,
+      scopeType: rest.scopeType,
+      scopeKey: rest.scopeKey,
+      equipmentType: rest.equipmentType,
+      status: rest.status ?? "active",
+      severity: rest.severity ?? "medium",
+      confidence: rest.confidence,
+      evidencePayload: rest.evidencePayload,
+      explanation: rest.explanation,
+      lastEvaluatedAt,
+    };
+    const [created] = await db.insert(marketSignals).values(insertData).returning();
+    return created;
+  }
+
+  async updateMarketSignalStatus(id: string, status: string, now: Date): Promise<void> {
+    if (status === "cooling") {
+      await db.update(marketSignals)
+        .set({ status, lastEvaluatedAt: now, coolingStartedAt: now })
+        .where(eq(marketSignals.id, id));
+    } else if (status === "resolved") {
+      await db.update(marketSignals)
+        .set({ status, lastEvaluatedAt: now, resolvedAt: now })
+        .where(eq(marketSignals.id, id));
+    } else {
+      await db.update(marketSignals)
+        .set({ status, lastEvaluatedAt: now })
+        .where(eq(marketSignals.id, id));
+    }
+  }
+
+  async getActiveMarketSignals(filters: {
+    scopeType?: string;
+    scopeKey?: string;
+    equipmentType?: string | null;
+    signalType?: string;
+    status?: string | string[];
+  }): Promise<MarketSignal[]> {
+    const conditions: SQL[] = [];
+
+    // Default: active or cooling
+    const statusFilter = filters.status ?? ["active", "cooling"];
+    if (Array.isArray(statusFilter) && statusFilter.length > 0) {
+      conditions.push(inArray(marketSignals.status, statusFilter));
+    } else if (typeof statusFilter === "string") {
+      conditions.push(eq(marketSignals.status, statusFilter));
+    }
+
+    if (filters.scopeType) conditions.push(eq(marketSignals.scopeType, filters.scopeType));
+    if (filters.scopeKey) conditions.push(eq(marketSignals.scopeKey, filters.scopeKey));
+    if (filters.signalType) conditions.push(eq(marketSignals.signalType, filters.signalType));
+    if (filters.equipmentType !== undefined) {
+      if (filters.equipmentType === null) {
+        conditions.push(isNull(marketSignals.equipmentType));
+      } else {
+        conditions.push(eq(marketSignals.equipmentType, filters.equipmentType));
+      }
+    }
+
+    return db.select().from(marketSignals)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(marketSignals.lastEvaluatedAt));
+  }
+
+  async getMarketSignalById(id: string): Promise<MarketSignal | undefined> {
+    const [row] = await db.select().from(marketSignals).where(eq(marketSignals.id, id));
+    return row;
   }
 }
 
