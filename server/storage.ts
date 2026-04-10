@@ -551,6 +551,7 @@ export interface IStorage {
   getCarrier(id: string): Promise<Carrier | undefined>;
   getCarriersByIds(ids: string[], orgId: string): Promise<Carrier[]>;
   createCarrier(data: InsertCarrier): Promise<Carrier>;
+  bulkCreateCarriers(data: InsertCarrier[]): Promise<number>;
   updateCarrier(id: string, orgId: string, data: Partial<Omit<InsertCarrier, 'orgId'>>): Promise<Carrier | undefined>;
   deleteCarrier(id: string, orgId: string): Promise<boolean>;
   bulkDeleteCarriers(ids: string[], orgId: string): Promise<number>;
@@ -3308,6 +3309,18 @@ export class DatabaseStorage implements IStorage {
   async createCarrier(data: InsertCarrier): Promise<Carrier> {
     const [row] = await db.insert(carriers).values(data).returning();
     return row;
+  }
+
+  async bulkCreateCarriers(data: InsertCarrier[]): Promise<number> {
+    if (data.length === 0) return 0;
+    const CHUNK = 500;
+    let total = 0;
+    for (let i = 0; i < data.length; i += CHUNK) {
+      const chunk = data.slice(i, i + CHUNK);
+      const result = await db.insert(carriers).values(chunk);
+      total += result.rowCount ?? chunk.length;
+    }
+    return total;
   }
 
   async updateCarrier(id: string, orgId: string, data: Partial<Omit<InsertCarrier, 'orgId'>>): Promise<Carrier | undefined> {

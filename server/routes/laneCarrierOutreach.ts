@@ -14,7 +14,7 @@ import { rankCarriersForLane } from "../carrierRankingService";
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
 import { getLaneCoverageProfile, shouldUseIncumbentFirstFlow } from "../laneCoverageService";
-import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, type InsertCarrier } from "@shared/schema";
+import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, type InsertCarrier, type Carrier } from "@shared/schema";
 import { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType, buildFallbackEmail as buildFallbackEmailHelper } from "../laneOutreachEmailBuilder";
 import { z } from "zod";
 import { inArray, eq } from "drizzle-orm";
@@ -300,7 +300,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         const nameCol  = findCol(["carrier name", "carrier", "payee name"]);
         const equipCol = findCol(["equipment type", "equip type", "trailer type", "equipment", "equip", "service type", "mode", "load mode"]);
 
-        // Aggregate per payee code → collect name + equipment types across all rows
+        // Aggregate per payee code → collect name + equipment types across all rows (in-memory)
         type FinAgg = { name: string; equipTypes: Set<string> };
         const byPayee = new Map<string, FinAgg>();
         let blankRows = 0;
@@ -316,14 +316,18 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           if (equip) byPayee.get(key)!.equipTypes.add(equip);
         }
 
-        let created = 0;
+        // Load all existing payee codes in ONE query — avoids N individual lookups
+        const existingAll = await storage.getCarriers(orgId);
+        const existingPayeeCodes = new Set(
+          existingAll.filter(c => c.payeeCode).map(c => c.payeeCode!.toLowerCase())
+        );
+
         let alreadyExisted = 0;
+        const toCreate: InsertCarrier[] = [];
 
         for (const [payeeKey, agg] of byPayee) {
-          const existing = await storage.getCarrierByPayeeCode(orgId, payeeKey);
-          if (existing) { alreadyExisted++; continue; }
-
-          await storage.createCarrier({
+          if (existingPayeeCodes.has(payeeKey)) { alreadyExisted++; continue; }
+          toCreate.push({
             orgId,
             name: agg.name,
             payeeCode: payeeKey,
@@ -333,8 +337,9 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
             equipmentTypes: Array.from(agg.equipTypes),
             tags: [],
           });
-          created++;
         }
+
+        const created = await storage.bulkCreateCarriers(toCreate);
 
         return res.json({
           mode: "financial",
@@ -358,14 +363,21 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         const cityCol   = findCol(["city"]);
         const stateCol  = findCol(["state"]);
 
-        // Stats
-        let blankRows      = 0;
-        let matchedPayee   = 0;
-        let matchedMc      = 0;
-        let matchedName    = 0;
-        let created        = 0;
-        let upToDate       = 0;
+        // Load ALL existing carriers once — avoids N individual lookups per row
+        const allExisting = await storage.getCarriers(orgId);
+        const byPayee  = new Map(allExisting.filter(c => c.payeeCode).map(c => [c.payeeCode!.toLowerCase(), c]));
+        const byMcDot  = new Map(allExisting.filter(c => c.mcDot).map(c => [c.mcDot!.trim().toUpperCase(), c]));
+        const byName   = new Map(allExisting.map(c => [c.name.toLowerCase().trim(), c]));
+
+        let blankRows    = 0;
+        let matchedPayee = 0;
+        let matchedMc    = 0;
+        let matchedName  = 0;
+        let upToDate     = 0;
         const conflicts: string[] = [];
+        const toCreate: InsertCarrier[] = [];
+        const toUpdate: Array<{ existing: Carrier; patch: Partial<Omit<InsertCarrier, 'orgId'>> }> = [];
+        const createdNames = new Set<string>();
 
         for (const row of rows) {
           const payeeCode = str(row, payeeCol);
@@ -379,25 +391,26 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           const city     = str(row, cityCol)  || null;
           const state    = str(row, stateCol) || null;
 
-          // ── Match priority ──────────────────────────────────────────────────
-          let existing = payeeCode
-            ? await storage.getCarrierByPayeeCode(orgId, payeeCode)
-            : undefined;
+          // ── Match priority (in-memory) ───────────────────────────────────────
+          let existing: Carrier | undefined;
           let matchHow = "payee";
 
+          if (payeeCode) existing = byPayee.get(payeeCode.toLowerCase());
           if (!existing && mcNumber) {
-            existing = await storage.getCarrierByMcNumber(orgId, mcNumber);
+            existing = byMcDot.get(mcNumber.trim().toUpperCase());
             matchHow = "mc";
           }
           if (!existing && rawName) {
-            existing = await storage.getCarrierByNormalizedName(orgId, rawName);
+            existing = byName.get(rawName.toLowerCase().trim());
             matchHow = "name";
           }
 
           // ── No match → create ───────────────────────────────────────────────
           if (!existing) {
             if (!rawName) { blankRows++; continue; }
-            await storage.createCarrier({
+            const nameKey = rawName.toLowerCase().trim();
+            if (createdNames.has(nameKey)) continue; // duplicate in this import batch
+            toCreate.push({
               orgId,
               name: rawName,
               payeeCode: payeeCode || null,
@@ -407,7 +420,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
               backupEmail: null,
               regions: [], equipmentTypes: [], tags: [],
             });
-            created++;
+            createdNames.add(nameKey);
+            // Update in-memory maps so subsequent rows don't create duplicates
+            if (payeeCode) byPayee.set(payeeCode.toLowerCase(), { id: "__pending__", orgId } as Carrier);
+            if (mcNumber)  byMcDot.set(mcNumber.trim().toUpperCase(), { id: "__pending__", orgId } as Carrier);
+            byName.set(nameKey, { id: "__pending__", orgId } as Carrier);
             continue;
           }
 
@@ -423,22 +440,28 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
           // Prefer non-empty rolodex value; never overwrite existing non-empty with blank
           const patch: Partial<Omit<InsertCarrier, 'orgId'>> = {};
-          if (!existing.payeeCode && payeeCode)                   patch.payeeCode    = payeeCode;
+          if (!existing.payeeCode && payeeCode)                    patch.payeeCode    = payeeCode;
           if (!existing.mcDot    && mcNumber && !conflicts.find(c => c.startsWith(existing!.name))) patch.mcDot = mcNumber;
-          if (!existing.phone    && phone)                        patch.phone        = phone;
-          if (!existing.primaryEmail && email)                    patch.primaryEmail = email;
-          if (!existing.city     && city)                         patch.city         = city;
-          if (!existing.state    && state)                        patch.state        = state;
+          if (!existing.phone    && phone)                         patch.phone        = phone;
+          if (!existing.primaryEmail && email)                     patch.primaryEmail = email;
+          if (!existing.city     && city)                          patch.city         = city;
+          if (!existing.state    && state)                         patch.state        = state;
 
           if (Object.keys(patch).length === 0) { upToDate++; continue; }
+          toUpdate.push({ existing, patch });
+        }
+
+        // Batch create all new carriers in one round-trip (chunked)
+        const created = await storage.bulkCreateCarriers(toCreate);
+
+        // Apply enrichment updates sequentially (typically far fewer than creates)
+        for (const { existing, patch } of toUpdate) {
           await storage.updateCarrier(existing.id, orgId, patch);
         }
 
         // ── Recurring-lane cross-reference ─────────────────────────────────────
-        // Carriers on recurring freight = carriers we discovered from the financial
-        // file (they have a payeeCode). Report how many of those now have contact info.
         const allCarriers = await storage.getCarriers(orgId);
-        const recurringCarriers = allCarriers.filter(c => c.payeeCode); // financial-file sourced
+        const recurringCarriers = allCarriers.filter(c => c.payeeCode);
         const recurringEnriched = recurringCarriers.filter(c => c.primaryEmail || c.phone).length;
         const recurringMissingContact = recurringCarriers.filter(c => !c.primaryEmail && !c.phone).length;
 
@@ -473,17 +496,24 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         const regionCol      = findCol(["region", "regions", "territory"]);
         const tagsCol        = findCol(["tags", "specialties", "notes"]);
 
+        // Load all existing carriers once (single DB query)
         const existingCarriers = await storage.getCarriers(orgId);
+        const existingByMcDot  = new Map(existingCarriers.filter(c => c.mcDot).map(c => [c.mcDot!.trim().toUpperCase(), c]));
         const existingNameSet  = new Set(existingCarriers.map(c => c.name.toLowerCase().trim()));
 
-        let created = 0;
         let skipped = 0;
+        const toCreate: InsertCarrier[] = [];
+        const newNames = new Set<string>(); // track names added in this batch (dedup within file)
+        const newMcDots = new Set<string>();
+
+        // Collect mcDot-based enrichment updates (existing carriers, typically few)
+        const mcDotUpdates: Array<{ id: string; patch: Partial<Omit<InsertCarrier, 'orgId'>> }> = [];
 
         for (const row of rows) {
           const name = str(row, nameCol);
           if (!name) { skipped++; continue; }
 
-          const mcDot          = str(row, mcCol) || null;
+          const mcDotRaw       = str(row, mcCol).trim().toUpperCase() || null;
           const primaryEmail   = str(row, emailCol) || null;
           const backupEmail    = str(row, backupEmailCol) || null;
           const phone          = str(row, phoneCol) || null;
@@ -493,21 +523,39 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           const equipmentTypes = equipCol  ? str(row, equipCol).split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)  : [];
           const tags           = tagsCol   ? str(row, tagsCol).split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)   : [];
 
-          if (mcDot) {
-            await storage.upsertCarrierByMcDot(orgId, mcDot, {
-              name, mcDot, phone, city, state, primaryEmail, backupEmail, regions, equipmentTypes, tags,
-            });
-            existingNameSet.add(name.toLowerCase());
-            created++;
+          if (mcDotRaw) {
+            const existing = existingByMcDot.get(mcDotRaw);
+            if (existing) {
+              // Existing carrier: enrich missing fields
+              const patch: Partial<Omit<InsertCarrier, 'orgId'>> = {};
+              if (!existing.phone && phone)               patch.phone = phone;
+              if (!existing.city && city)                 patch.city = city;
+              if (!existing.state && state)               patch.state = state;
+              if (!existing.primaryEmail && primaryEmail) patch.primaryEmail = primaryEmail;
+              if (!existing.backupEmail && backupEmail)   patch.backupEmail = backupEmail;
+              if (Object.keys(patch).length > 0) mcDotUpdates.push({ id: existing.id, patch });
+              else skipped++;
+              continue;
+            }
+            // New carrier with mcDot — skip if already in this batch
+            if (newMcDots.has(mcDotRaw) || existingNameSet.has(name.toLowerCase())) { skipped++; continue; }
+            toCreate.push({ orgId, name, mcDot: mcDotRaw, phone, city, state, primaryEmail, backupEmail, regions, equipmentTypes, tags });
+            newMcDots.add(mcDotRaw);
+            newNames.add(name.toLowerCase());
           } else {
-            if (existingNameSet.has(name.toLowerCase())) { skipped++; continue; }
-            await storage.createCarrier({
-              orgId, name, mcDot: null, phone, city, state,
-              primaryEmail, backupEmail, regions, equipmentTypes, tags,
-            });
-            existingNameSet.add(name.toLowerCase());
-            created++;
+            const nameKey = name.toLowerCase().trim();
+            if (existingNameSet.has(nameKey) || newNames.has(nameKey)) { skipped++; continue; }
+            toCreate.push({ orgId, name, mcDot: null, phone, city, state, primaryEmail, backupEmail, regions, equipmentTypes, tags });
+            newNames.add(nameKey);
           }
+        }
+
+        // Batch create all new carriers (chunked to avoid DB parameter limits)
+        const created = await storage.bulkCreateCarriers(toCreate);
+
+        // Apply enrichment updates to existing carriers (usually far fewer)
+        for (const { id, patch } of mcDotUpdates) {
+          await storage.updateCarrier(id, orgId, patch as any);
         }
 
         return res.json({
