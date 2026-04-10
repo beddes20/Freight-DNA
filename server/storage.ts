@@ -170,6 +170,7 @@ export interface LaneReplySummary {
   hotCount: number;           // carriers with available_now | available_next_week
   topStatus: string | null;   // highest-priority status among replied carriers
   topCarrierName: string | null;
+  needsAction: boolean;       // true when hotCount > 0 AND no open follow-up task exists for this lane
 }
 
 export interface LaneWorkQueueItem {
@@ -3971,12 +3972,15 @@ export class DatabaseStorage implements IStorage {
       ));
     if (hotRows.length === 0) return 0;
     const hotLaneIds = hotRows.map(r => r.laneId);
-    // Subtract lanes that already have a closed/completed follow-up task
+    // Subtract lanes that already have an OPEN follow-up task (work is already owned).
+    // A lane is "unactioned" only when a hot reply exists AND no one has taken ownership
+    // by creating a follow-up task for it. Once a task is created (even open), the lane
+    // no longer counts toward the unactioned badge — the rep has acknowledged it.
     const actionedResult = await this.pool.query<{ lane_id: string }>(
       `SELECT DISTINCT (lane_context->>'laneId')::text AS lane_id
          FROM tasks
         WHERE org_id = $1
-          AND status IN ('closed', 'done', 'completed')
+          AND status != 'closed'
           AND lane_context->>'type' = 'carrier_reply_follow_up'
           AND (lane_context->>'laneId') = ANY($2::text[])`,
       [orgId, hotLaneIds]
@@ -4030,6 +4034,18 @@ export class DatabaseStorage implements IStorage {
       benchByLane.get(entry.laneId)!.push(entry);
     }
 
+    // Load open follow-up tasks for all lanes in one query — used to compute needsAction
+    const openFollowUpResult = await this.pool.query<{ lane_id: string }>(
+      `SELECT DISTINCT (lane_context->>'laneId')::text AS lane_id
+         FROM tasks
+        WHERE org_id = $1
+          AND status != 'closed'
+          AND lane_context->>'type' = 'carrier_reply_follow_up'
+          AND (lane_context->>'laneId') = ANY($2::text[])`,
+      [orgId, laneIds]
+    );
+    const lanesWithOpenTask = new Set(openFollowUpResult.rows.map(r => r.lane_id));
+
     const visibleSet = new Set(visibleUserIds);
     const result: LaneWorkQueueResult = { unassigned: [], noContactable: [], assignedUntouched: [], inProgress: [] };
 
@@ -4058,11 +4074,13 @@ export class DatabaseStorage implements IStorage {
         const p = STATUS_PRIORITY[b.interestStatus] ?? 0;
         if (p > topPriority) { topPriority = p; topEntry = b; }
       }
+      const hotCount = replied.filter(b => HOT_STATUSES.has(b.interestStatus)).length;
       const replySummary: LaneReplySummary = {
         totalReplied: replied.length,
-        hotCount: replied.filter(b => HOT_STATUSES.has(b.interestStatus)).length,
+        hotCount,
         topStatus: topEntry?.interestStatus ?? null,
         topCarrierName: topEntry?.carrierName ?? null,
+        needsAction: hotCount > 0 && !lanesWithOpenTask.has(lane.id),
       };
 
       const item: LaneWorkQueueItem = {

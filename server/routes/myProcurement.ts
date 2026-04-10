@@ -89,9 +89,23 @@ export function registerMyProcurementRoutes(app: Express) {
         if (!benchByLane.has(b.laneId)) benchByLane.set(b.laneId, []);
         benchByLane.get(b.laneId)!.push(b);
       }
+      // Load open follow-up tasks for all LWQ lanes in one query — drives needsAction
+      const lwqOpenTaskResult = lwqLaneIds.length > 0
+        ? await storage.pool.query<{ lane_id: string }>(
+            `SELECT DISTINCT (lane_context->>'laneId')::text AS lane_id
+               FROM tasks
+              WHERE org_id = $1
+                AND status != 'closed'
+                AND lane_context->>'type' = 'carrier_reply_follow_up'
+                AND (lane_context->>'laneId') = ANY($2::text[])`,
+            [user.organizationId, lwqLaneIds]
+          )
+        : { rows: [] };
+      const lwqLanesWithOpenTask = new Set(lwqOpenTaskResult.rows.map(r => r.lane_id));
+
       const HOT_STATUSES = new Set(["available_now", "available_next_week"]);
       const STATUS_PRIORITY: Record<string, number> = { available_now: 4, available_next_week: 3, future_interest: 2, not_fit: 1 };
-      function computeReplySummary(bench: BenchRow[]) {
+      function computeReplySummary(bench: BenchRow[], laneId: string, lanesWithTask: Set<string>) {
         const replied = bench.filter(b => b.interestStatus !== "needs_follow_up");
         let topEntry: BenchRow | null = null;
         let topPriority = -1;
@@ -99,11 +113,13 @@ export function registerMyProcurementRoutes(app: Express) {
           const p = STATUS_PRIORITY[b.interestStatus] ?? 0;
           if (p > topPriority) { topPriority = p; topEntry = b; }
         }
+        const hotCount = replied.filter(b => HOT_STATUSES.has(b.interestStatus)).length;
         return {
           totalReplied: replied.length,
-          hotCount: replied.filter(b => HOT_STATUSES.has(b.interestStatus)).length,
+          hotCount,
           topStatus: topEntry?.interestStatus ?? null,
           topCarrierName: topEntry?.carrierName ?? null,
+          needsAction: hotCount > 0 && !lanesWithTask.has(laneId),
         };
       }
 
@@ -122,7 +138,7 @@ export function registerMyProcurementRoutes(app: Express) {
         assignedAt: r.assigned_at,
         carriersContactedCount: r.carriers_contacted_count ?? 0,
         isManual: r.is_manual,
-        replySummary: computeReplySummary(benchByLane.get(r.id) ?? []),
+        replySummary: computeReplySummary(benchByLane.get(r.id) ?? [], r.id, lwqLanesWithOpenTask),
       }));
 
       // ── 2. Award carrier-procurement tasks assigned to me ──────────────────
@@ -295,9 +311,25 @@ export function registerMyProcurementRoutes(app: Express) {
         if (!awardBenchByLane.has(b.laneId)) awardBenchByLane.set(b.laneId, []);
         awardBenchByLane.get(b.laneId)!.push(b);
       }
+      // Load open follow-up tasks for award-matched lanes (for needsAction)
+      const awardOpenTaskResult = awardMatchedLaneIds.length > 0
+        ? await storage.pool.query<{ lane_id: string }>(
+            `SELECT DISTINCT (lane_context->>'laneId')::text AS lane_id
+               FROM tasks
+              WHERE org_id = $1
+                AND status != 'closed'
+                AND lane_context->>'type' = 'carrier_reply_follow_up'
+                AND (lane_context->>'laneId') = ANY($2::text[])`,
+            [user.organizationId, awardMatchedLaneIds]
+          )
+        : { rows: [] };
+      const awardLanesWithOpenTask = new Set(awardOpenTaskResult.rows.map(r => r.lane_id));
+
       const awardTasks = rawTasks.map((t) => ({
         ...t,
-        replySummary: t.matchedLaneId ? computeReplySummary(awardBenchByLane.get(t.matchedLaneId) ?? []) : null,
+        replySummary: t.matchedLaneId
+          ? computeReplySummary(awardBenchByLane.get(t.matchedLaneId) ?? [], t.matchedLaneId, awardLanesWithOpenTask)
+          : null,
       }));
 
       return res.json({ lwqLanes, awardTasks });

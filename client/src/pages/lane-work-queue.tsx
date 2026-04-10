@@ -111,6 +111,7 @@ interface LaneReplySummary {
   hotCount: number;
   topStatus: string | null;
   topCarrierName: string | null;
+  needsAction: boolean;  // hot reply exists AND no open follow-up task yet
 }
 
 interface LaneItem {
@@ -341,20 +342,28 @@ function ReplyBadge({ summary, laneId }: { summary: LaneReplySummary; laneId: st
   const topLabel = summary.topStatus ? STATUS_LABELS[summary.topStatus] : null;
 
   if (isHot) {
+    // needsAction = hot reply with no open follow-up task yet — pulse green to flag urgency
+    // isHot but not needsAction = follow-up task already created — show muted green (activity)
+    const badgeClass = summary.needsAction
+      ? "text-[10px] py-0 px-1.5 border-green-500/60 text-green-400 bg-green-500/10 gap-0.5 cursor-help"
+      : "text-[10px] py-0 px-1.5 border-green-700/40 text-green-600 bg-green-900/10 gap-0.5 cursor-help";
+
     return (
       <Tooltip>
         <TooltipTrigger asChild>
           <Badge
             variant="outline"
-            className="text-[10px] py-0 px-1.5 border-green-500/60 text-green-400 bg-green-500/10 gap-0.5 cursor-help"
-            data-testid={`badge-reply-hot-${laneId}`}
+            className={badgeClass}
+            data-testid={summary.needsAction ? `badge-reply-needs-action-${laneId}` : `badge-reply-hot-${laneId}`}
           >
             <MessageCircle className="w-2.5 h-2.5" />
-            {summary.hotCount} {summary.hotCount === 1 ? "reply" : "replies"} — {summary.hotCount === 1 && topLabel ? topLabel : `${summary.hotCount} hot`}
+            {summary.needsAction ? "⚡ " : ""}{summary.hotCount} {summary.hotCount === 1 ? "reply" : "replies"} — {summary.hotCount === 1 && topLabel ? topLabel : `${summary.hotCount} hot`}
           </Badge>
         </TooltipTrigger>
         <TooltipContent className="text-xs max-w-[240px] space-y-1 p-3">
-          <p className="font-semibold text-green-400">Carrier Replies Received</p>
+          <p className={`font-semibold ${summary.needsAction ? "text-green-400" : "text-green-600"}`}>
+            {summary.needsAction ? "Needs Action — Hot Reply" : "Carrier Replies (Task Created)"}
+          </p>
           {summary.topCarrierName && (
             <p className="text-muted-foreground">
               Top: <span className="text-foreground">{summary.topCarrierName}</span> — {topLabel}
@@ -363,7 +372,10 @@ function ReplyBadge({ summary, laneId }: { summary: LaneReplySummary; laneId: st
           <p className="text-muted-foreground">
             {summary.totalReplied} carrier{summary.totalReplied !== 1 ? "s" : ""} responded · {summary.hotCount} available
           </p>
-          <p className="text-muted-foreground text-[10px]">Open the lane workspace to act on replies.</p>
+          {summary.needsAction
+            ? <p className="text-green-400 text-[10px] font-medium">No follow-up task yet — classify this reply to create one.</p>
+            : <p className="text-muted-foreground text-[10px]">A follow-up task has been created for this lane.</p>
+          }
         </TooltipContent>
       </Tooltip>
     );
@@ -554,11 +566,12 @@ function LaneRow({
   const isHighFreq = loadsNum >= HIGH_FREQ_THRESHOLD;
 
   const hasHotReply = (item.replySummary?.hotCount ?? 0) > 0;
+  const replyNeedsAction = item.replySummary?.needsAction ?? false;
 
   return (
     <div
       className={`bg-card border rounded-lg p-4 hover:border-amber-500/30 transition-colors cursor-pointer group ${
-        hasHotReply ? "border-green-500/40 bg-green-950/5" : isHighFreq ? "border-amber-500/20" : "border-border"
+        replyNeedsAction ? "border-green-500/40 bg-green-950/5" : isHighFreq ? "border-amber-500/20" : "border-border"
       }`}
       onClick={() => onOpen(item.lane.id)}
       data-testid={`work-queue-row-${item.lane.id}`}

@@ -188,63 +188,12 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
 
   log(`Inbound email logged: from=${fromEmail} confidence=${match.confidence} laneId=${laneId ?? "none"} msgId=${providerMessageId}`);
 
-  // Auto-create a follow-up task only when:
-  // 1. The email is matched to a lane (laneId is set)
-  // 2. The sender is matched to a carrier with non-unmatched confidence
-  // 3. The carrier is on the lane bench with `needs_follow_up` status (not yet classified),
-  //    OR the carrier is not yet on the bench at all (novel reply worth reviewing)
-  // This prevents false-positive tasks for already-classified not_fit / future_interest carriers.
-  if (laneId && match.confidence !== "unmatched" && match.carrierId) {
-    try {
-      // Check current bench status for this carrier on this lane
-      const benchCheck = await storage.pool.query<{ interest_status: string }>(
-        `SELECT interest_status FROM lane_carrier_interest WHERE lane_id = $1 AND carrier_id = $2 LIMIT 1`,
-        [laneId, match.carrierId]
-      );
-      const currentStatus = benchCheck.rows[0]?.interest_status ?? null;
-      // Skip if already classified as not interested or future — no action needed
-      const skipStatuses = new Set(["not_fit", "future_interest", "available_now", "available_next_week"]);
-      if (currentStatus && skipStatuses.has(currentStatus)) {
-        log(`Auto-task skipped: carrier already classified as ${currentStatus} on lane ${laneId}`);
-      } else {
-        // Carrier is in bench with needs_follow_up or not yet in bench — create review task
-        const lane = await storage.getRecurringLane(laneId);
-        const assignedUserId = lane?.ownerUserId ?? systemUser.id;
-        const carrier = await storage.getCarrier(match.carrierId);
-        const carrierLabel = carrier?.name ?? fromEmail;
-        const laneLabel = lane
-          ? `${lane.origin}${lane.originState ? `, ${lane.originState}` : ""} → ${lane.destination}${lane.destinationState ? `, ${lane.destinationState}` : ""}`
-          : "Unknown lane";
-
-        // Dedupe: one task per carrier+lane conversation (not per individual message)
-        const dedupeKey = `carrier_reply:${laneId}:${match.carrierId}`;
-        const existingTask = await storage.pool.query(
-          `SELECT id FROM tasks WHERE org_id = $1 AND lane_context->>'dedupeKey' = $2 AND status != 'closed' LIMIT 1`,
-          [orgId, dedupeKey]
-        );
-        if (existingTask.rows.length === 0) {
-          const carrierHubLink = `/carrier-hub/${match.carrierId}`;
-          await storage.createTask({
-            title: `Review carrier reply: ${carrierLabel} — ${laneLabel}`,
-            notes: bodyPreview ? bodyPreview.slice(0, 500) : null,
-            description: `Inbound reply from ${fromEmail} matched to ${carrierLabel} on lane ${laneLabel}. Classify their availability and follow up.\n\nCarrier Hub: ${carrierHubLink}`,
-            status: "open",
-            assignedTo: assignedUserId,
-            assignedBy: systemUser.id,
-            orgId,
-            laneContext: { type: "carrier_reply_follow_up", dedupeKey, laneId, carrierId: match.carrierId, fromEmail, carrierHubPath: carrierHubLink },
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-          log(`Auto-task created for carrier reply: carrier=${carrierLabel} lane=${laneLabel} assignedTo=${assignedUserId}`);
-        } else {
-          log(`Auto-task skipped (active task exists): dedupeKey=${dedupeKey}`);
-        }
-      }
-    } catch (taskErr) {
-      log(`Auto-task creation failed: ${taskErr instanceof Error ? taskErr.message : String(taskErr)}`);
-    }
-  }
+  // No auto-task creation on email arrival.
+  // Follow-up tasks are only created when a rep explicitly classifies a reply
+  // as hot (available_now / available_next_week) via the classify-reply or
+  // carrier-interest endpoints. This prevents noisy task creation from
+  // non-actionable inbound emails.
+  log(`Inbound email processed — laneId=${laneId ?? "none"} confidence=${match.confidence} msgId=${providerMessageId}`);
 }
 
 /**

@@ -43,6 +43,7 @@ interface LaneReplySummary {
   hotCount: number;
   topStatus: string | null;
   topCarrierName: string | null;
+  needsAction: boolean;  // hot reply AND no open follow-up task yet
 }
 
 interface LwqLane {
@@ -186,11 +187,12 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
     : null;
   const reply = item.replySummary;
   const hasHotReply = (reply?.hotCount ?? 0) > 0;
+  const needsAction = reply?.needsAction ?? false;
 
   return (
     <div
       className={`flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors ${
-        hasHotReply ? "border-green-500/40 bg-green-950/5" : ""
+        needsAction ? "border-green-500/40 bg-green-950/5" : ""
       }`}
       data-testid={`card-lwq-lane-${item.laneId}`}
     >
@@ -230,12 +232,13 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
           {reply && reply.totalReplied > 0 && (
             hasHotReply ? (
               <span
-                className="flex items-center gap-1 text-green-400 font-medium"
-                data-testid={`text-reply-hot-${item.laneId}`}
+                className={`flex items-center gap-1 font-medium ${needsAction ? "text-green-400" : "text-green-600"}`}
+                data-testid={needsAction ? `text-reply-needs-action-${item.laneId}` : `text-reply-hot-${item.laneId}`}
                 title={reply.topCarrierName ? `${reply.topCarrierName}: ${REPLY_STATUS_LABELS[reply.topStatus ?? ""] ?? reply.topStatus}` : undefined}
               >
-                <Zap className="w-3 h-3" />
-                {reply.hotCount} available — {REPLY_STATUS_LABELS[reply.topStatus ?? ""] ?? reply.topStatus}
+                {needsAction ? <Zap className="w-3 h-3" /> : <MessageCircle className="w-3 h-3" />}
+                {needsAction ? "Needs Action — " : ""}{reply.hotCount} available
+                {needsAction && <span className="text-[10px] font-normal opacity-80 ml-0.5">(no task yet)</span>}
               </span>
             ) : (
               <span
@@ -287,6 +290,7 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
       : null;
   const reply = item.replySummary;
   const hasHotReply = (reply?.hotCount ?? 0) > 0;
+  const needsAction = reply?.needsAction ?? false;
 
   // Primary action: open LWQ at the matched lane.
   // If no match found, go to LWQ root with a ?noMatch= hint so the rep gets a toast
@@ -301,7 +305,7 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
   return (
     <div
       className={`flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors ${
-        hasHotReply ? "border-green-500/40 bg-green-950/5" : ""
+        needsAction ? "border-green-500/40 bg-green-950/5" : ""
       }`}
       data-testid={`card-award-task-${item.taskId}`}
     >
@@ -361,12 +365,13 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
           {reply && reply.totalReplied > 0 && (
             hasHotReply ? (
               <span
-                className="flex items-center gap-1 text-green-400 font-medium"
-                data-testid={`text-reply-hot-award-${item.taskId}`}
+                className={`flex items-center gap-1 font-medium ${needsAction ? "text-green-400" : "text-green-600"}`}
+                data-testid={needsAction ? `text-reply-needs-action-award-${item.taskId}` : `text-reply-hot-award-${item.taskId}`}
                 title={reply.topCarrierName ? `${reply.topCarrierName}: ${REPLY_STATUS_LABELS[reply.topStatus ?? ""] ?? reply.topStatus}` : undefined}
               >
-                <Zap className="w-3 h-3" />
-                {reply.hotCount} available — {REPLY_STATUS_LABELS[reply.topStatus ?? ""] ?? reply.topStatus}
+                {needsAction ? <Zap className="w-3 h-3" /> : <MessageCircle className="w-3 h-3" />}
+                {needsAction ? "Needs Action — " : ""}{reply.hotCount} available
+                {needsAction && <span className="text-[10px] font-normal opacity-80 ml-0.5">(no task yet)</span>}
               </span>
             ) : (
               <span

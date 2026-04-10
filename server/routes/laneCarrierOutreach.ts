@@ -1394,6 +1394,69 @@ House style — follow every rule:
     res.json(enriched);
   });
 
+  /**
+   * ensureHotFollowUpTask — creates a follow-up task when a carrier is classified
+   * as hot (available_now | available_next_week). Idempotent: skips if an open
+   * follow-up task already exists for this carrier+lane pair.
+   *
+   * Single unified dedupeKey: `carrier_hot:{laneId}:{carrierId}` — shared by both
+   * the classify-reply path and the direct carrier-interest update path, so a
+   * carrier+lane pair never produces more than one open task regardless of how
+   * the status was set.
+   */
+  async function ensureHotFollowUpTask(
+    laneId: string,
+    carrierId: string,
+    carrierName: string,
+    status: string,
+    actorUserId: string,
+    orgId: string,
+  ): Promise<void> {
+    const HOT = new Set(["available_now", "available_next_week"]);
+    if (!HOT.has(status)) return;
+
+    try {
+      const dedupeKey = `carrier_hot:${laneId}:${carrierId}`;
+      const exists = await storage.pool.query(
+        `SELECT id FROM tasks WHERE org_id = $1 AND lane_context->>'dedupeKey' = $2 AND status != 'closed' LIMIT 1`,
+        [orgId, dedupeKey]
+      );
+      if (exists.rows.length > 0) return;
+
+      const lane = await storage.getRecurringLane(laneId);
+      const carrier = await storage.getCarrier(carrierId);
+      const carrierLabel = carrier?.name ?? carrierName;
+      const laneLabel = lane
+        ? `${lane.origin}${lane.originState ? `, ${lane.originState}` : ""} → ${lane.destination}${lane.destinationState ? `, ${lane.destinationState}` : ""}`
+        : "Unknown lane";
+      const assignedUserId = lane?.ownerUserId ?? actorUserId;
+      const statusLabel = status === "available_now" ? "available NOW" : "available next week";
+      const carrierHubPath = `/carrier-hub/${carrierId}`;
+      const laneQueuePath = `/lanes/work-queue?laneId=${laneId}`;
+
+      await storage.createTask({
+        title: `Confirm carrier: ${carrierLabel} is ${statusLabel} — ${laneLabel}`,
+        description: `${carrierLabel} replied and was classified as "${statusLabel}" for lane ${laneLabel}.\n\nSecure the load and confirm booking details.\n\nLane queue: ${laneQueuePath}\nCarrier Hub: ${carrierHubPath}`,
+        status: "open",
+        assignedTo: assignedUserId,
+        assignedBy: actorUserId,
+        orgId,
+        laneContext: {
+          type: "carrier_reply_follow_up",
+          dedupeKey,
+          laneId,
+          carrierId,
+          carrierHubPath,
+          laneQueuePath,
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("[ensureHotFollowUpTask] failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
   app.post("/api/lanes/:laneId/carrier-interest", async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
@@ -1423,6 +1486,12 @@ House style — follow every rule:
       replySnippet: replySnippet ?? null,
       lastReplySnippet: replySnippet ?? null,
     });
+
+    // If a rep directly sets (or reclassifies) a carrier to a hot status, ensure
+    // a follow-up task exists. Non-blocking — response is sent regardless.
+    if (carrierId && interestStatus) {
+      await ensureHotFollowUpTask(req.params.laneId, carrierId, carrierName, interestStatus, user.id, user.organizationId);
+    }
 
     res.json(record);
   });
@@ -1515,41 +1584,11 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
       });
     }
 
-    // When a carrier is classified as hot (available now/next week), ensure a follow-up task exists
-    const HOT_CLASSIFICATIONS = new Set(["available_now", "available_next_week"]);
-    if (HOT_CLASSIFICATIONS.has(classification) && carrierId) {
-      try {
-        const lane = await storage.getRecurringLane(req.params.laneId);
-        const assignedUserId = lane?.ownerUserId ?? user.id;
-        const carrier = await storage.getCarrier(carrierId);
-        const carrierLabel = carrier?.name ?? carrierName;
-        const laneLabel = lane
-          ? `${lane.origin}${lane.originState ? `, ${lane.originState}` : ""} → ${lane.destination}${lane.destinationState ? `, ${lane.destinationState}` : ""}`
-          : "Unknown lane";
-        const statusLabel = classification === "available_now" ? "available NOW" : "available next week";
-        const dedupeKey = `carrier_hot:${req.params.laneId}:${carrierId}`;
-        const existingHotTask = await storage.pool.query(
-          `SELECT id FROM tasks WHERE org_id = $1 AND lane_context->>'dedupeKey' = $2 AND status != 'closed' LIMIT 1`,
-          [user.organizationId, dedupeKey]
-        );
-        if (existingHotTask.rows.length === 0) {
-          const carrierHubLink = `/carrier-hub/${carrierId}`;
-          await storage.createTask({
-            title: `Confirm carrier: ${carrierLabel} is ${statusLabel} — ${laneLabel}`,
-            description: `${carrierLabel} has been classified as "${statusLabel}" for lane ${laneLabel}. Confirm booking details and secure the load.\n\nCarrier Hub: ${carrierHubLink}`,
-            status: "open",
-            assignedTo: assignedUserId,
-            assignedBy: user.id,
-            orgId: user.organizationId,
-            laneContext: { type: "carrier_reply_follow_up", dedupeKey, laneId: req.params.laneId, carrierId, carrierHubPath: carrierHubLink },
-            createdAt: now,
-            updatedAt: now,
-          });
-        }
-      } catch (taskErr) {
-        // Non-fatal — classification still succeeds even if task creation fails
-        console.error("[classify-reply] Hot-status task creation failed:", taskErr instanceof Error ? taskErr.message : taskErr);
-      }
+    // If classified as hot and we have a resolved carrierId, ensure a follow-up task exists.
+    // Uses the shared ensureHotFollowUpTask helper (same dedupeKey as carrier-interest POST)
+    // so the two paths never create duplicate tasks for the same carrier+lane pair.
+    if (carrierId) {
+      await ensureHotFollowUpTask(req.params.laneId, carrierId, carrierName, classification, user.id, user.organizationId);
     }
 
     res.json({ classification, confidence, replyText: replyText.slice(0, 500) });
