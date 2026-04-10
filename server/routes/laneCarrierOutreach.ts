@@ -1079,8 +1079,6 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       // (same uploads are used internally by rankCarriersForLane for history extraction)
       const suggUploads = await storage.getFinancialUploadsForOrg(user.organizationId);
 
-      let ranked = await rankCarriersForLane(lane, storage, bench, coverageProfile, coverageCarriers);
-
       // ── Query parameter parsing ──────────────────────────────────────────
       const pageSize = parseInt(String(req.query.pageSize ?? "20"), 10);
       const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10));
@@ -1091,6 +1089,10 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const activeOnly = req.query.activeOnly === "true";
       const includeNewProspects = req.query.includeNewProspects !== "false"; // default true
       const overrideRecentlyContacted = req.query.overrideRecentlyContacted === "true";
+      // debug=true is auth-gated (requireAuth already applied via getLaneWithAccessCheck path)
+      const debugMode = req.query.debug === "true";
+
+      let ranked = await rankCarriersForLane(lane, storage, bench, coverageProfile, coverageCarriers, debugMode);
 
       // ── Hard-filter Do Not Use carriers (unconditional) ─────────────────
       ranked = ranked.filter(c => !c.isDoNotUse);
@@ -1265,6 +1267,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
             hasMarketNbaBoost: c.hasMarketNbaBoost,
           },
           carrierFitExplanation: c.carrierFitExplanation ?? null,
+        // debug field: only present when ?debug=true; omitted entirely otherwise
+        ...(debugMode && c.debugScores ? { debug: c.debugScores } : {}),
         };
       });
 

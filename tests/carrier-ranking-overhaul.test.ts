@@ -563,6 +563,46 @@ async function main(): Promise<void> {
     assert(typeof data.totalPages === "number", "totalPages should be a number");
   });
 
+  // ── Task #192: Observability & Tuning ─────────────────────────────────────
+  await runTest("v2.1: ?debug=false — debug field absent from non-HF lane suggestions", async () => {
+    // Verify that debug field is absent on standard (non-HF) lane without ?debug=true.
+    // This ensures the omit logic is correct on the standard ranking path.
+    const { status, json } = await apiGet(
+      `/api/lanes/${laneId}/carrier-suggestions?pageSize=0`,
+      cookie
+    );
+    assert(status === 200, `Expected 200, got ${status}`);
+    const data = json as { carriers: Array<{ debug?: unknown }> };
+    for (const carrier of data.carriers) {
+      assert(
+        carrier.debug === undefined,
+        `debug field should be absent without ?debug=true, got ${JSON.stringify(carrier.debug)} on ${JSON.stringify(carrier)}`
+      );
+    }
+  });
+
+  await runTest("v2.1: ?debug=true — debug field present with expected sub-keys on non-HF lane", async () => {
+    const { status, json } = await apiGet(
+      `/api/lanes/${laneId}/carrier-suggestions?pageSize=0&debug=true`,
+      cookie
+    );
+    assert(status === 200, `Expected 200, got ${status}`);
+    const data = json as { carriers: Array<{ debug?: Record<string, unknown> }> };
+    assert(data.carriers.length > 0, "Should have at least one carrier");
+    // At least some carriers should have debug objects (all should, if debugMode is true)
+    const withDebug = data.carriers.filter(c => c.debug !== undefined);
+    assert(withDebug.length > 0, "At least one carrier should have a debug object when ?debug=true");
+    const dbg = withDebug[0].debug!;
+    assert("exactLaneScore" in dbg, "debug should have exactLaneScore");
+    assert("regionalScore" in dbg, "debug should have regionalScore");
+    assert("customerHistoryScore" in dbg, "debug should have customerHistoryScore");
+    assert("outreachRecencyDelta" in dbg, "debug should have outreachRecencyDelta");
+    assert("marketNbaBoost" in dbg, "debug should have marketNbaBoost");
+    assert("hfFloorApplied" in dbg, "debug should have hfFloorApplied");
+    assert("hfAdjustmentApplied" in dbg, "debug should have hfAdjustmentApplied");
+    assert("finalScore" in dbg, "debug should have finalScore");
+  });
+
   // ── Summary ───────────────────────────────────────────────────────────────
 
   await cleanup();

@@ -736,6 +736,224 @@ async function main(): Promise<void> {
     );
   });
 
+  // ── Task #192: Observability & Tuning Tests ──────────────────────────────
+
+  // ── Test (k): Metrics logging path does not throw ─────────────────────────
+  await runTest("(k) rankCarriersForLane emits metrics log without throwing", async () => {
+    // Unit test: verify the metrics log path completes without throwing.
+    // We capture console.log output by replacing it with a spy and verify a JSON
+    // entry with event=rankCarriersForLane is emitted.
+    const { rankCarriersForLane: rankFn } = await import("../server/carrierRankingService.js");
+
+    const capturedLogs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => {
+      if (typeof args[0] === "string") capturedLogs.push(args[0]);
+      else capturedLogs.push(JSON.stringify(args[0]));
+    };
+
+    try {
+      // Minimal stub storage — just enough to exercise the ranking + logging path
+      const stubStorage = {
+        getCarriers: async () => [],
+        getFinancialUploadsForOrg: async () => [],
+        getActiveCarrierMarketNbasBatch: async () => [],
+        getLatestCarrierOutreachLogsForLane: async () => new Map(),
+      } as any;
+      const fakeLane = {
+        id: "test-lane-metrics",
+        orgId: "test-org-metrics",
+        origin: "chicago",
+        destination: "detroit",
+        avgLoadsPerWeek: "3",
+        equipmentType: "dry_van",
+        originState: "IL",
+        destinationState: "MI",
+        companyName: null,
+      } as any;
+
+      await rankFn(fakeLane, stubStorage);
+    } finally {
+      console.log = origLog;
+    }
+
+    const metricsEntry = capturedLogs
+      .map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .find(e => e && e.event === "rankCarriersForLane");
+    assert(!!metricsEntry, `Expected a JSON metrics log with event=rankCarriersForLane. Got: ${capturedLogs.join(" | ")}`);
+    assert(metricsEntry.laneId === "test-lane-metrics", `laneId should be in metrics log`);
+    assert(metricsEntry.orgId === "test-org-metrics", `orgId should be in metrics log`);
+    assert(typeof metricsEntry.isHighFrequencyLane === "boolean", "isHighFrequencyLane should be boolean in metrics log");
+    assert(typeof metricsEntry.suggestionCount === "number", "suggestionCount should be number in metrics log");
+    assert(Array.isArray(metricsEntry.top3), "top3 should be array in metrics log");
+  });
+
+  // ── Test (l): Debug mode — debug object present/absent ────────────────────
+  await runTest("(l) ?debug=true returns debug object per carrier, absent without it", async () => {
+    const org = await createFreshOrg();
+    const user = await createUser(org, "admin");
+    await enableFeatureFlag(org);
+    const c = await loginAs(user.username, user.password);
+
+    const laneId = await createLane(org, "Sacramento", "Fresno", 3.0); // HF
+    await createCarrier(org, "DebugTestCarrier", { primaryEmail: "debug@test.com" });
+
+    // With ?debug=true — should have debug object on carriers
+    const { status: s1, json: j1 } = await apiGet(
+      `/api/lanes/${laneId}/carrier-suggestions?pageSize=0&debug=true`,
+      c
+    );
+    assert(s1 === 200, `Expected 200 with debug=true, got ${s1}`);
+    const d1 = j1 as { carriers: Array<{ debug?: unknown }> };
+    assert(d1.carriers.length > 0, "Expected at least one carrier");
+    const hasDebug = d1.carriers.some(carrier => carrier.debug !== undefined);
+    assert(hasDebug, "At least one carrier should have a debug object when ?debug=true");
+    const firstWithDebug = d1.carriers.find(carrier => carrier.debug !== undefined);
+    if (firstWithDebug) {
+      const dbg = firstWithDebug.debug as Record<string, unknown>;
+      assert("exactLaneScore" in dbg, "debug should have exactLaneScore");
+      assert("regionalScore" in dbg, "debug should have regionalScore");
+      assert("customerHistoryScore" in dbg, "debug should have customerHistoryScore");
+      assert("outreachRecencyDelta" in dbg, "debug should have outreachRecencyDelta");
+      assert("marketNbaBoost" in dbg, "debug should have marketNbaBoost");
+      assert("hfFloorApplied" in dbg, "debug should have hfFloorApplied");
+      assert("hfAdjustmentApplied" in dbg, "debug should have hfAdjustmentApplied");
+      assert("finalScore" in dbg, "debug should have finalScore");
+    }
+
+    // Without ?debug — should NOT have debug object
+    const { status: s2, json: j2 } = await apiGet(
+      `/api/lanes/${laneId}/carrier-suggestions?pageSize=0`,
+      c
+    );
+    assert(s2 === 200, `Expected 200 without debug, got ${s2}`);
+    const d2 = j2 as { carriers: Array<{ debug?: unknown }> };
+    for (const carrier of d2.carriers) {
+      assert(carrier.debug === undefined, `debug field should be absent on normal requests, got ${JSON.stringify(carrier.debug)}`);
+    }
+  });
+
+  // ── Test (m): HF lane with no exact-lane history returns non-empty regional ─
+  await runTest("(m) HF lane with zero exact-lane history returns non-empty list from regional carriers", async () => {
+    const org = await createFreshOrg();
+    const user = await createUser(org, "admin");
+    await enableFeatureFlag(org);
+    const c = await loginAs(user.username, user.password);
+
+    // Create an HF lane (by avgLoadsPerWeek) with NO exact-lane TMS history
+    const laneId = await createLane(org, "Boise", "Spokane", 2.0); // HF threshold
+    // Create regional carriers (no exact-lane history)
+    await createCarrier(org, "RegionalFallbackCarrier1", {
+      primaryEmail: "reg1@hftest.com",
+      regions: ["ID", "WA"],
+    });
+    await createCarrier(org, "RegionalFallbackCarrier2", {
+      primaryEmail: "reg2@hftest.com",
+      regions: ["WA"],
+    });
+    // No financial uploads — zero exact-lane history
+
+    const { status, json } = await apiGet(
+      `/api/lanes/${laneId}/carrier-suggestions?pageSize=0`,
+      c
+    );
+    assert(status === 200, `Expected 200, got ${status}: ${JSON.stringify(json)}`);
+    const data = json as { carriers: unknown[]; isHighFrequencyLane: boolean };
+    assert(data.isHighFrequencyLane === true, "Should be detected as HF lane");
+    assert(data.carriers.length > 0,
+      `HF lane with no exact-lane history should still return non-empty list (got 0 carriers). ` +
+      `This verifies the regional fallback guardrail.`
+    );
+  });
+
+  // ── Test (n): HF config externalization — new fields present ──────────────
+  await runTest("(n) HIGH_FREQUENCY_CONFIG has all externalized HF tuning fields", async () => {
+    const { HIGH_FREQUENCY_CONFIG: cfg } = await import("../server/carrierRankingService.js");
+    assert(typeof cfg.hfExactLaneFloorHigh === "number", "hfExactLaneFloorHigh should be a number");
+    assert(typeof cfg.hfExactLaneFloorMed === "number", "hfExactLaneFloorMed should be a number");
+    assert(typeof cfg.hfExactLaneFloorAny === "number", "hfExactLaneFloorAny should be a number");
+    assert(typeof cfg.marketNbaBoostPoints === "number", "marketNbaBoostPoints should be a number");
+    assert(typeof cfg.minExactLaneRunsForFloor === "number", "minExactLaneRunsForFloor should be a number");
+    assert(cfg.hfExactLaneFloorHigh === 95, `hfExactLaneFloorHigh should be 95, got ${cfg.hfExactLaneFloorHigh}`);
+    assert(cfg.hfExactLaneFloorMed === 85, `hfExactLaneFloorMed should be 85, got ${cfg.hfExactLaneFloorMed}`);
+    assert(cfg.hfExactLaneFloorAny === 72, `hfExactLaneFloorAny should be 72, got ${cfg.hfExactLaneFloorAny}`);
+    assert(cfg.marketNbaBoostPoints === 8, `marketNbaBoostPoints should be 8, got ${cfg.marketNbaBoostPoints}`);
+    assert(cfg.minExactLaneRunsForFloor === 1, `minExactLaneRunsForFloor should be 1, got ${cfg.minExactLaneRunsForFloor}`);
+  });
+
+  // ── Test (o): Mixed exact + NBA carriers ranking ───────────────────────────
+  await runTest("(o) HF lane: exact-lane carriers rank first and hasMarketNbaBoost correct in debug", async () => {
+    const org = await createFreshOrg();
+    const user = await createUser(org, "admin");
+    await enableFeatureFlag(org);
+    const c = await loginAs(user.username, user.password);
+
+    const laneId = await createLane(org, "Reno", "Las Vegas", 3.0); // HF
+    // Exact-lane carrier
+    const exactCarrierId = await createCarrier(org, "RankingExactCarrier", { primaryEmail: "exact@ranking.com" });
+    // NBA-only carrier (no exact history)
+    const nbaCarrierId = await createCarrier(org, "RankingNbaCarrier", { primaryEmail: "nba@ranking.com" });
+    const signalId = await createMarketSignal();
+    await createCarrierMarketNba(nbaCarrierId, signalId);
+
+    // Give exact carrier 5 runs on this lane
+    await createFinancialUpload(user.id, Array.from({ length: 5 }, () => ({
+      shipperCity: "reno",
+      consigneeCity: "las vegas",
+      carrier: "RankingExactCarrier",
+      month: "2026-02",
+    })));
+
+    const { status, json } = await apiGet(
+      `/api/lanes/${laneId}/carrier-suggestions?pageSize=0&debug=true`,
+      c
+    );
+    assert(status === 200, `Expected 200, got ${status}`);
+    const data = json as {
+      carriers: Array<{
+        carrierId: string | null;
+        carrierName: string;
+        fitScore: number;
+        historyMatch: string;
+        hasMarketNbaBoost: boolean;
+        debug?: {
+          exactLaneScore: number;
+          marketNbaBoost: number;
+          hfFloorApplied: number;
+          hfAdjustmentApplied: boolean;
+        };
+      }>;
+    };
+
+    const exactCarrier = data.carriers.find(x => x.carrierId === exactCarrierId);
+    const nbaCarrier = data.carriers.find(x => x.carrierId === nbaCarrierId);
+
+    assert(!!exactCarrier, "RankingExactCarrier should appear in results");
+    assert(exactCarrier!.historyMatch === "exact", `exactCarrier.historyMatch should be 'exact', got ${exactCarrier!.historyMatch}`);
+    assert(exactCarrier!.fitScore >= 85, `Exact-lane carrier with 5 runs should have fitScore ≥ 85, got ${exactCarrier!.fitScore}`);
+    // exact-lane carrier should rank before NBA-only carrier
+    const exactIdx = data.carriers.findIndex(x => x.carrierId === exactCarrierId);
+    const nbaIdx = data.carriers.findIndex(x => x.carrierId === nbaCarrierId);
+    if (nbaIdx >= 0) {
+      assert(exactIdx < nbaIdx,
+        `Exact-lane carrier (idx ${exactIdx}) should rank before NBA-only carrier (idx ${nbaIdx})`);
+    }
+    // NBA carrier should have hasMarketNbaBoost=true (visible in response)
+    if (nbaCarrier) {
+      assert(nbaCarrier.hasMarketNbaBoost === true,
+        `NBA carrier should have hasMarketNbaBoost=true, got ${nbaCarrier.hasMarketNbaBoost}`);
+      if (nbaCarrier.debug) {
+        assert(nbaCarrier.debug.marketNbaBoost > 0,
+          `NBA carrier debug.marketNbaBoost should be > 0, got ${nbaCarrier.debug.marketNbaBoost}`);
+      }
+    }
+    // Exact carrier in debug should show hfFloorApplied > 0 (floor was applied)
+    if (exactCarrier?.debug) {
+      assert(exactCarrier.debug.exactLaneScore > 0,
+        `debug.exactLaneScore should be > 0 for exact carrier, got ${exactCarrier.debug.exactLaneScore}`);
+    }
+  });
+
   // ── Summary ────────────────────────────────────────────────────────────────
 
   await cleanup();
