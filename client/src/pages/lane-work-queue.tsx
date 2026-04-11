@@ -1718,12 +1718,15 @@ export default function LaneWorkQueuePage() {
     (queue?.assignedUntouched?.length ?? 0) +
     (queue?.inProgress?.length ?? 0);
 
-  // Sort unassigned by avgLoadsPerWeek descending so highest-frequency lanes appear first
-  const sortedUnassigned = [...(filteredQueue?.unassigned ?? [])].sort((a, b) => {
-    const aVal = parseLoadsPerWeek(a.lane.avgLoadsPerWeek) ?? 0;
-    const bVal = parseLoadsPerWeek(b.lane.avgLoadsPerWeek) ?? 0;
-    return bVal - aVal;
-  });
+  // Sort unassigned by avgLoadsPerWeek descending so highest-frequency lanes appear first.
+  // Memoized so the O(n log n) sort only reruns when filtered data changes, not on every render.
+  const sortedUnassigned = useMemo(() =>
+    [...(filteredQueue?.unassigned ?? [])].sort((a, b) => {
+      const aVal = parseLoadsPerWeek(a.lane.avgLoadsPerWeek) ?? 0;
+      const bVal = parseLoadsPerWeek(b.lane.avgLoadsPerWeek) ?? 0;
+      return bVal - aVal;
+    }),
+  [filteredQueue?.unassigned]);
 
   return (
     <div className="flex flex-col h-full">

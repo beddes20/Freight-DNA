@@ -180,6 +180,65 @@ export function isHighFrequencyLane(
   return false;
 }
 
+/**
+ * Pre-index TMS uploads into a Map<"origin|dest", count> for O(1) HF lookups.
+ *
+ * This replaces the per-lane O(rows) scan in computeHfFromUploads with a single
+ * O(rows) build pass, reducing work-queue cost from O(lanes × rows) → O(rows + lanes).
+ *
+ * Use isHighFrequencyLaneFromIndex() to query the index.
+ */
+export function buildHighFrequencyIndex(uploads: FinancialUpload[]): Map<string, number> {
+  const lookbackMs = HIGH_FREQUENCY_CONFIG.frequencyLookbackDays * 24 * 60 * 60 * 1000;
+  const cutoffDate = new Date(Date.now() - lookbackMs);
+  const cutoffMonth = `${cutoffDate.getFullYear()}-${String(cutoffDate.getMonth() + 1).padStart(2, "0")}`;
+
+  const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+  const index = new Map<string, number>();
+
+  for (const upload of sorted.slice(0, 3)) {
+    const rows = (upload.rows as TmsRow[]) ?? [];
+    for (const row of rows) {
+      const rawMonth = readTmsField(row, "Month", "month");
+      const month = normalizeTmsMonth(rawMonth);
+      if (!month || month < cutoffMonth) continue;
+
+      const rawOriginCity = readTmsField(row, "Origin", "shipperCity", "Shipper city", "Origin city");
+      const rowOrigin = (rawOriginCity ?? "").toString().trim().toLowerCase();
+      const rawDestCity = readTmsField(row, "Destination", "consigneeCity", "Consignee city", "Destination city");
+      const rowDest = (rawDestCity ?? "").toString().trim().toLowerCase();
+
+      if (!rowOrigin || !rowDest) continue;
+      const key = `${rowOrigin}|${rowDest}`;
+      index.set(key, (index.get(key) ?? 0) + 1);
+    }
+  }
+
+  return index;
+}
+
+/**
+ * O(1) HF check using a pre-built index from buildHighFrequencyIndex().
+ * Prefer this over isHighFrequencyLane() when processing many lanes at once.
+ */
+export function isHighFrequencyLaneFromIndex(
+  lane: Pick<RecurringLane, "avgLoadsPerWeek" | "origin" | "destination">,
+  hfIndex: Map<string, number>,
+): boolean {
+  const minLoads = HIGH_FREQUENCY_CONFIG.minLoadsPerWeek;
+  const val = lane.avgLoadsPerWeek;
+  if (val !== null && val !== undefined) {
+    const n = typeof val === "number" ? val : parseFloat(String(val));
+    if (!isNaN(n) && n >= minLoads) return true;
+  }
+  const originNorm = (lane.origin ?? "").toString().trim().toLowerCase();
+  const destNorm = (lane.destination ?? "").toString().trim().toLowerCase();
+  const key = `${originNorm}|${destNorm}`;
+  const count = hfIndex.get(key) ?? 0;
+  const weeksInWindow = HIGH_FREQUENCY_CONFIG.frequencyLookbackDays / 7;
+  return (count / weeksInWindow) >= minLoads;
+}
+
 // ── Carrier Fit Explanation ───────────────────────────────
 
 /**
