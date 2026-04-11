@@ -1,0 +1,378 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+Context:
+We already have:
+- Customer account profiles with RFP lanes / lane patterns.
+- Email Intelligence Layer v1 (spot + mini-bid emails, RFP-related threads).
+- Transactional freight data tied to lanes / lane patterns.
+- Work in flight on:
+  - customer contact capture from email
+  - conversation ownership & waiting-state intelligence.
+
+We now want the system to learn, from real emails + transactional business, which customer contacts appear responsible for WHICH GEOGRAPHIC LANE PATTERNS at a customer — not lane-by-lane, but broader, more stable geographic patterns (regions, corridors, etc.).
+
+Goal:
+Build **Contact-to-Geographic Lane Pattern Responsibility Mapping v1**.
+
+Core semantics:
+- Primary concept: a contact is **responsible_for_pattern** (geographic lane pattern) at a customer.
+- We track finer labels (spot / mini-bid / RFP / ops) as descriptive tags only in v1.
+
+Scope:
+- Customer side only (not carriers) for v1.
+- Email + transactional + RFP data where available.
+- Focus on geographic lane patterns / corridors; use individual lanes mainly as evidence.
+
+--------------------------------------------------
+1. GEOGRAPHIC LANE PATTERNS
+--------------------------------------------------
+
+Work primarily at the geographic pattern level, not individual lanes.
+
+Define or reuse a model:
+- lane_pattern (or geographic_lane_pattern)
+
+Examples:
+- Regions:
+  - “Upper Midwest”, “Southeast”, “Northeast”, “SoCal”, “Texas”, etc.
+- Corridors:
+  - “Midwest → Northeast”, “Texas → Midwest”, “SoCal → Texas”, “Southeast → Northeast”.
+- Region × direction:
+  - “Midwest outbound”, “Midwest inbound”, “Southeast outbound”.
+- Optional overlays later:
+  - mode/equipment or bid type, but v1 can stay mostly geographic.
+
+V1 implementation:
+- Either:
+  - Reuse an existing region/corridor schema if we have one, OR
+  - Define a simple mapping from (origin, destination) states/markets to:
+    - an origin_region,
+    - a destination_region,
+    - and possibly a named corridor (origin_region → destination_region).
+
+We only need enough to roll lanes up into meaningful geographic clusters.
+
+--------------------------------------------------
+2. DATA MODEL
+--------------------------------------------------
+
+Add table:
+account_contact_lane_pattern_responsibilities
+
+Fields:
+- id
+- orgId
+- accountId
+- contactId
+- lanePatternId              // references geographic lane pattern / corridor
+- isResponsibleForPattern (boolean)  // true for active relationships in v1
+- responsibilityType: enum(
+    'spot',
+    'mini_bid',
+    'rfp',
+    'ops',
+    'other'
+  ) nullable                 // descriptive only in v1
+- confidenceScore (0–100)
+- evidenceCount (integer)
+- firstSeenAt
+- lastSeenAt
+- primarySourceType: enum(
+    'email',
+    'transaction',
+    'rfp',
+    'mixed'
+  )
+- status: enum(
+    'suggested',
+    'confirmed',
+    'dismissed'
+  )
+- createdAt / updatedAt
+- lastReviewedAt (nullable)
+- lastReviewedByUserId (nullable)
+
+Semantics:
+- The core is (accountId, contactId, lanePatternId, isResponsibleForPattern, confidenceScore, status).
+- responsibilityType is optional context (we can fill it when obvious).
+
+Indexes:
+- (accountId, contactId)
+- (accountId, lanePatternId)
+- (contactId, lanePatternId)
+
+--------------------------------------------------
+3. EVIDENCE SOURCES (LANES → GEOGRAPHIC PATTERNS)
+--------------------------------------------------
+
+We infer responsibility from three main sources:
+
+A) Email:
+- Spot RFQs, mini-bid emails, RFP-related threads.
+- Each qualifying email gives us:
+  - accountId
+  - contactId(s)
+  - laneId(s) (origin/destination geography)
+  - rough type (spot / mini_bid / rfp / ops)
+- Map laneId(s) → lanePatternId(s) using the geographic pattern mapping.
+
+B) Transactional:
+- Loads / shipments with:
+  - accountId
+  - laneId (origin/destination)
+  - contact responsible for booking/ops (if available)
+- Map laneId → lanePatternId(s).
+
+C) RFP structure:
+- RFP-defined geographic bundles (if present):
+  - e.g., “Midwest outbound lanes” group.
+- Contacts attached to RFPs or specific bundles → evidence into those patterns.
+
+Each evidence event becomes:
+- { accountId, contactId, lanePatternId, responsibilityType (optional), sourceType, timestamp }.
+
+--------------------------------------------------
+4. RESPONSIBILITY INFERENCE LOGIC
+--------------------------------------------------
+
+Implement service:
+accountContactLanePatternResponsibilityService.ts
+
+Responsibilities:
+- Ingest pattern evidence events.
+- Aggregate per (accountId, contactId, lanePatternId).
+- Maintain:
+  - isResponsibleForPattern (implicitly true for active rows),
+  - optional responsibilityType (most common or strongest type),
+  - evidenceCount,
+  - firstSeenAt / lastSeenAt,
+  - primarySourceType,
+  - confidenceScore,
+  - status.
+
+Evidence rules (examples):
+
+1) Geography-based spot:
+   - Contact A is main sender on multiple spot RFQs for lanes all originating from “Upper Midwest” to various regions.
+   - Map those lanes → a pattern like “Upper Midwest outbound”.
+   - Record evidence for that pattern; responsibilityType='spot' (optional).
+
+2) Mini-bid geography:
+   - Contact B runs mini-bids primarily for “Texas → Midwest” lanes.
+   - Map the lanes into that corridor pattern; record evidence (responsibilityType='mini_bid').
+
+3) RFP geography:
+   - Contact C is heavily involved in RFP bundles labelled “Southeast outbound”.
+   - Record evidence into that pattern; responsibilityType='rfp'.
+
+4) Ops geography:
+   - Contact D is tied to operational loads in the “SoCal → TX” corridor.
+   - Record evidence; responsibilityType='ops'.
+
+In v1:
+- Any of these responsibilityTypes still roll up to the same “responsible_for_pattern” semantics.
+- If multiple types exist, keep the most frequent or most recent as primaryType for display; behavior does not depend heavily on it yet.
+
+--------------------------------------------------
+5. CONFIDENCE SCORING
+--------------------------------------------------
+
+Compute confidenceScore per (accountId, contactId, lanePatternId):
+
+Inputs:
+- evidenceCount
+- recency (lastSeenAt)
+- source diversity (email / transaction / RFP)
+- geographic concentration:
+  - how much of this contact’s observed activity is in this geographic pattern vs others?
+
+Example heuristic:
+- Start at 0.
+- For each event:
+  - +10 base points.
+  - If within last 90 days, multiply by 1.5.
+- If we see ≥2 distinct source types for this pattern (e.g., email + transaction), add +15.
+- Compute share of this contact’s lane-related events for the account that map to this pattern; if ≥ X% (e.g., 50–60%), add +15.
+
+Cap at 100, and optionally map to buckets:
+- 0–39: low
+- 40–69: medium
+- 70–100: high
+
+Keep the rules explicit and easy to adjust.
+
+--------------------------------------------------
+6. SUGGESTED VS CONFIRMED
+--------------------------------------------------
+
+System-inferred relationships:
+- start as status='suggested'.
+
+User actions:
+- Confirm:
+  - status='confirmed'
+  - lastReviewedAt / lastReviewedByUserId set.
+- Dismiss:
+  - status='dismissed'
+  - review fields set.
+
+Behavior:
+- Confirmed rows stay confirmed; new evidence just updates evidenceCount, confidenceScore, timestamps.
+- Dismissed rows:
+  - still accumulate evidence but are not re-suggested immediately.
+  - optional: only re-suggest if confidenceScore increases significantly after dismissal (OK to skip re-suggest v1).
+
+Manual add:
+- Users can manually declare:
+  - contact X is responsible_for_pattern Y at this account.
+  - Create row with status='confirmed' and high confidenceScore.
+
+Never:
+- auto-downgrade confirmed to dismissed.
+- auto-delete confirmed rows.
+
+--------------------------------------------------
+7. PIPELINE INTEGRATION
+--------------------------------------------------
+
+A) Email pipeline:
+- When a spot / mini-bid / RFP email is ingested and we know:
+  - accountId, contactId(s), laneId(s), type,
+- Map laneId(s) → lanePatternId(s) (geographic).
+- Emit pattern evidence events into accountContactLanePatternResponsibilityService.
+
+B) Transaction pipeline:
+- When a load is ingested and we know:
+  - accountId, laneId, contactId for booking/ops (if any),
+- Map laneId → lanePatternId(s).
+- Emit ops evidence events.
+
+C) RFP pipeline:
+- When RFP structures/updates are processed and we know:
+  - geographic bundles and attached contacts,
+- Emit RFP-type evidence events.
+
+Requirements:
+- idempotency per base event (no double-counting).
+- failures in this service do not break the core email/transaction pipelines.
+
+--------------------------------------------------
+8. UI / UX
+--------------------------------------------------
+
+Contact-level (per customer account + contact):
+
+Section: “Geographic Lane Responsibilities”
+- Show patterns where this contact is suggested/confirmed responsible_for_pattern:
+  - Pattern label (e.g., “Upper Midwest Outbound”, “Texas → Midwest”, “SoCal → TX”).
+  - Confidence (badge: low / medium / high).
+  - Optional type chip(s): spot / mini-bid / RFP / ops.
+  - Evidence summary, e.g.:
+    - “Seen on 7 spot RFQs and 3 loads in this pattern in last 90 days.”
+
+Actions:
+- Confirm responsibility_for_pattern.
+- Dismiss suggestion.
+- “Show examples” → jump to a filtered view of relevant emails/loads if easily supported.
+
+Account-level:
+
+Section: “Who owns which geographies?”
+- For each major lanePattern for this customer:
+  - list contacts with:
+    - status (suggested vs confirmed),
+    - confidence,
+    - optional type.
+- Optional compact matrix:
+  - rows = geographic patterns,
+  - columns = contacts,
+  - cells = responsibility indicators.
+
+UX guidance:
+- Default view: top few patterns per contact / top few contacts per pattern.
+- Clearly differentiate “suggested” vs “confirmed” visually.
+
+--------------------------------------------------
+9. INTELLIGENCE / NBAs
+--------------------------------------------------
+
+Enable simple NBAs using this mapping:
+
+Examples:
+- “New geographic responsibility detected: [Contact] appears responsible for [Pattern] at [Customer].”
+- “This geographic pattern has transactional history but no confirmed responsible contact; consider confirming [Contact X].”
+- “You’re working on a spot RFQ in [Pattern]; suggest including [Contact(s)] marked responsible_for_pattern.”
+
+V1: at least one NBA that:
+- alerts when a new high-confidence responsibility is discovered,
+- and/or nudges users to confirm a mapping where confidence is high.
+
+--------------------------------------------------
+10. API ENDPOINTS
+--------------------------------------------------
+
+Internal endpoints:
+
+- GET /api/internal/accounts/:accountId/geographic-responsibilities
+  - filters: contactId, lanePatternId, status, minConfidence, responsibilityType.
+
+- GET /api/internal/contacts/:contactId/geographic-responsibilities
+  - filters: accountId, status, minConfidence, responsibilityType.
+
+- POST /api/internal/geographic-responsibilities/:id/confirm
+  - sets status='confirmed', updates review metadata.
+
+- POST /api/internal/geographic-responsibilities/:id/dismiss
+  - sets status='dismissed', updates review metadata.
+
+- POST /api/internal/geographic-responsibilities
+  - manual creation of confirmed relationships.
+
+Respect existing auth / org scoping.
+
+--------------------------------------------------
+11. TESTS
+--------------------------------------------------
+
+Add tests for:
+
+Inference:
+- Multiple spot/mini-bid emails for lanes from the same origin region → responsible_for_pattern for that region’s outbound.
+- Multiple RFP and load events on the same corridor → increasing evidence and confidence.
+- Activity spread across many patterns → no single pattern gets very high confidence.
+
+Status:
+- suggested → confirmed.
+- suggested → dismissed.
+- confirmed rows remain confirmed as evidence accumulates.
+
+Integration:
+- Email → proper lane → pattern mapping.
+- Transaction → lane → pattern mapping.
+- RFP → pattern mapping.
+- Idempotency: no double-count on reprocessing.
+
+UI assumptions:
+- Contact view shows correct patterns, statuses, confidence, and optional types.
+- Account view lists correct patterns and contacts.
+
+--------------------------------------------------
+12. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. Short summary of changes.
+2. Files changed.
+3. New/updated schemas and enums (including geographic lanePattern model if needed).
+4. Rules for mapping lanes → geographic patterns.
+5. Responsibility inference and confidence scoring logic.
+6. UI surfaces for contact-level and account-level geographic responsibilities.
+7. NBAs / queries that use this mapping.
+8. Tests added/updated.
+9. Limitations and recommended next steps (e.g., adding mode/equipment overlays later).
+
+Success criteria:
+- The system can infer and store “Contact X is responsible_for_pattern Y (geographic) at this customer.”
+- Users can see, confirm, or dismiss those relationships.
+- Lane-level activity rolls up into clear, stable geographic patterns.
+- Intelligence and workflows can target the right contacts per geography, not just per account.

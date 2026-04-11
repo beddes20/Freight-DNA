@@ -1,0 +1,285 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+Context:
+We already have:
+- Email Intelligence Layer v1
+- email_messages / email_signals
+- account + carrier associations to email threads
+- early NBAs based on email signals
+- work in flight on contact capture from email
+
+We now want a very focused v1 of:
+- conversation ownership
+- waiting state
+- reply priority
+for EMAIL THREADS ONLY.
+
+Scope:
+- Email threads only (no notes/tasks/in-app messages in v1).
+- Customer + carrier conversations only.
+- Single owner per thread.
+- Simple, action-oriented states.
+
+Goal:
+Build **Conversation Ownership, Waiting State & Reply Priority v1**.
+
+--------------------------------------------------
+1. DATA MODEL
+--------------------------------------------------
+
+Extend the existing conversation/thread-level entity (or add a small metadata table) with:
+
+- id
+- orgId
+- accountId / carrierId (nullable)
+- ownerUserId (nullable)
+- waitingState: enum(
+    'waiting_on_us',
+    'waiting_on_them',
+    'resolved'
+  )
+- responsePriority: enum(
+    'high',
+    'normal',
+    'low'
+  )
+- lastMessageId
+- lastIncomingAt (from external party)
+- lastOutgoingAt (from us)
+- waitingSinceAt (when it first became `waiting_on_us`)
+- overdueAt (nullable; first time it becomes “over SLA”)
+- createdAt / updatedAt
+
+If you need history later, we can add ownership events in a follow-up; v1 can keep it simple.
+
+--------------------------------------------------
+2. OWNERSHIP LOGIC (EMAIL-ONLY)
+--------------------------------------------------
+
+Implement a service:
+conversationOwnershipService.ts
+
+Responsibilities:
+- assign an initial owner for new email threads
+- allow manual changes from the UI
+
+Initial owner rules (in order):
+
+1) If the email thread is linked to a customer account:
+   - if the account has an “account owner”, use that.
+   - otherwise, if a single internal user sent the first outbound email, use that user.
+
+2) If the thread is linked to a carrier:
+   - if the carrier has an internal “carrier owner”, use that.
+   - otherwise, use the internal user who sent the first outbound email.
+
+3) If no account/carrier mapping but an internal user initiated the thread:
+   - use that initiating user.
+
+4) If we still can’t determine an owner:
+   - leave ownerUserId = null (explicitly “unowned”).
+
+Reassignment v1:
+- No auto-reassigns on every reply.
+- Only allow:
+  - manual change via UI, and
+  - simple reassignment when a user is deactivated or an account/carrier owner changes (if that mapping already exists in code).
+
+--------------------------------------------------
+3. WAITING STATE LOGIC
+--------------------------------------------------
+
+Implement:
+conversationWaitingStateService.ts
+
+States:
+- waiting_on_us
+- waiting_on_them
+- resolved
+
+Rules:
+
+- When a new message is ingested:
+  - Determine whether the sender is “us” (one of our users) or “them” (customer/carrier/contact).
+  - If it’s the first message:
+    - If from them → waiting_on_us, set waitingSinceAt = message.timestamp.
+    - If from us → waiting_on_them.
+
+- For subsequent messages:
+  - If last message is from them:
+    - waitingState = waiting_on_us
+    - if previously not waiting_on_us, set waitingSinceAt = message.timestamp, clear overdueAt.
+  - If last message is from us:
+    - waitingState = waiting_on_them
+    - clear waitingSinceAt and overdueAt.
+  - If we explicitly mark a thread resolved from UI:
+    - waitingState = resolved
+    - clear waitingSinceAt and overdueAt.
+
+V1 does NOT need extra states like “idle” or “blocked”; keep it to these three.
+
+--------------------------------------------------
+4. REPLY PRIORITY & OVERDUE LOGIC
+--------------------------------------------------
+
+We want a simple but useful priority system on top of waiting state.
+
+Add:
+- responsePriority: 'high' | 'normal' | 'low'
+- waitingSinceAt
+- overdueAt (nullable)
+
+Priority rules (can be constants/config in v1):
+
+- High if:
+  - thread is tied to an “important” account/carrier (if we have such a flag), OR
+  - thread relates to an active load (if we can detect it), OR
+  - marked manually as high in UI.
+
+- Low if:
+  - clearly non-urgent (newsletters, marketing, broad announcements) OR
+  - manually marked low.
+
+- Normal otherwise.
+
+Overdue rules (simple SLAs):
+
+For threads where:
+- waitingState = waiting_on_us, AND
+- responsePriority = high or normal,
+
+define SLAs like:
+- high: overdue if waitingSinceAt is older than X hours
+- normal: overdue if older than Y hours
+- low: no SLA in v1 (or very lax)
+
+When a thread crosses its SLA threshold, set overdueAt = now.
+If it switches out of waiting_on_us, clear overdueAt.
+
+We just need consistent constants X and Y; v1 can hardcode them.
+
+--------------------------------------------------
+5. EMAIL PIPELINE INTEGRATION
+--------------------------------------------------
+
+Hook into the existing email ingestion / email_signals pipeline.
+
+On each ingested email:
+- Link or create the thread.
+- Ensure ownerUserId is set via conversationOwnershipService (if empty).
+- Update:
+  - lastMessageId
+  - lastIncomingAt or lastOutgoingAt
+- Recompute:
+  - waitingState
+  - waitingSinceAt
+  - overdueAt (if we just crossed an SLA)
+- Ensure idempotency per message and don’t break ingestion if this logic fails.
+
+--------------------------------------------------
+6. UI / UX (EMAIL VIEWS ONLY)
+--------------------------------------------------
+
+In the email UI for customer/carrier conversations:
+
+Per-thread display:
+- Show owner:
+  - avatar + name, or “Unowned” badge.
+  - Click → change owner (dropdown of users). Optional “Assign to me” shortcut.
+- Show waiting state:
+  - badge: “Waiting on us”, “Waiting on customer”, “Resolved”.
+- Show priority:
+  - small indicator: high / normal / low (e.g., dot color or label).
+- Show overdue:
+  - if waiting_on_us and overdueAt != null, highlight thread (badge or subtle red/orange indicator).
+
+List / inbox view:
+- Filters:
+  - ownerUserId (e.g., “Mine”, “Unowned”, any user).
+  - waitingState.
+  - responsePriority.
+  - overdue (yes/no).
+- Useful built-in views:
+  - “My conversations — waiting on us” (sorted by overdue, then oldest waitingSinceAt).
+  - “Unowned — waiting on us”.
+  - “All high-priority — waiting on us”.
+
+Keep v1 UI small: a column/badge for owner, waiting state, priority, and a sort by “needs response”.
+
+--------------------------------------------------
+7. NBAs & ALERTS
+--------------------------------------------------
+
+Expose these states into the existing NBAs/intelligence.
+
+Add NBAs like:
+- “You have N conversations waiting on you (X overdue).”
+- “High-priority account conversation waiting on us for > SLA.”
+- “Unowned conversation waiting on us.”
+
+The NBA doesn’t need smart copy in v1; just correct counts and links into the filtered view.
+
+--------------------------------------------------
+8. API ENDPOINTS
+--------------------------------------------------
+
+Add or extend internal endpoints:
+
+- GET /api/internal/conversations
+  - filters: accountId, carrierId, ownerUserId, waitingState, responsePriority, overdue.
+- POST /api/internal/conversations/:id/owner
+  - body: { ownerUserId | null }
+- POST /api/internal/conversations/:id/waiting-state
+  - body: { waitingState }
+- POST /api/internal/conversations/:id/priority
+  - body: { responsePriority }
+
+Use existing auth/org guards.
+
+--------------------------------------------------
+9. TESTS
+--------------------------------------------------
+
+Add tests for:
+
+Ownership:
+- new email on account with account owner → owner set correctly.
+- new email initiated by internal user → owner = that user.
+- no mapping → owner null.
+
+Waiting state:
+- last message from them → waiting_on_us, waitingSinceAt set.
+- last message from us → waiting_on_them, waitingSinceAt cleared.
+- manual resolve → resolved and timers cleared.
+
+Priority & overdue:
+- high vs normal vs low assigned correctly based on rules.
+- threads cross SLA thresholds and set overdueAt.
+- clearing waiting_on_us clears overdueAt.
+
+Integration:
+- email ingestion calls the services and updates fields.
+- repeated processing of the same message is idempotent.
+
+--------------------------------------------------
+10. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. Short summary of changes.
+2. Files changed.
+3. New/updated schemas and enums.
+4. Ownership rules implemented (and any assumptions).
+5. Waiting state & SLA rules.
+6. UI surfaces for owner, waiting state, priority, and overdue.
+7. NBAs / filters added.
+8. Tests added/updated.
+9. Limitations and suggested next steps (e.g., handling non-email channels later).
+
+Success criteria:
+- For email threads tied to customers or carriers, we always know:
+  - who owns the conversation,
+  - who the ball is with (us vs them),
+  - which threads need a reply first.
+- Reps can clear their “waiting on us” queue.
+- This all works without adding noise or overcomplicating the model.
