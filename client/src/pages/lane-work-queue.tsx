@@ -14,6 +14,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatLaneDisplay, formatWeeklyLoadRange } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -115,29 +116,24 @@ interface LaneReplySummary {
 }
 
 interface LaneItem {
-  lane: {
-    id: string;
-    origin: string;
-    originState: string | null;
-    destination: string;
-    destinationState: string | null;
-    equipmentType: string | null;
-    avgLoadsPerWeek: string | null;
-    laneScore: number | null;
-    eligibilityConfidence: string;
-    companyId: string | null;
-    companyName: string | null;
-    carriersContactedCount: number | null;
-    ownerUserId: string | null;
-    ownerName: string | null;
-    assignedAt: string | null;
-    isManual: boolean;
-  };
+  laneId: string;
+  origin: string;
+  originState: string | null;
+  destination: string;
+  destinationState: string | null;
+  equipmentType: string | null;
+  avgLoadsPerWeek: string | null;
+  laneScore: number | null;
+  companyId: string | null;
+  companyName: string | null;
+  carriersContactedCount: number;
+  ownerUserId: string | null;
+  ownerName: string | null;
   contactableCount: number;
   totalBenchCount: number;
   historicalCount: number;
   missingContactCount: number;
-  replySummary?: LaneReplySummary;
+  isHighFrequency?: boolean;
 }
 
 interface WorkQueue {
@@ -147,6 +143,22 @@ interface WorkQueue {
   inProgress: LaneItem[];
   scopeLabel?: string;
   customers?: string[];  // distinct customer names from all visible lanes (for filter dropdown)
+  pagination?: {
+    limit: number;
+    nextCursors: {
+      unassigned: string | null;
+      noContactable: string | null;
+      assignedUntouched: string | null;
+      inProgress: string | null;
+    };
+    totals: {
+      unassigned: number;
+      noContactable: number;
+      assignedUntouched: number;
+      inProgress: number;
+      total: number;
+    };
+  };
 }
 
 interface EngineRunMeta {
@@ -167,8 +179,8 @@ interface TeamMember {
 
 const HIGH_FREQ_THRESHOLD = 2; // loads/week — main procurement priority
 
-function laneLabel(item: LaneItem["lane"]) {
-  return formatLaneDisplay(item.origin, item.originState, item.destination, item.destinationState);
+function laneLabel(item: { origin: string; originState?: string | null; destination: string; destinationState?: string | null }) {
+  return formatLaneDisplay(item.origin, item.originState ?? null, item.destination, item.destinationState ?? null);
 }
 
 function confidenceColor(c: string) {
@@ -319,10 +331,10 @@ function CoverageStatusBadge({
 /** Sort items — high-frequency first, then by laneScore descending */
 function sortItems(items: LaneItem[]): LaneItem[] {
   return [...items].sort((a, b) => {
-    const aFreq = avgLoadsNum(a.lane.avgLoadsPerWeek);
-    const bFreq = avgLoadsNum(b.lane.avgLoadsPerWeek);
+    const aFreq = avgLoadsNum(a.avgLoadsPerWeek);
+    const bFreq = avgLoadsNum(b.avgLoadsPerWeek);
     if (bFreq !== aFreq) return bFreq - aFreq;
-    return (b.lane.laneScore ?? 0) - (a.lane.laneScore ?? 0);
+    return (b.laneScore ?? 0) - (a.laneScore ?? 0);
   });
 }
 
@@ -495,37 +507,70 @@ function LaneRow({
   teamMembers: TeamMember[];
 }) {
   const { toast } = useToast();
+
+  // Prefetch detail data on hover so the panel opens instantly
+  function handleMouseEnter() {
+    queryClient.prefetchQuery({
+      queryKey: ["/api/recurring-lanes", item.laneId, "detail"],
+      queryFn: () => fetch(`/api/recurring-lanes/${item.laneId}/detail`).then(r => r.json()),
+      staleTime: 2 * 60 * 1000,
+    });
+  }
   const { user: currentUser } = useAuth();
   const isManager = MANAGER_ROLES.includes(currentUser?.role ?? "");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editForm, setEditForm] = useState({
-    origin: item.lane.origin ?? "",
-    originState: item.lane.originState ?? "",
-    destination: item.lane.destination ?? "",
-    destinationState: item.lane.destinationState ?? "",
-    equipmentType: item.lane.equipmentType ?? "",
-    avgLoadsPerWeek: item.lane.avgLoadsPerWeek ?? "",
-    companyName: item.lane.companyName ?? "",
+    origin: item.origin ?? "",
+    originState: item.originState ?? "",
+    destination: item.destination ?? "",
+    destinationState: item.destinationState ?? "",
+    equipmentType: item.equipmentType ?? "",
+    avgLoadsPerWeek: item.avgLoadsPerWeek ?? "",
+    companyName: item.companyName ?? "",
   });
 
   const selfAssignMutation = useMutation({
     mutationFn: (ownerUserId: string | null) =>
-      apiRequest("POST", `/api/recurring-lanes/${item.lane.id}/assign`, { ownerUserId }).then(r => r.json()),
-    onSuccess: (_data, ownerUserId) => {
+      apiRequest("POST", `/api/recurring-lanes/${item.laneId}/assign`, { ownerUserId }).then(r => r.json()),
+    onSuccess: (updatedLane, ownerUserId) => {
+      // In-place cache patch — avoids a full refetch for simple assign/unassign.
+      queryClient.setQueryData<WorkQueue>(["/api/recurring-lanes/work-queue"], (prev) => {
+        if (!prev) return prev;
+        const patchBucket = (bucket: LaneItem[]): LaneItem[] =>
+          bucket.map(i =>
+            i.laneId === item.laneId
+              ? {
+                  ...i,
+                  ownerUserId: ownerUserId ?? null,
+                  ownerName: ownerUserId
+                    ? (updatedLane?.ownerName ?? i.ownerName)
+                    : null,
+                }
+              : i
+          );
+        return {
+          ...prev,
+          unassigned: patchBucket(prev.unassigned ?? []),
+          noContactable: patchBucket(prev.noContactable ?? []),
+          assignedUntouched: patchBucket(prev.assignedUntouched ?? []),
+          inProgress: patchBucket(prev.inProgress ?? []),
+        };
+      });
+      // Structural changes (bucket reassignment) still require a background invalidation
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
       toast({ title: ownerUserId === null ? "Lane unassigned" : "Lane assigned" });
     },
     onError: () => toast({ title: "Assignment failed", variant: "destructive" }),
   });
 
-  const canUnassign = item.lane.ownerUserId &&
-    (isManager || item.lane.ownerUserId === currentUser?.id);
+  const canUnassign = item.ownerUserId &&
+    (isManager || item.ownerUserId === currentUser?.id);
 
-  const canDelete = isManager || item.lane.ownerUserId === currentUser?.id;
+  const canDelete = isManager || item.ownerUserId === currentUser?.id;
 
   const deleteMutation = useMutation({
-    mutationFn: () => apiRequest("DELETE", `/api/recurring-lanes/${item.lane.id}`),
+    mutationFn: () => apiRequest("DELETE", `/api/recurring-lanes/${item.laneId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
       toast({ title: "Lane deleted" });
@@ -536,7 +581,7 @@ function LaneRow({
 
   const editMutation = useMutation({
     mutationFn: (data: typeof editForm) =>
-      apiRequest("PATCH", `/api/recurring-lanes/${item.lane.id}`, {
+      apiRequest("PATCH", `/api/recurring-lanes/${item.laneId}`, {
         origin: data.origin.trim() || undefined,
         originState: data.originState.trim() || null,
         destination: data.destination.trim() || undefined,
@@ -554,21 +599,16 @@ function LaneRow({
   });
 
   const { data: coverageData } = useQuery<{ profile: CoverageProfile; carriers: CoverageProfileCarrier[] }>({
-    queryKey: ["/api/lanes", item.lane.id, "coverage-profile"],
-    queryFn: () => fetch(`/api/lanes/${item.lane.id}/coverage-profile`).then(r => r.ok ? r.json() : null),
+    queryKey: ["/api/lanes", item.laneId, "coverage-profile"],
+    queryFn: () => fetch(`/api/lanes/${item.laneId}/coverage-profile`).then(r => r.ok ? r.json() : null),
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
 
-  const contacted = item.lane.carriersContactedCount ?? 0;
+  const contacted = item.carriersContactedCount ?? 0;
   const progressPct = Math.min(100, (contacted / completionThreshold) * 100);
-  const loadsNum = avgLoadsNum(item.lane.avgLoadsPerWeek);
-  // Prefer server-stamped isHighFrequency (Task #188) with avgLoadsPerWeek as fallback
-  const isHighFreq = (item.lane as { isHighFrequency?: boolean }).isHighFrequency
-    ?? (loadsNum >= HIGH_FREQ_THRESHOLD);
-
-  const hasHotReply = (item.replySummary?.hotCount ?? 0) > 0;
-  const replyNeedsAction = item.replySummary?.needsAction ?? false;
+  const loadsNum = avgLoadsNum(item.avgLoadsPerWeek);
+  const isHighFreq = item.isHighFrequency ?? (loadsNum >= HIGH_FREQ_THRESHOLD);
 
   return (
     <div
@@ -582,18 +622,19 @@ function LaneRow({
             ? "border-amber-500/20"
             : "border-border"
       }`}
-      onClick={() => onOpen(item.lane.id)}
-      data-testid={`work-queue-row-${item.lane.id}`}
+      onClick={() => onOpen(item.laneId)}
+      onMouseEnter={handleMouseEnter}
+      data-testid={`work-queue-row-${item.laneId}`}
     >
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
           {/* Customer name — always shown first, prominent */}
-          {item.lane.companyName && (
+          {item.companyName && (
             <div className="flex items-center gap-1.5 mb-1.5">
               <Building2 className="w-3 h-3 text-blue-400 shrink-0" />
-              <span className="text-xs font-semibold text-blue-500 dark:text-blue-400">{item.lane.companyName}</span>
+              <span className="text-xs font-semibold text-blue-500 dark:text-blue-400">{item.companyName}</span>
               {/* CRM match indicator: show 'CRM' badge if companyId resolved, otherwise 'customer name' fallback */}
-              {item.lane.companyId ? (
+              {item.companyId ? (
                 <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 bg-blue-500/10">CRM</Badge>
               ) : (
                 <Badge variant="outline" className="text-[9px] py-0 px-1 border-slate-500/30 text-muted-foreground" title="Customer name from TMS — not yet matched to a CRM account">TMS name</Badge>
@@ -602,49 +643,34 @@ function LaneRow({
           )}
           {/* Lane label + badges */}
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-foreground">{laneLabel(item.lane)}</span>
+            <span className="text-sm font-semibold text-foreground">{laneLabel(item)}</span>
             {/* Frequency badge — prominent, always first */}
-            <FrequencyBadge val={item.lane.avgLoadsPerWeek} />
+            <FrequencyBadge val={item.avgLoadsPerWeek} />
             {/* High-frequency lane badge (Task #188): shown when ≥2 loads/week */}
             {isHighFreq && (
               <Badge
                 variant="outline"
                 className="text-[10px] py-0 px-1.5 border-orange-500/50 text-orange-400 bg-orange-500/10 gap-0.5 font-semibold"
-                data-testid={`badge-hf-lane-${item.lane.id}`}
+                data-testid={`badge-hf-lane-${item.laneId}`}
                 title="High-frequency lane: 2+ loads/week — enhanced carrier ranking and bulk outreach enabled"
               >
                 <Zap className="w-2.5 h-2.5" />
                 HF Lane
               </Badge>
             )}
-            {item.lane.isManual && (
-              <Badge
-                variant="outline"
-                className="text-[10px] py-0 px-1.5 border-violet-500/50 text-violet-400 bg-violet-500/10"
-                data-testid={`badge-manual-${item.lane.id}`}
-              >
-                Manual
-              </Badge>
-            )}
             <Badge variant="outline" className="text-[10px] py-0 px-1.5">
-              {item.lane.equipmentType ?? "Any"}
-            </Badge>
-            <Badge variant="outline" className={`text-[10px] py-0 px-1.5 capitalize ${confidenceColor(item.lane.eligibilityConfidence)}`}>
-              {item.lane.eligibilityConfidence}
+              {item.equipmentType ?? "Any"}
             </Badge>
           </div>
 
-          {/* Coverage status + reply badges */}
+          {/* Coverage status badge */}
           <div className="mt-1.5 flex items-center gap-2 flex-wrap">
             {coverageData?.profile && (
               <CoverageStatusBadge
                 profile={coverageData.profile}
                 carriers={coverageData.carriers}
-                laneId={item.lane.id}
+                laneId={item.laneId}
               />
-            )}
-            {item.replySummary && item.replySummary.totalReplied > 0 && (
-              <ReplyBadge summary={item.replySummary} laneId={item.lane.id} />
             )}
           </div>
 
@@ -653,7 +679,7 @@ function LaneRow({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="text-[11px] text-muted-foreground cursor-help">
-                  Score: <span className="text-foreground font-medium">{item.lane.laneScore ?? "—"}</span>
+                  Score: <span className="text-foreground font-medium">{item.laneScore ?? "—"}</span>
                 </span>
               </TooltipTrigger>
               <TooltipContent className="text-xs max-w-[240px] space-y-1 p-3">
@@ -712,7 +738,7 @@ function LaneRow({
                 <div
                   className={`h-1.5 rounded-full transition-all ${contacted > 0 ? "bg-amber-400" : "bg-muted-foreground/30"}`}
                   style={{ width: `${progressPct}%` }}
-                  data-testid={`progress-bar-${item.lane.id}`}
+                  data-testid={`progress-bar-${item.laneId}`}
                 />
               </div>
             </div>
@@ -720,15 +746,10 @@ function LaneRow({
 
           {/* Owner chip + assign controls */}
           <div className="flex items-center gap-2 mt-2 flex-wrap" onClick={e => e.stopPropagation()}>
-            {item.lane.ownerName ? (
+            {item.ownerName ? (
               <div className="flex items-center gap-1 text-[11px] text-muted-foreground bg-muted/50 border border-border rounded-full px-2 py-0.5">
                 <User className="w-3 h-3 text-blue-500" />
-                {item.lane.ownerName}
-                {item.lane.assignedAt && (
-                  <span className="text-[10px] text-muted-foreground/60">
-                    · {new Date(item.lane.assignedAt).toLocaleDateString()}
-                  </span>
-                )}
+                {item.ownerName}
               </div>
             ) : (
               <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -745,14 +766,14 @@ function LaneRow({
                 className="h-6 text-[10px] px-2 border-red-400/30 text-red-400 hover:bg-red-500/10 gap-1"
                 onClick={e => { e.stopPropagation(); selfAssignMutation.mutate(null); }}
                 disabled={selfAssignMutation.isPending}
-                data-testid={`btn-unassign-${item.lane.id}`}
+                data-testid={`btn-unassign-${item.laneId}`}
               >
                 {selfAssignMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <><UserX className="w-3 h-3" />Unassign</>}
               </Button>
             )}
 
             {/* Unassigned lane: show both "Assign to me" (for self) and "Assign to..." dropdown (for managers) */}
-            {!item.lane.ownerUserId && currentUser && (
+            {!item.ownerUserId && currentUser && (
               <>
                 <Button
                   size="sm"
@@ -760,13 +781,13 @@ function LaneRow({
                   className="h-6 text-[10px] px-2 border-blue-400/30 text-blue-400 hover:bg-blue-500/10"
                   onClick={e => { e.stopPropagation(); selfAssignMutation.mutate(currentUser.id); }}
                   disabled={selfAssignMutation.isPending}
-                  data-testid={`btn-assign-self-${item.lane.id}`}
+                  data-testid={`btn-assign-self-${item.laneId}`}
                 >
                   {selfAssignMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Assign to me"}
                 </Button>
                 {isManager && teamMembers.length > 0 && (
                   <AssignToDropdown
-                    laneId={item.lane.id}
+                    laneId={item.laneId}
                     teamMembers={teamMembers}
                     onAssigned={() => {}}
                   />
@@ -782,8 +803,8 @@ function LaneRow({
             {canDelete && (
               <button
                 className="p-1 rounded hover:bg-amber-500/10 text-muted-foreground hover:text-amber-400"
-                onClick={e => { e.stopPropagation(); setEditForm({ origin: item.lane.origin ?? "", originState: item.lane.originState ?? "", destination: item.lane.destination ?? "", destinationState: item.lane.destinationState ?? "", equipmentType: item.lane.equipmentType ?? "", avgLoadsPerWeek: item.lane.avgLoadsPerWeek ?? "", companyName: item.lane.companyName ?? "" }); setEditDialogOpen(true); }}
-                data-testid={`btn-edit-lane-${item.lane.id}`}
+                onClick={e => { e.stopPropagation(); setEditForm({ origin: item.origin ?? "", originState: item.originState ?? "", destination: item.destination ?? "", destinationState: item.destinationState ?? "", equipmentType: item.equipmentType ?? "", avgLoadsPerWeek: item.avgLoadsPerWeek ?? "", companyName: item.companyName ?? "" }); setEditDialogOpen(true); }}
+                data-testid={`btn-edit-lane-${item.laneId}`}
                 title="Edit lane"
               >
                 <Pencil className="w-3.5 h-3.5" />
@@ -793,7 +814,7 @@ function LaneRow({
               <button
                 className="p-1 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400"
                 onClick={e => { e.stopPropagation(); setDeleteDialogOpen(true); }}
-                data-testid={`btn-delete-lane-${item.lane.id}`}
+                data-testid={`btn-delete-lane-${item.laneId}`}
                 title="Delete lane"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -810,16 +831,16 @@ function LaneRow({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete lane?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently remove <strong>{laneLabel(item.lane)}</strong> from the work queue along with all carrier interest records. This action cannot be undone.
+              This will permanently remove <strong>{laneLabel(item)}</strong> from the work queue along with all carrier interest records. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel data-testid={`btn-delete-lane-cancel-${item.lane.id}`}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel data-testid={`btn-delete-lane-cancel-${item.laneId}`}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-red-600 hover:bg-red-700 text-white"
               onClick={() => deleteMutation.mutate()}
               disabled={deleteMutation.isPending}
-              data-testid={`btn-delete-lane-confirm-${item.lane.id}`}
+              data-testid={`btn-delete-lane-confirm-${item.laneId}`}
             >
               {deleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete lane"}
             </AlertDialogAction>
@@ -837,94 +858,94 @@ function LaneRow({
           <div className="grid gap-4 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor={`edit-origin-${item.lane.id}`}>Origin city</Label>
+                <Label htmlFor={`edit-origin-${item.laneId}`}>Origin city</Label>
                 <Input
-                  id={`edit-origin-${item.lane.id}`}
+                  id={`edit-origin-${item.laneId}`}
                   value={editForm.origin}
                   onChange={e => setEditForm(f => ({ ...f, origin: e.target.value }))}
                   placeholder="e.g. Chicago"
-                  data-testid={`input-edit-origin-${item.lane.id}`}
+                  data-testid={`input-edit-origin-${item.laneId}`}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor={`edit-origin-state-${item.lane.id}`}>Origin state</Label>
+                <Label htmlFor={`edit-origin-state-${item.laneId}`}>Origin state</Label>
                 <Input
-                  id={`edit-origin-state-${item.lane.id}`}
+                  id={`edit-origin-state-${item.laneId}`}
                   value={editForm.originState}
                   onChange={e => setEditForm(f => ({ ...f, originState: e.target.value }))}
                   placeholder="e.g. IL"
                   maxLength={2}
-                  data-testid={`input-edit-origin-state-${item.lane.id}`}
+                  data-testid={`input-edit-origin-state-${item.laneId}`}
                 />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor={`edit-destination-${item.lane.id}`}>Destination city</Label>
+                <Label htmlFor={`edit-destination-${item.laneId}`}>Destination city</Label>
                 <Input
-                  id={`edit-destination-${item.lane.id}`}
+                  id={`edit-destination-${item.laneId}`}
                   value={editForm.destination}
                   onChange={e => setEditForm(f => ({ ...f, destination: e.target.value }))}
                   placeholder="e.g. Dallas"
-                  data-testid={`input-edit-destination-${item.lane.id}`}
+                  data-testid={`input-edit-destination-${item.laneId}`}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor={`edit-destination-state-${item.lane.id}`}>Destination state</Label>
+                <Label htmlFor={`edit-destination-state-${item.laneId}`}>Destination state</Label>
                 <Input
-                  id={`edit-destination-state-${item.lane.id}`}
+                  id={`edit-destination-state-${item.laneId}`}
                   value={editForm.destinationState}
                   onChange={e => setEditForm(f => ({ ...f, destinationState: e.target.value }))}
                   placeholder="e.g. TX"
                   maxLength={2}
-                  data-testid={`input-edit-destination-state-${item.lane.id}`}
+                  data-testid={`input-edit-destination-state-${item.laneId}`}
                 />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor={`edit-equipment-${item.lane.id}`}>Equipment type</Label>
+                <Label htmlFor={`edit-equipment-${item.laneId}`}>Equipment type</Label>
                 <Input
-                  id={`edit-equipment-${item.lane.id}`}
+                  id={`edit-equipment-${item.laneId}`}
                   value={editForm.equipmentType}
                   onChange={e => setEditForm(f => ({ ...f, equipmentType: e.target.value }))}
                   placeholder="e.g. Dry Van"
-                  data-testid={`input-edit-equipment-${item.lane.id}`}
+                  data-testid={`input-edit-equipment-${item.laneId}`}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor={`edit-loads-${item.lane.id}`}>Avg loads/week</Label>
+                <Label htmlFor={`edit-loads-${item.laneId}`}>Avg loads/week</Label>
                 <Input
-                  id={`edit-loads-${item.lane.id}`}
+                  id={`edit-loads-${item.laneId}`}
                   type="number"
                   min="0"
                   step="0.1"
                   value={editForm.avgLoadsPerWeek}
                   onChange={e => setEditForm(f => ({ ...f, avgLoadsPerWeek: e.target.value }))}
                   placeholder="e.g. 3.5"
-                  data-testid={`input-edit-loads-${item.lane.id}`}
+                  data-testid={`input-edit-loads-${item.laneId}`}
                 />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor={`edit-company-${item.lane.id}`}>Customer name</Label>
+              <Label htmlFor={`edit-company-${item.laneId}`}>Customer name</Label>
               <Input
-                id={`edit-company-${item.lane.id}`}
+                id={`edit-company-${item.laneId}`}
                 value={editForm.companyName}
                 onChange={e => setEditForm(f => ({ ...f, companyName: e.target.value }))}
                 placeholder="e.g. Acme Corp"
-                data-testid={`input-edit-company-${item.lane.id}`}
+                data-testid={`input-edit-company-${item.laneId}`}
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditDialogOpen(false)} data-testid={`btn-edit-cancel-${item.lane.id}`}>
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)} data-testid={`btn-edit-cancel-${item.laneId}`}>
               Cancel
             </Button>
             <Button
               onClick={() => editMutation.mutate(editForm)}
               disabled={editMutation.isPending || !editForm.origin.trim() || !editForm.destination.trim()}
-              data-testid={`btn-edit-save-${item.lane.id}`}
+              data-testid={`btn-edit-save-${item.laneId}`}
             >
               {editMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
               Save changes
@@ -962,9 +983,9 @@ function CustomerGroup({
     setExpanded(defaultExpanded);
   }, [defaultExpanded]);
 
-  const totalLoads = items.reduce((sum, i) => sum + avgLoadsNum(i.lane.avgLoadsPerWeek), 0);
-  const highFreqCount = items.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length;
-  const hasCrmMatch = items.some(i => i.lane.companyId);
+  const totalLoads = items.reduce((sum, i) => sum + avgLoadsNum(i.avgLoadsPerWeek), 0);
+  const highFreqCount = items.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length;
+  const hasCrmMatch = items.some(i => i.companyId);
 
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden" data-testid={`customer-group-${customerName}`}>
@@ -1003,7 +1024,7 @@ function CustomerGroup({
         <div className="flex flex-col gap-1 px-2 pb-2 pt-0 border-t border-border/50 bg-muted/10">
           {items.map(item => (
             <LaneRow
-              key={item.lane.id}
+              key={item.laneId}
               item={item}
               completionThreshold={completionThreshold}
               onOpen={onOpen}
@@ -1047,7 +1068,7 @@ function BucketSection({
 
   const visibleItems = useMemo(() => {
     const sorted = sortItems(items);
-    return highFreqOnly ? sorted.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD) : sorted;
+    return highFreqOnly ? sorted.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD) : sorted;
   }, [items, highFreqOnly]);
 
   const hiddenCount = items.length - visibleItems.length;
@@ -1056,7 +1077,7 @@ function BucketSection({
   const customerGroups = useMemo(() => {
     const groupMap = new Map<string, LaneItem[]>();
     for (const item of visibleItems) {
-      const key = item.lane.companyName?.trim() || "Unknown Customer";
+      const key = item.companyName?.trim() || "Unknown Customer";
       if (!groupMap.has(key)) groupMap.set(key, []);
       groupMap.get(key)!.push(item);
     }
@@ -1065,7 +1086,7 @@ function BucketSection({
       .map(([name, lanes]) => ({
         name,
         lanes,
-        totalLoads: lanes.reduce((s, i) => s + avgLoadsNum(i.lane.avgLoadsPerWeek), 0),
+        totalLoads: lanes.reduce((s, i) => s + avgLoadsNum(i.avgLoadsPerWeek), 0),
       }))
       .sort((a, b) => b.totalLoads - a.totalLoads);
   }, [visibleItems]);
@@ -1683,10 +1704,10 @@ export default function LaneWorkQueuePage() {
   const filterBucket = (items: LaneItem[]) => {
     let out = items;
     if (customerFilter !== "__all__") {
-      out = out.filter(i => i.lane.companyName === customerFilter);
+      out = out.filter(i => i.companyName === customerFilter);
     }
     if (highFreqOnly) {
-      out = out.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD);
+      out = out.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD);
     }
     return out;
   };
@@ -1706,10 +1727,10 @@ export default function LaneWorkQueuePage() {
   const highFreqCount = useMemo(() => {
     if (!queue?.unassigned) return 0;
     return (
-      queue.unassigned.filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
-      (queue.noContactable ?? []).filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
-      (queue.assignedUntouched ?? []).filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
-      (queue.inProgress ?? []).filter(i => avgLoadsNum(i.lane.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length
+      queue.unassigned.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
+      (queue.noContactable ?? []).filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
+      (queue.assignedUntouched ?? []).filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
+      (queue.inProgress ?? []).filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length
     );
   }, [queue]);
 
@@ -1722,8 +1743,8 @@ export default function LaneWorkQueuePage() {
   // Memoized so the O(n log n) sort only reruns when filtered data changes, not on every render.
   const sortedUnassigned = useMemo(() =>
     [...(filteredQueue?.unassigned ?? [])].sort((a, b) => {
-      const aVal = parseLoadsPerWeek(a.lane.avgLoadsPerWeek) ?? 0;
-      const bVal = parseLoadsPerWeek(b.lane.avgLoadsPerWeek) ?? 0;
+      const aVal = parseLoadsPerWeek(a.avgLoadsPerWeek) ?? 0;
+      const bVal = parseLoadsPerWeek(b.avgLoadsPerWeek) ?? 0;
       return bVal - aVal;
     }),
   [filteredQueue?.unassigned]);
@@ -1842,9 +1863,40 @@ export default function LaneWorkQueuePage() {
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-6 py-6">
         {isLoading ? (
-          <div className="flex items-center gap-2 text-muted-foreground py-8">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm">Loading work queue…</span>
+          <div className="space-y-4" data-testid="lwq-skeleton">
+            {/* Summary stat chips skeleton */}
+            <div className="flex gap-3 flex-wrap mb-6">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="rounded-lg border border-border px-3 py-2 min-w-[80px]">
+                  <Skeleton className="h-7 w-10 mx-auto mb-1" />
+                  <Skeleton className="h-2.5 w-14 mx-auto" />
+                </div>
+              ))}
+            </div>
+            {/* Bucket skeleton */}
+            {[...Array(2)].map((_, bucketIdx) => (
+              <div key={bucketIdx} className="mb-6">
+                <Skeleton className="h-5 w-40 mb-3" />
+                <div className="rounded-lg border border-border bg-card overflow-hidden">
+                  <Skeleton className="h-12 w-full" />
+                  <div className="flex flex-col gap-1 px-2 pb-2 pt-2 border-t border-border/50 bg-muted/10">
+                    {[...Array(3)].map((_, rowIdx) => (
+                      <div key={rowIdx} className="flex gap-3 items-start p-3 rounded-md">
+                        <div className="flex-1 space-y-2">
+                          <Skeleton className="h-4 w-48" />
+                          <div className="flex gap-2">
+                            <Skeleton className="h-4 w-16" />
+                            <Skeleton className="h-4 w-16" />
+                          </div>
+                          <Skeleton className="h-3 w-32" />
+                        </div>
+                        <Skeleton className="h-8 w-24 shrink-0" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         ) : (
           <>
@@ -2067,11 +2119,11 @@ export default function LaneWorkQueuePage() {
                       {queue[bucket].length > 0 && (
                         <ul className="pl-3 mt-0.5 space-y-0.5">
                           {queue[bucket].map(item => (
-                            <li key={item.lane.id} className="text-muted-foreground">
-                              {item.lane.id.slice(0, 8)}… {item.lane.origin}→{item.lane.destination}
-                              {" | "}{item.lane.avgLoadsPerWeek ?? "—"}/wk
-                              {" | "}owner={item.lane.ownerName ?? "none"}
-                              {" | "}contacted={item.lane.carriersContactedCount ?? 0}
+                            <li key={item.laneId} className="text-muted-foreground">
+                              {item.laneId.slice(0, 8)}… {item.origin}→{item.destination}
+                              {" | "}{item.avgLoadsPerWeek ?? "—"}/wk
+                              {" | "}owner={item.ownerName ?? "none"}
+                              {" | "}contacted={item.carriersContactedCount ?? 0}
                               {" | "}bench={item.totalBenchCount}
                               {" | "}contactable={item.contactableCount}
                             </li>

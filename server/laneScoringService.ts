@@ -300,6 +300,7 @@ function buildScoreSummary(f: {
 
 /**
  * Score all eligible lanes for an org and persist the scores.
+ * Also upserts lane_summary_cache rows so list endpoints read lean pre-computed data.
  */
 export async function scoreAllEligibleLanes(
   orgId: string,
@@ -308,6 +309,10 @@ export async function scoreAllEligibleLanes(
   const lanes = await storage.getEligibleRecurringLanes(orgId);
   const now = new Date().toISOString();
 
+  // Pre-load bench counts for all lanes in one query (eliminates N+1)
+  const laneIds = lanes.map(l => l.id);
+  const benchCountsMap = await storage.getBenchCountsForLanes(orgId, laneIds);
+
   for (const lane of lanes) {
     try {
       const { score, factors } = await scoreLane(lane, storage);
@@ -315,6 +320,34 @@ export async function scoreAllEligibleLanes(
         laneScore: score,
         laneScoreFactors: factors as unknown as Record<string, unknown>,
         lastScoredAt: now,
+      });
+
+      const benchCounts = benchCountsMap.get(lane.id) ?? { contactableCount: 0, totalBenchCount: 0, historicalCount: 0, missingContactCount: 0 };
+
+      // Upsert lean summary cache so LWQ/My Procurement lists read pre-computed data
+      await storage.upsertLaneSummaryCache({
+        laneId: lane.id,
+        laneScore: score,
+        priority: score,
+        origin: lane.origin,
+        originState: lane.originState ?? null,
+        destination: lane.destination,
+        destinationState: lane.destinationState ?? null,
+        equipmentType: lane.equipmentType ?? null,
+        avgLoadsPerWeek: lane.avgLoadsPerWeek ?? null,
+        companyId: lane.companyId ?? null,
+        companyName: lane.companyName ?? null,
+        ownerUserId: lane.ownerUserId ?? null,
+        carriersContactedCount: lane.carriersContactedCount ?? 0,
+        contactableCount: benchCounts.contactableCount,
+        totalBenchCount: benchCounts.totalBenchCount,
+        historicalCount: benchCounts.historicalCount,
+        missingContactCount: benchCounts.missingContactCount,
+        orgId,
+        isEligible: lane.isEligible ?? true,
+        hasPreferredCarrierProgram: lane.hasPreferredCarrierProgram ?? false,
+        snoozedUntil: lane.snoozedUntil ?? null,
+        resolvedAt: lane.resolvedAt ?? null,
       });
     } catch (err) {
       console.error(`[laneScoringService] Error scoring lane ${lane.id}:`, err);

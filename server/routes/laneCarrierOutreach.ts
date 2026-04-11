@@ -3,6 +3,28 @@
  *
  * All endpoints for the recurring lane capacity + carrier outreach workflow.
  * Gated behind lane_carrier_outreach_v1 feature flag.
+ *
+ * ENDPOINT INTENT AUDIT (Task #200):
+ *
+ * GET /api/recurring-lanes/work-queue
+ *   PURPOSE: Lean list for the Lane Work Queue page.
+ *   RETURNS: Lane identity fields (id, origin, destination, equipment, scores, owner,
+ *            carriersContactedCount, bench counts) plus replySummary.
+ *   RENDERED: laneLabel, score badge, frequency badge, coverage badge, reply badge,
+ *             owner name, contacted progress, assignment controls.
+ *   NOT RETURNED: full carrier bench arrays, nested history objects, laneScoreFactors,
+ *                 lastScoredAt, assignedByUserId (stripped in the route handler).
+ *   PAGINATION: limit + cursor (keyset by laneScore DESC, laneId).
+ *
+ * GET /api/recurring-lanes/:id/detail
+ *   PURPOSE: Full enriched lane detail, fetched only when CarrierOutreachPanel opens.
+ *   RETURNS: replySummary (totalReplied, hotCount, topStatus, topCarrierName, needsAction),
+ *            bench counts, matched award task info.
+ *
+ * GET /api/my-procurement
+ *   PURPOSE: Personal procurement list — lean shape, no per-lane enrichment.
+ *   RETURNS: lwqLanes (lean list fields, no replySummary) + awardTasks (lean subset only).
+ *   PAGINATION: limit + cursor on both buckets.
  */
 
 import type { Express, Response } from "express";
@@ -691,70 +713,164 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     try {
+      // Pagination: keyset by (laneScore DESC, laneId). Default page size 50.
+      const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10) || 50));
+      const cursor = req.query.cursor as string | undefined; // format: "score:laneId"
+
       const { visibleUserIds, canSeeUnassigned, scopeLabel } = await storage.resolveVisibleUserIds(
         user.id, user.organizationId, user.role
       );
 
-      // Parallelize: fetch lanes and uploads at the same time
-      const [queue, orgUploads] = await Promise.all([
-        storage.getLaneWorkQueue(
-          user.organizationId, LANE_CONFIG.completionCarriersContacted, visibleUserIds, canSeeUnassigned
-        ),
+      // ── Try lean cache path first (O(1) per lane, no per-lane enrichment) ──
+      // Falls back to full getLaneWorkQueue only when the scoring job has never run.
+      const [leanQueue, orgUploads] = await Promise.all([
+        storage.getLaneWorkQueueFromCache(user.organizationId, visibleUserIds, canSeeUnassigned),
         storage.getFinancialUploadsForOrg(user.organizationId),
       ]);
 
       // Build HF index once (O(rows)) and look up per-lane in O(1).
-      // Replaces the previous O(lanes × rows) per-request TMS scan.
-      // The index is cached by upload fingerprint for 5 min.
       const hfIndex = getHfIndex(user.organizationId, orgUploads);
 
-      // Stripped lane fields: laneScoreFactors, lastScoredAt, and assignedByUserId
-      // are not rendered in the LWQ or CarrierOutreachPanel — removing them saves ~180KB
-      // per response (~30% payload reduction for a 450-lane org).
-      type LaneItem = (typeof queue.unassigned)[number];
-      const stampHf = (items: LaneItem[]) =>
-        items.map(item => {
-          const { laneScoreFactors: _sf, lastScoredAt: _ls, assignedByUserId: _ab, ...laneTrimmed } = item.lane as typeof item.lane & {
-            laneScoreFactors?: unknown; lastScoredAt?: unknown; assignedByUserId?: unknown;
-          };
-          return {
-            ...item,
-            lane: {
-              ...laneTrimmed,
-              isHighFrequency: isHighFrequencyLaneFromIndex(item.lane, hfIndex),
-            },
-          };
-        });
-
-      const totals = {
-        unassigned: queue.unassigned.length,
-        noContactable: queue.noContactable.length,
-        assignedUntouched: queue.assignedUntouched.length,
-        inProgress: queue.inProgress.length,
-        total: queue.unassigned.length + queue.noContactable.length + queue.assignedUntouched.length + queue.inProgress.length,
+      // ── Normalize into a common lean shape ─────────────────────────────────
+      // When the cache is populated: items come from lane_summary_cache (lean — no replySummary).
+      // When cache is empty (first run): fall back to getLaneWorkQueue and adapt to lean shape.
+      type LeanItem = {
+        laneId: string;
+        laneScore: number | null;
+        origin: string;
+        originState: string | null;
+        destination: string;
+        destinationState: string | null;
+        equipmentType: string | null;
+        avgLoadsPerWeek: string | null;
+        companyId: string | null;
+        companyName: string | null;
+        ownerUserId: string | null;
+        ownerName: string | null;
+        carriersContactedCount: number;
+        contactableCount: number;
+        totalBenchCount: number;
+        historicalCount: number;
+        missingContactCount: number;
+        isHighFrequency: boolean;
       };
 
-      // Collect distinct customer names from all visible lanes for the filter dropdown
-      const allVisibleLanes = [
-        ...queue.unassigned,
-        ...queue.noContactable,
-        ...queue.assignedUntouched,
-        ...queue.inProgress,
-      ];
+      type LeanBuckets = {
+        unassigned: LeanItem[];
+        noContactable: LeanItem[];
+        assignedUntouched: LeanItem[];
+        inProgress: LeanItem[];
+      };
+
+      let buckets: LeanBuckets;
+
+      if (leanQueue) {
+        // Cache hit — stamp HF flag and reshape
+        const mapItems = (items: typeof leanQueue.unassigned): LeanItem[] =>
+          items.map(item => ({
+            ...item,
+            isHighFrequency: isHighFrequencyLaneFromIndex(
+              { origin: item.origin, originState: item.originState ?? undefined, destination: item.destination, destinationState: item.destinationState ?? undefined },
+              hfIndex
+            ),
+          }));
+        buckets = {
+          unassigned: mapItems(leanQueue.unassigned),
+          noContactable: mapItems(leanQueue.noContactable),
+          assignedUntouched: mapItems(leanQueue.assignedUntouched),
+          inProgress: mapItems(leanQueue.inProgress),
+        };
+      } else {
+        // Cache miss — fall back to full query and project to lean shape (no replySummary)
+        const fullQueue = await storage.getLaneWorkQueue(
+          user.organizationId, LANE_CONFIG.completionCarriersContacted, visibleUserIds, canSeeUnassigned
+        );
+        const adaptItem = (item: (typeof fullQueue.unassigned)[number]): LeanItem => ({
+          laneId: item.lane.id,
+          laneScore: item.lane.laneScore ?? null,
+          origin: item.lane.origin,
+          originState: item.lane.originState ?? null,
+          destination: item.lane.destination,
+          destinationState: item.lane.destinationState ?? null,
+          equipmentType: item.lane.equipmentType ?? null,
+          avgLoadsPerWeek: item.lane.avgLoadsPerWeek ?? null,
+          companyId: item.lane.companyId ?? null,
+          companyName: item.lane.companyName ?? null,
+          ownerUserId: item.lane.ownerUserId ?? null,
+          ownerName: (item.lane as typeof item.lane & { ownerName?: string | null }).ownerName ?? null,
+          carriersContactedCount: item.lane.carriersContactedCount ?? 0,
+          contactableCount: item.contactableCount,
+          totalBenchCount: item.totalBenchCount,
+          historicalCount: item.historicalCount,
+          missingContactCount: item.missingContactCount,
+          isHighFrequency: isHighFrequencyLaneFromIndex(item.lane, hfIndex),
+        });
+        buckets = {
+          unassigned: fullQueue.unassigned.map(adaptItem),
+          noContactable: fullQueue.noContactable.map(adaptItem),
+          assignedUntouched: fullQueue.assignedUntouched.map(adaptItem),
+          inProgress: fullQueue.inProgress.map(adaptItem),
+        };
+      }
+
+      // Keyset pagination within each bucket (already sorted laneScore DESC, laneId by DB)
+      function applyPagination(items: LeanItem[]): { items: LeanItem[]; nextCursor: string | null } {
+        let startIdx = 0;
+        if (cursor) {
+          const [cursorScoreStr, cursorId] = cursor.split(":");
+          const cursorScore = parseInt(cursorScoreStr, 10);
+          startIdx = items.findIndex(item => {
+            const score = item.laneScore ?? 0;
+            if (score !== cursorScore) return score < cursorScore;
+            return item.laneId > cursorId;
+          });
+          if (startIdx === -1) startIdx = items.length;
+        }
+        const page = items.slice(startIdx, startIdx + limit);
+        const last = page[page.length - 1];
+        const nextCursor = page.length === limit && last
+          ? `${last.laneScore ?? 0}:${last.laneId}`
+          : null;
+        return { items: page, nextCursor };
+      }
+
+      const totals = {
+        unassigned: buckets.unassigned.length,
+        noContactable: buckets.noContactable.length,
+        assignedUntouched: buckets.assignedUntouched.length,
+        inProgress: buckets.inProgress.length,
+        total: buckets.unassigned.length + buckets.noContactable.length + buckets.assignedUntouched.length + buckets.inProgress.length,
+      };
+
+      const allVisible = [...buckets.unassigned, ...buckets.noContactable, ...buckets.assignedUntouched, ...buckets.inProgress];
       const customers = [...new Set(
-        allVisibleLanes
-          .map(i => i.lane.companyName)
-          .filter((n): n is string => !!n && n.trim() !== "")
+        allVisible.map(i => i.companyName).filter((n): n is string => !!n && n.trim() !== "")
       )].sort((a, b) => a.localeCompare(b));
 
-      console.log(`[work-queue] org=${user.organizationId} scope=${scopeLabel} buckets=${JSON.stringify(totals)} requestedBy=${user.id}(${user.role})`);
+      const uPaged = applyPagination(buckets.unassigned);
+      const ncPaged = applyPagination(buckets.noContactable);
+      const auPaged = applyPagination(buckets.assignedUntouched);
+      const ipPaged = applyPagination(buckets.inProgress);
+
+      const source = leanQueue ? "cache" : "full";
+      console.log(`[work-queue] org=${user.organizationId} source=${source} scope=${scopeLabel} buckets=${JSON.stringify(totals)} limit=${limit} cursor=${cursor ?? "none"} requestedBy=${user.id}(${user.role})`);
       res.json({
-        unassigned: stampHf(queue.unassigned),
-        noContactable: stampHf(queue.noContactable),
-        assignedUntouched: stampHf(queue.assignedUntouched),
-        inProgress: stampHf(queue.inProgress),
+        unassigned: uPaged.items,
+        noContactable: ncPaged.items,
+        assignedUntouched: auPaged.items,
+        inProgress: ipPaged.items,
         scopeLabel,
         customers,
+        pagination: {
+          limit,
+          nextCursors: {
+            unassigned: uPaged.nextCursor,
+            noContactable: ncPaged.nextCursor,
+            assignedUntouched: auPaged.nextCursor,
+            inProgress: ipPaged.nextCursor,
+          },
+          totals,
+        },
       });
     } catch (err) {
       res.status(500).json({ error: (err as Error)?.message ?? "Failed to load work queue" });
@@ -850,6 +966,77 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     const lane = await getLaneForOrg(req.params.id, user, res);
     if (!lane) return;
     res.json(lane);
+  });
+
+  /**
+   * GET /api/recurring-lanes/:id/detail
+   *
+   * Lean lane detail — fetched only when the CarrierOutreachPanel opens for a specific lane.
+   * Returns reply summary (totalReplied, hotCount, topStatus, topCarrierName, needsAction),
+   * bench counts, and any matched award task info. NOT included in the LWQ list payload.
+   */
+  app.get("/api/recurring-lanes/:id/detail", async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const lane = await getLaneForOrg(req.params.id, user, res);
+    if (!lane) return;
+
+    try {
+      const { laneCarrierInterest: lciTable } = await import("@shared/schema");
+      const benchEntries = await db.select({
+        id: lciTable.id,
+        carrierId: lciTable.carrierId,
+        carrierName: lciTable.carrierName,
+        interestStatus: lciTable.interestStatus,
+        sourceType: lciTable.sourceType,
+      }).from(lciTable).where(eq(lciTable.laneId, req.params.id));
+
+      // Reply summary computation
+      const HOT_STATUSES = new Set(["available_now", "available_next_week"]);
+      const STATUS_PRIORITY: Record<string, number> = { available_now: 4, available_next_week: 3, future_interest: 2, not_fit: 1 };
+      const replied = benchEntries.filter(b => b.interestStatus !== "needs_follow_up");
+      let topEntry: (typeof benchEntries)[0] | null = null;
+      let topPriority = -1;
+      for (const b of replied) {
+        const p = STATUS_PRIORITY[b.interestStatus] ?? 0;
+        if (p > topPriority) { topPriority = p; topEntry = b; }
+      }
+      const hotCount = replied.filter(b => HOT_STATUSES.has(b.interestStatus)).length;
+
+      // Check for open follow-up task for this lane
+      const openTaskResult = await storage.pool.query<{ lane_id: string }>(
+        `SELECT 1 FROM tasks
+         WHERE org_id = $1
+           AND status != 'closed'
+           AND lane_context->>'type' = 'carrier_reply_follow_up'
+           AND lane_context->>'laneId' = $2
+         LIMIT 1`,
+        [user.organizationId, req.params.id]
+      );
+      const hasOpenTask = openTaskResult.rows.length > 0;
+
+      const replySummary = {
+        totalReplied: replied.length,
+        hotCount,
+        topStatus: topEntry?.interestStatus ?? null,
+        topCarrierName: topEntry?.carrierName ?? null,
+        needsAction: hotCount > 0 && !hasOpenTask,
+      };
+
+      const totalBenchCount = benchEntries.length;
+      const historicalCount = benchEntries.filter(b => b.sourceType === "historical").length;
+
+      res.json({
+        laneId: req.params.id,
+        replySummary,
+        totalBenchCount,
+        historicalCount,
+      });
+    } catch (err) {
+      console.error("[lane-detail]", err);
+      res.status(500).json({ error: "Failed to load lane detail" });
+    }
   });
 
   app.patch("/api/recurring-lanes/:id", async (req, res) => {
@@ -1092,6 +1279,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           });
         }
       }
+
+      // Patch lane_summary_cache so list queries reflect new owner immediately
+      await storage.patchLaneSummaryCache(req.params.laneId, {
+        ownerUserId: ownerUserId ?? undefined,
+      }).catch(() => {}); // non-blocking — cache is refreshed by scoring job regardless
 
       res.json(updated);
     } catch (err) {
@@ -2102,17 +2294,24 @@ Rules for suggestions:
 
     // Auto-resolve if threshold reached
     let resolved = false;
+    let resolveNowSend: string | undefined;
     if (newCount >= LANE_CONFIG.completionCarriersContacted) {
-      const resolveNow = new Date().toISOString();
+      resolveNowSend = new Date().toISOString();
       const snoozeUntil = new Date();
       snoozeUntil.setDate(snoozeUntil.getDate() + LANE_CONFIG.snoozeAfterResolveDays);
       await storage.updateRecurringLane(req.params.laneId, {
-        resolvedAt: resolveNow,
+        resolvedAt: resolveNowSend,
         snoozedUntil: snoozeUntil.toISOString().split("T")[0],
       });
       await storage.resolveNbaCardsForLane(req.params.laneId);
       resolved = true;
     }
+
+    // Patch cache so LWQ list reflects updated contacted count + resolved state immediately
+    await storage.patchLaneSummaryCache(req.params.laneId, {
+      carriersContactedCount: newCount,
+      ...(resolved && resolveNowSend ? { resolvedAt: resolveNowSend } : {}),
+    }).catch(() => {});
 
     res.json({ logs, results, sentCount, failedCount, dedupSkippedCount, carriersContactedCount: newCount, resolved, overallStatus });
   });
@@ -2202,18 +2401,25 @@ Rules for suggestions:
     // Check if completion threshold reached (from shared LANE_CONFIG)
     const THRESHOLD = LANE_CONFIG.completionCarriersContacted;
     let resolved = false;
+    let resolvedAt: string | undefined;
     if (newCount >= THRESHOLD) {
-      const resolveNow = new Date().toISOString();
+      resolvedAt = new Date().toISOString();
       const snoozeUntil = new Date();
       snoozeUntil.setDate(snoozeUntil.getDate() + LANE_CONFIG.snoozeAfterResolveDays);
       await storage.updateRecurringLane(req.params.laneId, {
-        resolvedAt: resolveNow,
+        resolvedAt,
         snoozedUntil: snoozeUntil.toISOString().split("T")[0],
       });
       // Resolve all active NBA cards tied to this lane so they leave the dashboard
       await storage.resolveNbaCardsForLane(req.params.laneId);
       resolved = true;
     }
+
+    // Patch cache so LWQ list reflects updated contacted count + resolved state immediately
+    await storage.patchLaneSummaryCache(req.params.laneId, {
+      carriersContactedCount: newCount,
+      ...(resolved && resolvedAt ? { resolvedAt } : {}),
+    }).catch(() => {});
 
     res.json({ log, carriersContactedCount: newCount, resolved });
   });

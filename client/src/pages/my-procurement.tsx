@@ -10,6 +10,7 @@
  */
 
 import { useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { formatLaneDisplay, normalizeEquipmentType } from "@shared/laneFormatters";
@@ -27,7 +28,6 @@ import {
   Loader2,
   RefreshCw,
   Award,
-  MapPin,
   AlertCircle,
   ExternalLink,
   MessageCircle,
@@ -71,20 +71,23 @@ interface AwardTask {
   dueDate: string | null;
   companyId: string | null;
   createdAt: string | null;
-  lane: string | null;
   origin: string | null;
   destination: string | null;
-  volume: number | null;
   awardId: string | null;
   awardTitle: string | null;
   customerName: string | null;
+  equipmentType: string | null;
   matchedLaneId: string | null;
-  replySummary?: LaneReplySummary | null;
 }
 
 interface MyProcurementData {
   lwqLanes: LwqLane[];
   awardTasks: AwardTask[];
+  pagination?: {
+    limit: number;
+    lwqNextCursor: string | null;
+    tasksNextCursor: string | null;
+  };
 }
 
 const COMPLETION_THRESHOLD = 3;
@@ -189,11 +192,21 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
   const hasHotReply = (reply?.hotCount ?? 0) > 0;
   const needsAction = reply?.needsAction ?? false;
 
+  // Prefetch lane detail on hover so CarrierOutreachPanel opens instantly
+  function handleMouseEnter() {
+    queryClient.prefetchQuery({
+      queryKey: ["/api/recurring-lanes", item.laneId, "detail"],
+      queryFn: () => fetch(`/api/recurring-lanes/${item.laneId}/detail`).then(r => r.json()),
+      staleTime: 2 * 60 * 1000,
+    });
+  }
+
   return (
     <div
       className={`flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors ${
         needsAction ? "border-green-500/40 bg-green-950/5" : ""
       }`}
+      onMouseEnter={handleMouseEnter}
       data-testid={`card-lwq-lane-${item.laneId}`}
     >
       {/* Source badge */}
@@ -283,14 +296,7 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
   const laneDisplay =
     item.origin && item.destination
       ? formatLaneDisplay(item.origin, null, item.destination, null)
-      : item.lane ?? "Unknown lane";
-  const volumeStr =
-    item.volume && item.volume > 0
-      ? `${item.volume.toLocaleString()} loads/yr`
-      : null;
-  const reply = item.replySummary;
-  const hasHotReply = (reply?.hotCount ?? 0) > 0;
-  const needsAction = reply?.needsAction ?? false;
+      : "Unknown lane";
 
   // Primary action: open LWQ at the matched lane.
   // If no match found, go to LWQ root with a ?noMatch= hint so the rep gets a toast
@@ -304,9 +310,7 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
 
   return (
     <div
-      className={`flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors ${
-        needsAction ? "border-green-500/40 bg-green-950/5" : ""
-      }`}
+      className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors"
       data-testid={`card-award-task-${item.taskId}`}
     >
       {/* Lane identity */}
@@ -349,10 +353,10 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
               {item.customerName}
             </span>
           )}
-          {volumeStr && (
+          {item.equipmentType && (
             <span className="flex items-center gap-1">
-              <MapPin className="w-3 h-3" />
-              {volumeStr}
+              <Truck className="w-3 h-3" />
+              {normalizeEquipmentType(item.equipmentType)}
             </span>
           )}
           <AgeBadge dateStr={item.createdAt} label="Created" />
@@ -361,27 +365,6 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
               <Clock className="w-3 h-3" />
               Due {new Date(item.dueDate).toLocaleDateString()}
             </span>
-          )}
-          {reply && reply.totalReplied > 0 && (
-            hasHotReply ? (
-              <span
-                className={`flex items-center gap-1 font-medium ${needsAction ? "text-green-400" : "text-green-600"}`}
-                data-testid={needsAction ? `text-reply-needs-action-award-${item.taskId}` : `text-reply-hot-award-${item.taskId}`}
-                title={reply.topCarrierName ? `${reply.topCarrierName}: ${REPLY_STATUS_LABELS[reply.topStatus ?? ""] ?? reply.topStatus}` : undefined}
-              >
-                {needsAction ? <Zap className="w-3 h-3" /> : <MessageCircle className="w-3 h-3" />}
-                {needsAction ? "Needs Action — " : ""}{reply.hotCount} available
-                {needsAction && <span className="text-[10px] font-normal opacity-80 ml-0.5">(no task yet)</span>}
-              </span>
-            ) : (
-              <span
-                className="flex items-center gap-1 text-slate-400"
-                data-testid={`text-reply-award-${item.taskId}`}
-              >
-                <MessageCircle className="w-3 h-3" />
-                {reply.totalReplied} replied
-              </span>
-            )
           )}
         </div>
       </div>
@@ -442,21 +425,49 @@ export default function MyProcurementPage() {
   const resolveMutation = useMutation({
     mutationFn: (laneId: string) =>
       apiRequest("POST", `/api/my-procurement/lwq-lane/${laneId}/resolve`).then((r) => r.json()),
+    onMutate: async (laneId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/my-procurement"] });
+      const previous = queryClient.getQueryData<MyProcurementData>(["/api/my-procurement"]);
+      queryClient.setQueryData<MyProcurementData>(["/api/my-procurement"], (old) => {
+        if (!old) return old;
+        return { ...old, lwqLanes: old.lwqLanes.filter((l) => l.laneId !== laneId) };
+      });
+      return { previous };
+    },
     onSuccess: () => {
       toast({ title: "Lane marked as done" });
+    },
+    onError: (_err, _laneId, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(["/api/my-procurement"], ctx.previous);
+      toast({ title: "Failed to mark done", variant: "destructive" });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/my-procurement"] });
     },
-    onError: () => toast({ title: "Failed to mark done", variant: "destructive" }),
   });
 
   const closeMutation = useMutation({
     mutationFn: (taskId: string) =>
       apiRequest("POST", `/api/my-procurement/award-task/${taskId}/close`).then((r) => r.json()),
+    onMutate: async (taskId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/my-procurement"] });
+      const previous = queryClient.getQueryData<MyProcurementData>(["/api/my-procurement"]);
+      queryClient.setQueryData<MyProcurementData>(["/api/my-procurement"], (old) => {
+        if (!old) return old;
+        return { ...old, awardTasks: old.awardTasks.filter((t) => t.taskId !== taskId) };
+      });
+      return { previous };
+    },
     onSuccess: () => {
       toast({ title: "Task closed" });
+    },
+    onError: (_err, _taskId, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(["/api/my-procurement"], ctx.previous);
+      toast({ title: "Failed to close task", variant: "destructive" });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/my-procurement"] });
     },
-    onError: () => toast({ title: "Failed to close task", variant: "destructive" }),
   });
 
   const lwqLanes = data?.lwqLanes ?? [];
@@ -517,9 +528,22 @@ export default function MyProcurementPage() {
       {/* Body */}
       <div className="flex-1 px-6 py-4">
         {isLoading ? (
-          <div className="flex items-center justify-center py-20 text-muted-foreground gap-2">
-            <Loader2 className="w-5 h-5 animate-spin" />
-            Loading your procurement items…
+          <div className="space-y-3 py-4" data-testid="procurement-skeleton">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="flex gap-3 items-center p-4 rounded-lg border border-border bg-card">
+                <div className="flex-1 space-y-2">
+                  <div className="flex gap-2 items-center">
+                    <Skeleton className="h-5 w-12 rounded" />
+                    <Skeleton className="h-4 w-40" />
+                  </div>
+                  <div className="flex gap-2">
+                    <Skeleton className="h-3 w-24" />
+                    <Skeleton className="h-3 w-16" />
+                  </div>
+                </div>
+                <Skeleton className="h-8 w-24 shrink-0" />
+              </div>
+            ))}
           </div>
         ) : isError ? (
           <div className="flex items-center justify-center py-20 text-destructive gap-2">

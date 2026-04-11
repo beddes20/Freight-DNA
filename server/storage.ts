@@ -164,6 +164,9 @@ import {
   accountContactSuggestions,
   type AccountContactSuggestion,
   type InsertAccountContactSuggestion,
+  laneSummaryCache,
+  type LaneSummaryCache,
+  type InsertLaneSummaryCache,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -215,6 +218,34 @@ export interface LaneWorkQueueResult {
   noContactable: LaneWorkQueueItem[];        // isEligible, assigned, 0 contactable carriers
   assignedUntouched: LaneWorkQueueItem[];    // isEligible, assigned, carriersContactedCount = 0
   inProgress: LaneWorkQueueItem[];           // 0 < carriersContactedCount < threshold
+}
+
+// Lean item sourced from lane_summary_cache — no replySummary, no full lane object
+export interface LeanLaneQueueItem {
+  laneId: string;
+  laneScore: number | null;
+  origin: string;
+  originState: string | null;
+  destination: string;
+  destinationState: string | null;
+  equipmentType: string | null;
+  avgLoadsPerWeek: string | null;
+  companyId: string | null;
+  companyName: string | null;
+  ownerUserId: string | null;
+  ownerName: string | null;
+  carriersContactedCount: number;
+  contactableCount: number;
+  totalBenchCount: number;
+  historicalCount: number;
+  missingContactCount: number;
+}
+
+export interface LeanLaneWorkQueueResult {
+  unassigned: LeanLaneQueueItem[];
+  noContactable: LeanLaneQueueItem[];
+  assignedUntouched: LeanLaneQueueItem[];
+  inProgress: LeanLaneQueueItem[];
 }
 
 export interface CarrierImportResult {
@@ -675,7 +706,11 @@ export interface IStorage {
     scopeLabel: string;
   }>;
   getLaneWorkQueue(orgId: string, completionThreshold: number, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<LaneWorkQueueResult>;
+  getLaneWorkQueueFromCache(orgId: string, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<LeanLaneWorkQueueResult | null>;
+  getBenchCountsForLanes(orgId: string, laneIds: string[]): Promise<Map<string, { contactableCount: number; totalBenchCount: number; historicalCount: number; missingContactCount: number }>>;
   getUnactionedHotReplyCount(orgId: string, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<number>;
+  upsertLaneSummaryCache(data: InsertLaneSummaryCache): Promise<LaneSummaryCache>;
+  patchLaneSummaryCache(laneId: string, patch: Partial<InsertLaneSummaryCache>): Promise<void>;
 
   // Lane Coverage Profiles
   getLaneCoverageProfile(orgId: string, laneKey: string): Promise<import('@shared/schema').LaneCoverageProfile | undefined>;
@@ -4419,6 +4454,196 @@ export class DatabaseStorage implements IStorage {
     }
 
     return result;
+  }
+
+  // ── Lane Summary Cache ─────────────────────────────────────────────────────
+
+  /**
+   * Read the work queue from lane_summary_cache (pre-computed by scoreAllEligibleLanes).
+   * Returns null when the cache is empty (scoring job has never run for this org),
+   * so callers can fall back to getLaneWorkQueue().
+   *
+   * NO replySummary in the returned items — that is loaded lazily via the detail endpoint.
+   */
+  async getBenchCountsForLanes(orgId: string, laneIds: string[]): Promise<Map<string, { contactableCount: number; totalBenchCount: number; historicalCount: number; missingContactCount: number }>> {
+    if (laneIds.length === 0) return new Map();
+
+    const result = await this.pool.query<{
+      lane_id: string;
+      carrier_id: string | null;
+      source_type: string;
+      has_contact: boolean;
+    }>(
+      `SELECT
+         lci.lane_id,
+         lci.carrier_id,
+         lci.source_type,
+         (c.primary_email IS NOT NULL OR c.phone IS NOT NULL) AS has_contact
+       FROM lane_carrier_interest lci
+       LEFT JOIN carriers c ON c.id = lci.carrier_id AND c.org_id = $1
+       WHERE lci.lane_id = ANY($2::text[])`,
+      [orgId, laneIds]
+    );
+
+    const counts = new Map<string, { contactableCount: number; totalBenchCount: number; historicalCount: number; missingContactCount: number }>();
+    for (const laneId of laneIds) {
+      counts.set(laneId, { contactableCount: 0, totalBenchCount: 0, historicalCount: 0, missingContactCount: 0 });
+    }
+    for (const row of result.rows) {
+      const c = counts.get(row.lane_id);
+      if (!c) continue;
+      c.totalBenchCount++;
+      if (row.has_contact) c.contactableCount++;
+      if (row.source_type === "historical") {
+        c.historicalCount++;
+        if (!row.has_contact) c.missingContactCount++;
+      }
+    }
+    return counts;
+  }
+
+  async getLaneWorkQueueFromCache(orgId: string, visibleUserIds: string[], canSeeUnassigned: boolean): Promise<LeanLaneWorkQueueResult | null> {
+    const today = new Date().toISOString().split("T")[0];
+
+    const cacheRows = await this.pool.query<{
+      lane_id: string;
+      lane_score: number | null;
+      origin: string;
+      origin_state: string | null;
+      destination: string;
+      destination_state: string | null;
+      equipment_type: string | null;
+      avg_loads_per_week: string | null;
+      company_id: string | null;
+      company_name: string | null;
+      owner_user_id: string | null;
+      owner_name: string | null;
+      carriers_contacted_count: number;
+      contactable_count: number;
+      total_bench_count: number;
+      historical_count: number;
+      missing_contact_count: number;
+      snoozed_until: string | null;
+    }>(
+      `SELECT
+         c.lane_id,
+         c.lane_score,
+         c.origin,
+         c.origin_state,
+         c.destination,
+         c.destination_state,
+         c.equipment_type,
+         c.avg_loads_per_week::text,
+         c.company_id,
+         c.company_name,
+         c.owner_user_id,
+         u.name AS owner_name,
+         COALESCE(c.carriers_contacted_count, 0) AS carriers_contacted_count,
+         COALESCE(c.contactable_count, 0)         AS contactable_count,
+         COALESCE(c.total_bench_count, 0)         AS total_bench_count,
+         COALESCE(c.historical_count, 0)          AS historical_count,
+         COALESCE(c.missing_contact_count, 0)     AS missing_contact_count,
+         c.snoozed_until
+       FROM lane_summary_cache c
+       LEFT JOIN users u ON u.id = c.owner_user_id
+       WHERE c.org_id = $1
+         AND c.resolved_at IS NULL
+         AND c.is_eligible = true
+         AND c.has_preferred_carrier_program = false
+         AND (c.snoozed_until IS NULL OR c.snoozed_until <= $2)
+       ORDER BY c.lane_score DESC NULLS LAST, c.lane_id`,
+      [orgId, today]
+    );
+
+    // Return null (fall back to full query) if the cache is empty for this org
+    if (cacheRows.rows.length === 0) return null;
+
+    const visibleSet = new Set(visibleUserIds);
+    const result: LeanLaneWorkQueueResult = { unassigned: [], noContactable: [], assignedUntouched: [], inProgress: [] };
+
+    for (const r of cacheRows.rows) {
+      // Hierarchy visibility: unassigned lanes only for admin/directors; assigned only if owner in scope
+      if (!r.owner_user_id) {
+        if (!canSeeUnassigned) continue;
+      } else {
+        if (!visibleSet.has(r.owner_user_id)) continue;
+      }
+
+      const item: LeanLaneQueueItem = {
+        laneId: r.lane_id,
+        laneScore: r.lane_score,
+        origin: r.origin,
+        originState: r.origin_state,
+        destination: r.destination,
+        destinationState: r.destination_state,
+        equipmentType: r.equipment_type,
+        avgLoadsPerWeek: r.avg_loads_per_week,
+        companyId: r.company_id,
+        companyName: r.company_name,
+        ownerUserId: r.owner_user_id,
+        ownerName: r.owner_name,
+        carriersContactedCount: r.carriers_contacted_count,
+        contactableCount: r.contactable_count,
+        totalBenchCount: r.total_bench_count,
+        historicalCount: r.historical_count,
+        missingContactCount: r.missing_contact_count,
+      };
+
+      const contacted = r.carriers_contacted_count ?? 0;
+      if (!r.owner_user_id) {
+        result.unassigned.push(item);
+      } else if (r.contactable_count === 0) {
+        result.noContactable.push(item);
+      } else if (contacted === 0) {
+        result.assignedUntouched.push(item);
+      } else {
+        result.inProgress.push(item);
+      }
+    }
+
+    return result;
+  }
+
+  async upsertLaneSummaryCache(data: InsertLaneSummaryCache): Promise<LaneSummaryCache> {
+    const [row] = await db
+      .insert(laneSummaryCache)
+      .values({ ...data, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: laneSummaryCache.laneId,
+        set: {
+          laneScore: data.laneScore,
+          priority: data.priority ?? 0,
+          origin: data.origin,
+          originState: data.originState,
+          destination: data.destination,
+          destinationState: data.destinationState,
+          equipmentType: data.equipmentType,
+          avgLoadsPerWeek: data.avgLoadsPerWeek,
+          companyId: data.companyId,
+          companyName: data.companyName,
+          ownerUserId: data.ownerUserId,
+          carriersContactedCount: data.carriersContactedCount ?? 0,
+          contactableCount: data.contactableCount ?? 0,
+          totalBenchCount: data.totalBenchCount ?? 0,
+          historicalCount: data.historicalCount ?? 0,
+          missingContactCount: data.missingContactCount ?? 0,
+          orgId: data.orgId ?? null,
+          isEligible: data.isEligible ?? true,
+          hasPreferredCarrierProgram: data.hasPreferredCarrierProgram ?? false,
+          snoozedUntil: data.snoozedUntil ?? null,
+          resolvedAt: data.resolvedAt,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async patchLaneSummaryCache(laneId: string, patch: Partial<InsertLaneSummaryCache>): Promise<void> {
+    await db
+      .update(laneSummaryCache)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(laneSummaryCache.laneId, laneId));
   }
 
   // ── Lane Coverage Profiles ─────────────────────────────────────────────────

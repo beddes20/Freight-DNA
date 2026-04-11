@@ -1958,4 +1958,55 @@ export async function runMigrations() {
   } finally {
     clientContactCapture.release();
   }
+
+  // ── lane_summary_cache (Task #200: LWQ Data Flow & Performance Optimization) ──
+  const clientLaneSummaryCache = await pool.connect();
+  try {
+    await clientLaneSummaryCache.query(`
+      CREATE TABLE IF NOT EXISTS "lane_summary_cache" (
+        "lane_id"                       varchar PRIMARY KEY REFERENCES "recurring_lanes"("id") ON DELETE CASCADE,
+        "lane_score"                    integer,
+        "priority"                      integer DEFAULT 0,
+        "origin"                        text NOT NULL,
+        "origin_state"                  text,
+        "destination"                   text NOT NULL,
+        "destination_state"             text,
+        "equipment_type"                text,
+        "avg_loads_per_week"            decimal(6, 2),
+        "company_id"                    varchar,
+        "company_name"                  text,
+        "owner_user_id"                 varchar,
+        "carriers_contacted_count"      integer DEFAULT 0,
+        "contactable_count"             integer DEFAULT 0,
+        "total_bench_count"             integer DEFAULT 0,
+        "historical_count"              integer DEFAULT 0,
+        "missing_contact_count"         integer DEFAULT 0,
+        "org_id"                        varchar,
+        "is_eligible"                   boolean DEFAULT true,
+        "has_preferred_carrier_program" boolean DEFAULT false,
+        "snoozed_until"                 text,
+        "resolved_at"                   text,
+        "updated_at"                    timestamp DEFAULT now() NOT NULL
+      )
+    `);
+    await clientLaneSummaryCache.query(`ALTER TABLE "lane_summary_cache" ADD COLUMN IF NOT EXISTS "contactable_count" integer DEFAULT 0`);
+    await clientLaneSummaryCache.query(`ALTER TABLE "lane_summary_cache" ADD COLUMN IF NOT EXISTS "total_bench_count" integer DEFAULT 0`);
+    await clientLaneSummaryCache.query(`ALTER TABLE "lane_summary_cache" ADD COLUMN IF NOT EXISTS "historical_count" integer DEFAULT 0`);
+    await clientLaneSummaryCache.query(`ALTER TABLE "lane_summary_cache" ADD COLUMN IF NOT EXISTS "missing_contact_count" integer DEFAULT 0`);
+    await clientLaneSummaryCache.query(`ALTER TABLE "lane_summary_cache" ADD COLUMN IF NOT EXISTS "org_id" varchar`);
+    await clientLaneSummaryCache.query(`ALTER TABLE "lane_summary_cache" ADD COLUMN IF NOT EXISTS "is_eligible" boolean DEFAULT true`);
+    await clientLaneSummaryCache.query(`ALTER TABLE "lane_summary_cache" ADD COLUMN IF NOT EXISTS "has_preferred_carrier_program" boolean DEFAULT false`);
+    await clientLaneSummaryCache.query(`ALTER TABLE "lane_summary_cache" ADD COLUMN IF NOT EXISTS "snoozed_until" text`);
+    await clientLaneSummaryCache.query(`CREATE INDEX IF NOT EXISTS "lane_summary_cache_owner_resolved_score" ON "lane_summary_cache" ("owner_user_id", "resolved_at", "lane_score")`);
+    await clientLaneSummaryCache.query(`CREATE INDEX IF NOT EXISTS "lane_summary_cache_org_resolved_score" ON "lane_summary_cache" ("org_id", "resolved_at", "lane_score")`);
+    await clientLaneSummaryCache.query(`CREATE INDEX IF NOT EXISTS "recurring_lanes_owner_resolved" ON "recurring_lanes" ("owner_user_id", "resolved_at")`);
+    await clientLaneSummaryCache.query(`CREATE INDEX IF NOT EXISTS "recurring_lanes_lane_score_desc" ON "recurring_lanes" ("lane_score" DESC)`);
+    await clientLaneSummaryCache.query(`CREATE INDEX IF NOT EXISTS "tasks_assigned_status" ON "tasks" ("assigned_to", "status")`);
+    await clientLaneSummaryCache.query(`CREATE INDEX IF NOT EXISTS "lane_carrier_interest_lane_id_idx" ON "lane_carrier_interest" ("lane_id")`);
+    console.log("[migrations] lane_summary_cache table + indexes ensured (Task #200)");
+  } catch (err) {
+    console.error("[migrations] lane_summary_cache migration error:", err);
+  } finally {
+    clientLaneSummaryCache.release();
+  }
 }

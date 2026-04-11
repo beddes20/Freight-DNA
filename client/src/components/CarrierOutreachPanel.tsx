@@ -410,6 +410,27 @@ export function CarrierOutreachPanel({
     enabled: !!laneId && open,
   });
 
+  // Lean detail query — fetches replySummary and bench counts separately from the list.
+  // Note: this data is prefetched on hover in lane-work-queue.tsx so it's often already cached
+  // when the panel opens. staleTime matches the prefetch so we don't re-fetch unnecessarily.
+  const { data: laneDetail } = useQuery<{
+    laneId: string;
+    replySummary: {
+      totalReplied: number;
+      hotCount: number;
+      topStatus: string | null;
+      topCarrierName: string | null;
+      needsAction: boolean;
+    };
+    totalBenchCount: number;
+    historicalCount: number;
+  }>({
+    queryKey: ["/api/recurring-lanes", laneId, "detail"],
+    queryFn: () => fetch(`/api/recurring-lanes/${laneId}/detail`).then(r => r.json()),
+    enabled: !!laneId && open,
+    staleTime: 2 * 60 * 1000,
+  });
+
   const suggestionsQueryParams = new URLSearchParams({
     pageSize: String(pageSize),
     page: String(currentPage),
@@ -1000,6 +1021,24 @@ export function CarrierOutreachPanel({
                 <span>Score <span className="text-foreground font-medium">{lane.laneScore ?? "—"}</span></span>
                 <span className="text-muted-foreground/30">·</span>
                 <span>Contacted <span className={`font-medium ${contactedCount >= completionThreshold ? "text-emerald-400" : "text-foreground"}`}>{contactedCount}/{completionThreshold}</span></span>
+                {laneDetail && laneDetail.totalBenchCount > 0 && (
+                  <>
+                    <span className="text-muted-foreground/30">·</span>
+                    <span data-testid="stat-bench-count">Bench <span className="text-foreground font-medium">{laneDetail.totalBenchCount}</span></span>
+                  </>
+                )}
+                {laneDetail?.replySummary && laneDetail.replySummary.totalReplied > 0 && (
+                  <>
+                    <span className="text-muted-foreground/30">·</span>
+                    <span
+                      className={laneDetail.replySummary.hotCount > 0 ? "text-green-400 font-medium" : ""}
+                      data-testid="stat-replies"
+                    >
+                      {laneDetail.replySummary.hotCount > 0 && "⚡ "}{laneDetail.replySummary.totalReplied} repl{laneDetail.replySummary.totalReplied === 1 ? "y" : "ies"}
+                      {laneDetail.replySummary.hotCount > 0 && ` · ${laneDetail.replySummary.hotCount} hot`}
+                    </span>
+                  </>
+                )}
               </div>
               <div className="mt-1.5 h-1 rounded-full bg-muted/40">
                 <div

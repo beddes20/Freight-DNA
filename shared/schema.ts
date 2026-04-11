@@ -1854,3 +1854,49 @@ export const insertAccountContactSuggestionSchema = createInsertSchema(accountCo
 });
 export type InsertAccountContactSuggestion = z.infer<typeof insertAccountContactSuggestionSchema>;
 export type AccountContactSuggestion = typeof accountContactSuggestions.$inferSelect;
+
+/**
+ * Pre-computed lane summary cache — written by the nightly scheduler after lane scoring.
+ * List endpoints (LWQ, My Procurement) read from this table instead of running per-request
+ * joins + enrichment against recurring_lanes + companies.
+ *
+ * KEY COLUMNS rendered by list views:
+ *   laneScore, priority, origin, originState, destination, destinationState,
+ *   equipmentType, avgLoadsPerWeek, companyId, companyName, ownerUserId,
+ *   carriersContactedCount, resolvedAt, updatedAt
+ *
+ * NOT included (fetched lazily via GET /api/recurring-lanes/:id/detail):
+ *   replySummary, carrier bench arrays, nested history objects
+ */
+export const laneSummaryCache = pgTable("lane_summary_cache", {
+  laneId: varchar("lane_id").primaryKey().references(() => recurringLanes.id, { onDelete: "cascade" }),
+  laneScore: integer("lane_score"),
+  priority: integer("priority").default(0),
+  origin: text("origin").notNull(),
+  originState: text("origin_state"),
+  destination: text("destination").notNull(),
+  destinationState: text("destination_state"),
+  equipmentType: text("equipment_type"),
+  avgLoadsPerWeek: decimal("avg_loads_per_week", { precision: 6, scale: 2 }),
+  companyId: varchar("company_id"),
+  companyName: text("company_name"),
+  ownerUserId: varchar("owner_user_id"),
+  carriersContactedCount: integer("carriers_contacted_count").default(0),
+  contactableCount: integer("contactable_count").default(0),
+  totalBenchCount: integer("total_bench_count").default(0),
+  historicalCount: integer("historical_count").default(0),
+  missingContactCount: integer("missing_contact_count").default(0),
+  orgId: varchar("org_id"),
+  isEligible: boolean("is_eligible").default(true),
+  hasPreferredCarrierProgram: boolean("has_preferred_carrier_program").default(false),
+  snoozedUntil: text("snoozed_until"),
+  resolvedAt: text("resolved_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("lane_summary_cache_owner_resolved_score").on(table.ownerUserId, table.resolvedAt, table.laneScore),
+  index("lane_summary_cache_org_resolved_score").on(table.orgId, table.resolvedAt, table.laneScore),
+]);
+
+export const insertLaneSummaryCacheSchema = createInsertSchema(laneSummaryCache).omit({ updatedAt: true });
+export type InsertLaneSummaryCache = z.infer<typeof insertLaneSummaryCacheSchema>;
+export type LaneSummaryCache = typeof laneSummaryCache.$inferSelect;
