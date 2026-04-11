@@ -16,6 +16,7 @@ import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
+import { initMomentumDropScheduler } from "./momentumDropScheduler";
 import { scoreAllEligibleLanes } from "./laneScoringService";
 import { startIntelEmailScheduler } from "./intelEmailScheduler";
 import { startEmailIntelligenceScheduler } from "./emailIntelligenceScheduler";
@@ -233,6 +234,7 @@ async function initStripe() {
       initLmCheckinScheduler();
       initNbaPhase1Scheduler();
       initMarketSignalScheduler();
+      initMomentumDropScheduler();
       startIntelEmailScheduler();
       startEmailIntelligenceScheduler();
       initGraphSubscriptionService().catch(err => {

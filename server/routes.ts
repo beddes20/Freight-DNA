@@ -34,6 +34,7 @@ import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFrom
 import { isExcludedRow, parseHistoricalRow, isBadSummaryData, computeLoadsForRepGoal, extractSheetsFromWorkbook, toMonthKey } from "./financialHelpers";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
 import { computeGrowthScore } from "./growthScoreCalculator";
+import { checkAndFireMomentumDropNotification } from "./momentumNotifications";
 import { computeNextBestAction } from "./nextBestActionEngine";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
@@ -5148,6 +5149,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         calculatedAt: new Date().toISOString().slice(0, 16),
       });
 
+      checkAndFireMomentumDropNotification(companyId, result.band, saved.previousBand, storage).catch(() => {});
+
       // Always include breakdown and bandLabel/bandColor from the freshly computed result
       res.json({ ...saved, bandLabel: result.bandLabel, bandColor: result.bandColor, breakdown: result.breakdown });
     } catch (error) {
@@ -5214,7 +5217,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           for (const cid of toRecompute) {
             try {
               const gs = await computeGrowthScore(cid, user.organizationId, storage);
-              await storage.upsertGrowthScore({ companyId: cid, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+              const saved = await storage.upsertGrowthScore({ companyId: cid, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+              checkAndFireMomentumDropNotification(cid, gs.band, saved.previousBand, storage).catch(() => {});
             } catch (_) { /* skip individual failures */ }
           }
         })();
@@ -6666,7 +6670,8 @@ Respond with valid JSON only:
       _nbaCache.delete(`nba:${req.params.id}`);
       try {
         const gs = await computeGrowthScore(req.params.id as string, user.organizationId, storage);
-        await storage.upsertGrowthScore({ companyId: req.params.id as string, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+        const savedGs = await storage.upsertGrowthScore({ companyId: req.params.id as string, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+        checkAndFireMomentumDropNotification(req.params.id as string, gs.band, savedGs.previousBand, storage).catch(() => {});
       } catch (gsErr) {
         console.error("[company-touchpoint] growth score refresh failed:", gsErr);
       }
@@ -6717,7 +6722,8 @@ Respond with valid JSON only:
       _nbaCache.delete(`nba:${companyId}`);
       try {
         const gs = await computeGrowthScore(companyId, user.organizationId, storage);
-        await storage.upsertGrowthScore({ companyId, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+        const savedGs = await storage.upsertGrowthScore({ companyId, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+        checkAndFireMomentumDropNotification(companyId, gs.band, savedGs.previousBand, storage).catch(() => {});
       } catch (gsErr) {
         // Log full stack so transient failures are visible in server logs
         console.error("[touch-logs] growth score refresh failed for company", companyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
