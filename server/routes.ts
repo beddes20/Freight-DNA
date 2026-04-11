@@ -9298,6 +9298,19 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
   // ── Account Contact Suggestions (Task #201) ───────────────────────────────
 
+  /** GET /api/internal/accounts/suggestion-counts — batch pending count per account */
+  app.get("/api/internal/accounts/suggestion-counts", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const counts = await storage.countPendingContactSuggestionsByOrg(currentUser.organizationId);
+      res.json(counts);
+    } catch (err: any) {
+      console.error("[suggestion-counts GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to fetch suggestion counts" });
+    }
+  });
+
   /** GET /api/internal/accounts/:accountId/contact-suggestions */
   app.get("/api/internal/accounts/:accountId/contact-suggestions", requireAuth, async (req, res) => {
     try {

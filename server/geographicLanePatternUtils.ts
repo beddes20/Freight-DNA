@@ -234,9 +234,15 @@ export async function mapLaneToPatternIds(
   const originRegion = originState ? (STATE_TO_REGION[originState.toUpperCase()] ?? originState) : null;
   const destRegion = destinationState ? (STATE_TO_REGION[destinationState.toUpperCase()] ?? destinationState) : null;
 
-  const patterns = await storage.getGeographicLanePatterns();
-  const matches: string[] = [];
+  let patterns: Awaited<ReturnType<IStorage["getGeographicLanePatterns"]>>;
+  try {
+    patterns = await storage.getGeographicLanePatterns();
+  } catch (err) {
+    console.error("[geoPatternUtils] getGeographicLanePatterns failed:", err instanceof Error ? err.message : String(err));
+    return [];
+  }
 
+  const matches: string[] = [];
   for (const pattern of patterns) {
     const originMatch = !originRegion || regionMatches(pattern.originRegion, originRegion);
     const destMatch = !destRegion || regionMatches(pattern.destinationRegion, destRegion);

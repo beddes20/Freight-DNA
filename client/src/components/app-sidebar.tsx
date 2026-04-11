@@ -162,11 +162,24 @@ function useUnactionedReplyCount() {
   return data?.count ?? 0;
 }
 
+function useConversationsWaitingCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/internal/conversations/my-count"],
+    enabled: !!user,
+    refetchInterval: 90_000,
+    staleTime: 80_000,
+    retry: false,
+  });
+  return data?.count ?? 0;
+}
+
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const { taskCount, suggestionCount } = useNotificationCounts();
   const unactionedReplyCount = useUnactionedReplyCount();
+  const conversationsWaitingCount = useConversationsWaitingCount();
   const { toast } = useToast();
   const [profileOpen, setProfileOpen] = useState(false);
   const [signature, setSignature] = useState("");
@@ -286,7 +299,11 @@ export function AppSidebar() {
                     key={item.title}
                     item={item}
                     isActive={isActive(item.url)}
-                    badge={item.title === "Tasks" ? taskCount : undefined}
+                    badge={
+                      item.title === "Tasks" ? taskCount
+                      : item.title === "Conversations" ? conversationsWaitingCount
+                      : undefined
+                    }
                   />
                 ))}
             </SidebarMenu>

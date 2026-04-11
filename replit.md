@@ -49,12 +49,29 @@ The application uses React, TypeScript, Tailwind CSS, and `shadcn/ui` for a mode
     - **My Procurement**: Personal unified work surface for reps showing LWQ lane assignments and open award carrier procurement tasks.
     - **Carrier Hub (Phase 1)**: Central carrier intelligence layer with contact management, claimed lanes, and activity tracking.
     - **LWQ ↔ Carrier Hub Cross-Linking**: Provides explanations for ranked carrier suggestions and allows navigation to Carrier Hub profiles.
-    - **Customer Contact Capture from Email**: Detects new people in account-linked email threads and surfaces lightweight contact suggestions.
+    - **Customer Contact Capture from Email**: Detects new people in account-linked email threads and surfaces lightweight contact suggestions. Suggestions shown on company People tab; count badge visible in the Customers list. Batch count API: `GET /api/internal/accounts/suggestion-counts`.
     - **Two-Way Carrier Email**: Outbound emails to carriers include a reply-to address routed through Microsoft Graph webhook; inbound replies matched to outreach logs.
     - **Inbound Reply Surfaces**: Inbound carrier replies are surfaced across Lane Work Queue, My Procurement, and the sidebar with a `needsAction` distinction.
+    - **Conversations Inbox** (`/conversations`): Org-scoped email conversation thread management with ownership, waiting-state (`waiting_on_us` / `waiting_on_them` / `resolved`), priority, and overdue tracking. Sidebar shows live badge count of threads waiting on the current user (`GET /api/internal/conversations/my-count`, polls every 90s).
+    - **Geographic Lane Patterns** (Task #203): 20 baseline corridor patterns (Upper Midwest, Southeast, Texas→Midwest, etc.) stored in `geographic_lane_patterns`. `account_contact_lane_pattern_responsibilities` tracks which contacts own which corridors, with confidence scoring and NBA card firing at ≥70 confidence. UI on contact detail card.
 - **Carrier History & Ranking Contract**: Governs carrier ranking and TMS history display logic. Defines TMS field-name handling (title-case-with-spaces and camelCase), carrier name parsing (stripping payee codes), month normalization to "YYYY-MM", and an HQ proximity bonus for ranking.
 - **Ranking Guarantee**: A 5-tier geo-aware system ensures TMS history outranks catalog-region-only carriers. Tiers: "exact", "nearby", "state_pair", "region", "none" with defined `fitScore` floor bands.
 - **Shared History Source**: LWQ and Carrier Hub read from the same `financial_uploads.rows` JSONB source via a shared utility layer, ensuring consistency.
+
+### DB Tables Added in Tasks #200–203
+| Table | Purpose |
+|---|---|
+| `lane_summary_cache` | Pre-computed flat LeanItem rows for the LWQ work-queue (cache-first path). Populated by `scoreAllEligibleLanes` on startup (20s delay) and nightly at 3:00 AM CT. |
+| `account_contact_suggestions` | Pending/accepted/ignored contact suggestions detected from email threads. |
+| `geographic_lane_patterns` | Named corridor patterns (20 baseline rows seeded on startup). |
+| `account_contact_lane_pattern_responsibilities` | Confidence-scored mappings of contact → corridor, with evidence keys and source types. |
+| `email_conversation_threads` | Org-scoped carrier/account email conversation management (Task #202). |
+
+### lane_summary_cache Warming Contract
+- **On startup**: `scoreAllEligibleLanes` runs for each org 20 seconds after the server starts listening (non-blocking, errors per org are logged and swallowed).
+- **Nightly**: NBA Phase 1 scheduler (3:00 AM CT) also calls `scoreAllEligibleLanes` for all orgs.
+- **On assignment**: Assigning a lane owner also refreshes that lane's cache entry.
+- **Fallback**: If the cache is empty (first-ever boot before warmup completes), the LWQ endpoint falls back to the full `getLaneWorkQueue` query automatically.
 
 ## External Dependencies
 - **PostgreSQL**: Primary database and session store.

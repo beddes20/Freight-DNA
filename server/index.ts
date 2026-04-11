@@ -16,6 +16,7 @@ import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
+import { scoreAllEligibleLanes } from "./laneScoringService";
 import { startIntelEmailScheduler } from "./intelEmailScheduler";
 import { startEmailIntelligenceScheduler } from "./emailIntelligenceScheduler";
 import { initGraphSubscriptionService } from "./graphSubscriptionService";
@@ -242,6 +243,27 @@ async function initStripe() {
       setTimeout(() => {
         storage.preWarmFinancialUploadsCache().catch(() => {});
       }, 5000); // 5-second delay so migrations complete and pool is settled
+
+      // Warm lane_summary_cache so the cache-first work-queue path is active
+      // before the first rep loads the Lane Work Queue. Runs non-blocking in
+      // the background; errors per org are logged but never crash the server.
+      setTimeout(async () => {
+        try {
+          const orgs = await storage.getOrganizations();
+          if (!orgs.length) return;
+          log(`[lane-cache] Warming lane_summary_cache for ${orgs.length} org(s)…`, "startup");
+          for (const org of orgs) {
+            try {
+              await scoreAllEligibleLanes(org.id, storage);
+            } catch (err) {
+              log(`[lane-cache] Error warming org ${org.id}: ${err instanceof Error ? err.message : String(err)}`, "startup");
+            }
+          }
+          log("[lane-cache] lane_summary_cache warm-up complete", "startup");
+        } catch (err) {
+          log(`[lane-cache] Warm-up aborted: ${err instanceof Error ? err.message : String(err)}`, "startup");
+        }
+      }, 20_000); // 20s: after HF cache and DB pool are fully settled
     },
   );
 })();

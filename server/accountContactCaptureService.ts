@@ -246,7 +246,13 @@ export async function detectAndSuggest(
   if (!accountId) return { upserted: 0, skipped: 0 };
 
   // Get company info for domain matching
-  const company = await storage.getCompany(accountId);
+  let company: Awaited<ReturnType<IStorage["getCompany"]>>;
+  try {
+    company = await storage.getCompany(accountId);
+  } catch (err) {
+    console.error(`[accountContactCapture] getCompany failed for ${accountId} (msg ${message.id}):`, err instanceof Error ? err.message : String(err));
+    return { upserted: 0, skipped: 0 };
+  }
   if (!company) return { upserted: 0, skipped: 0 };
 
   const orgId = message.orgId;
@@ -271,7 +277,13 @@ export async function detectAndSuggest(
   if (participantMap.size === 0) return { upserted: 0, skipped: 0 };
 
   // Load existing contacts for this account
-  const existingContacts = await storage.getContactsByCompany(accountId);
+  let existingContacts: Awaited<ReturnType<IStorage["getContactsByCompany"]>>;
+  try {
+    existingContacts = await storage.getContactsByCompany(accountId);
+  } catch (err) {
+    console.error(`[accountContactCapture] getContactsByCompany failed for ${accountId} (msg ${message.id}):`, err instanceof Error ? err.message : String(err));
+    return { upserted: 0, skipped: 0 };
+  }
   const knownEmails = new Set(
     existingContacts.map(c => c.email?.toLowerCase()).filter(Boolean) as string[],
   );

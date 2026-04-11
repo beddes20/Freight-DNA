@@ -18,6 +18,27 @@ import { assignOwner } from "../services/conversationOwnershipService";
 
 export function registerConversationsRoutes(app: Express): void {
 
+  // ── GET /api/internal/conversations/my-count ─────────────────────────────────
+  // Returns the number of threads currently "waiting on me" (owned by the
+  // requesting user with waitingState = 'waiting_on_us'). Used for the sidebar
+  // badge so reps see how many conversations need their attention at a glance.
+  app.get("/api/internal/conversations/my-count", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const threads = await storage.listEmailConversationThreads(user.organizationId, {
+        ownerUserId: user.id,
+        waitingState: "waiting_on_us",
+        limit: 200,
+      });
+      res.json({ count: threads.length });
+    } catch (err) {
+      console.error("[conversations] GET /conversations/my-count error:", err);
+      res.status(500).json({ error: "Failed to fetch count" });
+    }
+  });
+
   // ── GET /api/internal/conversations ─────────────────────────────────────────
   // Query filters: accountId, carrierId, ownerUserId, waitingState,
   // responsePriority, overdue=true|false, unowned=true

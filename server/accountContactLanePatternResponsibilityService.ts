@@ -92,6 +92,7 @@ export async function ingestPatternEvidence(
 ): Promise<IngestResult> {
   const { orgId, accountId, contactId, lanePatternId, responsibilityType, sourceType, occurredAt, eventKey } = input;
 
+  try {
   // 1. Load existing row if any
   const existing = await storage.getResponsibilityByKey(accountId, contactId, lanePatternId);
 
@@ -198,6 +199,11 @@ export async function ingestPatternEvidence(
     isNew: true,
     crossedHighConfidenceThreshold,
   };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[geoResponsibility] ingestPatternEvidence failed for contact ${input.contactId} / pattern ${input.lanePatternId}: ${msg}`);
+    throw err;
+  }
 }
 
 // ─── Confidence bucket helper (for UI display) ────────────────────────────────

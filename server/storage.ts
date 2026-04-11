@@ -870,6 +870,7 @@ export interface IStorage {
   // Account Contact Suggestions (Task #201)
   upsertAccountContactSuggestion(data: import('@shared/schema').InsertAccountContactSuggestion): Promise<import('@shared/schema').AccountContactSuggestion>;
   getAccountContactSuggestions(accountId: string, status?: string): Promise<import('@shared/schema').AccountContactSuggestion[]>;
+  countPendingContactSuggestionsByOrg(orgId: string): Promise<{ accountId: string; count: number }[]>;
   getAccountContactSuggestion(id: string): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
   updateAccountContactSuggestionStatus(id: string, status: string, opts: { userId?: string; snoozedUntil?: Date | null }): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
   getContactByEmailAndCompany(email: string, companyId: string): Promise<import('@shared/schema').Contact | undefined>;
@@ -5757,6 +5758,29 @@ export class DatabaseStorage implements IStorage {
       }
       return true;
     });
+  }
+
+  async countPendingContactSuggestionsByOrg(orgId: string): Promise<{ accountId: string; count: number }[]> {
+    const rows = await db
+      .select({
+        accountId: accountContactSuggestions.accountId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(accountContactSuggestions)
+      .where(
+        and(
+          eq(accountContactSuggestions.orgId, orgId),
+          or(
+            eq(accountContactSuggestions.status, "pending"),
+            and(
+              eq(accountContactSuggestions.status, "snoozed"),
+              lte(accountContactSuggestions.snoozedUntil, new Date()),
+            ),
+          ),
+        ),
+      )
+      .groupBy(accountContactSuggestions.accountId);
+    return rows as { accountId: string; count: number }[];
   }
 
   async getAccountContactSuggestion(id: string): Promise<AccountContactSuggestion | undefined> {

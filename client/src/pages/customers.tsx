@@ -274,6 +274,16 @@ export default function Customers() {
     queryKey: ["/api/research-tasks"],
   });
 
+  const { data: suggestionCounts = [] } = useQuery<{ accountId: string; count: number }[]>({
+    queryKey: ["/api/internal/accounts/suggestion-counts"],
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const suggestionCountMap = useMemo(
+    () => new Map(suggestionCounts.map(r => [r.accountId, r.count])),
+    [suggestionCounts],
+  );
+
   const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
     queryKey: ["/api/financials/account-summary"],
   });
@@ -618,6 +628,7 @@ export default function Customers() {
           {displayList.map((company) => {
             const contacts = contactsByCompany.get(company.id) || [];
             const openTasks = openTasksByCompany.get(company.id) || 0;
+            const pendingSuggestions = suggestionCountMap.get(company.id) ?? 0;
             const fin = getCompanyFinancials(company, accountSummary);
             const tps = tpSummary[company.id] || { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
             return (
@@ -719,6 +730,15 @@ export default function Customers() {
                         <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs">
                           <AlertTriangle className="h-3 w-3 mr-1" />
                           {openTasks} lane{openTasks !== 1 ? "s" : ""} need research
+                        </Badge>
+                      )}
+                      {pendingSuggestions > 0 && !company.archivedAt && (
+                        <Badge
+                          className="bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400 text-xs"
+                          data-testid={`badge-suggestions-${company.id}`}
+                        >
+                          <UserPlus className="h-3 w-3 mr-1" />
+                          {pendingSuggestions} contact{pendingSuggestions !== 1 ? "s" : ""} suggested
                         </Badge>
                       )}
                       {company.archivedAt && (
