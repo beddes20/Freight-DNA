@@ -1504,29 +1504,15 @@ House style — follow every rule:
   });
 
   /**
-   * ensureHotFollowUpTask — creates a carrier follow-up task when a reply is classified
-   * as hot. This function encodes the following APPROVED product spec (confirmed by
-   * product owner April 2026; do not change without explicit re-approval):
+   * Create a carrier follow-up task when a hot reply is classified.
    *
-   * TRIGGER: available_now or available_next_week ONLY.
-   *   - needs_follow_up does NOT trigger task creation — it is too broad and would
-   *     produce noisy tasks from ambiguous or non-committal replies.
+   * Trigger: available_now or available_next_week only (needs_follow_up excluded — too noisy).
+   * Dedupe: skip if any open follow-up task already exists for this event key; allow new
+   *   tasks after closure so later replies from the same carrier/lane get their own task.
+   * Needs-Action clearing: creating this task marks the lane as actioned (hotCount clears).
+   * Reply snippet is quoted in the task description so assignee can read it inline.
    *
-   * DEDUPLICATION: per-open-task, not permanent lifetime dedupe.
-   *   - While any open (non-closed) follow-up task exists for this event/lane/carrier,
-   *     skip creation to prevent duplicates within the same work cycle.
-   *   - After a task is CLOSED, a new qualifying reply from the same carrier on the same
-   *     lane IS allowed to generate a new task. A new later reply is a new actionable event.
-   *   - Two-level key: if `eventId` is known (interest record id), use per-event key
-   *     `carrier_hot_event:{eventId}`. Otherwise fall back to `carrier_hot:{laneId}:{carrierId}`.
-   *
-   * NEEDS ACTION CLEARING: task creation = actioned.
-   *   - A lane is "unactioned" while hotCount > 0 and no open follow-up task exists.
-   *   - The moment a follow-up task is created, the lane is no longer "Needs Action".
-   *   - No secondary explicit action log is required to clear the indicator.
-   *
-   * `replySnippet` (when available) is appended as a quoted block in the task description
-   * so the assignee can see what the carrier said without opening the full thread.
+   * Spec locked April 2026 — see replit.md "Inbound Reply Auto-Task Spec" before changing.
    */
   async function ensureHotFollowUpTask(
     laneId: string,
