@@ -1,11 +1,146 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PhoneCall, Network, Users, Plus, Upload, Search, Clock } from "lucide-react";
+import { PhoneCall, Network, Users, Plus, Upload, Search, Clock, Globe } from "lucide-react";
 import { OrgChart } from "@/components/org-chart";
 import type { Contact, Company, Touchpoint, User } from "@shared/schema";
 import type { TaskWithCount } from "../types";
 import { SuggestedContactsPanel } from "../components/SuggestedContactsPanel";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+
+// ─── Geo Lane Ownership Panel ─────────────────────────────────────────────────
+
+interface GeoResp {
+  id: string;
+  contactId: string;
+  lanePatternId: string;
+  status: string;
+  confidenceScore: number;
+  responsibilityType: string | null;
+  evidenceCount: number;
+  sourceTypes: string[] | null;
+  pattern: {
+    id: string;
+    name: string;
+    originRegion: string;
+    destinationRegion: string;
+    namedCorridor: string | null;
+  } | null;
+}
+
+function GeoLaneOwnershipPanel({ companyId, contacts }: { companyId: string; contacts: Contact[] }) {
+  const { toast } = useToast();
+
+  const { data: responsibilities = [], isLoading } = useQuery<GeoResp[]>({
+    queryKey: ["/api/internal/accounts", companyId, "geographic-responsibilities"],
+    queryFn: () => fetch(`/api/internal/accounts/${companyId}/geographic-responsibilities`, { credentials: "include" }).then(r => r.json()),
+  });
+
+  const confirmMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/internal/geographic-responsibilities/${id}/confirm`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/accounts", companyId, "geographic-responsibilities"] });
+      toast({ title: "Responsibility confirmed" });
+    },
+    onError: () => toast({ title: "Failed to confirm", variant: "destructive" }),
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/internal/geographic-responsibilities/${id}/dismiss`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/accounts", companyId, "geographic-responsibilities"] });
+      toast({ title: "Responsibility dismissed" });
+    },
+    onError: () => toast({ title: "Failed to dismiss", variant: "destructive" }),
+  });
+
+  const visible = responsibilities.filter(r => r.status !== "dismissed");
+
+  if (!isLoading && visible.length === 0) return null;
+
+  const grouped = visible.reduce<Record<string, GeoResp[]>>((acc, r) => {
+    const key = r.pattern?.name ?? "Unknown";
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(r);
+    return acc;
+  }, {});
+
+  return (
+    <Card data-testid="card-geo-lane-ownership">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Globe className="h-4 w-4 text-emerald-500" />
+          Who Owns Which Geographies?
+          {!isLoading && <Badge variant="secondary" className="ml-1 font-normal">{visible.length} lane pattern{visible.length !== 1 ? "s" : ""}</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-4">
+        {isLoading && (
+          <div className="space-y-2">
+            {[1, 2, 3].map(i => <div key={i} className="h-10 rounded-md bg-muted animate-pulse" />)}
+          </div>
+        )}
+        {Object.entries(grouped).map(([patternName, rows]) => {
+          const best = rows.slice().sort((a, b) => b.confidenceScore - a.confidenceScore)[0];
+          const contact = contacts.find(c => c.id === best.contactId);
+          const others = rows.length > 1 ? rows.slice(1).map(r => contacts.find(c => c.id === r.contactId)?.name).filter(Boolean) : [];
+          return (
+            <div key={patternName} className="rounded-md border p-3 space-y-2" data-testid={`geo-ownership-row-${best.id}`}>
+              <div className="flex items-start gap-2 flex-wrap">
+                <span className="text-sm font-medium flex-1 min-w-0">{patternName}</span>
+                {best.confidenceScore >= 70
+                  ? <Badge className="text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">High confidence</Badge>
+                  : best.confidenceScore >= 40
+                  ? <Badge className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">Medium confidence</Badge>
+                  : <Badge className="text-xs bg-muted text-muted-foreground">Low confidence</Badge>
+                }
+                {best.status === "confirmed"
+                  ? <Badge className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Confirmed</Badge>
+                  : <Badge className="text-xs bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">Suggested</Badge>
+                }
+              </div>
+              <p className="text-sm">
+                <span className="text-muted-foreground">Primary: </span>
+                <span className="font-medium">{contact?.name ?? "Unknown contact"}</span>
+                {contact?.title && <span className="text-muted-foreground"> · {contact.title}</span>}
+              </p>
+              {others.length > 0 && (
+                <p className="text-xs text-muted-foreground">Also: {others.join(", ")}</p>
+              )}
+              <p className="text-xs text-muted-foreground">{best.evidenceCount} evidence event{best.evidenceCount !== 1 ? "s" : ""} · {(best.sourceTypes ?? []).join(", ") || "unknown source"}</p>
+              {best.status === "suggested" && (
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs text-blue-600 border-blue-200 hover:bg-blue-50 dark:text-blue-400 dark:border-blue-800"
+                    onClick={() => confirmMutation.mutate(best.id)}
+                    disabled={confirmMutation.isPending}
+                    data-testid={`button-confirm-ownership-${best.id}`}
+                  >
+                    Confirm
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs text-muted-foreground hover:text-destructive"
+                    onClick={() => dismissMutation.mutate(best.id)}
+                    disabled={dismissMutation.isPending}
+                    data-testid={`button-dismiss-ownership-${best.id}`}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
 
 interface ActivityItem {
   type: string;
@@ -160,6 +295,8 @@ export function PeopleTab({
           </CardContent>
         </Card>
       )}
+
+      <GeoLaneOwnershipPanel companyId={company.id} contacts={contacts ?? []} />
 
       <Card data-testid="card-org-chart-section">
         <CardContent className="p-4">

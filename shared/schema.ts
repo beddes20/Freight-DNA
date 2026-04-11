@@ -1930,3 +1930,78 @@ export const laneSummaryCache = pgTable("lane_summary_cache", {
 export const insertLaneSummaryCacheSchema = createInsertSchema(laneSummaryCache).omit({ updatedAt: true });
 export type InsertLaneSummaryCache = z.infer<typeof insertLaneSummaryCacheSchema>;
 export type LaneSummaryCache = typeof laneSummaryCache.$inferSelect;
+
+// ─── Geographic Lane Patterns (Task #203) ─────────────────────────────────────
+// Named regions and corridors that individual lanes roll up into.
+// e.g. "Upper Midwest Outbound", "Texas → Midwest"
+
+export const geographicLanePatterns = pgTable("geographic_lane_patterns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  originRegion: text("origin_region").notNull(),
+  destinationRegion: text("destination_region").notNull(),
+  namedCorridor: text("named_corridor"),
+  description: text("description"),
+  isBaseline: boolean("is_baseline").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertGeographicLanePatternSchema = createInsertSchema(geographicLanePatterns).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertGeographicLanePattern = z.infer<typeof insertGeographicLanePatternSchema>;
+export type GeographicLanePattern = typeof geographicLanePatterns.$inferSelect;
+
+// ─── Account Contact Lane Pattern Responsibilities (Task #203) ────────────────
+// Inferred and confirmed contact–pattern mappings per org and account.
+
+export const responsibilityStatuses = ["suggested", "confirmed", "dismissed"] as const;
+export type ResponsibilityStatus = typeof responsibilityStatuses[number];
+
+export const responsibilityTypes = ["spot", "mini_bid", "rfp", "ops", "other"] as const;
+export type ResponsibilityType = typeof responsibilityTypes[number];
+
+export const sourceTypes = ["email", "transaction", "rfp", "mixed"] as const;
+export type SourceType = typeof sourceTypes[number];
+
+export const accountContactLanePatternResponsibilities = pgTable(
+  "account_contact_lane_pattern_responsibilities",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    accountId: varchar("account_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    contactId: varchar("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    lanePatternId: varchar("lane_pattern_id").notNull().references(() => geographicLanePatterns.id, { onDelete: "cascade" }),
+    isResponsibleForPattern: boolean("is_responsible_for_pattern").notNull().default(true),
+    responsibilityType: text("responsibility_type"),
+    confidenceScore: integer("confidence_score").notNull().default(0),
+    evidenceCount: integer("evidence_count").notNull().default(0),
+    firstSeenAt: timestamp("first_seen_at").notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+    primarySourceType: text("primary_source_type").notNull().default("email"),
+    status: text("status").notNull().default("suggested"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    lastReviewedAt: timestamp("last_reviewed_at"),
+    lastReviewedByUserId: varchar("last_reviewed_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    evidenceEventKeys: text("evidence_event_keys").array().default([]),
+    sourceTypes: text("source_types").array().default([]),
+  },
+  (table) => [
+    index("aclpr_account_contact_pattern_idx").on(table.accountId, table.contactId, table.lanePatternId),
+    index("aclpr_account_status_idx").on(table.accountId, table.status),
+    index("aclpr_contact_status_idx").on(table.contactId, table.status),
+  ],
+);
+
+export const insertAccountContactLanePatternResponsibilitySchema = createInsertSchema(
+  accountContactLanePatternResponsibilities,
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertAccountContactLanePatternResponsibility = z.infer<typeof insertAccountContactLanePatternResponsibilitySchema>;
+export type AccountContactLanePatternResponsibility = typeof accountContactLanePatternResponsibilities.$inferSelect;

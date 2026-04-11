@@ -2009,4 +2009,78 @@ export async function runMigrations() {
   } finally {
     clientLaneSummaryCache.release();
   }
+
+  // ── Geographic Lane Patterns + Responsibilities (Task #203) ──────────────────
+  const clientGeoLanes = await pool.connect();
+  try {
+    await clientGeoLanes.query(`
+      CREATE TABLE IF NOT EXISTS "geographic_lane_patterns" (
+        "id"                 varchar PRIMARY KEY,
+        "org_id"             varchar,
+        "name"               text NOT NULL,
+        "origin_region"      text NOT NULL,
+        "destination_region" text NOT NULL,
+        "named_corridor"     text,
+        "description"        text,
+        "is_baseline"        boolean DEFAULT false NOT NULL,
+        "created_at"         timestamp DEFAULT now() NOT NULL
+      )
+    `);
+    await clientGeoLanes.query(`ALTER TABLE geographic_lane_patterns ADD COLUMN IF NOT EXISTS is_baseline boolean DEFAULT false NOT NULL`);
+    await clientGeoLanes.query(`
+      CREATE INDEX IF NOT EXISTS idx_geographic_lane_patterns_org
+        ON geographic_lane_patterns(org_id)
+    `);
+
+    await clientGeoLanes.query(`
+      CREATE TABLE IF NOT EXISTS "account_contact_lane_pattern_responsibilities" (
+        "id"                   varchar PRIMARY KEY,
+        "org_id"               varchar NOT NULL,
+        "account_id"           varchar NOT NULL,
+        "contact_id"           varchar NOT NULL,
+        "lane_pattern_id"      varchar NOT NULL REFERENCES "geographic_lane_patterns"("id") ON DELETE CASCADE,
+        "status"               text DEFAULT 'suggested' NOT NULL,
+        "confidence_score"     integer DEFAULT 0 NOT NULL,
+        "responsibility_type"  text,
+        "evidence_count"       integer DEFAULT 0 NOT NULL,
+        "evidence_event_keys"  text[],
+        "source_types"         text[],
+        "first_seen_at"        timestamp DEFAULT now() NOT NULL,
+        "last_seen_at"         timestamp DEFAULT now() NOT NULL,
+        "confirmed_by"         varchar,
+        "confirmed_at"         timestamp,
+        "dismissed_by"         varchar,
+        "dismissed_at"         timestamp,
+        "notes"                text,
+        "created_at"           timestamp DEFAULT now() NOT NULL,
+        "updated_at"           timestamp DEFAULT now() NOT NULL
+      )
+    `);
+    await clientGeoLanes.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS account_contact_lane_resp_unique_idx
+        ON account_contact_lane_pattern_responsibilities(account_id, contact_id, lane_pattern_id)
+    `);
+    await clientGeoLanes.query(`
+      CREATE INDEX IF NOT EXISTS idx_aclpr_account
+        ON account_contact_lane_pattern_responsibilities(account_id)
+    `);
+    await clientGeoLanes.query(`
+      CREATE INDEX IF NOT EXISTS idx_aclpr_contact
+        ON account_contact_lane_pattern_responsibilities(contact_id)
+    `);
+    console.log("[migrations] geographic_lane_patterns and account_contact_lane_pattern_responsibilities tables ensured (Task #203)");
+  } catch (err) {
+    console.error("[migrations] geographic lane pattern migration error:", err);
+  } finally {
+    clientGeoLanes.release();
+  }
+
+  // Seed baseline geographic lane patterns (idempotent via INSERT ... ON CONFLICT DO NOTHING)
+  try {
+    const { storage } = await import("./storage");
+    await storage.seedBaselinePatterns();
+    console.log("[migrations] baseline geographic lane patterns seeded (Task #203)");
+  } catch (err) {
+    console.error("[migrations] baseline pattern seeding error:", err);
+  }
 }

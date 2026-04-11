@@ -18,6 +18,7 @@ import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
 import { registerMarketSignalRoutes } from "./routes/marketSignals";
 import { registerEmailIntelligenceRoutes } from "./routes/emailIntelligence";
 import { registerConversationsRoutes } from "./routes/conversations";
+import { registerGeographicResponsibilitiesRoutes } from "./routes/geographicResponsibilities";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -9454,6 +9455,8 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       res.status(500).json({ error: "Failed to suppress suggestion" });
     }
   });
+
+  registerGeographicResponsibilitiesRoutes(app);
 
   return httpServer;
 }

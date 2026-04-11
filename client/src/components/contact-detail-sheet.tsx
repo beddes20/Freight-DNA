@@ -19,6 +19,7 @@ import {
 import {
   Phone, Mail, MapPin, Route, DollarSign, FileText, PhoneCall, Copy, Check,
   MessageSquare, Laptop, Building2, Plus, Trash2, Clock, CalendarDays, ListTodo, X, History, Send, Star,
+  ChevronDown, ChevronUp, Globe,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateAfterTouchpoint } from "@/lib/invalidations";
@@ -370,6 +371,10 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit, onDeleted }
 
             <Separator />
 
+            <GeographicLaneResponsibilities contactId={contact.id} />
+
+            <Separator />
+
             <ContactLaneManager contactId={contact.id} />
 
             {baseHistory.length > 0 && (
@@ -569,5 +574,143 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit, onDeleted }
         companyId={contact?.companyId ?? undefined}
       />
     </>
+  );
+}
+
+// ─── Geographic Lane Responsibilities subcomponent ─────────────────────────────
+
+interface GeoResponsibility {
+  id: string;
+  lanePatternId: string;
+  status: string;
+  confidenceScore: number;
+  responsibilityType: string | null;
+  evidenceCount: number;
+  sourceTypes: string[] | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  pattern: {
+    id: string;
+    name: string;
+    originRegion: string;
+    destinationRegion: string;
+    namedCorridor: string | null;
+  } | null;
+}
+
+function confidenceBadge(score: number) {
+  if (score >= 70) return <Badge className="text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">High</Badge>;
+  if (score >= 40) return <Badge className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">Medium</Badge>;
+  return <Badge className="text-xs bg-muted text-muted-foreground">Low</Badge>;
+}
+
+function statusBadge(status: string) {
+  if (status === "confirmed") return <Badge className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Confirmed</Badge>;
+  if (status === "dismissed") return <Badge variant="outline" className="text-xs text-muted-foreground">Dismissed</Badge>;
+  return <Badge className="text-xs bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">Suggested</Badge>;
+}
+
+function GeographicLaneResponsibilities({ contactId }: { contactId: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const { toast } = useToast();
+
+  const { data: responsibilities = [], isLoading } = useQuery<GeoResponsibility[]>({
+    queryKey: ["/api/internal/contacts", contactId, "geographic-responsibilities"],
+    queryFn: () => fetch(`/api/internal/contacts/${contactId}/geographic-responsibilities`, { credentials: "include" }).then(r => r.json()),
+    enabled: expanded,
+  });
+
+  const confirmMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/internal/geographic-responsibilities/${id}/confirm`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/contacts", contactId, "geographic-responsibilities"] });
+      toast({ title: "Responsibility confirmed" });
+    },
+    onError: () => toast({ title: "Failed to confirm", variant: "destructive" }),
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/internal/geographic-responsibilities/${id}/dismiss`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/contacts", contactId, "geographic-responsibilities"] });
+      toast({ title: "Responsibility dismissed" });
+    },
+    onError: () => toast({ title: "Failed to dismiss", variant: "destructive" }),
+  });
+
+  const visible = responsibilities.filter(r => r.status !== "dismissed");
+
+  return (
+    <div className="space-y-2" data-testid="section-geographic-responsibilities">
+      <button
+        className="flex items-center gap-2 text-sm font-medium w-full text-left hover:text-foreground"
+        onClick={() => setExpanded(v => !v)}
+        data-testid="button-toggle-geo-responsibilities"
+      >
+        <Globe className="h-4 w-4 text-muted-foreground" />
+        <span>Geographic Lane Responsibilities</span>
+        {expanded ? <ChevronUp className="h-4 w-4 ml-auto text-muted-foreground" /> : <ChevronDown className="h-4 w-4 ml-auto text-muted-foreground" />}
+      </button>
+
+      {expanded && (
+        <div className="space-y-2 pl-6">
+          {isLoading && (
+            <div className="space-y-2">
+              {[1, 2].map(i => <div key={i} className="h-10 rounded-md bg-muted animate-pulse" />)}
+            </div>
+          )}
+
+          {!isLoading && visible.length === 0 && (
+            <p className="text-xs text-muted-foreground py-1">No geographic lane responsibilities detected yet.</p>
+          )}
+
+          {visible.map(r => {
+            const days90Ago = new Date();
+            days90Ago.setDate(days90Ago.getDate() - 90);
+            const lastSeen = new Date(r.lastSeenAt);
+            const daysSince = Math.round((Date.now() - lastSeen.getTime()) / 86400000);
+            const sourceSummary = (r.sourceTypes ?? []).join(", ") || "unknown";
+            const evidenceSummary = `${r.evidenceCount} event${r.evidenceCount !== 1 ? "s" : ""} via ${sourceSummary}${daysSince <= 90 ? ` (last: ${daysSince}d ago)` : ""}`;
+            return (
+              <div key={r.id} className="rounded-md border bg-muted/20 p-3 space-y-2" data-testid={`geo-responsibility-${r.id}`}>
+                <div className="flex items-start gap-2 flex-wrap">
+                  <span className="text-sm font-medium flex-1 min-w-0">{r.pattern?.name ?? "Unknown pattern"}</span>
+                  {confidenceBadge(r.confidenceScore)}
+                  {statusBadge(r.status)}
+                </div>
+                {r.responsibilityType && (
+                  <Badge variant="outline" className="text-xs capitalize">{r.responsibilityType.replace("_", " ")}</Badge>
+                )}
+                <p className="text-xs text-muted-foreground">{evidenceSummary}</p>
+                {r.status === "suggested" && (
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs text-blue-600 border-blue-200 hover:bg-blue-50 dark:text-blue-400 dark:border-blue-800"
+                      onClick={() => confirmMutation.mutate(r.id)}
+                      disabled={confirmMutation.isPending}
+                      data-testid={`button-confirm-geo-${r.id}`}
+                    >
+                      Confirm
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs text-muted-foreground hover:text-destructive"
+                      onClick={() => dismissMutation.mutate(r.id)}
+                      disabled={dismissMutation.isPending}
+                      data-testid={`button-dismiss-geo-${r.id}`}
+                    >
+                      Dismiss
+                    </Button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

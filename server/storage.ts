@@ -170,6 +170,12 @@ import {
   emailConversationThreads,
   type EmailConversationThread,
   type InsertEmailConversationThread,
+  geographicLanePatterns,
+  type GeographicLanePattern,
+  type InsertGeographicLanePattern,
+  accountContactLanePatternResponsibilities,
+  type AccountContactLanePatternResponsibility,
+  type InsertAccountContactLanePatternResponsibility,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -867,6 +873,33 @@ export interface IStorage {
   getAccountContactSuggestion(id: string): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
   updateAccountContactSuggestionStatus(id: string, status: string, opts: { userId?: string; snoozedUntil?: Date | null }): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
   getContactByEmailAndCompany(email: string, companyId: string): Promise<import('@shared/schema').Contact | undefined>;
+
+  // Geographic Lane Patterns (Task #203)
+  getGeographicLanePatterns(orgId?: string): Promise<import('@shared/schema').GeographicLanePattern[]>;
+  getGeographicLanePattern(id: string): Promise<import('@shared/schema').GeographicLanePattern | undefined>;
+  createGeographicLanePattern(data: import('@shared/schema').InsertGeographicLanePattern): Promise<import('@shared/schema').GeographicLanePattern>;
+  seedBaselinePatterns(): Promise<void>;
+
+  // Account Contact Lane Pattern Responsibilities (Task #203)
+  createResponsibility(data: Omit<import('@shared/schema').InsertAccountContactLanePatternResponsibility, 'evidenceEventKeys' | 'sourceTypes'> & { evidenceEventKeys?: string[]; sourceTypes?: string[] }): Promise<import('@shared/schema').AccountContactLanePatternResponsibility>;
+  updateResponsibility(id: string, data: Partial<import('@shared/schema').AccountContactLanePatternResponsibility>): Promise<import('@shared/schema').AccountContactLanePatternResponsibility>;
+  getResponsibilityByKey(accountId: string, contactId: string, lanePatternId: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
+  getResponsibilitiesByAccount(accountId: string, filters?: {
+    contactId?: string;
+    lanePatternId?: string;
+    status?: string;
+    minConfidence?: number;
+    responsibilityType?: string;
+  }): Promise<import('@shared/schema').AccountContactLanePatternResponsibility[]>;
+  getResponsibilitiesByContact(contactId: string, filters?: {
+    accountId?: string;
+    status?: string;
+    minConfidence?: number;
+    responsibilityType?: string;
+  }): Promise<import('@shared/schema').AccountContactLanePatternResponsibility[]>;
+  getResponsibility(id: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
+  confirmResponsibility(id: string, userId: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
+  dismissResponsibility(id: string, userId: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
 }
 
 const pool = new Pool({
@@ -5873,6 +5906,171 @@ export class DatabaseStorage implements IStorage {
         eq(emailConversationThreads.id, id),
         eq(emailConversationThreads.orgId, orgId),
       ))
+      .returning();
+    return row;
+  }
+
+  // ─── Geographic Lane Patterns (Task #203) ──────────────────────────────────
+
+  async getGeographicLanePatterns(orgId?: string): Promise<GeographicLanePattern[]> {
+    const conditions = [];
+    if (orgId) {
+      conditions.push(or(eq(geographicLanePatterns.orgId, orgId), isNull(geographicLanePatterns.orgId)));
+    }
+    const rows = conditions.length > 0
+      ? await db.select().from(geographicLanePatterns).where(and(...conditions))
+      : await db.select().from(geographicLanePatterns);
+    return rows;
+  }
+
+  async getGeographicLanePattern(id: string): Promise<GeographicLanePattern | undefined> {
+    const [row] = await db.select().from(geographicLanePatterns).where(eq(geographicLanePatterns.id, id)).limit(1);
+    return row;
+  }
+
+  async createGeographicLanePattern(data: InsertGeographicLanePattern): Promise<GeographicLanePattern> {
+    const { randomUUID } = await import("crypto");
+    const [row] = await db.insert(geographicLanePatterns).values({ id: randomUUID(), ...data }).returning();
+    return row;
+  }
+
+  async seedBaselinePatterns(): Promise<void> {
+    const { BASELINE_LANE_PATTERNS } = await import("./geographicLanePatternUtils");
+    const { randomUUID } = await import("crypto");
+    const existing = await db.select({ name: geographicLanePatterns.name, isBaseline: geographicLanePatterns.isBaseline })
+      .from(geographicLanePatterns)
+      .where(eq(geographicLanePatterns.isBaseline, true));
+    const existingNames = new Set(existing.map(r => r.name));
+    const toInsert = BASELINE_LANE_PATTERNS.filter(p => !existingNames.has(p.name));
+    if (toInsert.length === 0) return;
+    await db.insert(geographicLanePatterns).values(
+      toInsert.map(p => ({
+        id: randomUUID(),
+        name: p.name,
+        originRegion: p.originRegion,
+        destinationRegion: p.destinationRegion,
+        namedCorridor: p.namedCorridor,
+        description: p.description,
+        isBaseline: true,
+        orgId: null,
+      })),
+    );
+    console.log(`[geographicLanePatterns] seeded ${toInsert.length} baseline patterns`);
+  }
+
+  // ─── Account Contact Lane Pattern Responsibilities (Task #203) ─────────────
+
+  async createResponsibility(
+    data: Omit<InsertAccountContactLanePatternResponsibility, 'evidenceEventKeys' | 'sourceTypes'> & {
+      evidenceEventKeys?: string[];
+      sourceTypes?: string[];
+    },
+  ): Promise<AccountContactLanePatternResponsibility> {
+    const { randomUUID } = await import("crypto");
+    const [row] = await db.insert(accountContactLanePatternResponsibilities).values({
+      id: randomUUID(),
+      ...data,
+      evidenceEventKeys: data.evidenceEventKeys ?? [],
+      sourceTypes: data.sourceTypes ?? [],
+    }).returning();
+    return row;
+  }
+
+  async updateResponsibility(
+    id: string,
+    data: Partial<AccountContactLanePatternResponsibility>,
+  ): Promise<AccountContactLanePatternResponsibility> {
+    const [row] = await db.update(accountContactLanePatternResponsibilities)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(accountContactLanePatternResponsibilities.id, id))
+      .returning();
+    return row;
+  }
+
+  async getResponsibilityByKey(
+    accountId: string,
+    contactId: string,
+    lanePatternId: string,
+  ): Promise<AccountContactLanePatternResponsibility | undefined> {
+    const [row] = await db.select()
+      .from(accountContactLanePatternResponsibilities)
+      .where(and(
+        eq(accountContactLanePatternResponsibilities.accountId, accountId),
+        eq(accountContactLanePatternResponsibilities.contactId, contactId),
+        eq(accountContactLanePatternResponsibilities.lanePatternId, lanePatternId),
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async getResponsibilitiesByAccount(
+    accountId: string,
+    filters?: {
+      contactId?: string;
+      lanePatternId?: string;
+      status?: string;
+      minConfidence?: number;
+      responsibilityType?: string;
+    },
+  ): Promise<AccountContactLanePatternResponsibility[]> {
+    const conditions: SQL[] = [eq(accountContactLanePatternResponsibilities.accountId, accountId)];
+    if (filters?.contactId) conditions.push(eq(accountContactLanePatternResponsibilities.contactId, filters.contactId));
+    if (filters?.lanePatternId) conditions.push(eq(accountContactLanePatternResponsibilities.lanePatternId, filters.lanePatternId));
+    if (filters?.status) conditions.push(eq(accountContactLanePatternResponsibilities.status, filters.status));
+    if (filters?.minConfidence !== undefined) conditions.push(gte(accountContactLanePatternResponsibilities.confidenceScore, filters.minConfidence));
+    if (filters?.responsibilityType) conditions.push(eq(accountContactLanePatternResponsibilities.responsibilityType, filters.responsibilityType));
+    return db.select().from(accountContactLanePatternResponsibilities).where(and(...conditions))
+      .orderBy(desc(accountContactLanePatternResponsibilities.confidenceScore));
+  }
+
+  async getResponsibilitiesByContact(
+    contactId: string,
+    filters?: {
+      accountId?: string;
+      status?: string;
+      minConfidence?: number;
+      responsibilityType?: string;
+    },
+  ): Promise<AccountContactLanePatternResponsibility[]> {
+    const conditions: SQL[] = [eq(accountContactLanePatternResponsibilities.contactId, contactId)];
+    if (filters?.accountId) conditions.push(eq(accountContactLanePatternResponsibilities.accountId, filters.accountId));
+    if (filters?.status) conditions.push(eq(accountContactLanePatternResponsibilities.status, filters.status));
+    if (filters?.minConfidence !== undefined) conditions.push(gte(accountContactLanePatternResponsibilities.confidenceScore, filters.minConfidence));
+    if (filters?.responsibilityType) conditions.push(eq(accountContactLanePatternResponsibilities.responsibilityType, filters.responsibilityType));
+    return db.select().from(accountContactLanePatternResponsibilities).where(and(...conditions))
+      .orderBy(desc(accountContactLanePatternResponsibilities.confidenceScore));
+  }
+
+  async getResponsibility(id: string): Promise<AccountContactLanePatternResponsibility | undefined> {
+    const [row] = await db.select()
+      .from(accountContactLanePatternResponsibilities)
+      .where(eq(accountContactLanePatternResponsibilities.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async confirmResponsibility(id: string, userId: string): Promise<AccountContactLanePatternResponsibility | undefined> {
+    const [row] = await db.update(accountContactLanePatternResponsibilities)
+      .set({
+        status: "confirmed",
+        lastReviewedAt: new Date(),
+        lastReviewedByUserId: userId,
+        updatedAt: new Date(),
+      })
+      .where(eq(accountContactLanePatternResponsibilities.id, id))
+      .returning();
+    return row;
+  }
+
+  async dismissResponsibility(id: string, userId: string): Promise<AccountContactLanePatternResponsibility | undefined> {
+    const [row] = await db.update(accountContactLanePatternResponsibilities)
+      .set({
+        status: "dismissed",
+        lastReviewedAt: new Date(),
+        lastReviewedByUserId: userId,
+        updatedAt: new Date(),
+      })
+      .where(eq(accountContactLanePatternResponsibilities.id, id))
       .returning();
     return row;
   }

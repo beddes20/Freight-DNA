@@ -24,6 +24,9 @@ import { processCarrierEmailSignals } from "./services/carrierIntelSuggestions";
 import { detectAndSuggest } from "./accountContactCaptureService";
 import { applyMessageToThread } from "./services/conversationWaitingStateService";
 import { determineInitialOwner } from "./services/conversationOwnershipService";
+import { ingestPatternEvidence, maybeFireResponsibilityNba } from "./accountContactLanePatternResponsibilityService";
+import { mapLaneToPatternIds, extractStateFromLocation } from "./geographicLanePatternUtils";
+import { createHash } from "crypto";
 import type { InsertEmailSignal } from "@shared/schema";
 
 const BATCH_SIZE = parseInt(process.env.EMAIL_INTEL_BATCH_SIZE ?? "50", 10);
@@ -120,6 +123,58 @@ async function runEmailIntelligenceBatch(): Promise<void> {
         } catch (convErr) {
           console.error(`[emailIntelligenceScheduler] conversation thread upsert error for ${msg.id}:`, convErr);
         }
+      }
+
+      // ── Consumer area 6: Geographic lane pattern responsibility (Task #203) ──
+      // Emits evidence when account, contact, and lane are all identifiable.
+      if (msg.linkedAccountId && msg.linkedLaneId && msg.orgId) {
+        (async () => {
+          try {
+            const lane = await storage.getRecurringLane(msg.linkedLaneId!);
+            if (!lane) return;
+            const originState = extractStateFromLocation(lane.originState ?? lane.origin);
+            const destState = extractStateFromLocation(lane.destinationState ?? lane.destination);
+            const patternIds = await mapLaneToPatternIds(originState, destState, storage);
+            if (patternIds.length === 0) return;
+
+            const contacts = await storage.getContactsByCompany(msg.linkedAccountId!);
+            const fromEmail = msg.fromEmail?.toLowerCase();
+            const matchedContact = fromEmail
+              ? contacts.find(c => c.email?.toLowerCase() === fromEmail)
+              : null;
+            if (!matchedContact) return;
+
+            for (const patternId of patternIds) {
+              const eventKey = createHash("sha256")
+                .update(`email:${msg.id}:${patternId}`)
+                .digest("hex");
+              const ingestResult = await ingestPatternEvidence({
+                orgId: msg.orgId!,
+                accountId: msg.linkedAccountId!,
+                contactId: matchedContact.id,
+                lanePatternId: patternId,
+                responsibilityType: null,
+                sourceType: "email",
+                occurredAt: new Date(),
+                eventKey,
+              }, storage);
+              if (ingestResult.crossedHighConfidenceThreshold) {
+                maybeFireResponsibilityNba({
+                  orgId: msg.orgId!,
+                  accountId: msg.linkedAccountId!,
+                  contactId: matchedContact.id,
+                  lanePatternId: patternId,
+                  rowId: ingestResult.rowId,
+                  confidenceScore: ingestResult.confidenceScore,
+                  crossedHighConfidenceThreshold: true,
+                  storage,
+                }).catch(() => {});
+              }
+            }
+          } catch (err) {
+            console.error(`[emailIntelligenceScheduler] lane pattern responsibility error for ${msg.id}:`, err);
+          }
+        })();
       }
 
       if (saved.length === 0) continue;
