@@ -2007,3 +2007,17 @@ export const insertAccountContactLanePatternResponsibilitySchema = createInsertS
 });
 export type InsertAccountContactLanePatternResponsibility = z.infer<typeof insertAccountContactLanePatternResponsibilitySchema>;
 export type AccountContactLanePatternResponsibility = typeof accountContactLanePatternResponsibilities.$inferSelect;
+
+export const pinnedCompanies = pgTable("pinned_companies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  pinnedAt: timestamp("pinned_at").defaultNow().notNull(),
+},
+(table) => [
+  uniqueIndex("pinned_companies_user_company_idx").on(table.userId, table.companyId),
+]);
+
+export const insertPinnedCompanySchema = createInsertSchema(pinnedCompanies).omit({ id: true, pinnedAt: true });
+export type InsertPinnedCompany = z.infer<typeof insertPinnedCompanySchema>;
+export type PinnedCompany = typeof pinnedCompanies.$inferSelect;

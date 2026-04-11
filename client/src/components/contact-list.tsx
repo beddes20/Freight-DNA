@@ -33,6 +33,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Contact, Touchpoint } from "@shared/schema";
+import { CopyButton } from "@/components/copy-button";
 import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 
 function countThisWeek(tps: Touchpoint[]) {
@@ -223,24 +224,30 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                         <div className="space-y-1.5 min-w-0">
                           <div className="flex flex-wrap gap-3 text-xs min-w-0">
                             {contact.email && (
-                              <a
-                                href={`mailto:${contact.email}`}
-                                onClick={e => e.stopPropagation()}
-                                className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
-                              >
-                                <Mail className="h-3 w-3" />
-                                <span className="truncate">{contact.email}</span>
-                              </a>
+                              <span className="flex items-center gap-1">
+                                <a
+                                  href={`mailto:${contact.email}`}
+                                  onClick={e => e.stopPropagation()}
+                                  className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                                >
+                                  <Mail className="h-3 w-3" />
+                                  <span className="truncate">{contact.email}</span>
+                                </a>
+                                <CopyButton value={contact.email} label="Email" data-testid={`button-copy-contact-email-${contact.id}`} />
+                              </span>
                             )}
                             {contact.phone && (
-                              <a
-                                href={`tel:${contact.phone}`}
-                                onClick={e => e.stopPropagation()}
-                                className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
-                              >
-                                <Phone className="h-3 w-3" />
-                                <span>{contact.phone}</span>
-                              </a>
+                              <span className="flex items-center gap-1">
+                                <a
+                                  href={`tel:${contact.phone}`}
+                                  onClick={e => e.stopPropagation()}
+                                  className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                                >
+                                  <Phone className="h-3 w-3" />
+                                  <span>{contact.phone}</span>
+                                </a>
+                                <CopyButton value={contact.phone} label="Phone" data-testid={`button-copy-contact-phone-${contact.id}`} />
+                              </span>
                             )}
                           </div>
                           {contact.email && (

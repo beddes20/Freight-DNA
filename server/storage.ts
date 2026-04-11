@@ -176,6 +176,8 @@ import {
   accountContactLanePatternResponsibilities,
   type AccountContactLanePatternResponsibility,
   type InsertAccountContactLanePatternResponsibility,
+  pinnedCompanies,
+  type PinnedCompany,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -903,6 +905,12 @@ export interface IStorage {
   getResponsibility(id: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
   confirmResponsibility(id: string, userId: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
   dismissResponsibility(id: string, userId: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
+
+  // Pinned Companies (Task #206)
+  getPinnedCompanies(userId: string): Promise<import('@shared/schema').PinnedCompany[]>;
+  pinCompany(userId: string, companyId: string): Promise<import('@shared/schema').PinnedCompany>;
+  unpinCompany(userId: string, companyId: string): Promise<boolean>;
+  isPinnedCompany(userId: string, companyId: string): Promise<boolean>;
 }
 
 const pool = new Pool({
@@ -6124,6 +6132,28 @@ export class DatabaseStorage implements IStorage {
       .where(eq(accountContactLanePatternResponsibilities.id, id))
       .returning();
     return row;
+  }
+
+  // ── Pinned Companies (Task #206) ──────────────────────────────────────────
+  async getPinnedCompanies(userId: string): Promise<PinnedCompany[]> {
+    return db.select().from(pinnedCompanies).where(eq(pinnedCompanies.userId, userId)).orderBy(desc(pinnedCompanies.pinnedAt));
+  }
+
+  async pinCompany(userId: string, companyId: string): Promise<PinnedCompany> {
+    const existing = await db.select().from(pinnedCompanies).where(and(eq(pinnedCompanies.userId, userId), eq(pinnedCompanies.companyId, companyId)));
+    if (existing.length > 0) return existing[0];
+    const [row] = await db.insert(pinnedCompanies).values({ userId, companyId }).returning();
+    return row;
+  }
+
+  async unpinCompany(userId: string, companyId: string): Promise<boolean> {
+    const result = await db.delete(pinnedCompanies).where(and(eq(pinnedCompanies.userId, userId), eq(pinnedCompanies.companyId, companyId)));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async isPinnedCompany(userId: string, companyId: string): Promise<boolean> {
+    const rows = await db.select().from(pinnedCompanies).where(and(eq(pinnedCompanies.userId, userId), eq(pinnedCompanies.companyId, companyId)));
+    return rows.length > 0;
   }
 }
 

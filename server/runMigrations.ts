@@ -2143,4 +2143,27 @@ export async function runMigrations() {
   } finally {
     clientCompanyAudit.release();
   }
+
+  // Pinned companies — user-level account bookmarks (Task #206)
+  const clientPinnedCompanies = await pool.connect();
+  try {
+    // Create table matching shared/schema.ts: varchar UUID PK, timestamp pinnedAt, FK refs
+    await clientPinnedCompanies.query(`
+      CREATE TABLE IF NOT EXISTS pinned_companies (
+        id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        company_id  varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        pinned_at   timestamp NOT NULL DEFAULT now(),
+        UNIQUE (user_id, company_id)
+      )
+    `);
+    await clientPinnedCompanies.query(`
+      CREATE INDEX IF NOT EXISTS idx_pinned_companies_user_id ON pinned_companies (user_id)
+    `);
+    console.log("[migrations] pinned_companies table ensured (Task #206)");
+  } catch (err) {
+    console.error("[migrations] pinned_companies migration error:", err);
+  } finally {
+    clientPinnedCompanies.release();
+  }
 }

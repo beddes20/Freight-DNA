@@ -10,6 +10,7 @@ import {
   ClipboardList, Copy, PhoneCall, MessageSquare, Building2,
   TruckIcon, CheckSquare, Square, CheckCircle2,
 } from "lucide-react";
+import { CopyButton } from "@/components/copy-button";
 import { FileAttachmentList, FileAttachmentUpload, uploadPendingFiles } from "@/components/file-attachment";
 import type { PendingFile } from "@/components/file-attachment";
 import { InfoTooltip } from "@/components/info-tooltip";
@@ -478,7 +479,14 @@ export function IntelTab({
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Users className="h-3 w-3" /> Username</p>
-                    <p className="text-sm font-mono" data-testid="text-portal-username">{company.portalUsername || <span className="text-muted-foreground italic font-sans">Not set</span>}</p>
+                    {company.portalUsername ? (
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-sm font-mono" data-testid="text-portal-username">{company.portalUsername}</p>
+                        <CopyButton value={company.portalUsername} label="Username" data-testid="button-copy-portal-username" />
+                      </div>
+                    ) : (
+                      <p className="text-sm font-mono" data-testid="text-portal-username"><span className="text-muted-foreground italic font-sans">Not set</span></p>
+                    )}
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><KeyRound className="h-3 w-3" /> Password</p>
@@ -488,6 +496,7 @@ export function IntelTab({
                         <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setShowPortalPassword(v => !v)} data-testid="button-reveal-password">
                           {showPortalPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                         </button>
+                        <CopyButton value={company.portalPassword} label="Password" data-testid="button-copy-portal-password" />
                       </div>
                     ) : (
                       <p className="text-sm text-muted-foreground italic">Not set</p>
@@ -543,7 +552,10 @@ export function IntelTab({
                     {company.dlEmail && (
                       <div>
                         <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Mail className="h-3 w-3" /> D/L Email</p>
-                        <a href={`mailto:${company.dlEmail}`} className="text-sm text-blue-600 dark:text-blue-400 hover:underline" data-testid="text-dl-email">{company.dlEmail}</a>
+                        <div className="flex items-center gap-1.5">
+                          <a href={`mailto:${company.dlEmail}`} className="text-sm text-blue-600 dark:text-blue-400 hover:underline" data-testid="text-dl-email">{company.dlEmail}</a>
+                          <CopyButton value={company.dlEmail} label="Email" data-testid="button-copy-dl-email" />
+                        </div>
                       </div>
                     )}
                     {company.operatingHours && (

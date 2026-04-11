@@ -32,6 +32,7 @@ import {
   Activity,
   MoreHorizontal,
 } from "lucide-react";
+import { PinButton } from "@/components/pin-button";
 import * as XLSX from "xlsx";
 import { InfoTooltip } from "@/components/info-tooltip";
 import {
@@ -584,6 +585,7 @@ export default function CompanyDetail() {
                 <h1 className="text-2xl font-semibold" data-testid="text-company-name">
                   {company.name}
                 </h1>
+                {!company.archivedAt && <PinButton companyId={companyId} size="default" className="h-8 w-8" />}
                 {healthScore && (() => {
                   const colorMap: Record<string, string> = {
                     green: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300 border-green-200 dark:border-green-800",

@@ -71,6 +71,7 @@ import { AwardHealthPortlet } from "./dashboard/AwardHealthPortlet";
 import { TodaysBriefingPortlet } from "@/components/todays-briefing-portlet";
 import { RecentlyVisitedPortlet } from "@/components/recently-visited-portlet";
 import { useRecentlyVisited } from "@/hooks/use-recently-visited";
+import { PinnedAccountsPortlet } from "@/components/pinned-accounts-portlet";
 
 const METRIC_LABELS: Record<string, string> = {
   contacts_added: "New Contacts",
@@ -1138,6 +1139,13 @@ export default function Dashboard() {
           </Card>
         </PortletErrorBoundary>
       )}
+
+      {/* ── Pinned Accounts ──────────────────────────────────────────────────── */}
+      <div style={{ order: getOrder("pinned-accounts") }} className={(!isVisible("pinned-accounts") || isLmRole) ? "hidden" : ""}>
+        <PortletErrorBoundary label="Pinned Accounts">
+          <PinnedAccountsPortlet />
+        </PortletErrorBoundary>
+      </div>
 
       {/* ── Outbound Touchpoints Today (collapsed by default, running context) ── */}
       <PortletErrorBoundary label="Touchpoints Today">

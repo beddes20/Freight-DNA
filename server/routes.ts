@@ -1378,6 +1378,51 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
+  // ── Pinned Companies (Task #206) ─────────────────────────────────────────
+  app.get("/api/pinned-companies", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const pinned = await storage.getPinnedCompanies(currentUser.id);
+      res.json(pinned);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get pinned companies" });
+    }
+  });
+
+  app.post("/api/pinned-companies/:companyId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = req.params.companyId as string;
+      if (!(await canAccessCompany(currentUser, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      // Enforce max 10 pinned accounts
+      const existing = await storage.getPinnedCompanies(currentUser.id);
+      const alreadyPinned = existing.some(p => p.companyId === companyId);
+      if (!alreadyPinned && existing.length >= 10) {
+        return res.status(400).json({ error: "Maximum of 10 pinned accounts allowed" });
+      }
+      const pinned = await storage.pinCompany(currentUser.id, companyId);
+      res.json(pinned);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to pin company" });
+    }
+  });
+
+  app.delete("/api/pinned-companies/:companyId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = req.params.companyId as string;
+      await storage.unpinCompany(currentUser.id, companyId);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to unpin company" });
+    }
+  });
+
   app.post("/api/companies/:id/archive", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);

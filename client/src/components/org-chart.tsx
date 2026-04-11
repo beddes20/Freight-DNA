@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Pencil, MapPin, Route, DollarSign, FileText, PhoneCall, ListTodo, Brain, ClipboardList, Mail } from "lucide-react";
 import type { Contact, Touchpoint } from "@shared/schema";
+import { CopyButton } from "@/components/copy-button";
 
 interface OrgChartProps {
   contacts: Contact[];
@@ -304,8 +305,18 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, o
 
             {(contact.email || contact.phone) && (
               <div className="mt-3 pt-3 border-t flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                {contact.email && <span>{contact.email}</span>}
-                {contact.phone && <span>{contact.phone}</span>}
+                {contact.email && (
+                  <span className="flex items-center gap-1">
+                    {contact.email}
+                    <CopyButton value={contact.email} label="Email" data-testid={`button-copy-email-${contact.id}`} />
+                  </span>
+                )}
+                {contact.phone && (
+                  <span className="flex items-center gap-1">
+                    {contact.phone}
+                    <CopyButton value={contact.phone} label="Phone" data-testid={`button-copy-phone-${contact.id}`} />
+                  </span>
+                )}
               </div>
             )}
           </div>

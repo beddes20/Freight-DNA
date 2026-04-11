@@ -1,15 +1,17 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Trophy, TrendingUp, DollarSign } from "lucide-react";
+import { BarChart3, Trophy, TrendingUp, DollarSign, Phone, Mail, User } from "lucide-react";
 import { ForcedFocusDialog } from "@/components/forced-focus-dialog";
 import { RelationshipFreightCompanyPortlet } from "@/components/relationship-freight-portlet";
 import { NextBestActionCard } from "@/components/next-best-action-card";
 import { NbaCompanyCard } from "@/components/NbaCompanyCard";
 import { MarketShareCard } from "@/components/market-share-card";
+import { CopyButton } from "@/components/copy-button";
 import { fmtMoney } from "@/lib/rep-utils";
-import type { Rfp } from "@shared/schema";
+import type { Contact, Rfp } from "@shared/schema";
 import type { AccountPerf, MonthBucket } from "../types";
 
 interface OverviewTabProps {
@@ -48,6 +50,12 @@ export function OverviewTab({
   isLeadership,
 }: OverviewTabProps) {
   const [ffDialogOpen, setFfDialogOpen] = useState(false);
+
+  const { data: contacts = [] } = useQuery<Contact[]>({
+    queryKey: ["/api/companies", companyId, "contacts"],
+    staleTime: 60_000,
+  });
+  const primaryContact = contacts.find(c => c.isPrimary) ?? contacts[0] ?? null;
   const [hasPhase1Card, setHasPhase1Card] = useState(false);
   const fmtMonth = (key: string) => {
     const [y, mo] = key.split("-");
@@ -93,6 +101,43 @@ export function OverviewTab({
 
   return (
     <>
+      {/* Primary Contact Quick-View with copy buttons */}
+      {primaryContact && (primaryContact.phone || primaryContact.email) && (
+        <Card data-testid="card-primary-contact-overview">
+          <CardContent className="py-3 px-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <button
+                className="text-sm font-medium hover:underline"
+                onClick={() => onOpenContact?.(primaryContact.id)}
+                data-testid={`button-open-primary-contact-${primaryContact.id}`}
+              >
+                {primaryContact.name}
+              </button>
+              {primaryContact.title && (
+                <span className="text-xs text-muted-foreground">· {primaryContact.title}</span>
+              )}
+              <div className="flex items-center gap-3 ml-auto flex-wrap">
+                {primaryContact.phone && (
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Phone className="h-3 w-3" />
+                    <a href={`tel:${primaryContact.phone}`} className="hover:text-foreground" data-testid={`text-primary-contact-phone-${primaryContact.id}`}>{primaryContact.phone}</a>
+                    <CopyButton value={primaryContact.phone} label="Phone" data-testid={`button-copy-primary-contact-phone-${primaryContact.id}`} />
+                  </span>
+                )}
+                {primaryContact.email && (
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Mail className="h-3 w-3" />
+                    <a href={`mailto:${primaryContact.email}`} className="hover:text-foreground" data-testid={`text-primary-contact-email-${primaryContact.id}`}>{primaryContact.email}</a>
+                    <CopyButton value={primaryContact.email} label="Email" data-testid={`button-copy-primary-contact-email-${primaryContact.id}`} />
+                  </span>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Phase 1 persistent NBA card — takes precedence; falls back to legacy when absent */}
       <NbaCompanyCard companyId={companyId} onHasCard={setHasPhase1Card} />
 

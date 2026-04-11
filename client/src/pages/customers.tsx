@@ -31,6 +31,7 @@ import {
   MessageSquare,
   MapPin,
 } from "lucide-react";
+import { PinButton } from "@/components/pin-button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CompanyDialog } from "@/components/company-dialog";
@@ -666,6 +667,9 @@ export default function Customers() {
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
+                        {!company.archivedAt && (
+                          <PinButton companyId={company.id} />
+                        )}
                         {!company.archivedAt && (() => {
                           const gs = growthScoreMap.get(company.id);
                           if (!gs) return null;
