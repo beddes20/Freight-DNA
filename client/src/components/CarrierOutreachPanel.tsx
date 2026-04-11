@@ -1383,6 +1383,50 @@ export function CarrierOutreachPanel({
                     );
                   })()}
 
+                  {/* ── Email Template picker — always visible ── */}
+                  <div className="mb-3 rounded-lg border border-border bg-muted/10 px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <Mail className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <p className="text-[11px] font-semibold text-foreground/80 shrink-0">Email Template</p>
+                      <Select value={selectedTemplateId} onValueChange={handleTemplateSelect}>
+                        <SelectTrigger className="flex-1 h-7 text-xs bg-muted/20 border-border text-foreground/80" data-testid="template-selector-carriers">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-card border-border text-foreground">
+                          {OUTREACH_TEMPLATES.map(t => (
+                            <SelectItem key={t.id} value={t.id} className="text-xs">{t.label}</SelectItem>
+                          ))}
+                          <SelectItem value="__ai__" className="text-xs text-blue-400">AI Draft (let AI write it)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {pendingTemplateId && (
+                      <div className="mt-2 flex items-center gap-2 bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-2">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <p className="text-[11px] text-amber-300 flex-1">Switching templates will replace your current edits. Continue?</p>
+                        <button
+                          onClick={() => {
+                            if (pendingTemplateId === "__ai__") {
+                              setSharedTemplate(""); setSharedSubject(""); setLastAppliedBody(""); setLastAppliedSubject(""); setSelectedTemplateId("__ai__");
+                            } else {
+                              applyTemplateToEditor(pendingTemplateId);
+                            }
+                            setPendingTemplateId(null);
+                          }}
+                          className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 text-amber-300 hover:bg-amber-500/30 transition-colors"
+                        >
+                          Replace
+                        </button>
+                        <button
+                          onClick={() => setPendingTemplateId(null)}
+                          className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted/20 transition-colors"
+                        >
+                          Keep edits
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
                   {/* ── Filter row: Sort + primary chips + Refine toggle ── */}
                   <div className="flex items-center gap-1.5 mb-2 flex-wrap">
                     <Select value={sortOption} onValueChange={v => { setSortOption(v); setCurrentPage(1); }}>
@@ -1493,8 +1537,12 @@ export function CarrierOutreachPanel({
                   {/* Bulk selection controls */}
                   {filteredCarriers.length > 0 && (
                     <div className="flex items-center gap-1.5 mb-3 flex-wrap">
-                      <button onClick={selectAllFiltered} className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground hover:text-foreground/80 transition-colors" data-testid="btn-select-all-filtered">
-                        All
+                      <button
+                        onClick={selectAllFiltered}
+                        className="text-[11px] px-3 py-1 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 font-semibold transition-colors flex items-center gap-1"
+                        data-testid="btn-select-all-filtered"
+                      >
+                        <CheckCircle2 className="w-3 h-3" /> Select All Carriers
                       </button>
                       {isHighFrequencyLane && (
                         <button
