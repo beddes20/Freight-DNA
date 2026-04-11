@@ -1574,6 +1574,7 @@ export function CarrierOutreachPanel({
                   {/* Loading state */}
                   {suggestionsLoading && (
                     <div className="flex flex-col gap-2">
+                      <p className="text-[10px] text-muted-foreground text-center py-1 animate-pulse">Loading carrier suggestions…</p>
                       {[1,2,3,4,5].map(i => (
                         <div key={i} className="h-16 rounded-lg bg-muted/20 border border-border animate-pulse" />
                       ))}
