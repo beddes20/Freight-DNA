@@ -605,6 +605,19 @@ function LaneRow({
     retry: false,
   });
 
+  // Reply summary — reads from prefetch cache populated on hover (handleMouseEnter).
+  // refetchOnMount/WindowFocus: false prevents N simultaneous requests when the LWQ loads.
+  // After the user hovers a card, the prefetch fires and React Query re-renders this observer reactively.
+  const { data: laneDetail } = useQuery<{ replySummary: LaneReplySummary }>({
+    queryKey: ["/api/recurring-lanes", item.laneId, "detail"],
+    queryFn: () => fetch(`/api/recurring-lanes/${item.laneId}/detail`).then(r => r.json()),
+    staleTime: 2 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+  const hasHotReply = (laneDetail?.replySummary?.hotCount ?? 0) > 0;
+  const replyNeedsAction = laneDetail?.replySummary?.needsAction ?? false;
+
   const contacted = item.carriersContactedCount ?? 0;
   const progressPct = Math.min(100, (contacted / completionThreshold) * 100);
   const loadsNum = avgLoadsNum(item.avgLoadsPerWeek);
