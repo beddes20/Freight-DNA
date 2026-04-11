@@ -70,6 +70,24 @@ async function getLaneWithAccessCheck(
   return lane;
 }
 
+/**
+ * Read-only lane accessor: verifies the lane belongs to the user's org.
+ * Does NOT enforce ownership — any authenticated org member can read lane data.
+ * Use this for GET endpoints; use getLaneWithAccessCheck for write operations.
+ */
+async function getLaneForOrg(
+  laneId: string,
+  user: { id: string; organizationId: string },
+  res: Response,
+) {
+  const lane = await storage.getRecurringLane(laneId);
+  if (!lane || lane.orgId !== user.organizationId) {
+    res.status(404).json({ error: "Lane not found" });
+    return null;
+  }
+  return lane;
+}
+
 export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Feature Flag ───────────────────────────────────────────────────────────
@@ -790,7 +808,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneWithAccessCheck(req.params.id, user, res);
+    const lane = await getLaneForOrg(req.params.id, user, res);
     if (!lane) return;
     res.json(lane);
   });
@@ -1067,7 +1085,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    const lane = await getLaneForOrg(req.params.laneId, user!, res);
     if (!lane) return;
 
     try {
@@ -1420,7 +1438,7 @@ House style — follow every rule:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    const lane = await getLaneForOrg(req.params.laneId, user!, res);
     if (!lane) return;
     const bench = await storage.getLaneCarrierBench(req.params.laneId);
 
@@ -1685,7 +1703,7 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    const lane = await getLaneForOrg(req.params.laneId, user!, res);
     if (!lane) return;
 
     const bench = await storage.getLaneCarrierBench(req.params.laneId);
@@ -2179,7 +2197,7 @@ Rules for suggestions:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    const lane = await getLaneForOrg(req.params.laneId, user!, res);
     if (!lane) return;
     const logs = await storage.getCarrierOutreachLogs(req.params.laneId);
     res.json(logs);
@@ -2245,7 +2263,7 @@ Rules for suggestions:
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user, res);
+    const lane = await getLaneForOrg(req.params.laneId, user, res);
     if (!lane) return;
 
     try {
