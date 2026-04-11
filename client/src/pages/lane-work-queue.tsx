@@ -499,12 +499,16 @@ function LaneRow({
   onOpen,
   bucket,
   teamMembers,
+  selected = false,
+  onToggleSelect,
 }: {
   item: LaneItem;
   completionThreshold: number;
   onOpen: (laneId: string) => void;
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
+  selected?: boolean;
+  onToggleSelect?: (laneId: string) => void;
 }) {
   const { toast } = useToast();
 
@@ -626,20 +630,38 @@ function LaneRow({
   return (
     <div
       className={`bg-card border rounded-lg p-4 hover:border-amber-500/30 transition-colors cursor-pointer group ${
-        // Green border for any hot lane — full brightness if needsAction (unactioned), dimmer if already actioned
-        hasHotReply
-          ? replyNeedsAction
-            ? "border-green-500/40 bg-green-950/5"
-            : "border-green-700/30 bg-green-950/3"
-          : isHighFreq
-            ? "border-amber-500/20"
-            : "border-border"
+        selected
+          ? "border-blue-500/60 bg-blue-950/10 ring-1 ring-blue-500/30"
+          : hasHotReply
+            ? replyNeedsAction
+              ? "border-green-500/40 bg-green-950/5"
+              : "border-green-700/30 bg-green-950/3"
+            : isHighFreq
+              ? "border-amber-500/20"
+              : "border-border"
       }`}
       onClick={() => onOpen(item.laneId)}
       onMouseEnter={handleMouseEnter}
       data-testid={`work-queue-row-${item.laneId}`}
     >
       <div className="flex items-start gap-3">
+        {onToggleSelect && (
+          <div
+            className="pt-0.5 shrink-0"
+            onClick={e => { e.stopPropagation(); onToggleSelect(item.laneId); }}
+          >
+            <div
+              className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                selected
+                  ? "bg-blue-500 border-blue-500"
+                  : "border-muted-foreground/40 hover:border-blue-400"
+              }`}
+              data-testid={`checkbox-lane-${item.laneId}`}
+            >
+              {selected && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 10 10" fill="none"><path d="M1.5 5l2.5 2.5 4.5-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+            </div>
+          </div>
+        )}
         <div className="flex-1 min-w-0">
           {/* Customer name — always shown first, prominent */}
           {item.companyName && (
@@ -980,6 +1002,8 @@ function CustomerGroup({
   bucket,
   teamMembers,
   defaultExpanded,
+  selectedLaneIds,
+  onToggleSelect,
 }: {
   customerName: string;
   items: LaneItem[];
@@ -988,6 +1012,8 @@ function CustomerGroup({
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
   defaultExpanded: boolean;
+  selectedLaneIds?: Set<string>;
+  onToggleSelect?: (laneId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
@@ -1043,6 +1069,8 @@ function CustomerGroup({
               onOpen={onOpen}
               bucket={bucket}
               teamMembers={teamMembers}
+              selected={selectedLaneIds?.has(item.laneId) ?? false}
+              onToggleSelect={onToggleSelect}
             />
           ))}
         </div>
@@ -1064,6 +1092,8 @@ function BucketSection({
   bucket,
   teamMembers,
   highFreqOnly,
+  selectedLaneIds,
+  onToggleSelect,
 }: {
   title: string;
   description: string;
@@ -1075,6 +1105,8 @@ function BucketSection({
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
   highFreqOnly: boolean;
+  selectedLaneIds?: Set<string>;
+  onToggleSelect?: (laneId: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [allCustomersExpanded, setAllCustomersExpanded] = useState(false);
@@ -1164,6 +1196,8 @@ function BucketSection({
                 bucket={bucket}
                 teamMembers={teamMembers}
                 defaultExpanded={allCustomersExpanded}
+                selectedLaneIds={selectedLaneIds}
+                onToggleSelect={onToggleSelect}
               />
             ))
           )}
@@ -1635,6 +1669,36 @@ export default function LaneWorkQueuePage() {
   const [highFreqOnly, setHighFreqOnly] = useState(false);
   const [customerFilter, setCustomerFilter] = useState<string>("__all__");
   const [buildLaneOpen, setBuildLaneOpen] = useState(false);
+  const [selectedLaneIds, setSelectedLaneIds] = useState<Set<string>>(new Set());
+  const [bulkAssignUserId, setBulkAssignUserId] = useState<string>("");
+
+  const handleToggleSelect = (laneId: string) => {
+    setSelectedLaneIds(prev => {
+      const next = new Set(prev);
+      if (next.has(laneId)) next.delete(laneId);
+      else next.add(laneId);
+      return next;
+    });
+  };
+
+  const bulkAssignMutation = useMutation({
+    mutationFn: async ({ laneIds, ownerUserId }: { laneIds: string[]; ownerUserId: string }) => {
+      await Promise.all(
+        laneIds.map(laneId =>
+          apiRequest("POST", `/api/recurring-lanes/${laneId}/assign`, { ownerUserId }).then(r => r.json())
+        )
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+      setSelectedLaneIds(new Set());
+      setBulkAssignUserId("");
+      toast({ title: `${selectedLaneIds.size} lane${selectedLaneIds.size !== 1 ? "s" : ""} assigned` });
+    },
+    onError: () => {
+      toast({ title: "Failed to assign lanes", variant: "destructive" });
+    },
+  });
 
   // Auto-open a specific lane when ?laneId=... is in the URL (cross-link from Carrier Hub / My Procurement)
   useEffect(() => {
@@ -2045,6 +2109,8 @@ export default function LaneWorkQueuePage() {
                   bucket="unassigned"
                   teamMembers={teamMembers}
                   highFreqOnly={highFreqOnly}
+                  selectedLaneIds={selectedLaneIds}
+                  onToggleSelect={handleToggleSelect}
                 />
                 <BucketSection
                   title="No Contactable Carriers"
@@ -2057,6 +2123,8 @@ export default function LaneWorkQueuePage() {
                   bucket="noContactable"
                   teamMembers={teamMembers}
                   highFreqOnly={highFreqOnly}
+                  selectedLaneIds={selectedLaneIds}
+                  onToggleSelect={handleToggleSelect}
                 />
                 <BucketSection
                   title="Assigned — Untouched"
@@ -2069,6 +2137,8 @@ export default function LaneWorkQueuePage() {
                   bucket="assignedUntouched"
                   teamMembers={teamMembers}
                   highFreqOnly={highFreqOnly}
+                  selectedLaneIds={selectedLaneIds}
+                  onToggleSelect={handleToggleSelect}
                 />
                 <BucketSection
                   title="In Progress"
@@ -2081,6 +2151,8 @@ export default function LaneWorkQueuePage() {
                   bucket="inProgress"
                   teamMembers={teamMembers}
                   highFreqOnly={highFreqOnly}
+                  selectedLaneIds={selectedLaneIds}
+                  onToggleSelect={handleToggleSelect}
                 />
               </>
             )}
@@ -2151,6 +2223,44 @@ export default function LaneWorkQueuePage() {
           </>
         )}
       </div>
+
+      {/* Bulk assign panel — floats at bottom when lanes are selected */}
+      {selectedLaneIds.size > 0 && (
+        <div
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-card border border-blue-500/40 rounded-xl shadow-xl px-4 py-3 min-w-[340px]"
+          data-testid="panel-bulk-assign"
+        >
+          <span className="text-sm font-medium text-blue-400 shrink-0">
+            {selectedLaneIds.size} lane{selectedLaneIds.size !== 1 ? "s" : ""} selected
+          </span>
+          <select
+            className="flex-1 rounded-md border border-border bg-background text-sm px-2 py-1.5 text-foreground"
+            value={bulkAssignUserId}
+            onChange={e => setBulkAssignUserId(e.target.value)}
+            data-testid="select-bulk-assign-user"
+          >
+            <option value="">Assign to…</option>
+            {teamMembers.map(m => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => bulkAssignMutation.mutate({ laneIds: Array.from(selectedLaneIds), ownerUserId: bulkAssignUserId })}
+            disabled={!bulkAssignUserId || bulkAssignMutation.isPending}
+            className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            data-testid="button-bulk-assign-confirm"
+          >
+            {bulkAssignMutation.isPending ? "Assigning…" : "Assign"}
+          </button>
+          <button
+            onClick={() => setSelectedLaneIds(new Set())}
+            className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+            data-testid="button-bulk-assign-clear"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          </button>
+        </div>
+      )}
 
       {/* Build Lane dialog */}
       <BuildLaneDialog

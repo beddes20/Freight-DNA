@@ -2128,4 +2128,19 @@ export async function runMigrations() {
   } catch (err) {
     console.error("[migrations] baseline pattern seeding error:", err);
   }
+
+  // Companies — handoff notes + onboarding milestones
+  const clientCompanyAudit = await pool.connect();
+  try {
+    await clientCompanyAudit.query(`
+      ALTER TABLE companies
+        ADD COLUMN IF NOT EXISTS handoff_notes text,
+        ADD COLUMN IF NOT EXISTS onboarding_milestones jsonb
+    `);
+    console.log("[migrations] companies handoff_notes + onboarding_milestones columns ensured");
+  } catch (err) {
+    console.error("[migrations] companies audit columns migration error:", err);
+  } finally {
+    clientCompanyAudit.release();
+  }
 }

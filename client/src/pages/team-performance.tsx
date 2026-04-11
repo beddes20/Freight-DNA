@@ -534,6 +534,76 @@ type RepeatCarrierRow = { dispatcherName: string; totalLoads: number; repeatCarr
 type SalespersonSummaryRow = { salespersonName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
 type GapEntry = { name: string; loads: number; column: string };
 type GoalShape = { id: string; amId: string; metric: string; startDate: string; endDate: string; currentValue: string | null; target: string };
+type CadenceAlert = { companyId: string; companyName: string; repName: string; repId: string; daysSinceTouch: number; orgId: string };
+
+function CadenceAccountabilitySection() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin" || user?.role === "director";
+  const [expanded, setExpanded] = useState(false);
+
+  const { data: alerts = [], isLoading } = useQuery<CadenceAlert[]>({
+    queryKey: ["/api/team/cadence-alerts"],
+    enabled: isAdmin,
+  });
+
+  if (!isAdmin) return null;
+  if (isLoading) return null;
+  if (alerts.length === 0) return null;
+
+  const preview = expanded ? alerts : alerts.slice(0, 5);
+
+  return (
+    <div
+      className="border rounded-xl p-5 space-y-4 bg-red-50/30 dark:bg-red-950/10 border-red-200 dark:border-red-800"
+      data-testid="section-cadence-alerts"
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <CalendarClock className="w-4 h-4 text-red-600 dark:text-red-400" />
+          <h2 className="font-semibold text-sm">Cadence Accountability</h2>
+          <Badge className="bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 text-[10px] px-1.5 py-0">
+            {alerts.length} account{alerts.length !== 1 ? "s" : ""} overdue
+          </Badge>
+        </div>
+        <span className="text-xs text-muted-foreground">No touchpoints in 30+ days</span>
+      </div>
+
+      <div className="space-y-2">
+        {preview.map(alert => (
+          <div
+            key={`${alert.repId}-${alert.companyId}`}
+            className="flex items-center justify-between gap-3 p-3 rounded-lg border bg-background hover:bg-muted/30 transition-colors"
+            data-testid={`row-cadence-alert-${alert.companyId}`}
+          >
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Building2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <span className="text-sm font-medium truncate">{alert.companyName}</span>
+                <Badge variant="outline" className="text-[10px] px-1 py-0 text-muted-foreground">
+                  {alert.repName}
+                </Badge>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400 shrink-0">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              {alert.daysSinceTouch}d ago
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {alerts.length > 5 && (
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          data-testid="button-cadence-expand"
+        >
+          {expanded ? <><ChevronUp className="w-3 h-3" /> Show less</> : <><ChevronDown className="w-3 h-3" /> Show {alerts.length - 5} more</>}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function TeamPerformancePage() {
   const { user } = useAuth();
@@ -1392,6 +1462,9 @@ export default function TeamPerformancePage() {
           )}
         </div>
       )}
+
+      {/* Cadence Accountability */}
+      <CadenceAccountabilitySection />
 
       {/* Nominate Dialog */}
       <Dialog open={!!nominationTarget} onOpenChange={(open) => { if (!open) setNominationTarget(null); }}>

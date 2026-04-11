@@ -32,6 +32,8 @@ import {
   ExternalLink,
   MessageCircle,
   Zap,
+  AlertTriangle,
+  CalendarClock,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -105,6 +107,49 @@ function daysAgo(dateStr: string | null): number | null {
   if (!dateStr) return null;
   const diff = Date.now() - new Date(dateStr).getTime();
   return Math.floor(diff / (1000 * 60 * 60 * 24));
+}
+
+function daysUntilDue(dueDateStr: string | null): number | null {
+  if (!dueDateStr) return null;
+  const diff = new Date(dueDateStr).getTime() - Date.now();
+  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+function DueDateBadge({ dueDate }: { dueDate: string | null }) {
+  if (!dueDate) return null;
+  const days = daysUntilDue(dueDate);
+  if (days === null) return null;
+  if (days < 0) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-semibold text-red-400 border-red-800 bg-red-950/40 animate-pulse"
+        data-testid="badge-overdue"
+      >
+        <AlertTriangle className="w-3 h-3" />
+        Overdue by {Math.abs(days)}d
+      </span>
+    );
+  }
+  if (days <= 2) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-medium text-amber-400 border-amber-800 bg-amber-950/40"
+        data-testid="badge-due-soon"
+      >
+        <CalendarClock className="w-3 h-3" />
+        Due in {days}d
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-xs text-orange-400"
+      data-testid="badge-due-date"
+    >
+      <Clock className="w-3 h-3" />
+      Due {new Date(dueDate).toLocaleDateString()}
+    </span>
+  );
 }
 
 function AgeBadge({ dateStr, label }: { dateStr: string | null; label: string }) {
@@ -308,9 +353,15 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
     ? `/lanes/work-queue?laneId=${item.matchedLaneId}`
     : `/lanes/work-queue${noMatchHint ? `?noMatch=${noMatchHint}` : ""}`;
 
+  const daysLeft = daysUntilDue(item.dueDate);
+  const isOverdue = daysLeft !== null && daysLeft < 0;
+  const isDueSoon = daysLeft !== null && daysLeft >= 0 && daysLeft <= 2;
+
   return (
     <div
-      className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors"
+      className={`flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors ${
+        isOverdue ? "border-red-600/50 bg-red-950/5" : isDueSoon ? "border-amber-600/50 bg-amber-950/5" : ""
+      }`}
       data-testid={`card-award-task-${item.taskId}`}
     >
       {/* Lane identity */}
@@ -360,12 +411,7 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
             </span>
           )}
           <AgeBadge dateStr={item.createdAt} label="Created" />
-          {item.dueDate && (
-            <span className="flex items-center gap-1 text-orange-400">
-              <Clock className="w-3 h-3" />
-              Due {new Date(item.dueDate).toLocaleDateString()}
-            </span>
-          )}
+          <DueDateBadge dueDate={item.dueDate} />
         </div>
       </div>
 

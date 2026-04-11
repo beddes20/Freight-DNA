@@ -8,7 +8,7 @@ import {
   Globe, KeyRound, Eye, EyeOff, DollarSign, UserCheck, Pencil, Users,
   AlertCircle, FileText, Clock, Zap, Mail, ExternalLink, Trash2, Plus,
   ClipboardList, Copy, PhoneCall, MessageSquare, Building2,
-  TruckIcon,
+  TruckIcon, CheckSquare, Square, CheckCircle2,
 } from "lucide-react";
 import { FileAttachmentList, FileAttachmentUpload, uploadPendingFiles } from "@/components/file-attachment";
 import type { PendingFile } from "@/components/file-attachment";
@@ -18,6 +18,81 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company, Touchpoint, User, Rfp } from "@shared/schema";
 import type { AccountPerf, SharedRepEntry, TouchLogEntry } from "../types";
+
+const ONBOARDING_MILESTONES = [
+  { id: "kickoff_call", label: "Kickoff call completed" },
+  { id: "system_access", label: "System access granted" },
+  { id: "first_load", label: "First load covered" },
+  { id: "rate_process_review", label: "Rate confirmation process reviewed" },
+  { id: "primary_contact", label: "Primary contact confirmed" },
+  { id: "routing_guide", label: "Routing guide / tender preferences documented" },
+  { id: "thirty_day_checkin", label: "30-day check-in completed" },
+];
+
+function OnboardingMilestoneCard({ companyId, company }: { companyId: string; company: Company }) {
+  const { toast } = useToast();
+  const milestones: Record<string, boolean> = (company as any).onboardingMilestones ?? {};
+  const completedCount = ONBOARDING_MILESTONES.filter(m => milestones[m.id]).length;
+  const total = ONBOARDING_MILESTONES.length;
+  const pct = Math.round((completedCount / total) * 100);
+
+  const toggleMutation = useMutation({
+    mutationFn: async ({ id, checked }: { id: string; checked: boolean }) => {
+      return apiRequest("PATCH", `/api/companies/${companyId}/onboarding-milestones`, { milestoneId: id, completed: checked });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
+    },
+    onError: () => {
+      toast({ title: "Failed to update milestone", variant: "destructive" });
+    },
+  });
+
+  return (
+    <Card data-testid="card-onboarding-milestones">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <ClipboardList className="h-4 w-4 text-green-600 dark:text-green-400" />
+          Onboarding Milestones
+          <span className="ml-auto text-xs font-normal text-muted-foreground">
+            {completedCount}/{total} complete
+          </span>
+        </CardTitle>
+        <div className="mt-1 h-1.5 w-full rounded-full bg-muted overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${pct === 100 ? "bg-green-500" : "bg-blue-500"}`}
+            style={{ width: `${pct}%` }}
+            data-testid="bar-onboarding-progress"
+          />
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-1.5">
+        {pct === 100 && (
+          <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400 font-medium mb-2">
+            <CheckCircle2 className="h-3.5 w-3.5" /> Onboarding complete!
+          </div>
+        )}
+        {ONBOARDING_MILESTONES.map(m => {
+          const done = !!milestones[m.id];
+          return (
+            <button
+              key={m.id}
+              onClick={() => toggleMutation.mutate({ id: m.id, checked: !done })}
+              disabled={toggleMutation.isPending}
+              className="flex items-center gap-2.5 w-full text-left rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors disabled:opacity-60"
+              data-testid={`button-milestone-${m.id}`}
+            >
+              {done
+                ? <CheckSquare className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />
+                : <Square className="h-4 w-4 text-muted-foreground shrink-0" />}
+              <span className={`text-sm ${done ? "line-through text-muted-foreground" : ""}`}>{m.label}</span>
+            </button>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
 
 interface IntelTabProps {
   company: Company;
@@ -57,6 +132,7 @@ export function IntelTab({
   const [tenderStyle, setTenderStyle] = useState("");
   const [accountQuirks, setAccountQuirks] = useState("");
   const [processNotes, setProcessNotes] = useState("");
+  const [handoffNotes, setHandoffNotes] = useState("");
   const [spotProcess, setSpotProcess] = useState("");
   const [dlEmail, setDlEmail] = useState("");
   const [operatingHours, setOperatingHours] = useState("");
@@ -119,6 +195,7 @@ export function IntelTab({
         operatingHours: operatingHours || null,
         accountSummary: accountSummary.trim() || null,
         salesPersonId: salesPersonIdEdit || null,
+        handoffNotes: handoffNotes.trim() || null,
       });
     },
     onSuccess: () => {
@@ -179,6 +256,7 @@ export function IntelTab({
     setTenderStyle(company?.tenderStyle || "");
     setAccountQuirks(company?.accountQuirks || "");
     setProcessNotes(company?.processNotes || "");
+    setHandoffNotes((company as any)?.handoffNotes || "");
     setSpotProcess(company?.spotProcess || "");
     setDlEmail(company?.dlEmail || "");
     setOperatingHours((company as any)?.operatingHours || "");
@@ -361,6 +439,17 @@ export function IntelTab({
                       data-testid="input-process-notes"
                     />
                   </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground flex items-center gap-1"><Users className="h-3 w-3" /> Rep Handoff Notes</label>
+                    <textarea
+                      className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+                      rows={3}
+                      placeholder="Notes for incoming reps: key relationships, history, landmines to avoid, key context…"
+                      value={handoffNotes}
+                      onChange={e => setHandoffNotes(e.target.value)}
+                      data-testid="input-handoff-notes"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -436,7 +525,7 @@ export function IntelTab({
               )}
 
               {/* Account Intelligence */}
-              {(company.tenderStyle || company.spotProcess || company.dlEmail || (company as any).operatingHours || company.accountQuirks || company.processNotes) && (
+              {(company.tenderStyle || company.spotProcess || company.dlEmail || (company as any).operatingHours || company.accountQuirks || company.processNotes || (company as any).handoffNotes) && (
                 <div className="border-t pt-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Account Intelligence</p>
                   <div className="space-y-3">
@@ -476,12 +565,18 @@ export function IntelTab({
                         <p className="text-sm whitespace-pre-wrap" data-testid="text-process-notes">{company.processNotes}</p>
                       </div>
                     )}
+                    {(company as any).handoffNotes && (
+                      <div className="border border-amber-700/40 bg-amber-950/10 rounded-md px-3 py-2">
+                        <p className="text-xs text-amber-500 flex items-center gap-1 mb-1 font-medium"><Users className="h-3 w-3" /> Rep Handoff Notes</p>
+                        <p className="text-sm whitespace-pre-wrap text-amber-200/80" data-testid="text-handoff-notes">{(company as any).handoffNotes}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
               {/* Empty state nudge for intelligence section */}
-              {!company.tenderStyle && !company.spotProcess && !company.dlEmail && !company.accountQuirks && !company.processNotes && (
+              {!company.tenderStyle && !company.spotProcess && !company.dlEmail && !company.accountQuirks && !company.processNotes && !(company as any).handoffNotes && (
                 <div className="border-t pt-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Intelligence</p>
                   <p className="text-xs text-muted-foreground italic">No account intelligence captured yet. Click Edit to add tendering process, spot process, D/L email, quirks, and process notes.</p>
@@ -491,6 +586,9 @@ export function IntelTab({
           )}
         </CardContent>
       </Card>
+
+      {/* Onboarding Milestone Tracker */}
+      <OnboardingMilestoneCard companyId={companyId} company={company} />
 
       {/* Shared Reps */}
       <Card data-testid="card-shared-reps">

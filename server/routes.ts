@@ -650,14 +650,15 @@ RULES FOR YOUR RESPONSES:
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const q = (req.query.q as string || "").trim();
-      if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [], tasks: [] });
-      const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, matchedTasks, allCompanies] = await Promise.all([
+      if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [], tasks: [], carriers: [] });
+      const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, matchedTasks, allCompanies, matchedCarriers] = await Promise.all([
         storage.searchCompanies(q, req.session.organizationId!),
         storage.searchUsers(q, ["account_manager", "national_account_manager", "director", "sales"], req.session.organizationId!),
         storage.searchContacts(q, req.session.organizationId!),
         storage.searchRfps(q, req.session.organizationId!),
         storage.searchTasks(q, req.session.organizationId!),
         storage.getCompanies(req.session.organizationId!),
+        storage.searchCarriers(q, req.session.organizationId!),
       ]);
       const companyNameMap = new Map(allCompanies.map(c => [c.id, c.name]));
       const accounts = matchedCompanies.map(c => ({ id: c.id, name: c.name }));
@@ -666,7 +667,8 @@ RULES FOR YOUR RESPONSES:
       const contacts = matchedContacts.map(c => ({ id: c.id, name: c.name, title: c.title, companyId: c.companyId, companyName: companyNameMap.get(c.companyId) || "" }));
       const rfps = matchedRfps.map(r => ({ id: r.id, title: r.title, companyId: r.companyId, status: r.status }));
       const tasks = matchedTasks.map(t => ({ id: t.id, title: t.title, status: t.status, companyId: t.companyId || null, companyName: t.companyId ? (companyNameMap.get(t.companyId) || "") : "" }));
-      res.json({ accounts, accountManagers, nationalAccountManagers, contacts, rfps, tasks });
+      const carriers = matchedCarriers.map(c => ({ id: c.id, name: c.name, mcDot: c.mcDot, state: c.state }));
+      res.json({ accounts, accountManagers, nationalAccountManagers, contacts, rfps, tasks, carriers });
     } catch (error) {
       res.status(500).json({ error: "Search failed" });
     }
@@ -1402,6 +1404,26 @@ RULES FOR YOUR RESPONSES:
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to unarchive company" });
+    }
+  });
+
+  // ── Onboarding Milestones ──────────────────────────────────────────────────
+  app.patch("/api/companies/:id/onboarding-milestones", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, req.params.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { milestones } = req.body;
+      if (!Array.isArray(milestones)) return res.status(400).json({ error: "milestones must be an array" });
+      const updated = await storage.updateCompany(req.params.id, currentUser.organizationId, {
+        onboardingMilestones: milestones,
+      } as any);
+      if (!updated) return res.status(404).json({ error: "Company not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update onboarding milestones" });
     }
   });
 
@@ -4249,6 +4271,54 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     } catch (error) {
       console.error("Error in team performance detail:", error);
       res.status(500).json({ error: "Failed to fetch detail data" });
+    }
+  });
+
+  // ── Cadence Accountability Alerts ─────────────────────────────────────────
+  app.get("/api/team/cadence-alerts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const restrictedRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+      if (restrictedRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
+      const days = parseInt((req.query.days as string) || "30", 10);
+      const result = await storage.pool.query<{
+        company_id: string; company_name: string; rep_id: string; rep_name: string;
+        last_touchpoint_at: string | null; days_since: number | null;
+      }>(`
+        SELECT
+          c.id AS company_id,
+          c.name AS company_name,
+          u.id AS rep_id,
+          u.name AS rep_name,
+          MAX(t.created_at) AS last_touchpoint_at,
+          CASE
+            WHEN MAX(t.created_at) IS NULL THEN NULL
+            ELSE EXTRACT(EPOCH FROM (NOW() - MAX(t.created_at::timestamptz))) / 86400
+          END AS days_since
+        FROM companies c
+        JOIN users u ON c.assigned_to = u.id
+        LEFT JOIN touchpoints t ON t.company_id = c.id
+        WHERE c.organization_id = $1
+          AND c.archived_at IS NULL
+          AND c.assigned_to IS NOT NULL
+        GROUP BY c.id, c.name, u.id, u.name
+        HAVING MAX(t.created_at) IS NULL
+           OR MAX(t.created_at::timestamptz) < NOW() - ($2 || ' days')::interval
+        ORDER BY days_since DESC NULLS FIRST
+        LIMIT 100
+      `, [user.organizationId, days]);
+      res.json(result.rows.map(r => ({
+        companyId: r.company_id,
+        companyName: r.company_name,
+        repId: r.rep_id,
+        repName: r.rep_name,
+        lastTouchpointAt: r.last_touchpoint_at || null,
+        daysSince: r.days_since !== null ? Math.floor(r.days_since) : null,
+      })));
+    } catch (error) {
+      console.error("Error in cadence-alerts:", error);
+      res.status(500).json({ error: "Failed to fetch cadence alerts" });
     }
   });
 

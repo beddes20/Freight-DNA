@@ -43,6 +43,8 @@ export const companies = pgTable("companies", {
   accountSummary: text("account_summary"),
   sharedReps: jsonb("shared_reps").default([]),
   operatingHours: text("operating_hours"),
+  handoffNotes: text("handoff_notes"),
+  onboardingMilestones: jsonb("onboarding_milestones"),
 });
 
 export const sharedRepSchema = z.object({

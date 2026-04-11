@@ -62,6 +62,7 @@ import LaneWorkQueuePage from "@/pages/lane-work-queue";
 import MyProcurementPage from "@/pages/my-procurement";
 import IntelPage from "@/pages/intel";
 import ConversationsPage from "@/pages/conversations";
+import ContactSuggestionsPage from "@/pages/contact-suggestions";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -144,6 +145,7 @@ function Router() {
       <Route path="/my-procurement" component={MyProcurementPage} />
       <Route path="/intel" component={IntelPage} />
       <Route path="/conversations" component={ConversationsPage} />
+      <Route path="/contact-suggestions" component={ContactSuggestionsPage} />
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/terms" component={TermsPage} />
       <Route component={NotFound} />
