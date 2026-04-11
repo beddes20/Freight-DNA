@@ -165,21 +165,28 @@ async function main(): Promise<void> {
   );
 
   // ── 4. work-queue: isHighFrequency present ────────────────────────────────
+  // Task #200 changed the response to a flat LeanItem shape (no nested .lane object).
+  // isHighFrequency is now stamped at the top level of each item.
   await runTest(
-    "work-queue lanes include isHighFrequency flag",
+    "work-queue lanes include isHighFrequency flag (flat shape)",
     async () => {
       const r = await httpRequest({ method: "GET", path: "/api/recurring-lanes/work-queue", headers });
       assert(r.status === 200, `Expected 200 got ${r.status}`);
-      const body = JSON.parse(r.body) as { unassigned: { lane: Record<string, unknown> }[] };
+      const body = JSON.parse(r.body) as { unassigned: Record<string, unknown>[] };
       const first = body.unassigned?.[0];
       assert(!!first, "unassigned bucket is empty");
       assert(
-        "isHighFrequency" in first.lane,
-        "isHighFrequency missing from lane — HF index may have broken"
+        "isHighFrequency" in first,
+        "isHighFrequency missing from work-queue item — HF stamping may have broken (Task #200 flat shape)"
       );
       assert(
-        typeof first.lane.isHighFrequency === "boolean",
-        `isHighFrequency should be boolean, got ${typeof first.lane.isHighFrequency}`
+        typeof first.isHighFrequency === "boolean",
+        `isHighFrequency should be boolean, got ${typeof first.isHighFrequency}`
+      );
+      // Confirm flat shape — nested .lane must NOT exist (Task #200 contract)
+      assert(
+        !("lane" in first),
+        "Unexpected nested .lane object — Task #200 switched to flat LeanItem shape"
       );
     }
   );
