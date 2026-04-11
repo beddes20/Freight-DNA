@@ -1593,4 +1593,55 @@ export function registerDashboardRoutes(app: Express): void {
     }
   });
 
+  // ── Today's Briefing — health summary (at-risk + contacts needing attention) ──
+  app.get("/api/dashboard/briefing-health", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const orgId = req.session.organizationId!;
+      const rawIds = await getVisibleCompanyIds(user);
+      const allCompanies = await storage.getCompanies(orgId);
+      const activeCompanies = allCompanies.filter((c: any) => !c.archivedAt);
+      const visibleIds: string[] = rawIds !== null ? rawIds : activeCompanies.map((c: any) => c.id);
+      if (visibleIds.length === 0) return res.json([]);
+
+      const visibleSet = new Set(visibleIds);
+      const visible = activeCompanies.filter((c: any) => visibleSet.has(c.id));
+
+      const growthScores = await storage.getGrowthScoresByOrg(orgId, visibleIds);
+      const scoreMap = new Map(growthScores.map((s: any) => [s.companyId, s]));
+
+      let coldContacts: any[] = [];
+      try {
+        if (user.role === "admin") {
+          coldContacts = await storage.getColdContacts(null, 30);
+        } else if (["director", "sales_director", "national_account_manager", "sales"].includes(user.role)) {
+          const teamIds = await storage.getTeamMemberIds(user.id, orgId);
+          coldContacts = await storage.getColdContacts(null, 30, teamIds);
+        } else {
+          coldContacts = await storage.getColdContacts(user.id, 30);
+        }
+      } catch (_) { /* cold contacts optional */ }
+
+      const coldCompanyIds = new Set(coldContacts.map((r: any) => r.company?.id).filter(Boolean));
+
+      const result = visible.map((c: any) => {
+        const score = scoreMap.get(c.id);
+        return {
+          id: c.id,
+          name: c.name,
+          growthBand: score?.band ?? null,
+          growthScore: score?.score ?? null,
+          needsAttention: coldCompanyIds.has(c.id),
+        };
+      });
+
+      res.json(result);
+    } catch (err) {
+      console.error("briefing-health error:", err);
+      res.status(500).json({ error: "Failed to load briefing health data" });
+    }
+  });
+
 }

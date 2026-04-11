@@ -68,6 +68,9 @@ import { TeamDirectorySection } from "./dashboard/TeamDirectorySection";
 import { NbaDashboardPanel } from "@/components/NbaDashboardPanel";
 import { CoverageGapsPortlet } from "./dashboard/CoverageGapsPortlet";
 import { AwardHealthPortlet } from "./dashboard/AwardHealthPortlet";
+import { TodaysBriefingPortlet } from "@/components/todays-briefing-portlet";
+import { RecentlyVisitedPortlet } from "@/components/recently-visited-portlet";
+import { useRecentlyVisited } from "@/hooks/use-recently-visited";
 
 const METRIC_LABELS: Record<string, string> = {
   contacts_added: "New Contacts",
@@ -444,6 +447,10 @@ export default function Dashboard() {
     const today = new Date().toISOString().slice(0, 10);
     return localStorage.getItem("briefing_dismissed") === today;
   });
+
+  const [todaysBriefingCollapsed, setTodaysBriefingCollapsed] = useState(() => localStorage.getItem("dash_todays_briefing_collapsed") === "true");
+
+  const { entries: recentlyVisited } = useRecentlyVisited(currentUser?.id);
 
   // streakData now comes from dashSummary (no separate request needed)
   const streakData = dashSummary?.streak;
@@ -1043,6 +1050,31 @@ export default function Dashboard() {
         isLeadership={canAssignForcedFocus}
         onAssignForcedFocus={() => { setForcedFocusEditId(undefined); setForcedFocusPrefill(undefined); setForcedFocusDialogOpen(true); }}
       />
+
+      {/* ── Today's Briefing portlet ─────────────────────────────────────── */}
+      <div style={{ order: getOrder("todays-briefing") }} className={(!isVisible("todays-briefing") || isLmRole) ? "hidden" : ""}>
+        <PortletErrorBoundary label="Today's Briefing">
+          <TodaysBriefingPortlet
+            collapsed={todaysBriefingCollapsed}
+            onToggle={() => {
+              const next = !todaysBriefingCollapsed;
+              setTodaysBriefingCollapsed(next);
+              localStorage.setItem("dash_todays_briefing_collapsed", String(next));
+            }}
+            allTasks={allTasks}
+            tasksLoading={tasksLoading}
+            notifications={safeNotifications}
+            currentUserId={currentUser?.id}
+          />
+        </PortletErrorBoundary>
+      </div>
+
+      {/* ── Recently Visited portlet ─────────────────────────────────────── */}
+      <div style={{ order: getOrder("recently-visited") }} className={(!isVisible("recently-visited") || isLmRole) ? "hidden" : ""}>
+        <PortletErrorBoundary label="Recently Visited">
+          <RecentlyVisitedPortlet entries={recentlyVisited} />
+        </PortletErrorBoundary>
+      </div>
 
       {/* ── "Do This First" — NBA priority actions (top of dashboard) ─────── */}
       {/* Hidden for AM/NAM when Phase 1 cards are active — NbaDashboardPanel wins.   */}

@@ -255,12 +255,12 @@ export function IntelTab({
     setTenderStyle(company?.tenderStyle || "");
     setAccountQuirks(company?.accountQuirks || "");
     setProcessNotes(company?.processNotes || "");
-    setHandoffNotes((company as any)?.handoffNotes || "");
+    setHandoffNotes(company?.handoffNotes || "");
     setSpotProcess(company?.spotProcess || "");
     setDlEmail(company?.dlEmail || "");
-    setOperatingHours((company as any)?.operatingHours || "");
-    setAccountSummary((company as any)?.accountSummary || "");
-    setSalesPersonIdEdit((company as any)?.salesPersonId || "");
+    setOperatingHours(company?.operatingHours || "");
+    setAccountSummary(company?.accountSummary || "");
+    setSalesPersonIdEdit(company?.salesPersonId || "");
     setPortalEdit(true);
   };
 
@@ -500,7 +500,7 @@ export function IntelTab({
                     </p>
                   </div>
                   {(() => {
-                    const spId = (company as any).salesPersonId as string | null;
+                    const spId = company.salesPersonId as string | null;
                     const spUser = allSalesUsers.find(u => u.id === spId) || [...assignableUsers, ...allUsersForSales].find(u => u.id === spId);
                     if (!spId && !canEditSalesPerson) return null;
                     return (
@@ -516,15 +516,15 @@ export function IntelTab({
               </div>
 
               {/* Account Summary View */}
-              {(company as any).accountSummary && (
+              {company.accountSummary && (
                 <div className="border-t pt-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Summary</p>
-                  <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap" data-testid="text-account-summary">{(company as any).accountSummary}</p>
+                  <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap" data-testid="text-account-summary">{company.accountSummary}</p>
                 </div>
               )}
 
               {/* Account Intelligence */}
-              {(company.tenderStyle || company.spotProcess || company.dlEmail || (company as any).operatingHours || company.accountQuirks || company.processNotes || (company as any).handoffNotes) && (
+              {(company.tenderStyle || company.spotProcess || company.dlEmail || company.operatingHours || company.accountQuirks || company.processNotes || company.handoffNotes) && (
                 <div className="border-t pt-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Account Intelligence</p>
                   <div className="space-y-3">
@@ -546,10 +546,10 @@ export function IntelTab({
                         <a href={`mailto:${company.dlEmail}`} className="text-sm text-blue-600 dark:text-blue-400 hover:underline" data-testid="text-dl-email">{company.dlEmail}</a>
                       </div>
                     )}
-                    {(company as any).operatingHours && (
+                    {company.operatingHours && (
                       <div>
                         <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><Clock className="h-3 w-3" /> Operating Hours / Scheduling Windows</p>
-                        <p className="text-sm" data-testid="text-operating-hours">{(company as any).operatingHours}</p>
+                        <p className="text-sm" data-testid="text-operating-hours">{company.operatingHours}</p>
                       </div>
                     )}
                     {company.accountQuirks && (
@@ -564,10 +564,10 @@ export function IntelTab({
                         <p className="text-sm whitespace-pre-wrap" data-testid="text-process-notes">{company.processNotes}</p>
                       </div>
                     )}
-                    {(company as any).handoffNotes && (
+                    {company.handoffNotes && (
                       <div className="border border-amber-700/40 bg-amber-950/10 rounded-md px-3 py-2">
                         <p className="text-xs text-amber-500 flex items-center gap-1 mb-1 font-medium"><Users className="h-3 w-3" /> Rep Handoff Notes</p>
-                        <p className="text-sm whitespace-pre-wrap text-amber-200/80" data-testid="text-handoff-notes">{(company as any).handoffNotes}</p>
+                        <p className="text-sm whitespace-pre-wrap text-amber-200/80" data-testid="text-handoff-notes">{company.handoffNotes}</p>
                       </div>
                     )}
                   </div>
@@ -575,7 +575,7 @@ export function IntelTab({
               )}
 
               {/* Empty state nudge for intelligence section */}
-              {!company.tenderStyle && !company.spotProcess && !company.dlEmail && !company.accountQuirks && !company.processNotes && !(company as any).handoffNotes && (
+              {!company.tenderStyle && !company.spotProcess && !company.dlEmail && !company.accountQuirks && !company.processNotes && !company.handoffNotes && (
                 <div className="border-t pt-4">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Account Intelligence</p>
                   <p className="text-xs text-muted-foreground italic">No account intelligence captured yet. Click Edit to add tendering process, spot process, D/L email, quirks, and process notes.</p>
@@ -758,7 +758,7 @@ export function IntelTab({
           return sum + (isNaN(vol) ? 0 : vol);
         }, 0);
         const hasRfp = companyRfps.length > 0 && rfpTotalVolume > 0;
-        const estimatedSpend = (company as any).estimatedFreightSpend ? parseFloat(String((company as any).estimatedFreightSpend)) : null;
+        const estimatedSpend = company.estimatedFreightSpend ? parseFloat(String(company.estimatedFreightSpend)) : null;
         const hasEstimate = !hasRfp && estimatedSpend && estimatedSpend > 0;
         const sliderPct = walletSharePct;
         const overrideVal = avgMarginOverride !== "" ? parseFloat(avgMarginOverride) : null;

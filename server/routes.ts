@@ -1295,7 +1295,7 @@ RULES FOR YOUR RESPONSES:
         return res.status(403).json({ error: "Access denied" });
       }
       const { financialAlias } = req.body;
-      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { financialAlias: financialAlias || null } as any);
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { financialAlias: financialAlias || null });
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);
     } catch (error) {
@@ -1311,7 +1311,7 @@ RULES FOR YOUR RESPONSES:
         return res.status(403).json({ error: "Access denied" });
       }
       const { salesPersonId } = req.body;
-      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { salesPersonId: salesPersonId || null } as any);
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { salesPersonId: salesPersonId || null });
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);
     } catch (error) {

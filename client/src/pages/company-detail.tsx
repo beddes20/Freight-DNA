@@ -77,6 +77,7 @@ import type { MomentumBreakdown } from "@/components/momentum-score-drawer";
 import type {
   TouchLogEntry, MonthBucket, HealthScore, SharedRepEntry, TaskWithCount, AccountPerf,
 } from "./company-detail/types";
+import { useRecentlyVisited } from "@/hooks/use-recently-visited";
 
 export default function CompanyDetail() {
   const params = useParams<{ id: string }>();
@@ -145,6 +146,8 @@ export default function CompanyDetail() {
     }
   }, [rfpIntelTab]);
 
+  const { trackVisit } = useRecentlyVisited(currentUser?.id);
+
   const { data: company, isLoading: companyLoading, isError: companyError, refetch: refetchCompany } = useQuery<Company>({
     queryKey: ["/api/companies", companyId],
     refetchOnMount: "always",
@@ -203,6 +206,15 @@ export default function CompanyDetail() {
     queryKey: ["/api/companies", companyId, "growth-score"],
     staleTime: 6 * 60 * 60 * 1000, // 6h — matches server cache window
   });
+
+  useEffect(() => {
+    if (!company) return;
+    trackVisit({
+      companyId: company.id,
+      name: company.name,
+      momentumLabel: growthScore?.bandLabel,
+    });
+  }, [company?.id, growthScore?.bandLabel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: healthNarrative } = useQuery<{ narrative: string }>({
     queryKey: ["/api/companies", companyId, "health-narrative"],
