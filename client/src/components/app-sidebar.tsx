@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, UserPlus, HelpCircle, Plane, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, type LucideIcon } from "lucide-react";
 import { KeyboardShortcutsPopover } from "@/components/keyboard-shortcuts-popover";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -14,6 +14,7 @@ import {
   SidebarMenuItem,
   SidebarHeader,
   SidebarFooter,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -167,6 +168,7 @@ export function AppSidebar() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [signature, setSignature] = useState("");
+  const { toggleSidebar, open, isMobile } = useSidebar();
 
   const saveSignatureMutation = useMutation({
     mutationFn: async (sig: string) => {
@@ -199,6 +201,22 @@ export function AppSidebar() {
   return (
     <>
     <Sidebar collapsible="icon">
+      {/* Desktop rail toggle button */}
+      {!isMobile && (
+        <button
+          onClick={toggleSidebar}
+          title={open ? "Collapse sidebar" : "Expand sidebar"}
+          data-testid="button-sidebar-rail-toggle"
+          className="absolute -right-3 top-20 z-50 hidden md:flex h-6 w-6 items-center justify-center rounded-full border border-sidebar-border bg-sidebar text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent shadow-sm transition-colors"
+          aria-label={open ? "Collapse sidebar" : "Expand sidebar"}
+        >
+          {open ? (
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          ) : (
+            <PanelLeftOpen className="h-3.5 w-3.5" />
+          )}
+        </button>
+      )}
       <SidebarHeader className="p-4 border-b border-sidebar-border">
         {/* Expanded sidebar header */}
         <div className="flex flex-col items-center justify-center py-1 gap-1 group-data-[collapsible=icon]:hidden">

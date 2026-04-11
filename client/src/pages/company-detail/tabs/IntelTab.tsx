@@ -766,7 +766,7 @@ export function IntelTab({
           : null;
         const avgRevenuePerLoad = hasFinancial && (ytd.totalRevenue ?? 0) > 0 ? (ytd.totalRevenue ?? 0) / ytd.totalLoads : null;
         const rfpTotalVolume = companyRfps.reduce((sum, r) => {
-          const vol = parseInt(String((r as any).totalVolume || "0"), 10);
+          const vol = parseInt(String(r.totalVolume || "0"), 10);
           return sum + (isNaN(vol) ? 0 : vol);
         }, 0);
         const hasRfp = companyRfps.length > 0 && rfpTotalVolume > 0;
