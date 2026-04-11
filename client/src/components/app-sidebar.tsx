@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, UserPlus, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, UserPlus, HelpCircle, Plane, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -29,7 +29,6 @@ import { useToast } from "@/hooks/use-toast";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
-
 const PROSPECTS_ROLES = ["admin", "sales", "sales_director"];
 
 type NavItem = {
@@ -47,45 +46,27 @@ const navItems: NavItem[] = [
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
   { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare },
   { title: "Tasks",             url: "/tasks",            icon: ListTodo      },
-  { title: "Touchpoint History", url: "/touchpoint-history", icon: Phone        },
   {
     title: "Team Performance",
     url: "/team-performance",
     icon: TrendingUp,
     roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
   },
-  { title: "Goals",           url: "/goals",      icon: Target         },
-  { title: "My Scorecard",    url: "/report/me",  icon: FileBarChart2, roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
-  { title: "PTO Passoff",     url: "/pto-passoff",icon: Plane          },
-  {
-    title: "Coordinators Corner",
-    url: "/coordinators-corner",
-    icon: KeyRound,
-    roles: ["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator"],
-  },
+  { title: "Goals",        url: "/goals",      icon: Target        },
+  { title: "My Scorecard", url: "/report/me",  icon: FileBarChart2, roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
 ];
 
 const pipelineItems: NavItem[] = [
-  { title: "RFP & Awards",       url: "/rfp-awards",         icon: Trophy    },
-  { title: "RFP Calendar",       url: "/rfp-calendar",       icon: Calendar  },
-  { title: "Rep Scorecard",      url: "/rep-scorecard",      icon: Medal,     roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "LM Check-In Log",   url: "/lm-checkin-history", icon: History,   roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
+  { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy   },
+  { title: "RFP Calendar",    url: "/rfp-calendar",    icon: Calendar },
+  { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,   roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  { title: "LM Check-In Log", url: "/lm-checkin-history", icon: History, roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
 ];
 
 const laneToolItems: NavItem[] = [
-  { title: "Lane Research",       url: "/research-tasks",      icon: ClipboardList },
-  { title: "RFP Lane Search",     url: "/rfp-lane-search",     icon: MapPin        },
-  { title: "Carrier Lane Search", url: "/carrier-lane-search", icon: Truck         },
-  {
-    title: "My Procurement",
-    url: "/my-procurement",
-    icon: Briefcase,
-  },
-  {
-    title: "Lane Work Queue",
-    url: "/lanes/work-queue",
-    icon: ListFilter,
-  },
+  { title: "Lane Intelligence",  url: "/research-tasks",  icon: ClipboardList },
+  { title: "My Procurement",     url: "/my-procurement",  icon: Briefcase     },
+  { title: "Lane Work Queue",    url: "/lanes/work-queue",icon: ListFilter    },
   {
     title: "Carrier Hub",
     url: "/carrier-hub",
@@ -110,11 +91,6 @@ const laneToolItems: NavItem[] = [
     icon: UserPlus,
     roles: ["admin", "director", "national_account_manager", "account_manager"],
   },
-];
-
-const toolItems: NavItem[] = [
-  { title: "Resources", url: "/tools",    icon: Wrench        },
-  { title: "Training",  url: "/training", icon: GraduationCap },
 ];
 
 const ROLE_LABELS: Record<string, string> = {
@@ -188,11 +164,11 @@ export function AppSidebar() {
   const conversationsWaitingCount = useConversationsWaitingCount();
   const { toast } = useToast();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [signature, setSignature] = useState("");
 
   const saveSignatureMutation = useMutation({
     mutationFn: async (sig: string) => {
-      // Remove empty paragraphs before saving so spacing is clean in sent emails
       const cleaned = sig
         .replace(/<p[^>]*>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, "")
         .replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>")
@@ -216,7 +192,8 @@ export function AppSidebar() {
   const isActive = (url: string) =>
     url === "/"
       ? location === "/"
-      : location.startsWith(url) || (url === "/customers" && location.startsWith("/companies/"));
+      : location.startsWith(url) || (url === "/customers" && location.startsWith("/companies/")) ||
+        (url === "/research-tasks" && (location.startsWith("/research-tasks") || location.startsWith("/rfp-lane-search") || location.startsWith("/carrier-lane-search")));
 
   return (
     <>
@@ -227,14 +204,12 @@ export function AppSidebar() {
           {user?.organizationSlug === "demo" ? (
             <div className="flex flex-col items-center gap-0.5">
               <svg viewBox="0 0 120 36" width="110" height="33" aria-label="Freight DNA">
-                {/* Stylized truck outline */}
                 <rect x="2" y="10" width="70" height="20" rx="3" fill="none" stroke="#ffb400" strokeWidth="2"/>
                 <rect x="72" y="16" width="26" height="14" rx="2" fill="none" stroke="#ffb400" strokeWidth="2"/>
                 <circle cx="18" cy="32" r="4" fill="#ffb400"/>
                 <circle cx="52" cy="32" r="4" fill="#ffb400"/>
                 <circle cx="88" cy="32" r="4" fill="#ffb400"/>
                 <line x1="72" y1="23" x2="72" y2="30" stroke="#ffb400" strokeWidth="1.5"/>
-                {/* DNA double helix hint */}
                 <path d="M 100,12 Q 104,17 100,22 Q 96,27 100,32" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
                 <path d="M 108,12 Q 104,17 108,22 Q 112,27 108,32" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
                 <line x1="100" y1="17" x2="108" y2="17" stroke="#ffb400" strokeWidth="1"/>
@@ -253,7 +228,6 @@ export function AppSidebar() {
             <span className="font-bold">N</span>ot{" "}
             <span className="font-bold">A</span>cross
           </p>
-          {/* Farmer → Hunter icon */}
           <div className="flex items-center justify-center mt-1" title="Farmer → Hunter">
             <svg viewBox="0 0 134 46" width="90" height="30" aria-label="Farmer to Hunter">
               <line x1="38" y1="4" x2="24" y2="21" stroke="#ffb400" strokeWidth="2.5" strokeLinecap="round"/>
@@ -305,11 +279,7 @@ export function AppSidebar() {
                     key={item.title}
                     item={item}
                     isActive={isActive(item.url)}
-                    badge={
-                      item.title === "Tasks" ? taskCount
-                      : item.title === "Conversations" ? conversationsWaitingCount
-                      : undefined
-                    }
+                    badge={item.title === "Tasks" ? taskCount : undefined}
                   />
                 ))}
             </SidebarMenu>
@@ -347,9 +317,11 @@ export function AppSidebar() {
                       badge={
                         (item.title === "Lane Work Queue" || item.title === "My Procurement")
                           ? unactionedReplyCount
-                          : undefined
+                          : item.title === "Conversations"
+                            ? conversationsWaitingCount
+                            : undefined
                       }
-                      badgeColor="green"
+                      badgeColor={item.title === "Conversations" ? "red" : "green"}
                     />
                   ))}
                 </SidebarMenu>
@@ -357,16 +329,6 @@ export function AppSidebar() {
             </SidebarGroup>
           );
         })()}
-
-        {/* ── Tools ── */}
-        <SidebarGroup>
-          <SidebarGroupLabel>Tools</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {toolItems.map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
 
         {/* ── Admin / Team ── */}
         {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales" || user?.role === "sales_director") && (
@@ -408,6 +370,35 @@ export function AppSidebar() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {/* Coordinators Corner moved here — role-specific, not main nav */}
+                {["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator"].includes(user?.role ?? "") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/coordinators-corner"}>
+                      <Link href="/coordinators-corner" data-testid="link-coordinators-corner">
+                        <KeyRound className="h-4 w-4" />
+                        <span>Coordinators Corner</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {/* PTO Passoff moved here — used infrequently */}
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location === "/pto-passoff"}>
+                    <Link href="/pto-passoff" data-testid="link-pto-passoff">
+                      <Plane className="h-4 w-4" />
+                      <span>PTO Passoff</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {/* Touchpoint History moved here — review tool, not daily nav */}
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location === "/touchpoint-history"}>
+                    <Link href="/touchpoint-history" data-testid="link-touchpoint-history">
+                      <Phone className="h-4 w-4" />
+                      <span>Touchpoint History</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
                 {(user?.role === "admin" || user?.role === "director") && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild isActive={location === "/feedback-inbox"}>
@@ -442,6 +433,16 @@ export function AppSidebar() {
                 variant="ghost"
                 size="icon"
                 className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                onClick={() => setHelpOpen(true)}
+                data-testid="button-help"
+                title="Help & Resources"
+              >
+                <HelpCircle className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
                 onClick={openProfile}
                 data-testid="button-my-profile"
                 title="My profile"
@@ -468,6 +469,48 @@ export function AppSidebar() {
       </SidebarFooter>
     </Sidebar>
 
+    {/* Help & Resources Dialog */}
+    <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
+      <DialogContent className="sm:max-w-sm" data-testid="dialog-help">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <HelpCircle className="h-4 w-4 text-blue-500" />
+            Help & Resources
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2 py-1">
+          <Link
+            href="/tools"
+            onClick={() => setHelpOpen(false)}
+            className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50 transition-colors"
+            data-testid="link-resources-help"
+          >
+            <Wrench className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div>
+              <p className="text-sm font-medium">Resources</p>
+              <p className="text-xs text-muted-foreground">Templates, guides, and reference materials</p>
+            </div>
+          </Link>
+          <Link
+            href="/training"
+            onClick={() => setHelpOpen(false)}
+            className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50 transition-colors"
+            data-testid="link-training-help"
+          >
+            <GraduationCap className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div>
+              <p className="text-sm font-medium">Training</p>
+              <p className="text-xs text-muted-foreground">Onboarding materials and learning content</p>
+            </div>
+          </Link>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => setHelpOpen(false)} data-testid="button-help-close">Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    {/* Profile Dialog */}
     <Dialog open={profileOpen} onOpenChange={(v) => !v && setProfileOpen(false)}>
       <DialogContent className="sm:max-w-md max-h-[85vh] flex flex-col overflow-hidden" data-testid="dialog-my-profile">
         <DialogHeader>

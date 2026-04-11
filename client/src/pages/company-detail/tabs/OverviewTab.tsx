@@ -7,6 +7,7 @@ import { ForcedFocusDialog } from "@/components/forced-focus-dialog";
 import { RelationshipFreightCompanyPortlet } from "@/components/relationship-freight-portlet";
 import { NextBestActionCard } from "@/components/next-best-action-card";
 import { NbaCompanyCard } from "@/components/NbaCompanyCard";
+import { MarketShareCard } from "@/components/market-share-card";
 import { fmtMoney } from "@/lib/rep-utils";
 import type { Rfp } from "@shared/schema";
 import type { AccountPerf, MonthBucket } from "../types";
@@ -182,6 +183,9 @@ export function OverviewTab({
           </CardContent>
         </Card>
       )}
+
+      {/* Market share — moved here from Intel tab so reps see it on first glance */}
+      <MarketShareCard companyId={companyId} rfps={companyRfps} />
 
       <RelationshipFreightCompanyPortlet companyId={companyId} companyName={companyName} onOpenContact={onOpenContact} />
 

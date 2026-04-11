@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { FileAttachmentList, FileAttachmentUpload, uploadPendingFiles } from "@/components/file-attachment";
 import type { PendingFile } from "@/components/file-attachment";
-import { MarketShareCard } from "@/components/market-share-card";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -739,9 +738,6 @@ export function IntelTab({
           </div>
         </CardContent>
       </Card>
-
-      {/* Market Share */}
-      <MarketShareCard companyId={companyId} rfps={companyRfps} />
 
       {/* Wallet Share Calculator */}
       {(() => {
