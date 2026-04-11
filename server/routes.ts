@@ -512,14 +512,16 @@ export async function registerRoutes(
     if (req.path === "/webhooks/outlook-reply") return next();
     // Microsoft Graph webhook endpoints — public (Graph calls without session cookies)
     if (req.path.startsWith("/webhooks/graph/")) return next();
-    // Internal service endpoints — validated by INTERNAL_SERVICE_TOKEN header
+    // Internal service endpoints — can be accessed via INTERNAL_SERVICE_TOKEN header
+    // (machine-to-machine) or by an authenticated user session (browser clients).
     if (req.path.startsWith("/internal/")) {
       const token = process.env.INTERNAL_SERVICE_TOKEN;
       const provided = req.headers["x-internal-token"];
-      if (!token || !provided || provided !== token) {
-        return res.status(401).json({ error: "Unauthorized" });
+      if (token && provided === token) {
+        return next(); // Valid service-to-service token — skip session check
       }
-      return next();
+      // Fall through to normal session-based requireAuth for browser clients
+      return requireAuth(req, res, next);
     }
     requireAuth(req, res, next);
   });

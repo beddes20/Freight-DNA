@@ -1959,6 +1959,43 @@ export async function runMigrations() {
     clientContactCapture.release();
   }
 
+  // ── Conversation Inbox — email_conversation_threads (Task #202) ──────────────
+  const clientConversations = await pool.connect();
+  try {
+    await clientConversations.query(`
+      CREATE TABLE IF NOT EXISTS "email_conversation_threads" (
+        "id"                  varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        "org_id"              varchar NOT NULL REFERENCES "organizations"("id") ON DELETE CASCADE,
+        "thread_id"           text NOT NULL,
+        "linked_account_id"   varchar REFERENCES "companies"("id") ON DELETE SET NULL,
+        "linked_carrier_id"   varchar REFERENCES "carriers"("id") ON DELETE SET NULL,
+        "owner_user_id"       varchar REFERENCES "users"("id") ON DELETE SET NULL,
+        "waiting_state"       text NOT NULL DEFAULT 'waiting_on_us',
+        "response_priority"   text NOT NULL DEFAULT 'normal',
+        "last_message_id"     varchar REFERENCES "email_messages"("id") ON DELETE SET NULL,
+        "last_incoming_at"    timestamp,
+        "last_outgoing_at"    timestamp,
+        "waiting_since_at"    timestamp,
+        "overdue_at"          timestamp,
+        "created_at"          timestamp NOT NULL DEFAULT now(),
+        "updated_at"          timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientConversations.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "email_conversation_threads_org_thread"
+        ON "email_conversation_threads" ("org_id", "thread_id")
+    `);
+    await clientConversations.query(`
+      CREATE INDEX IF NOT EXISTS "email_conversation_threads_owner_waiting"
+        ON "email_conversation_threads" ("owner_user_id", "waiting_state")
+    `);
+    console.log("[migrations] email_conversation_threads table ensured (Task #202)");
+  } catch (err) {
+    console.error("[migrations] email_conversation_threads migration error:", err);
+  } finally {
+    clientConversations.release();
+  }
+
   // ── lane_summary_cache (Task #200: LWQ Data Flow & Performance Optimization) ──
   const clientLaneSummaryCache = await pool.connect();
   try {
@@ -2067,6 +2104,14 @@ export async function runMigrations() {
     await clientGeoLanes.query(`
       CREATE INDEX IF NOT EXISTS idx_aclpr_contact
         ON account_contact_lane_pattern_responsibilities(contact_id)
+    `);
+    // Add columns that were added to schema after initial migration
+    await clientGeoLanes.query(`
+      ALTER TABLE account_contact_lane_pattern_responsibilities
+        ADD COLUMN IF NOT EXISTS is_responsible_for_pattern boolean NOT NULL DEFAULT true,
+        ADD COLUMN IF NOT EXISTS primary_source_type text NOT NULL DEFAULT 'email',
+        ADD COLUMN IF NOT EXISTS last_reviewed_at timestamp,
+        ADD COLUMN IF NOT EXISTS last_reviewed_by_user_id varchar REFERENCES users(id) ON DELETE SET NULL
     `);
     console.log("[migrations] geographic_lane_patterns and account_contact_lane_pattern_responsibilities tables ensured (Task #203)");
   } catch (err) {

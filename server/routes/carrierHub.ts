@@ -373,7 +373,7 @@ export function registerCarrierHubRoutes(app: Express) {
             lci.interest_status,
             lci.source_type,
             lci.updated_at,
-            rl.origin_city, rl.origin_state, rl.dest_city, rl.dest_state,
+            rl.origin AS origin_city, rl.origin_state, rl.destination AS dest_city, rl.destination_state AS dest_state,
             rl.equipment_type, rl.avg_loads_per_week, rl.weeks_active,
             rl.company_name,
             rl.resolved_at
@@ -391,7 +391,7 @@ export function registerCarrierHubRoutes(app: Express) {
           SELECT
             col.id, col.lane_id, col.timestamp, col.delivery_status,
             col.sent_at, col.recipients, col.thread_id,
-            rl.origin_city, rl.origin_state, rl.dest_city, rl.dest_state,
+            rl.origin AS origin_city, rl.origin_state, rl.destination AS dest_city, rl.destination_state AS dest_state,
             rl.company_name
           FROM carrier_outreach_logs col
           JOIN recurring_lanes rl ON rl.id = col.lane_id
@@ -701,13 +701,13 @@ export function registerCarrierHubRoutes(app: Express) {
       }>(
         `SELECT
           rl.origin_state AS top_origin,
-          rl.dest_state AS top_dest,
+          rl.destination_state AS top_dest,
           rl.equipment_type AS equipment,
           COUNT(*) AS load_count
         FROM lane_carrier_interest lci
         JOIN recurring_lanes rl ON rl.id = lci.lane_id
         WHERE lci.carrier_id = $1
-        GROUP BY rl.origin_state, rl.dest_state, rl.equipment_type
+        GROUP BY rl.origin_state, rl.destination_state, rl.equipment_type
         ORDER BY load_count DESC
         LIMIT 10`,
         [id]
