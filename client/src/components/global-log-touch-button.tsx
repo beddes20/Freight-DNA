@@ -10,9 +10,10 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient as qc } from "@/lib/queryClient";
 import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { PhoneCall, Mail, MessageSquare, Building2, Search, Contact } from "lucide-react";
+import { useLogTouch } from "@/context/log-touch-context";
 
 const TOUCH_TYPES = [
   { value: "call", label: "Call", icon: PhoneCall },
@@ -35,8 +36,8 @@ interface ContactResult {
   companyName?: string;
 }
 
-export function GlobalLogTouchButton() {
-  const [open, setOpen] = useState(false);
+export function GlobalLogTouchDialog() {
+  const { open, prefillCompanyId, prefillCompanyName, closeDialog } = useLogTouch();
   const [contactSearch, setContactSearch] = useState("");
   const [selectedContact, setSelectedContact] = useState<ContactResult | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -46,6 +47,19 @@ export function GlobalLogTouchButton() {
   const [notes, setNotes] = useState("");
   const { toast } = useToast();
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let name = prefillCompanyName;
+    if (!name && prefillCompanyId) {
+      const cached = qc.getQueryData<{ id: string; name: string }>(["/api/companies", prefillCompanyId]);
+      name = cached?.name ?? null;
+    }
+    if (name) {
+      setContactSearch(name);
+      setShowDropdown(true);
+    }
+  }, [open, prefillCompanyId, prefillCompanyName]);
 
   const { data: searchResults = [] } = useQuery<ContactResult[]>({
     queryKey: ["/api/search/contacts-for-touch", contactSearch],
@@ -85,8 +99,7 @@ export function GlobalLogTouchButton() {
     },
     onSuccess: () => {
       invalidateAfterTouchpoint(selectedContact?.companyId);
-      // Refresh the customer list so last-touch metrics update on company cards
-      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      qc.invalidateQueries({ queryKey: ["/api/companies"] });
       toast({ title: "Touch logged successfully" });
       handleClose();
     },
@@ -96,7 +109,7 @@ export function GlobalLogTouchButton() {
   });
 
   function handleClose() {
-    setOpen(false);
+    closeDialog();
     setContactSearch("");
     setSelectedContact(null);
     setShowDropdown(false);
@@ -113,163 +126,167 @@ export function GlobalLogTouchButton() {
   }
 
   return (
-    <>
-      <Button
-        size="sm"
-        variant="ghost"
-        className="h-8 px-3 text-white/80 hover:text-white hover:bg-white/10 border border-white/20 text-xs font-medium whitespace-nowrap"
-        onClick={() => setOpen(true)}
-        data-testid="button-global-log-touch"
-      >
-        <PhoneCall className="h-3.5 w-3.5 mr-1.5" />
-        Log Touch
-      </Button>
+    <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
+      <DialogContent className="sm:max-w-md" data-testid="dialog-global-log-touch">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <PhoneCall className="h-4 w-4 text-cyan-500" />
+            Log a Touch
+          </DialogTitle>
+        </DialogHeader>
 
-      <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
-        <DialogContent className="sm:max-w-md" data-testid="dialog-global-log-touch">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <PhoneCall className="h-4 w-4 text-cyan-500" />
-              Log a Touch
-            </DialogTitle>
-          </DialogHeader>
-
-          <div className="space-y-4 py-1">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Contact</label>
-              <div className="relative" ref={dropdownRef}>
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <input
-                    data-testid="input-touch-contact-search"
-                    type="text"
-                    className="w-full pl-9 pr-3 h-9 rounded-md border border-input bg-background text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    placeholder="Search for a contact..."
-                    value={contactSearch}
-                    onChange={(e) => {
-                      setContactSearch(e.target.value);
-                      setSelectedContact(null);
-                      setShowDropdown(true);
-                    }}
-                    onFocus={() => { if (contactSearch.trim()) setShowDropdown(true); }}
-                  />
-                </div>
-                {showDropdown && contactSearch.trim() && searchResults.length > 0 && (
-                  <div
-                    data-testid="dropdown-touch-contacts"
-                    className="absolute top-full mt-1 w-full bg-popover border rounded-md shadow-lg z-50 max-h-48 overflow-auto"
-                  >
-                    {searchResults.map((contact) => (
-                      <button
-                        key={contact.id}
-                        data-testid={`touch-contact-option-${contact.id}`}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent cursor-pointer text-left"
-                        onClick={() => handleSelectContact(contact)}
-                      >
-                        <Contact className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <span className="truncate block font-medium">{contact.name}</span>
-                          <span className="text-xs text-muted-foreground truncate block">
-                            {[contact.companyName, contact.title].filter(Boolean).join(" · ")}
-                          </span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
+        <div className="space-y-4 py-1">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Contact</label>
+            <div className="relative" ref={dropdownRef}>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <input
+                  data-testid="input-touch-contact-search"
+                  type="text"
+                  className="w-full pl-9 pr-3 h-9 rounded-md border border-input bg-background text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder="Search for a contact..."
+                  value={contactSearch}
+                  onChange={(e) => {
+                    setContactSearch(e.target.value);
+                    setSelectedContact(null);
+                    setShowDropdown(true);
+                  }}
+                  onFocus={() => { if (contactSearch.trim()) setShowDropdown(true); }}
+                />
               </div>
-              {selectedContact?.companyName && (
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-1" data-testid="touch-selected-account">
-                  <Building2 className="h-3 w-3" />
-                  <span>{selectedContact.companyName}</span>
+              {showDropdown && contactSearch.trim() && searchResults.length > 0 && (
+                <div
+                  data-testid="dropdown-touch-contacts"
+                  className="absolute top-full mt-1 w-full bg-popover border rounded-md shadow-lg z-50 max-h-48 overflow-auto"
+                >
+                  {searchResults.map((contact) => (
+                    <button
+                      key={contact.id}
+                      data-testid={`touch-contact-option-${contact.id}`}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent cursor-pointer text-left"
+                      onClick={() => handleSelectContact(contact)}
+                    >
+                      <Contact className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <span className="truncate block font-medium">{contact.name}</span>
+                        <span className="text-xs text-muted-foreground truncate block">
+                          {[contact.companyName, contact.title].filter(Boolean).join(" · ")}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Touch Type</label>
-              <div className="flex gap-2 flex-wrap">
-                {TOUCH_TYPES.map((opt) => {
-                  const Icon = opt.icon;
-                  return (
-                    <button
-                      key={opt.value}
-                      data-testid={`touch-type-${opt.value}`}
-                      onClick={() => setTouchType(opt.value)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border transition-colors ${
-                        touchType === opt.value
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "bg-background border-input hover:bg-muted"
-                      }`}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      {opt.label}
-                    </button>
-                  );
-                })}
+            {selectedContact?.companyName && (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-1" data-testid="touch-selected-account">
+                <Building2 className="h-3 w-3" />
+                <span>{selectedContact.companyName}</span>
               </div>
-            </div>
+            )}
+          </div>
 
-            <div className="flex items-center gap-3">
-              <button
-                data-testid="toggle-meaningful-conversation"
-                onClick={() => setMeaningful((v) => !v)}
-                className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${meaningful ? "bg-primary" : "bg-muted"}`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${meaningful ? "translate-x-4" : "translate-x-0"}`}
-                />
-              </button>
-              <label className="text-sm cursor-pointer select-none" onClick={() => setMeaningful((v) => !v)}>
-                Meaningful conversation
-              </label>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Call Vibe</label>
-              <div className="flex gap-2">
-                {VIBES.map((v) => (
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Touch Type</label>
+            <div className="flex gap-2 flex-wrap">
+              {TOUCH_TYPES.map((opt) => {
+                const Icon = opt.icon;
+                return (
                   <button
-                    key={v.value}
-                    data-testid={`vibe-${v.value}`}
-                    onClick={() => setVibe(vibe === v.value ? "" : v.value)}
-                    className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
-                      vibe === v.value ? v.color : "bg-background border-input hover:bg-muted text-foreground"
+                    key={opt.value}
+                    data-testid={`touch-type-${opt.value}`}
+                    onClick={() => setTouchType(opt.value)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border transition-colors ${
+                      touchType === opt.value
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background border-input hover:bg-muted"
                     }`}
                   >
-                    {v.label}
+                    <Icon className="h-3.5 w-3.5" />
+                    {opt.label}
                   </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Notes <span className="text-muted-foreground font-normal">(optional)</span></label>
-              <Textarea
-                data-testid="textarea-touch-notes"
-                placeholder="What did you talk about?"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={3}
-                className="resize-none"
-              />
+                );
+              })}
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={handleClose} data-testid="button-cancel-global-touch">
-              Cancel
-            </Button>
-            <Button
-              onClick={() => logTouchMutation.mutate()}
-              disabled={!selectedContact || logTouchMutation.isPending}
-              data-testid="button-submit-global-touch"
+          <div className="flex items-center gap-3">
+            <button
+              data-testid="toggle-meaningful-conversation"
+              onClick={() => setMeaningful((v) => !v)}
+              className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${meaningful ? "bg-primary" : "bg-muted"}`}
             >
-              {logTouchMutation.isPending ? "Saving..." : "Log Touch"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${meaningful ? "translate-x-4" : "translate-x-0"}`}
+              />
+            </button>
+            <label className="text-sm cursor-pointer select-none" onClick={() => setMeaningful((v) => !v)}>
+              Meaningful conversation
+            </label>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Call Vibe</label>
+            <div className="flex gap-2">
+              {VIBES.map((v) => (
+                <button
+                  key={v.value}
+                  data-testid={`vibe-${v.value}`}
+                  onClick={() => setVibe(vibe === v.value ? "" : v.value)}
+                  className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
+                    vibe === v.value ? v.color : "bg-background border-input hover:bg-muted text-foreground"
+                  }`}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Notes <span className="text-muted-foreground font-normal">(optional)</span></label>
+            <Textarea
+              data-testid="textarea-touch-notes"
+              placeholder="What did you talk about?"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              className="resize-none"
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={handleClose} data-testid="button-cancel-global-touch">
+            Cancel
+          </Button>
+          <Button
+            onClick={() => logTouchMutation.mutate()}
+            disabled={!selectedContact || logTouchMutation.isPending}
+            data-testid="button-submit-global-touch"
+          >
+            {logTouchMutation.isPending ? "Saving..." : "Log Touch"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function GlobalLogTouchButton() {
+  const { openDialog } = useLogTouch();
+
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="h-8 px-3 text-white/80 hover:text-white hover:bg-white/10 border border-white/20 text-xs font-medium whitespace-nowrap"
+      onClick={() => openDialog()}
+      data-testid="button-global-log-touch"
+    >
+      <PhoneCall className="h-3.5 w-3.5 mr-1.5" />
+      Log Touch
+    </Button>
   );
 }

@@ -17,7 +17,9 @@ import React, { useEffect, useCallback, useState } from "react";
 import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
 import { ClerkProvider, useClerk } from "@clerk/clerk-react";
 import { dark } from "@clerk/themes";
-import { GlobalLogTouchButton } from "@/components/global-log-touch-button";
+import { GlobalLogTouchButton, GlobalLogTouchDialog } from "@/components/global-log-touch-button";
+import { LogTouchFab, useKeyboardShortcut } from "@/components/log-touch-fab";
+import { LogTouchProvider } from "@/context/log-touch-context";
 import { TourProvider } from "@/components/app-tour";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -96,6 +98,11 @@ class ErrorBoundary extends React.Component<
     }
     return this.props.children;
   }
+}
+
+function LogTouchFabWithShortcut() {
+  useKeyboardShortcut();
+  return <LogTouchFab />;
 }
 
 function PipelineAnalyticsRedirect() {
@@ -330,6 +337,8 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
           </div>
         </div>
       </SidebarProvider>
+      <GlobalLogTouchDialog />
+      <LogTouchFabWithShortcut />
       <CrmChatbot />
       <NotificationToasts />
     </>
@@ -341,10 +350,12 @@ function AppCore() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <TourProvider>
-            <AuthenticatedApp />
-          </TourProvider>
-          <Toaster />
+          <LogTouchProvider>
+            <TourProvider>
+              <AuthenticatedApp />
+            </TourProvider>
+            <Toaster />
+          </LogTouchProvider>
         </TooltipProvider>
       </QueryClientProvider>
     </ErrorBoundary>

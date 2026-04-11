@@ -1,4 +1,5 @@
 import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, UserPlus, HelpCircle, Plane, type LucideIcon } from "lucide-react";
+import { KeyboardShortcutsPopover } from "@/components/keyboard-shortcuts-popover";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -429,6 +430,7 @@ export function AppSidebar() {
             </div>
             <div className="flex items-center gap-1 shrink-0">
               <NotificationBell />
+              <KeyboardShortcutsPopover />
               <Button
                 variant="ghost"
                 size="icon"
