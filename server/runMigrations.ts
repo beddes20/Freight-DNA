@@ -1902,4 +1902,60 @@ export async function runMigrations() {
   } finally {
     clientCarrierIntel.release();
   }
+
+  // Task #201: Customer Contact Capture — extend contacts + add account_contact_suggestions
+  const clientContactCapture = await pool.connect();
+  try {
+    // Extend contacts table with new fields
+    await clientContactCapture.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP`);
+    await clientContactCapture.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source_type TEXT`);
+    await clientContactCapture.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS role_type TEXT`);
+    await clientContactCapture.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'`);
+    await clientContactCapture.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS is_primary BOOLEAN DEFAULT false`);
+
+    // Create account_contact_suggestions table
+    await clientContactCapture.query(`
+      CREATE TABLE IF NOT EXISTS account_contact_suggestions (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        account_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        email_address TEXT NOT NULL,
+        suggested_name TEXT,
+        suggested_title TEXT,
+        suggested_phone TEXT,
+        suggestion_source TEXT NOT NULL DEFAULT 'email_thread',
+        confidence_score INTEGER NOT NULL DEFAULT 50,
+        status TEXT NOT NULL DEFAULT 'pending',
+        thread_count INTEGER NOT NULL DEFAULT 1,
+        email_message_id VARCHAR,
+        thread_id TEXT,
+        snoozed_until TIMESTAMP,
+        acted_by_user_id VARCHAR REFERENCES users(id) ON DELETE SET NULL,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+
+    // Unique constraint for deduplication
+    await clientContactCapture.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS account_contact_suggestions_account_email_idx
+        ON account_contact_suggestions(account_id, email_address)
+    `);
+
+    await clientContactCapture.query(`
+      CREATE INDEX IF NOT EXISTS idx_account_contact_suggestions_org
+        ON account_contact_suggestions(org_id)
+    `);
+    await clientContactCapture.query(`
+      CREATE INDEX IF NOT EXISTS idx_account_contact_suggestions_status
+        ON account_contact_suggestions(status)
+    `);
+
+    console.log("[migrations] contacts extended and account_contact_suggestions table ensured (Task #201)");
+  } catch (err) {
+    console.error("[migrations] account_contact_suggestions migration error:", err);
+  } finally {
+    clientContactCapture.release();
+  }
 }

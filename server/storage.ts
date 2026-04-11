@@ -161,9 +161,9 @@ import {
   emailOutcomeLinks,
   type EmailOutcomeLink,
   type InsertEmailOutcomeLink,
-  carrierIntelSuggestions,
-  type CarrierIntelSuggestion,
-  type InsertCarrierIntelSuggestion,
+  accountContactSuggestions,
+  type AccountContactSuggestion,
+  type InsertAccountContactSuggestion,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -799,6 +799,13 @@ export interface IStorage {
    * Returns a Map keyed by carrierId with all accepted intel rows.
    */
   getBatchAcceptedIntelForCarriers(carrierIds: string[]): Promise<Map<string, import('@shared/schema').CarrierIntelSuggestion[]>>;
+
+  // Account Contact Suggestions (Task #201)
+  upsertAccountContactSuggestion(data: import('@shared/schema').InsertAccountContactSuggestion): Promise<import('@shared/schema').AccountContactSuggestion>;
+  getAccountContactSuggestions(accountId: string, status?: string): Promise<import('@shared/schema').AccountContactSuggestion[]>;
+  getAccountContactSuggestion(id: string): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
+  updateAccountContactSuggestionStatus(id: string, status: string, opts: { userId?: string; snoozedUntil?: Date | null }): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
+  getContactByEmailAndCompany(email: string, companyId: string): Promise<import('@shared/schema').Contact | undefined>;
 }
 
 const pool = new Pool({
@@ -5394,6 +5401,116 @@ export class DatabaseStorage implements IStorage {
       }
     }
     return result;
+  }
+
+  // ── Account Contact Suggestions (Task #201) ───────────────────────────────
+
+  async upsertAccountContactSuggestion(data: InsertAccountContactSuggestion): Promise<AccountContactSuggestion> {
+    const now = new Date();
+    // Try insert first; on conflict (accountId, emailAddress) update thread count + updatedAt
+    // but preserve status unless it is 'ignored' or 'never_suggest' (don't re-open suppressed)
+    const [existing] = await db.select()
+      .from(accountContactSuggestions)
+      .where(and(
+        eq(accountContactSuggestions.accountId, data.accountId),
+        eq(accountContactSuggestions.emailAddress, data.emailAddress),
+      ))
+      .limit(1);
+
+    if (existing) {
+      // If already permanently suppressed, don't update
+      if (existing.status === "never_suggest" || existing.status === "ignored") {
+        return existing;
+      }
+      // Update thread count, confidence, and name hints if they were null
+      const [updated] = await db
+        .update(accountContactSuggestions)
+        .set({
+          threadCount: existing.threadCount + 1,
+          confidenceScore: Math.max(existing.confidenceScore, data.confidenceScore ?? 50),
+          suggestedName: existing.suggestedName ?? data.suggestedName,
+          suggestedTitle: existing.suggestedTitle ?? data.suggestedTitle,
+          suggestedPhone: existing.suggestedPhone ?? data.suggestedPhone,
+          emailMessageId: data.emailMessageId ?? existing.emailMessageId,
+          threadId: data.threadId ?? existing.threadId,
+          updatedAt: now,
+        })
+        .where(eq(accountContactSuggestions.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [inserted] = await db
+      .insert(accountContactSuggestions)
+      .values({ ...data, createdAt: now, updatedAt: now })
+      .returning();
+    return inserted;
+  }
+
+  async getAccountContactSuggestions(accountId: string, status?: string): Promise<AccountContactSuggestion[]> {
+    const now = new Date();
+    const rows = await db.select()
+      .from(accountContactSuggestions)
+      .where(
+        status
+          ? and(
+              eq(accountContactSuggestions.accountId, accountId),
+              eq(accountContactSuggestions.status, status),
+            )
+          : eq(accountContactSuggestions.accountId, accountId),
+      )
+      .orderBy(desc(accountContactSuggestions.confidenceScore), desc(accountContactSuggestions.createdAt));
+
+    // Filter out snoozed suggestions whose snooze window has expired
+    return rows.filter(row => {
+      if (row.status === "snoozed" && row.snoozedUntil && row.snoozedUntil <= now) {
+        // Automatically re-open — async fire-and-forget
+        db.update(accountContactSuggestions)
+          .set({ status: "pending", snoozedUntil: null, updatedAt: now })
+          .where(eq(accountContactSuggestions.id, row.id))
+          .catch(() => { /* ignore */ });
+        return true; // show as pending to the caller
+      }
+      return true;
+    });
+  }
+
+  async getAccountContactSuggestion(id: string): Promise<AccountContactSuggestion | undefined> {
+    const [row] = await db.select()
+      .from(accountContactSuggestions)
+      .where(eq(accountContactSuggestions.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async updateAccountContactSuggestionStatus(
+    id: string,
+    status: string,
+    opts: { userId?: string; snoozedUntil?: Date | null },
+  ): Promise<AccountContactSuggestion | undefined> {
+    const now = new Date();
+    const [updated] = await db
+      .update(accountContactSuggestions)
+      .set({
+        status,
+        actedByUserId: opts.userId ?? null,
+        snoozedUntil: opts.snoozedUntil ?? null,
+        updatedAt: now,
+      })
+      .where(eq(accountContactSuggestions.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getContactByEmailAndCompany(email: string, companyId: string): Promise<import('@shared/schema').Contact | undefined> {
+    const [contact] = await db.select()
+      .from(contacts)
+      .where(and(
+        eq(contacts.companyId, companyId),
+        eq(contacts.email, email.toLowerCase()),
+      ))
+      .limit(1);
+    return contact;
   }
 }
 

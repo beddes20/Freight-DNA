@@ -9293,5 +9293,165 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     }
   });
 
+  // ── Account Contact Suggestions (Task #201) ───────────────────────────────
+
+  /** GET /api/internal/accounts/:accountId/contact-suggestions */
+  app.get("/api/internal/accounts/:accountId/contact-suggestions", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { accountId } = req.params as { accountId: string };
+      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Account not found" });
+      const status = req.query.status as string | undefined;
+      const suggestions = await storage.getAccountContactSuggestions(accountId, status);
+      // Only return pending / snoozed suggestions (exclude accepted/ignored/never_suggest unless explicitly requested)
+      const filtered = status ? suggestions : suggestions.filter(s => s.status === "pending" || s.status === "snoozed");
+      res.json(filtered);
+    } catch (err: any) {
+      console.error("[contact-suggestions GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to fetch suggestions" });
+    }
+  });
+
+  /** POST /api/internal/accounts/:accountId/contact-suggestions/:id/accept */
+  app.post("/api/internal/accounts/:accountId/contact-suggestions/:id/accept", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { accountId, id } = req.params as { accountId: string; id: string };
+      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Account not found" });
+      const suggestion = await storage.getAccountContactSuggestion(id);
+      if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
+
+      const { roleType } = req.body as { roleType?: string };
+
+      // Accept: create or update contact
+      const existingContact = await storage.getContactByEmailAndCompany(suggestion.emailAddress, accountId);
+      const now = new Date();
+      let contact;
+      if (existingContact) {
+        // Update lastSeenAt without overwriting manually-curated fields.
+        // Build an explicit InsertContact payload.
+        // Preserve curated (non-blank) fields; backfill blanks from suggestion hints.
+        const updatePayload: import("@shared/schema").InsertContact = {
+          companyId: existingContact.companyId,
+          name: existingContact.name || suggestion.suggestedName || suggestion.emailAddress,
+          title: existingContact.title || suggestion.suggestedTitle || null,
+          phone: existingContact.phone || suggestion.suggestedPhone || null,
+          relationshipBase: existingContact.relationshipBase ?? null,
+          email: existingContact.email ?? null,
+          reportsToId: existingContact.reportsToId ?? null,
+          lanes: existingContact.lanes ?? null,
+          regions: existingContact.regions ?? null,
+          freightSpend: existingContact.freightSpend ?? null,
+          spotBiddingProcess: existingContact.spotBiddingProcess ?? null,
+          nextSteps: existingContact.nextSteps ?? null,
+          interests: existingContact.interests ?? null,
+          notes: existingContact.notes ?? null,
+          createdAt: existingContact.createdAt ?? null,
+          createdBy: existingContact.createdBy ?? null,
+          baseAdvancedAt: existingContact.baseAdvancedAt ?? null,
+          lastSeenAt: now,
+          roleType: roleType ?? existingContact.roleType ?? null,
+          sourceType: existingContact.sourceType ?? "email_capture",
+          status: existingContact.status ?? "active",
+          isPrimary: existingContact.isPrimary ?? false,
+        };
+        contact = await storage.updateContact(existingContact.id, updatePayload);
+      } else {
+        const createPayload: import("@shared/schema").InsertContact = {
+          companyId: accountId,
+          name: suggestion.suggestedName ?? suggestion.emailAddress,
+          title: suggestion.suggestedTitle ?? null,
+          email: suggestion.emailAddress,
+          phone: suggestion.suggestedPhone ?? null,
+          roleType: roleType ?? null,
+          sourceType: "email_capture",
+          lastSeenAt: now,
+          status: "active",
+          isPrimary: false,
+          relationshipBase: null,
+          reportsToId: null,
+          lanes: null,
+          regions: null,
+          freightSpend: null,
+          spotBiddingProcess: null,
+          nextSteps: null,
+          interests: null,
+          notes: null,
+          createdAt: null,
+          createdBy: null,
+          baseAdvancedAt: null,
+        };
+        contact = await storage.createContact(createPayload);
+      }
+
+      // Mark suggestion as accepted
+      await storage.updateAccountContactSuggestionStatus(id, "accepted", { userId: currentUser.id });
+      res.json({ suggestion: { ...suggestion, status: "accepted" }, contact });
+    } catch (err: any) {
+      console.error("[contact-suggestions/accept POST]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to accept suggestion" });
+    }
+  });
+
+  /** POST /api/internal/accounts/:accountId/contact-suggestions/:id/ignore */
+  app.post("/api/internal/accounts/:accountId/contact-suggestions/:id/ignore", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { accountId, id } = req.params as { accountId: string; id: string };
+      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Account not found" });
+      const suggestion = await storage.getAccountContactSuggestion(id);
+      if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
+      const updated = await storage.updateAccountContactSuggestionStatus(id, "ignored", { userId: currentUser.id });
+      res.json(updated);
+    } catch (err: any) {
+      console.error("[contact-suggestions/ignore POST]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to ignore suggestion" });
+    }
+  });
+
+  /** POST /api/internal/accounts/:accountId/contact-suggestions/:id/snooze */
+  app.post("/api/internal/accounts/:accountId/contact-suggestions/:id/snooze", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { accountId, id } = req.params as { accountId: string; id: string };
+      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Account not found" });
+      const suggestion = await storage.getAccountContactSuggestion(id);
+      if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
+      const { snoozedUntil } = req.body as { snoozedUntil?: string };
+      const snoozedUntilDate = snoozedUntil ? new Date(snoozedUntil) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const updated = await storage.updateAccountContactSuggestionStatus(id, "snoozed", { userId: currentUser.id, snoozedUntil: snoozedUntilDate });
+      res.json(updated);
+    } catch (err: any) {
+      console.error("[contact-suggestions/snooze POST]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to snooze suggestion" });
+    }
+  });
+
+  /** POST /api/internal/accounts/:accountId/contact-suggestions/:id/never-suggest */
+  app.post("/api/internal/accounts/:accountId/contact-suggestions/:id/never-suggest", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { accountId, id } = req.params as { accountId: string; id: string };
+      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Account not found" });
+      const suggestion = await storage.getAccountContactSuggestion(id);
+      if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
+      const updated = await storage.updateAccountContactSuggestionStatus(id, "never_suggest", { userId: currentUser.id });
+      res.json(updated);
+    } catch (err: any) {
+      console.error("[contact-suggestions/never-suggest POST]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to suppress suggestion" });
+    }
+  });
+
   return httpServer;
 }

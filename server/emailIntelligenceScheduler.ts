@@ -21,6 +21,7 @@ import { generateCarrierEmailNbas } from "./carrierEmailNbaService";
 import { stageCarrierEmailEnrichment } from "./carrierEmailEnrichmentService";
 import { processWinLossEvidence } from "./emailWinLossService";
 import { processCarrierEmailSignals } from "./services/carrierIntelSuggestions";
+import { detectAndSuggest } from "./accountContactCaptureService";
 import type { InsertEmailSignal } from "@shared/schema";
 
 const BATCH_SIZE = parseInt(process.env.EMAIL_INTEL_BATCH_SIZE ?? "50", 10);
@@ -63,6 +64,14 @@ async function runEmailIntelligenceBatch(): Promise<void> {
       const saved = inserts.length > 0 ? await storage.insertEmailSignals(inserts) : [];
       await storage.markEmailMessageProcessed(msg.id);
 
+      // ── Consumer area 5: Account contact capture (Task #201) ───────────────
+      // Runs for every account-linked message regardless of signal count.
+      if (msg.linkedAccountId) {
+        detectAndSuggest(msg, storage).catch(err => {
+          console.error(`[emailIntelligenceScheduler] contact capture error for message ${msg.id}:`, err);
+        });
+      }
+
       if (saved.length === 0) continue;
 
       // ── Consumer area 1: Win/loss evidence linkage ─────────────────────────
@@ -102,6 +111,7 @@ async function runEmailIntelligenceBatch(): Promise<void> {
           console.error(`[emailIntelligenceScheduler] carrier intel mapper error for message ${msg.id}:`, err);
         });
       }
+
     } catch (err) {
       console.error(`[emailIntelligenceScheduler] fatal error for message ${msg.id}:`, err);
       // Mark processed so the same message doesn't stall the queue

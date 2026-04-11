@@ -77,6 +77,11 @@ export const contacts = pgTable("contacts", {
   createdAt: text("created_at"),
   createdBy: varchar("created_by"),
   baseAdvancedAt: text("base_advanced_at"),
+  lastSeenAt: timestamp("last_seen_at"),
+  sourceType: text("source_type"),
+  roleType: text("role_type"),
+  status: text("status").default("active"),
+  isPrimary: boolean("is_primary").default(false),
 });
 
 export const insertContactSchema = createInsertSchema(contacts).omit({
@@ -1801,3 +1806,51 @@ export const insertCarrierIntelSuggestionSchema = createInsertSchema(carrierInte
 });
 export type InsertCarrierIntelSuggestion = z.infer<typeof insertCarrierIntelSuggestionSchema>;
 export type CarrierIntelSuggestion = typeof carrierIntelSuggestions.$inferSelect;
+
+// ─── Account Contact Suggestions (Task #201) ─────────────────────────────────
+// Staged contact capture suggestions from account-linked email threads.
+// Reps can accept, ignore, snooze, or permanently suppress each suggestion.
+
+export const accountContactSuggestionStatuses = [
+  "pending",
+  "accepted",
+  "ignored",
+  "snoozed",
+  "never_suggest",
+] as const;
+export type AccountContactSuggestionStatus = typeof accountContactSuggestionStatuses[number];
+
+export const accountContactSuggestions = pgTable(
+  "account_contact_suggestions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    accountId: varchar("account_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    emailAddress: text("email_address").notNull(),
+    suggestedName: text("suggested_name"),
+    suggestedTitle: text("suggested_title"),
+    suggestedPhone: text("suggested_phone"),
+    suggestionSource: text("suggestion_source").notNull().default("email_thread"),
+    confidenceScore: integer("confidence_score").notNull().default(50),
+    status: text("status").notNull().default("pending"),
+    threadCount: integer("thread_count").notNull().default(1),
+    emailMessageId: varchar("email_message_id"),
+    threadId: text("thread_id"),
+    snoozedUntil: timestamp("snoozed_until"),
+    actedByUserId: varchar("acted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("account_contact_suggestions_account_email_idx").on(table.accountId, table.emailAddress),
+  ],
+);
+
+export const insertAccountContactSuggestionSchema = createInsertSchema(accountContactSuggestions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertAccountContactSuggestion = z.infer<typeof insertAccountContactSuggestionSchema>;
+export type AccountContactSuggestion = typeof accountContactSuggestions.$inferSelect;

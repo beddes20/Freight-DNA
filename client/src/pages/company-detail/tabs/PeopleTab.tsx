@@ -5,6 +5,7 @@ import { PhoneCall, Network, Users, Plus, Upload, Search, Clock } from "lucide-r
 import { OrgChart } from "@/components/org-chart";
 import type { Contact, Company, Touchpoint, User } from "@shared/schema";
 import type { TaskWithCount } from "../types";
+import { SuggestedContactsPanel } from "../components/SuggestedContactsPanel";
 
 interface ActivityItem {
   type: string;
@@ -60,6 +61,8 @@ export function PeopleTab({
 
   return (
     <>
+      <SuggestedContactsPanel companyId={company.id} />
+
       {company.notes && (
         <Card>
           <CardContent className="p-4">
