@@ -61,3 +61,7 @@ SMTP_HOST = "smtpout.secureserver.net"
 SMTP_PORT = "465"
 SMTP_FROM = "info@freight-dna.com"
 SMTP_FROM_NAME = "Value Truck · Growth Chart"
+
+[userenv.development]
+DEV_AUTH_BYPASS_USER_ID = "4e75fd7c-d462-42c5-a335-af327076416c"
+VITE_DEV_AUTH_BYPASS = "true"

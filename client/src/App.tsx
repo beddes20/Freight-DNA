@@ -151,7 +151,9 @@ function Router() {
   );
 }
 
-function AuthenticatedApp() {
+const DEV_BYPASS = import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+
+function AuthenticatedAppInner() {
   const { user, isLoading } = useAuth();
   const { signOut } = useClerk();
 
@@ -162,6 +164,31 @@ function AuthenticatedApp() {
     queryClient.clear();
     window.location.href = "/";
   }, [signOut]);
+
+  return <AuthenticatedAppContent user={user} isLoading={isLoading} handleInactivityLogout={handleInactivityLogout} />;
+}
+
+function AuthenticatedAppBypass() {
+  const { user, isLoading } = useAuth();
+
+  const handleInactivityLogout = useCallback(async () => {
+    queryClient.clear();
+    window.location.href = "/";
+  }, []);
+
+  return <AuthenticatedAppContent user={user} isLoading={isLoading} handleInactivityLogout={handleInactivityLogout} />;
+}
+
+function AuthenticatedApp() {
+  if (DEV_BYPASS) return <AuthenticatedAppBypass />;
+  return <AuthenticatedAppInner />;
+}
+
+function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
+  user: ReturnType<typeof useAuth>["user"];
+  isLoading: boolean;
+  handleInactivityLogout: () => void;
+}) {
 
   const { warningVisible, secondsLeft, staySignedIn } = useInactivityTimeout(
     user ? handleInactivityLogout : () => {}
@@ -307,15 +334,35 @@ function AuthenticatedApp() {
   );
 }
 
+function AppCore() {
+  return (
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <TourProvider>
+            <AuthenticatedApp />
+          </TourProvider>
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
+  );
+}
+
 function App() {
-  const [clerkKey, setClerkKey] = useState<string | null>(null);
+  const [clerkKey, setClerkKey] = useState<string | null | false>(DEV_BYPASS ? false : null);
 
   useEffect(() => {
+    if (DEV_BYPASS) return;
     fetch("/api/config/public")
       .then(r => r.json())
       .then(cfg => setClerkKey(cfg.clerkPublishableKey || null))
       .catch(() => setClerkKey(null));
   }, []);
+
+  if (DEV_BYPASS) {
+    return <AppCore />;
+  }
 
   if (!clerkKey) {
     return (
@@ -327,19 +374,10 @@ function App() {
 
   return (
     <ClerkProvider
-      publishableKey={clerkKey}
+      publishableKey={clerkKey as string}
       appearance={{ baseTheme: dark }}
     >
-      <ErrorBoundary>
-        <QueryClientProvider client={queryClient}>
-          <TooltipProvider>
-            <TourProvider>
-              <AuthenticatedApp />
-            </TourProvider>
-            <Toaster />
-          </TooltipProvider>
-        </QueryClientProvider>
-      </ErrorBoundary>
+      <AppCore />
     </ClerkProvider>
   );
 }

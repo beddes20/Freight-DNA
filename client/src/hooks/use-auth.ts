@@ -9,7 +9,41 @@ export type SafeUser = Omit<User, "password"> & {
   organizationSlug?: string;
 };
 
+const DEV_BYPASS = import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+
 export function useAuth() {
+  if (DEV_BYPASS) {
+    return useAuthBypass();
+  }
+  return useAuthClerk();
+}
+
+function useAuthBypass() {
+  const { data: user, isLoading } = useQuery<SafeUser | null>({
+    queryKey: ["/api/auth/me"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+
+  const logoutMutation = useMutation({
+    mutationFn: async () => {
+      queryClient.clear();
+    },
+    onSuccess: () => {
+      window.location.href = "/";
+    },
+  });
+
+  return {
+    user: user ?? null,
+    isLoading,
+    logout: logoutMutation,
+  };
+}
+
+function useAuthClerk() {
   const { isLoaded: clerkLoaded, isSignedIn } = useUser();
   const { signOut } = useClerk();
 

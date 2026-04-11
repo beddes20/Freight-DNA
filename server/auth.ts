@@ -9,6 +9,10 @@ import type { User, Company, SharedRep } from "@shared/schema";
 const PgStore = connectPgSimple(session);
 const IS_PROD = process.env.NODE_ENV === "production";
 
+// Dev-only auth bypass: when DEV_AUTH_BYPASS_USER_ID is set and we are not in
+// production, every request is automatically authenticated as that DB user.
+const DEV_AUTH_BYPASS_USER_ID = !IS_PROD ? (process.env.DEV_AUTH_BYPASS_USER_ID ?? null) : null;
+
 // Session type augmentation (used in dev/test mode only)
 declare module "express-session" {
   interface SessionData {
@@ -186,6 +190,23 @@ export function setupAuth(app: any) {
 const RESOLVED_USER = Symbol("resolvedUser");
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  // Dev-only bypass: auto-attach the bypass user so the route handler just works
+  if (DEV_AUTH_BYPASS_USER_ID) {
+    const user = await storage.getUser(DEV_AUTH_BYPASS_USER_ID);
+    if (user) {
+      (req as any)[RESOLVED_USER] = user;
+      if (!req.session) {
+        (req as any).session = { organizationId: user.organizationId, userId: user.id };
+      } else {
+        req.session.organizationId = req.session.organizationId || user.organizationId;
+        req.session.userId = req.session.userId || user.id;
+      }
+      return next();
+    }
+    // If the bypass user ID doesn't exist in DB, fall through to normal auth
+    console.warn(`[DEV_AUTH_BYPASS] User ${DEV_AUTH_BYPASS_USER_ID} not found in DB — falling through to Clerk auth`);
+  }
+
   // Primary: Clerk JWT auth
   const { userId } = getAuth(req);
   if (userId) {
@@ -214,6 +235,12 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 export async function getCurrentUser(req: Request): Promise<User | null> {
   // Return cached value if requireAuth already resolved it
   if ((req as any)[RESOLVED_USER]) return (req as any)[RESOLVED_USER];
+
+  // Dev-only bypass: return the bypass user directly
+  if (DEV_AUTH_BYPASS_USER_ID) {
+    const user = await storage.getUser(DEV_AUTH_BYPASS_USER_ID);
+    if (user) return user;
+  }
 
   // Check Clerk first
   const { userId: clerkUserId } = getAuth(req);
