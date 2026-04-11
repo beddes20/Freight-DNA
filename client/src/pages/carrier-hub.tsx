@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ConversationThreadBadges } from "@/components/conversation-thread-badges";
 
 // ── Source channel helpers ─────────────────────────────────────────────────────
 
@@ -1228,14 +1229,19 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
             )}
             <div className="space-y-2">
               {(activityData?.outreachActivity ?? []).map((a: any) => (
-                <div key={a.id} className="rounded-lg border border-border bg-muted/10 px-3 py-2 text-sm">
+                <div key={a.id} className="rounded-lg border border-border bg-muted/10 px-3 py-2 text-sm" data-testid={`outreach-row-${a.id}`}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium text-foreground">{laneLabel(a)}</span>
                     <span className="text-xs text-muted-foreground">{formatDate(a.timestamp)}</span>
                   </div>
-                  {a.delivery_status && (
-                    <Badge variant="outline" className="text-[9px] mt-1 py-0 px-1">{a.delivery_status}</Badge>
-                  )}
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    {a.delivery_status && (
+                      <Badge variant="outline" className="text-[9px] py-0 px-1">{a.delivery_status}</Badge>
+                    )}
+                    {a.thread_id && (
+                      <ConversationThreadBadges threadId={a.thread_id} />
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

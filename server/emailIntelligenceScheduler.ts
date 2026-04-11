@@ -22,6 +22,8 @@ import { stageCarrierEmailEnrichment } from "./carrierEmailEnrichmentService";
 import { processWinLossEvidence } from "./emailWinLossService";
 import { processCarrierEmailSignals } from "./services/carrierIntelSuggestions";
 import { detectAndSuggest } from "./accountContactCaptureService";
+import { applyMessageToThread } from "./services/conversationWaitingStateService";
+import { determineInitialOwner } from "./services/conversationOwnershipService";
 import type { InsertEmailSignal } from "@shared/schema";
 
 const BATCH_SIZE = parseInt(process.env.EMAIL_INTEL_BATCH_SIZE ?? "50", 10);
@@ -70,6 +72,54 @@ async function runEmailIntelligenceBatch(): Promise<void> {
         detectAndSuggest(msg, storage).catch(err => {
           console.error(`[emailIntelligenceScheduler] contact capture error for message ${msg.id}:`, err);
         });
+      }
+
+      // ── Conversation thread ownership + waiting state upsert ────────────────
+      // Fault-isolated: failure here never interrupts ingestion.
+      if (msg.threadId && msg.orgId && (msg.linkedAccountId || msg.linkedCarrierId)) {
+        try {
+          const now = new Date();
+          const existing = await storage.getEmailConversationThreadByThreadId(msg.orgId, msg.threadId);
+          const isFirstMessage = !existing;
+
+          let ownerUserId = existing?.ownerUserId ?? null;
+          if (isFirstMessage) {
+            ownerUserId = await determineInitialOwner(msg, msg.orgId, storage);
+          }
+
+          const threadBase = existing ?? {
+            id: "",
+            orgId: msg.orgId,
+            threadId: msg.threadId,
+            linkedAccountId: msg.linkedAccountId ?? null,
+            linkedCarrierId: msg.linkedCarrierId ?? null,
+            ownerUserId,
+            waitingState: "waiting_on_us" as const,
+            responsePriority: "normal" as const,
+            lastMessageId: null,
+            lastIncomingAt: null,
+            lastOutgoingAt: null,
+            waitingSinceAt: null,
+            overdueAt: null,
+            createdAt: now,
+            updatedAt: now,
+          };
+
+          const update = applyMessageToThread(threadBase as any, msg, now);
+
+          await storage.upsertEmailConversationThread({
+            orgId: msg.orgId,
+            threadId: msg.threadId,
+            linkedAccountId: msg.linkedAccountId ?? null,
+            linkedCarrierId: msg.linkedCarrierId ?? null,
+            update: {
+              ...update,
+              ownerUserId: ownerUserId ?? undefined,
+            },
+          });
+        } catch (convErr) {
+          console.error(`[emailIntelligenceScheduler] conversation thread upsert error for ${msg.id}:`, convErr);
+        }
       }
 
       if (saved.length === 0) continue;

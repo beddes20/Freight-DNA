@@ -390,7 +390,7 @@ export function registerCarrierHubRoutes(app: Express) {
           `
           SELECT
             col.id, col.lane_id, col.timestamp, col.delivery_status,
-            col.sent_at, col.recipients,
+            col.sent_at, col.recipients, col.thread_id,
             rl.origin_city, rl.origin_state, rl.dest_city, rl.dest_state,
             rl.company_name
           FROM carrier_outreach_logs col

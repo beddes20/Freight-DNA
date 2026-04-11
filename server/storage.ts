@@ -167,6 +167,9 @@ import {
   laneSummaryCache,
   type LaneSummaryCache,
   type InsertLaneSummaryCache,
+  emailConversationThreads,
+  type EmailConversationThread,
+  type InsertEmailConversationThread,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -819,6 +822,29 @@ export interface IStorage {
   findDuplicateSuggestion(carrierId: string, suggestionType: string, emailSignalId: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
   getCarrierIntelSuggestionByDedup(carrierId: string, suggestionType: string, emailSignalId: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
   getCarrierIntelSuggestions(carrierId: string, status?: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
+
+  // Email Conversation Threads (Task #202)
+  upsertEmailConversationThread(data: {
+    orgId: string;
+    threadId: string;
+    linkedAccountId?: string | null;
+    linkedCarrierId?: string | null;
+    update: Partial<InsertEmailConversationThread>;
+  }): Promise<EmailConversationThread>;
+  getEmailConversationThreadById(id: string): Promise<EmailConversationThread | undefined>;
+  getEmailConversationThreadByThreadId(orgId: string, threadId: string): Promise<EmailConversationThread | undefined>;
+  listEmailConversationThreads(orgId: string, filters: {
+    ownerUserId?: string | null;
+    unowned?: boolean;
+    waitingState?: string;
+    responsePriority?: string;
+    overdue?: boolean;
+    linkedAccountId?: string;
+    linkedCarrierId?: string;
+    threadId?: string;
+    limit?: number;
+  }): Promise<EmailConversationThread[]>;
+  updateEmailConversationThread(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined>;
 
   // Carrier Intel Suggestions — accepted preference helpers (Task #195)
   // Used by ranking and NBA services to consume accepted intelligence.
@@ -5736,6 +5762,119 @@ export class DatabaseStorage implements IStorage {
       ))
       .limit(1);
     return contact;
+  }
+
+  // ── Email Conversation Threads (Task #202) ───────────────────────────────────
+
+  async upsertEmailConversationThread(data: {
+    orgId: string;
+    threadId: string;
+    linkedAccountId?: string | null;
+    linkedCarrierId?: string | null;
+    update: Partial<InsertEmailConversationThread>;
+  }): Promise<EmailConversationThread> {
+    const existing = await this.getEmailConversationThreadByThreadId(data.orgId, data.threadId);
+
+    if (existing) {
+      const [updated] = await db.update(emailConversationThreads)
+        .set({ ...data.update, updatedAt: new Date() })
+        .where(eq(emailConversationThreads.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    // Insert new thread
+    const [inserted] = await db.insert(emailConversationThreads).values({
+      orgId: data.orgId,
+      threadId: data.threadId,
+      linkedAccountId: data.linkedAccountId ?? null,
+      linkedCarrierId: data.linkedCarrierId ?? null,
+      waitingState: "waiting_on_us",
+      responsePriority: "normal",
+      ...data.update,
+    }).returning();
+    return inserted;
+  }
+
+  async getEmailConversationThreadById(id: string): Promise<EmailConversationThread | undefined> {
+    const [row] = await db.select().from(emailConversationThreads)
+      .where(eq(emailConversationThreads.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getEmailConversationThreadByThreadId(orgId: string, threadId: string): Promise<EmailConversationThread | undefined> {
+    const [row] = await db.select().from(emailConversationThreads)
+      .where(and(
+        eq(emailConversationThreads.orgId, orgId),
+        eq(emailConversationThreads.threadId, threadId),
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async listEmailConversationThreads(orgId: string, filters: {
+    ownerUserId?: string | null;
+    unowned?: boolean;
+    waitingState?: string;
+    responsePriority?: string;
+    overdue?: boolean;
+    linkedAccountId?: string;
+    linkedCarrierId?: string;
+    threadId?: string;
+    limit?: number;
+  }): Promise<EmailConversationThread[]> {
+    const conditions: SQL[] = [eq(emailConversationThreads.orgId, orgId)];
+
+    if (filters.unowned === true) {
+      conditions.push(isNull(emailConversationThreads.ownerUserId));
+    } else if (filters.ownerUserId !== undefined && filters.ownerUserId !== null) {
+      conditions.push(eq(emailConversationThreads.ownerUserId, filters.ownerUserId));
+    }
+
+    if (filters.waitingState) {
+      conditions.push(eq(emailConversationThreads.waitingState, filters.waitingState));
+    }
+
+    if (filters.responsePriority) {
+      conditions.push(eq(emailConversationThreads.responsePriority, filters.responsePriority));
+    }
+
+    if (filters.overdue === true) {
+      conditions.push(isNotNull(emailConversationThreads.overdueAt));
+    }
+
+    if (filters.linkedAccountId) {
+      conditions.push(eq(emailConversationThreads.linkedAccountId, filters.linkedAccountId));
+    }
+
+    if (filters.linkedCarrierId) {
+      conditions.push(eq(emailConversationThreads.linkedCarrierId, filters.linkedCarrierId));
+    }
+
+    if (filters.threadId) {
+      conditions.push(eq(emailConversationThreads.threadId, filters.threadId));
+    }
+
+    return db.select().from(emailConversationThreads)
+      .where(and(...conditions))
+      .orderBy(
+        asc(emailConversationThreads.overdueAt),
+        asc(emailConversationThreads.waitingSinceAt),
+        desc(emailConversationThreads.updatedAt),
+      )
+      .limit(filters.limit ?? 200);
+  }
+
+  async updateEmailConversationThread(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined> {
+    const [row] = await db.update(emailConversationThreads)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(
+        eq(emailConversationThreads.id, id),
+        eq(emailConversationThreads.orgId, orgId),
+      ))
+      .returning();
+    return row;
   }
 }
 

@@ -14,6 +14,8 @@ import type {
   InsertEmailSignal,
   InsertEmailMessage,
 } from "@shared/schema";
+import { applyMessageToThread } from "./services/conversationWaitingStateService";
+import { determineInitialOwner } from "./services/conversationOwnershipService";
 
 // ─── Intent taxonomy ─────────────────────────────────────────────────────────
 
@@ -345,6 +347,37 @@ export async function logOutboundCarrierEmail(params: {
       outreachLogId: params.linkedOutreachLogId ?? null,
     },
   }]);
+
+  // ── Conversation thread upsert for outbound carrier emails ──────────────────
+  if (params.threadId && params.linkedCarrierId && "upsertEmailConversationThread" in defaultStorage) {
+    const convStorage = defaultStorage as any;
+    try {
+      const now = new Date();
+      const existing = await convStorage.getEmailConversationThreadByThreadId(params.orgId, params.threadId);
+      const threadBase = existing ?? {
+        id: "", orgId: params.orgId, threadId: params.threadId,
+        linkedAccountId: null, linkedCarrierId: params.linkedCarrierId,
+        ownerUserId: null, waitingState: "waiting_on_them" as const,
+        responsePriority: "normal" as const, lastMessageId: null,
+        lastIncomingAt: null, lastOutgoingAt: null,
+        waitingSinceAt: null, overdueAt: null, createdAt: now, updatedAt: now,
+      };
+      const update = applyMessageToThread(threadBase, message, now);
+      let ownerUserId = existing?.ownerUserId ?? null;
+      if (!existing) {
+        ownerUserId = await determineInitialOwner(message, params.orgId, convStorage).catch(() => null);
+      }
+      await convStorage.upsertEmailConversationThread({
+        orgId: params.orgId,
+        threadId: params.threadId,
+        linkedCarrierId: params.linkedCarrierId,
+        linkedAccountId: null,
+        update: { ...update, ownerUserId: ownerUserId ?? undefined },
+      });
+    } catch (convErr) {
+      console.error("[emailIntelligenceService] logOutboundCarrierEmail conversation upsert error:", convErr);
+    }
+  }
 
   return { message, signal: signal ?? null };
 }

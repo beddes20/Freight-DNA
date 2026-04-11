@@ -870,6 +870,144 @@ export async function generateAccountEmailNbas(
   }
 }
 
+// ── Conversation Ownership NBA Generator (Task #202) ─────────────────────────
+
+type ConversationNbaStorage = Pick<
+  IStorage,
+  | "getRecentNbaCardByType"
+  | "createNbaCard"
+  | "getUser"
+>;
+
+/**
+ * Generate NBA cards from email_conversation_threads waiting state.
+ * Called after thread state is updated.
+ *
+ * Rules:
+ *  (a) waiting_on_us + overdue  → one summary card per user "N convos waiting — X overdue"
+ *  (b) high-priority + waiting_on_us + overdueAt set → one card per thread
+ *  (c) unowned + waiting_on_us  → one card per thread
+ */
+export async function generateConversationOwnershipNbas(
+  orgId: string,
+  threads: Array<{
+    id: string;
+    ownerUserId: string | null;
+    waitingState: string;
+    responsePriority: string;
+    overdueAt: Date | null;
+    threadId: string;
+    linkedAccountId: string | null;
+    linkedCarrierId: string | null;
+  }>,
+  storageInstance: ConversationNbaStorage = defaultStorage,
+): Promise<void> {
+  const now = new Date();
+  const nowStr = now.toISOString();
+
+  // Group waiting_on_us threads by owner for rule (a)
+  const ownerOverdueMap = new Map<string, { total: number; overdue: number }>();
+
+  for (const thread of threads) {
+    if (thread.waitingState !== "waiting_on_us") continue;
+
+    // Rule (b): high-priority past SLA — one card per thread
+    if (
+      thread.responsePriority === "high" &&
+      thread.overdueAt &&
+      thread.overdueAt <= now
+    ) {
+      const companyId = thread.linkedAccountId ?? thread.linkedCarrierId;
+      if (!companyId) continue;
+
+      const dedupKey = `conv_high_priority_overdue_${thread.id}`;
+      const existing = await storageInstance.getRecentNbaCardByType(companyId, dedupKey, 7);
+      if (!existing) {
+        await storageInstance.createNbaCard({
+          companyId,
+          userId: thread.ownerUserId ?? null,
+          orgId,
+          ruleType: dedupKey,
+          outcomeType: "protect",
+          confidence: "high",
+          signalCount: 1,
+          signalSummary: [{ threadId: thread.threadId, waitingState: thread.waitingState, priority: thread.responsePriority }],
+          whyThisNow: "High-priority conversation is past SLA",
+          suggestedAction: `A high-priority thread (${thread.threadId}) has been waiting on us past the 4-hour SLA. Reply now.`,
+          expectedOutcome: "Reply sent within SLA — thread moves to waiting_on_them.",
+          urgencyScore: 85,
+          status: "generated",
+          linkedLaneId: null,
+          createdAt: nowStr,
+        });
+      }
+    }
+
+    // Rule (c): unowned + waiting_on_us — one card per thread
+    if (!thread.ownerUserId) {
+      const companyId = thread.linkedAccountId ?? thread.linkedCarrierId;
+      if (!companyId) continue;
+
+      const dedupKey = `conv_unowned_waiting_${thread.id}`;
+      const existing = await storageInstance.getRecentNbaCardByType(companyId, dedupKey, 3);
+      if (!existing) {
+        await storageInstance.createNbaCard({
+          companyId,
+          userId: null,
+          orgId,
+          ruleType: dedupKey,
+          outcomeType: "execute",
+          confidence: "medium",
+          signalCount: 1,
+          signalSummary: [{ threadId: thread.threadId, waitingState: thread.waitingState }],
+          whyThisNow: "Unowned conversation waiting on us",
+          suggestedAction: `Thread ${thread.threadId} has no owner and is waiting on a reply. Assign ownership and respond.`,
+          expectedOutcome: "Thread is claimed and reply is sent.",
+          urgencyScore: 65,
+          status: "generated",
+          linkedLaneId: null,
+          createdAt: nowStr,
+        });
+      }
+    }
+
+    // Accumulate for rule (a) summary card
+    if (thread.ownerUserId) {
+      const stats = ownerOverdueMap.get(thread.ownerUserId) ?? { total: 0, overdue: 0 };
+      stats.total++;
+      if (thread.overdueAt && thread.overdueAt <= now) stats.overdue++;
+      ownerOverdueMap.set(thread.ownerUserId, stats);
+    }
+  }
+
+  // Rule (a): summary card per user — once per day max
+  for (const [ownerUserId, stats] of ownerOverdueMap.entries()) {
+    if (stats.total === 0) continue;
+    const dedupKey = `conv_waiting_summary_${ownerUserId}`;
+    const existing = await storageInstance.getRecentNbaCardByType(ownerUserId, dedupKey, 1);
+    if (existing) continue;
+
+    const overdueText = stats.overdue > 0 ? ` (${stats.overdue} overdue)` : "";
+    await storageInstance.createNbaCard({
+      companyId: ownerUserId, // use userId as companyId sentinel for user-level cards
+      userId: ownerUserId,
+      orgId,
+      ruleType: dedupKey,
+      outcomeType: "execute",
+      confidence: stats.overdue > 0 ? "high" : "medium",
+      signalCount: stats.total,
+      signalSummary: [{ totalWaiting: stats.total, overdue: stats.overdue }],
+      whyThisNow: `You have ${stats.total} conversation${stats.total !== 1 ? "s" : ""} waiting on you${overdueText}`,
+      suggestedAction: "Open the Conversations inbox to review and reply to threads waiting on you.",
+      expectedOutcome: "All waiting threads receive a timely reply.",
+      urgencyScore: stats.overdue > 0 ? 80 : 55,
+      status: "generated",
+      linkedLaneId: null,
+      createdAt: nowStr,
+    }).catch(() => undefined); // Non-fatal — suppress if companyId constraint fails
+  }
+}
+
 function buildNbaTitleFromSignal(signal: EmailSignal): string {
   const titles: Record<string, string> = {
     lane_offer:             "Carrier offering lane capacity — log interest",

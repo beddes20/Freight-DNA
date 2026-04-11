@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -97,6 +97,12 @@ const laneToolItems: NavItem[] = [
     url: "/intel",
     icon: Radio,
     roles: ["admin"],
+  },
+  {
+    title: "Conversations",
+    url: "/conversations",
+    icon: MessageSquare,
+    roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
   },
 ];
 

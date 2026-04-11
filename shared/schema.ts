@@ -1753,6 +1753,36 @@ export const insertEmailOutcomeLinkSchema = createInsertSchema(emailOutcomeLinks
 export type InsertEmailOutcomeLink = z.infer<typeof insertEmailOutcomeLinkSchema>;
 export type EmailOutcomeLink = typeof emailOutcomeLinks.$inferSelect;
 
+// ─── Email Conversation Threads (Task #202) ──────────────────────────────────
+// Per-thread ownership, ball-in-court state, and reply priority layer.
+// Linked to email_messages.threadId (unique per org).
+
+export const emailConversationThreads = pgTable("email_conversation_threads", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  threadId: text("thread_id").notNull(),
+  linkedAccountId: varchar("linked_account_id").references(() => companies.id, { onDelete: "set null" }),
+  linkedCarrierId: varchar("linked_carrier_id").references(() => carriers.id, { onDelete: "set null" }),
+  ownerUserId: varchar("owner_user_id").references(() => users.id, { onDelete: "set null" }),
+  waitingState: text("waiting_state").notNull().default("waiting_on_us"),
+  responsePriority: text("response_priority").notNull().default("normal"),
+  lastMessageId: varchar("last_message_id").references(() => emailMessages.id, { onDelete: "set null" }),
+  lastIncomingAt: timestamp("last_incoming_at"),
+  lastOutgoingAt: timestamp("last_outgoing_at"),
+  waitingSinceAt: timestamp("waiting_since_at"),
+  overdueAt: timestamp("overdue_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertEmailConversationThreadSchema = createInsertSchema(emailConversationThreads).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertEmailConversationThread = z.infer<typeof insertEmailConversationThreadSchema>;
+export type EmailConversationThread = typeof emailConversationThreads.$inferSelect;
+
 // ─── Carrier Intel Suggestions (Task #193) ───────────────────────────────────
 
 export const carrierIntelSuggestionStatuses = ["pending", "accepted", "rejected", "auto_accepted"] as const;

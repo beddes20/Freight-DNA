@@ -17,6 +17,7 @@ import { registerIntelRoutes } from "./routes/intel";
 import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
 import { registerMarketSignalRoutes } from "./routes/marketSignals";
 import { registerEmailIntelligenceRoutes } from "./routes/emailIntelligence";
+import { registerConversationsRoutes } from "./routes/conversations";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -3031,6 +3032,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerGraphWebhookRoutes(app);
   registerMarketSignalRoutes(app);
   registerEmailIntelligenceRoutes(app);
+  registerConversationsRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
 

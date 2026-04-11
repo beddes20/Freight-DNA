@@ -18,6 +18,7 @@ import { runPhase1EngineForOrg } from "./nbaPhase1Engine";
 import { runRecurringLaneEngineForOrg } from "./recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes } from "./laneScoringService";
 import { syncMarketSignalNbas } from "./marketNbaService";
+import { generateConversationOwnershipNbas } from "./nextBestActionEngine";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -136,6 +137,20 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
           }
         } catch (marketErr: any) {
           log(`Org ${org.id}: market NBA sync warning (non-fatal): ${marketErr?.message ?? marketErr}`);
+        }
+
+        // ── Conversation Ownership NBAs (Task #202) ────────────────────────────
+        try {
+          const convThreads = await storage.listEmailConversationThreads(org.id, {
+            waitingState: "waiting_on_us",
+            limit: 500,
+          });
+          if (convThreads.length > 0) {
+            await generateConversationOwnershipNbas(org.id, convThreads as any, storage as any);
+            log(`Org ${org.id}: conversation ownership NBAs processed (${convThreads.length} threads)`);
+          }
+        } catch (convErr: any) {
+          log(`Org ${org.id}: conversation NBA sync warning (non-fatal): ${convErr?.message ?? convErr}`);
         }
 
         log(`Org ${org.id}: ${totalGenerated} generated this pass, ${totalSkipped} skipped`);
