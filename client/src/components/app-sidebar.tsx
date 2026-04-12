@@ -1,5 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, type LucideIcon } from "lucide-react";
-import { KeyboardShortcutsPopover } from "@/components/keyboard-shortcuts-popover";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -448,7 +447,6 @@ export function AppSidebar() {
             </div>
             <div className="flex items-center gap-1 shrink-0">
               <NotificationBell />
-              <KeyboardShortcutsPopover />
               <Button
                 variant="ghost"
                 size="icon"
@@ -531,6 +529,7 @@ export function AppSidebar() {
             {[
               { keys: ["/"], label: "Focus global search" },
               { keys: ["⌘", "K"], label: "Focus global search" },
+              { keys: ["Shift", "T"], label: "Log a Touch" },
               { keys: ["Shift", "D"], label: "Go to Dashboard" },
               { keys: ["Shift", "A"], label: "Go to Customers" },
               { keys: ["Shift", "L"], label: "Open Lane Work Queue" },

@@ -79,7 +79,7 @@ export function useKeyboardShortcut() {
       if (!e.shiftKey || e.key !== "T") return;
       const target = e.target as HTMLElement;
       const tag = target.tagName.toLowerCase();
-      if (tag === "input" || tag === "textarea" || target.isContentEditable) return;
+      if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) return;
       if (open) return;
       openDialog();
     }

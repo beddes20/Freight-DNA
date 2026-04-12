@@ -210,6 +210,14 @@ function useGlobalKeyboardShortcuts() {
         return;
       }
 
+      // ⌘K / Ctrl+K — focus global search (same as "/")
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        const input = document.querySelector<HTMLInputElement>("[data-testid='input-global-search']");
+        if (input) { input.focus(); input.select(); }
+        return;
+      }
+
       if (e.shiftKey && !isEditable && !e.metaKey && !e.ctrlKey) {
         if (e.key === "A") { e.preventDefault(); navigate("/customers"); return; }
         if (e.key === "D") { e.preventDefault(); navigate("/"); return; }
