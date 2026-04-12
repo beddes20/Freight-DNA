@@ -193,11 +193,40 @@ function AuthenticatedApp() {
   return <AuthenticatedAppInner />;
 }
 
+function useGlobalKeyboardShortcuts() {
+  const [, navigate] = useLocation();
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      const isEditable =
+        tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
+        (e.target as HTMLElement).isContentEditable;
+
+      if (e.key === "/" && !isEditable && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        const input = document.querySelector<HTMLInputElement>("[data-testid='input-global-search']");
+        if (input) { input.focus(); input.select(); }
+        return;
+      }
+
+      if (e.shiftKey && !isEditable && !e.metaKey && !e.ctrlKey) {
+        if (e.key === "A") { e.preventDefault(); navigate("/customers"); return; }
+        if (e.key === "D") { e.preventDefault(); navigate("/"); return; }
+        if (e.key === "L") { e.preventDefault(); navigate("/lanes/work-queue"); return; }
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [navigate]);
+}
+
 function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
   user: ReturnType<typeof useAuth>["user"];
   isLoading: boolean;
   handleInactivityLogout: () => void;
 }) {
+  useGlobalKeyboardShortcuts();
 
   const { warningVisible, secondsLeft, staySignedIn } = useInactivityTimeout(
     user ? handleInactivityLogout : () => {}

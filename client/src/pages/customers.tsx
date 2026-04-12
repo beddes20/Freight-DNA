@@ -188,7 +188,7 @@ export default function Customers() {
   const [saveFilterName, setSaveFilterName] = useState("");
   const [showSaveFilter, setShowSaveFilter] = useState(false);
 
-  type SavedFilter = { name: string; rep: string; industry: string; touch: string; sort: string };
+  type SavedFilter = { name: string; search: string; rep: string; industry: string; touch: string; mode: string; sort: string };
 
   const { data: savedFiltersData } = useQuery<{ filters: SavedFilter[] }>({
     queryKey: ["/api/users/saved-filters"],
@@ -201,21 +201,28 @@ export default function Customers() {
       queryClient.invalidateQueries({ queryKey: ["/api/users/saved-filters"] });
       setSaveFilterName("");
       setShowSaveFilter(false);
-      toast({ title: "Filter preset saved!" });
+      toast({ title: "View saved!" });
     },
   });
 
   const handleSaveFilter = () => {
     if (!saveFilterName.trim()) return;
-    const newFilter: SavedFilter = { name: saveFilterName.trim(), rep: repFilter, industry: industryFilter, touch: touchFilter, sort: sortBy };
+    if (savedFilters.length >= 10 && !savedFilters.find(f => f.name === saveFilterName.trim())) {
+      toast({ title: "Maximum 10 saved views", description: "Remove an existing view first.", variant: "destructive" });
+      return;
+    }
+    const newFilter: SavedFilter = { name: saveFilterName.trim(), search: searchQuery, rep: repFilter, industry: industryFilter, touch: touchFilter, mode: modeFilter, sort: sortBy };
     saveFilterMutation.mutate([...savedFilters.filter(f => f.name !== newFilter.name), newFilter]);
   };
 
   const handleLoadFilter = (f: SavedFilter) => {
+    if (f.search !== undefined) setSearchQuery(f.search || "");
     setRepFilter(f.rep || "all");
     setIndustryFilter(f.industry || "all");
     setTouchFilter(f.touch || "all");
+    setModeFilter(f.mode || "all");
     setSortBy(f.sort || "name");
+    if (f.rep !== "all" || f.industry !== "all" || f.touch !== "all") setShowFilters(true);
   };
 
   const handleDeleteFilter = (name: string) => {
@@ -451,6 +458,32 @@ export default function Customers() {
         </div>
       </div>
 
+      {/* Saved view chips — shown above the filter bar when views exist */}
+      {!showArchived && savedFilters.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap" data-testid="saved-filter-chips">
+          <BookmarkCheck className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          {savedFilters.map(f => (
+            <div key={f.name} className="flex items-center gap-0">
+              <button
+                onClick={() => handleLoadFilter(f)}
+                className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-l-full border border-r-0 border-border bg-background hover:bg-muted transition-colors font-medium"
+                data-testid={`chip-load-filter-${f.name}`}
+              >
+                {f.name}
+              </button>
+              <button
+                onClick={() => handleDeleteFilter(f.name)}
+                className="flex items-center px-1.5 py-1 rounded-r-full border border-border bg-background text-muted-foreground hover:bg-red-50 hover:text-destructive hover:border-red-200 dark:hover:bg-red-950/20 transition-colors"
+                data-testid={`chip-delete-filter-${f.name}`}
+                title={`Remove "${f.name}" view`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Search + Filter bar */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
@@ -484,6 +517,27 @@ export default function Customers() {
           <Button variant="ghost" size="sm" className="h-9 gap-1 text-muted-foreground" onClick={clearFilters} data-testid="button-clear-filters">
             <X className="h-3.5 w-3.5" /> Clear
           </Button>
+        )}
+        {!showArchived && (activeFiltersCount > 0 || searchQuery) && (
+          !showSaveFilter ? (
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => setShowSaveFilter(true)} data-testid="button-show-save-filter">
+              <Bookmark className="h-3.5 w-3.5" /> Save View
+            </Button>
+          ) : (
+            <div className="flex items-center gap-1">
+              <Input
+                value={saveFilterName}
+                onChange={e => setSaveFilterName(e.target.value)}
+                placeholder="View name"
+                className="h-9 text-sm w-28"
+                onKeyDown={e => { if (e.key === "Enter") handleSaveFilter(); if (e.key === "Escape") setShowSaveFilter(false); }}
+                autoFocus
+                data-testid="input-save-filter-name"
+              />
+              <Button size="sm" className="h-9 text-sm px-3" onClick={handleSaveFilter} disabled={!saveFilterName.trim() || saveFilterMutation.isPending} data-testid="button-confirm-save-filter">Save</Button>
+              <Button variant="ghost" size="sm" className="h-9 px-2" onClick={() => setShowSaveFilter(false)}><X className="h-3.5 w-3.5" /></Button>
+            </div>
+          )
         )}
         {!showArchived && (
           <div className="flex items-center gap-1.5 ml-auto">
@@ -572,42 +626,6 @@ export default function Customers() {
                 {mode}
               </button>
             ))}
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            {savedFilters.length > 0 && savedFilters.map(f => (
-              <div key={f.name} className="flex items-center gap-0.5">
-                <button
-                  onClick={() => handleLoadFilter(f)}
-                  className="flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-border bg-background hover:bg-muted transition-colors"
-                  data-testid={`button-load-filter-${f.name}`}
-                >
-                  <BookmarkCheck className="h-3 w-3 text-blue-500" />
-                  {f.name}
-                </button>
-                <button onClick={() => handleDeleteFilter(f.name)} className="text-muted-foreground hover:text-destructive p-0.5" data-testid={`button-delete-filter-${f.name}`}>
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-            {!showSaveFilter ? (
-              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => setShowSaveFilter(true)} data-testid="button-show-save-filter">
-                <Bookmark className="h-3.5 w-3.5" /> Save
-              </Button>
-            ) : (
-              <div className="flex items-center gap-1">
-                <Input
-                  value={saveFilterName}
-                  onChange={e => setSaveFilterName(e.target.value)}
-                  placeholder="Filter name"
-                  className="h-7 text-xs w-24"
-                  onKeyDown={e => { if (e.key === "Enter") handleSaveFilter(); if (e.key === "Escape") setShowSaveFilter(false); }}
-                  autoFocus
-                  data-testid="input-save-filter-name"
-                />
-                <Button size="sm" className="h-7 text-xs px-2" onClick={handleSaveFilter} disabled={!saveFilterName.trim() || saveFilterMutation.isPending} data-testid="button-confirm-save-filter">Save</Button>
-                <Button variant="ghost" size="sm" className="h-7 px-1" onClick={() => setShowSaveFilter(false)}><X className="h-3.5 w-3.5" /></Button>
-              </div>
-            )}
           </div>
         </div>
       )}

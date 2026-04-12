@@ -1580,6 +1580,7 @@ export default function Dashboard() {
           currentUser={currentUser as SafeUser}
           onEditTask={(task) => setEditingTask(task)}
           onOpenTaskDialog={() => setTaskDialogOpen(true)}
+          teamMembers={teamMembers as SafeUser[]}
         />
       </PortletErrorBoundary>
 

@@ -1,12 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Link } from "wouter";
 import {
   ClipboardList, Plus, CheckCircle2, ListTodo, Trash2,
   Bell, MessageCircle, Users, Truck, ChevronDown, ChevronUp,
+  CheckCheck, UserCog, X,
 } from "lucide-react";
 import { dueDateBadge, statusIcon, nextStatus } from "./utils";
 import type { Task, LaneCarrier } from "@shared/schema";
@@ -14,6 +19,8 @@ import type { Notification } from "@shared/schema";
 import type { ActionItem, SafeUser } from "./types";
 import type { ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
 import { Route } from "lucide-react";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 function ProcurementTaskSummary({ lane, taskId }: { lane: ProcurementLaneInfo; taskId: string }) {
   const { data: carriers = [] } = useQuery<LaneCarrier[]>({
@@ -85,6 +92,7 @@ interface TasksSectionProps {
   currentUser: SafeUser | null | undefined;
   onEditTask: (task: Task | undefined) => void;
   onOpenTaskDialog: () => void;
+  teamMembers?: SafeUser[];
 }
 
 export function TasksSection({
@@ -98,7 +106,62 @@ export function TasksSection({
   markNotifRead, toggleStatus, deleteTask,
   currentUser,
   onEditTask, onOpenTaskDialog,
+  teamMembers = [],
 }: TasksSectionProps) {
+  const { toast } = useToast();
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const [reassignDialogOpen, setReassignDialogOpen] = useState(false);
+  const [reassignUserId, setReassignUserId] = useState("");
+
+  const allSelectableTasks = useMemo(() => [...incomingTasks, ...regularTasks], [incomingTasks, regularTasks]);
+
+  const toggleTaskSelection = (taskId: string) => {
+    setSelectedTaskIds(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedTaskIds(new Set());
+
+  const bulkCompleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      await Promise.all(ids.map(id => apiRequest("PATCH", `/api/tasks/${id}`, { status: "completed" })));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: `${selectedTaskIds.size} task${selectedTaskIds.size !== 1 ? "s" : ""} marked complete` });
+      clearSelection();
+    },
+    onError: () => toast({ title: "Failed to update tasks", variant: "destructive" }),
+  });
+
+  const bulkReassignMutation = useMutation({
+    mutationFn: async ({ ids, userId }: { ids: string[]; userId: string }) => {
+      await Promise.all(ids.map(id => apiRequest("PATCH", `/api/tasks/${id}`, { assignedTo: userId })));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      const name = teamMembers.find(u => u.id === reassignUserId)?.name || "user";
+      toast({ title: `${selectedTaskIds.size} task${selectedTaskIds.size !== 1 ? "s" : ""} reassigned to ${name}` });
+      setReassignDialogOpen(false);
+      setReassignUserId("");
+      clearSelection();
+    },
+    onError: () => toast({ title: "Failed to reassign tasks", variant: "destructive" }),
+  });
+
+  const handleBulkComplete = () => {
+    bulkCompleteMutation.mutate(Array.from(selectedTaskIds));
+  };
+
+  const handleBulkReassign = () => {
+    if (!reassignUserId) return;
+    bulkReassignMutation.mutate({ ids: Array.from(selectedTaskIds), userId: reassignUserId });
+  };
+
   return (
     <div style={{ order: getOrder("tasks") }} className={!isVisible("tasks") ? "hidden" : ""}>
     <Card data-testid="card-my-tasks" data-tour="tour-tasks-portlet">
@@ -178,6 +241,7 @@ export function TasksSection({
                     const assignerName = getUserName(task.assignedBy);
                     const hasNewComment = taskCommentNotifIds.has(task.id);
                     const assignedNotif = taskAssignedNotifMap.get(task.id);
+                    const isSelected = selectedTaskIds.has(task.id);
                     return (
                       <div
                         key={task.id}
@@ -185,6 +249,9 @@ export function TasksSection({
                         data-testid={`task-row-${task.id}`}
                         onClick={() => { onEditTask(task); onOpenTaskDialog(); }}
                       >
+                        <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => { e.stopPropagation(); toggleTaskSelection(task.id); }} data-testid={`checkbox-task-${task.id}`}>
+                          <Checkbox checked={isSelected} onCheckedChange={() => toggleTaskSelection(task.id)} className="h-3.5 w-3.5" />
+                        </div>
                         <button onClick={(e) => { e.stopPropagation(); toggleStatus(task.id, nextStatus(task.status)); }} className="shrink-0 hover:scale-110 transition-transform" title={`Status: ${task.status}`} data-testid={`button-toggle-status-${task.id}`}>{statusIcon(task.status)}</button>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
@@ -226,6 +293,7 @@ export function TasksSection({
                   const companyName = getCompanyName(task.companyId);
                   const assignerName = getUserName(task.assignedBy);
                   const hasNewComment = taskCommentNotifIds.has(task.id);
+                  const isSelected = selectedTaskIds.has(task.id);
                   const procLane = (() => {
                     if (!Array.isArray(task.attachedLaneData)) return null;
                     return (task.attachedLaneData as Array<Record<string, unknown>>).find(
@@ -240,6 +308,9 @@ export function TasksSection({
                       data-testid={`task-row-${task.id}`}
                       onClick={() => { onEditTask(task); onOpenTaskDialog(); }}
                     >
+                      <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity mt-0.5" onClick={e => { e.stopPropagation(); toggleTaskSelection(task.id); }} data-testid={`checkbox-task-${task.id}`}>
+                        <Checkbox checked={isSelected} onCheckedChange={() => toggleTaskSelection(task.id)} className="h-3.5 w-3.5" />
+                      </div>
                       <button onClick={(e) => { e.stopPropagation(); toggleStatus(task.id, nextStatus(task.status)); }} className="shrink-0 hover:scale-110 transition-transform mt-0.5" title={`Status: ${task.status}`} data-testid={`button-toggle-status-${task.id}`}>{statusIcon(task.status)}</button>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -333,11 +404,85 @@ export function TasksSection({
                 </Button>
               </div>
             )}
+
+            {/* Bulk action bar */}
+            {selectedTaskIds.size > 0 && (
+              <div
+                className="sticky bottom-0 mt-3 flex items-center gap-2 p-2.5 rounded-lg border border-primary/30 bg-primary/5 backdrop-blur-sm shadow-sm"
+                data-testid="bulk-action-bar"
+              >
+                <span className="text-xs font-medium text-primary">
+                  {selectedTaskIds.size} selected
+                </span>
+                <div className="flex-1" />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1.5"
+                  onClick={handleBulkComplete}
+                  disabled={bulkCompleteMutation.isPending}
+                  data-testid="button-bulk-complete"
+                >
+                  <CheckCheck className="h-3 w-3" />
+                  Mark Complete
+                </Button>
+                {teamMembers.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1.5"
+                    onClick={() => { setReassignUserId(""); setReassignDialogOpen(true); }}
+                    data-testid="button-bulk-reassign"
+                  >
+                    <UserCog className="h-3 w-3" />
+                    Reassign…
+                  </Button>
+                )}
+                <button
+                  onClick={clearSelection}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  data-testid="button-clear-selection"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
           </>
         )}
       </CardContent>
       )}
     </Card>
+
+    {/* Reassign dialog */}
+    <Dialog open={reassignDialogOpen} onOpenChange={setReassignDialogOpen}>
+      <DialogContent className="sm:max-w-xs" data-testid="dialog-bulk-reassign">
+        <DialogHeader>
+          <DialogTitle>Reassign {selectedTaskIds.size} task{selectedTaskIds.size !== 1 ? "s" : ""}</DialogTitle>
+        </DialogHeader>
+        <div className="py-2">
+          <Select value={reassignUserId} onValueChange={setReassignUserId}>
+            <SelectTrigger data-testid="select-reassign-user">
+              <SelectValue placeholder="Choose a team member…" />
+            </SelectTrigger>
+            <SelectContent>
+              {teamMembers.map(u => (
+                <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setReassignDialogOpen(false)} data-testid="button-cancel-reassign">Cancel</Button>
+          <Button
+            onClick={handleBulkReassign}
+            disabled={!reassignUserId || bulkReassignMutation.isPending}
+            data-testid="button-confirm-reassign"
+          >
+            {bulkReassignMutation.isPending ? "Reassigning…" : "Reassign"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     </div>
   );
 }

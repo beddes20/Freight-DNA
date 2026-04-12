@@ -27,8 +27,9 @@ import {
   ChevronDown, ChevronUp, Bell, BellRing, Loader2, MessageSquare,
   List, ChevronLeft, ChevronRight as ChevronRightIcon, Plane,
   AlertTriangle, Users, User as UserIcon, StickyNote,
-  Truck, Route,
+  Truck, Route, CheckCheck, UserCog, X as XIcon,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -450,6 +451,9 @@ export default function TasksPage() {
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
   const [showMyTasksOnly, setShowMyTasksOnly] = useState(true);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const [reassignDialogOpen, setReassignDialogOpen] = useState(false);
+  const [reassignUserId, setReassignUserId] = useState("");
   const markRead = useMarkNotificationsRead(TASK_NOTIFICATION_TYPES);
 
   const isAdminRole = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
@@ -570,6 +574,42 @@ export default function TasksPage() {
     },
   });
 
+  const bulkCompleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      await Promise.all(ids.map(id => apiRequest("PATCH", `/api/tasks/${id}`, { status: "completed" })));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: `${selectedTaskIds.size} task${selectedTaskIds.size !== 1 ? "s" : ""} marked complete` });
+      setSelectedTaskIds(new Set());
+    },
+    onError: () => toast({ title: "Failed to update tasks", variant: "destructive" }),
+  });
+
+  const bulkReassignMutation = useMutation({
+    mutationFn: async ({ ids, userId }: { ids: string[]; userId: string }) => {
+      await Promise.all(ids.map(id => apiRequest("PATCH", `/api/tasks/${id}`, { assignedTo: userId })));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      const name = teamMembers.find(u => u.id === reassignUserId)?.name || "user";
+      toast({ title: `${selectedTaskIds.size} task${selectedTaskIds.size !== 1 ? "s" : ""} reassigned to ${name}` });
+      setReassignDialogOpen(false);
+      setReassignUserId("");
+      setSelectedTaskIds(new Set());
+    },
+    onError: () => toast({ title: "Failed to reassign tasks", variant: "destructive" }),
+  });
+
+  const toggleTaskSelection = (taskId: string) => {
+    setSelectedTaskIds(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+
   const getUserName = (userId: string) => teamMembers.find(u => u.id === userId)?.name || "";
   const getCompanyName = (companyId: string | null) => companyId ? companies?.find(c => c.id === companyId)?.name || "" : "";
 
@@ -585,6 +625,7 @@ export default function TasksPage() {
       ) ?? null;
     })();
 
+    const isSelected = selectedTaskIds.has(task.id);
     return (
       <div
         key={task.id}
@@ -593,11 +634,23 @@ export default function TasksPage() {
             ? "border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/10 hover:bg-red-50 dark:hover:bg-red-950/20"
             : procLane
               ? "border-primary/20 bg-primary/3 hover:border-primary/40 hover:bg-primary/5"
-              : "border-transparent hover:border-border hover:bg-muted/50"}
+              : isSelected
+                ? "border-primary/30 bg-primary/5"
+                : "border-transparent hover:border-border hover:bg-muted/50"}
           ${isCompleted ? "opacity-60" : ""}`}
         data-testid={`task-row-${task.id}`}
         onClick={() => { setEditingTask(task); setFocusComments(false); setTaskDialogOpen(true); }}
       >
+        {/* Multi-select checkbox — always in DOM; fades in on hover or stays visible when selected */}
+        {!isCompleted && (
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={() => toggleTaskSelection(task.id)}
+            onClick={e => e.stopPropagation()}
+            className={`shrink-0 mt-0.5 h-3.5 w-3.5 transition-opacity duration-150 ${isSelected ? "opacity-100" : "opacity-20 group-hover:opacity-100"}`}
+            data-testid={`checkbox-task-${task.id}`}
+          />
+        )}
         {/* Quick-complete checkbox */}
         <button
           onClick={(e) => {
@@ -1001,6 +1054,47 @@ export default function TasksPage() {
       </>
       )}
 
+      {/* Bulk action bar */}
+      {selectedTaskIds.size > 0 && (
+        <div
+          className="sticky bottom-4 flex items-center gap-2 p-3 rounded-lg border border-primary/30 bg-background/95 backdrop-blur shadow-lg"
+          data-testid="bulk-action-bar"
+        >
+          <span className="text-sm font-medium text-primary">
+            {selectedTaskIds.size} task{selectedTaskIds.size !== 1 ? "s" : ""} selected
+          </span>
+          <div className="flex-1" />
+          <Button
+            variant="outline"
+            className="h-8 text-sm gap-1.5"
+            onClick={() => bulkCompleteMutation.mutate(Array.from(selectedTaskIds))}
+            disabled={bulkCompleteMutation.isPending}
+            data-testid="button-bulk-complete"
+          >
+            <CheckCheck className="h-3.5 w-3.5" />
+            Mark Complete
+          </Button>
+          {teamMembers.length > 0 && (
+            <Button
+              variant="outline"
+              className="h-8 text-sm gap-1.5"
+              onClick={() => { setReassignUserId(""); setReassignDialogOpen(true); }}
+              data-testid="button-bulk-reassign"
+            >
+              <UserCog className="h-3.5 w-3.5" />
+              Reassign…
+            </Button>
+          )}
+          <button
+            onClick={() => setSelectedTaskIds(new Set())}
+            className="text-muted-foreground hover:text-foreground transition-colors ml-1"
+            data-testid="button-clear-selection"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <TaskDialog
         open={taskDialogOpen}
         onOpenChange={(open) => { setTaskDialogOpen(open); if (!open) setFocusComments(false); }}
@@ -1013,6 +1107,37 @@ export default function TasksPage() {
         onOpenChange={setAlertDialogOpen}
         companies={companies}
       />
+
+      {/* Reassign dialog */}
+      <Dialog open={reassignDialogOpen} onOpenChange={setReassignDialogOpen}>
+        <DialogContent className="sm:max-w-xs" data-testid="dialog-bulk-reassign">
+          <DialogHeader>
+            <DialogTitle>Reassign {selectedTaskIds.size} task{selectedTaskIds.size !== 1 ? "s" : ""}</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <Select value={reassignUserId} onValueChange={setReassignUserId}>
+              <SelectTrigger data-testid="select-reassign-user">
+                <SelectValue placeholder="Choose a team member…" />
+              </SelectTrigger>
+              <SelectContent>
+                {teamMembers.map(u => (
+                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReassignDialogOpen(false)} data-testid="button-cancel-reassign">Cancel</Button>
+            <Button
+              onClick={() => bulkReassignMutation.mutate({ ids: Array.from(selectedTaskIds), userId: reassignUserId })}
+              disabled={!reassignUserId || bulkReassignMutation.isPending}
+              data-testid="button-confirm-reassign"
+            >
+              {bulkReassignMutation.isPending ? "Reassigning…" : "Reassign"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       </div>
     </div>
   );

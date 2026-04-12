@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, MapPin, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, type LucideIcon } from "lucide-react";
 import { KeyboardShortcutsPopover } from "@/components/keyboard-shortcuts-popover";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -523,6 +523,28 @@ export function AppSidebar() {
               <p className="text-xs text-muted-foreground">Onboarding materials and learning content</p>
             </div>
           </Link>
+          <div className="rounded-lg border p-3 space-y-2" data-testid="section-keyboard-shortcuts">
+            <div className="flex items-center gap-2 mb-1">
+              <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
+              <p className="text-sm font-medium">Keyboard Shortcuts</p>
+            </div>
+            {[
+              { keys: ["/"], label: "Focus global search" },
+              { keys: ["⌘", "K"], label: "Focus global search" },
+              { keys: ["Shift", "D"], label: "Go to Dashboard" },
+              { keys: ["Shift", "A"], label: "Go to Customers" },
+              { keys: ["Shift", "L"], label: "Open Lane Work Queue" },
+            ].map(({ keys, label }) => (
+              <div key={label + keys.join("")} className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">{label}</span>
+                <div className="flex items-center gap-1">
+                  {keys.map((k, i) => (
+                    <span key={i} className="text-[10px] font-mono px-1.5 py-0.5 rounded border bg-muted text-muted-foreground">{k}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => setHelpOpen(false)} data-testid="button-help-close">Close</Button>
