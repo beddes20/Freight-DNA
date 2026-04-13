@@ -44,6 +44,20 @@ export async function sendEmail(opts: EmailOptions): Promise<boolean> {
     return false;
   }
 
+  // ── Test-mode redirect ──────────────────────────────────────────────────────
+  // When EMAIL_OVERRIDE_TO is set, all emails go to that address instead of the
+  // real recipient. The original recipient is prepended to the subject line so
+  // you can see exactly who would have gotten it.
+  const overrideTo = process.env.EMAIL_OVERRIDE_TO?.trim();
+  const deliverTo = overrideTo || opts.to;
+  const subject = overrideTo
+    ? `[TEST → ${opts.to}] ${opts.subject}`
+    : opts.subject;
+  if (overrideTo) {
+    logMessage(`[REDIRECT] Sending to override address ${overrideTo} (original recipient: ${opts.to})`);
+  }
+  // ───────────────────────────────────────────────────────────────────────────
+
   const fromAddr = process.env.SMTP_FROM || "noreply@freight-dna.com";
   const fromName = process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
   const from = `${fromName} <${fromAddr}>`;
@@ -53,34 +67,34 @@ export async function sendEmail(opts: EmailOptions): Promise<boolean> {
     try {
       const { error } = await resend.emails.send({
         from,
-        to: opts.to,
-        subject: opts.subject,
+        to: deliverTo,
+        subject,
         html: opts.html,
         text: opts.text,
       });
       if (error) {
-        logMessage(`Resend error for ${opts.to}: ${error.message}`);
+        logMessage(`Resend error for ${deliverTo}: ${error.message}`);
         return false;
       }
-      logMessage(`Email sent via Resend to ${opts.to}: "${opts.subject}"`);
+      logMessage(`Email sent via Resend to ${deliverTo}: "${subject}"`);
       return true;
     } catch (err: any) {
-      logMessage(`Resend exception for ${opts.to}: ${err.message}`);
+      logMessage(`Resend exception for ${deliverTo}: ${err.message}`);
       return false;
     }
   }
 
   const transporter = getTransporter();
   if (!transporter) {
-    logMessage(`Email not configured — skipping email to ${opts.to}: "${opts.subject}"`);
+    logMessage(`Email not configured — skipping email to ${deliverTo}: "${subject}"`);
     return false;
   }
   try {
-    await transporter.sendMail({ from, to: opts.to, subject: opts.subject, html: opts.html, text: opts.text });
-    logMessage(`Email sent via SMTP to ${opts.to}: "${opts.subject}"`);
+    await transporter.sendMail({ from, to: deliverTo, subject, html: opts.html, text: opts.text });
+    logMessage(`Email sent via SMTP to ${deliverTo}: "${subject}"`);
     return true;
   } catch (err: any) {
-    logMessage(`SMTP error for ${opts.to}: ${err.message}`);
+    logMessage(`SMTP error for ${deliverTo}: ${err.message}`);
     return false;
   }
 }

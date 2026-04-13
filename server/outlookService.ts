@@ -63,6 +63,23 @@ export async function sendOutlookEmail(opts: OutlookSendOptions): Promise<Outloo
     return { ok: true };
   }
 
+  // ── Test-mode redirect ──────────────────────────────────────────────────────
+  // When EMAIL_OVERRIDE_TO is set, all carrier emails go to that address instead
+  // of the real carrier recipient. CC recipients are suppressed. The original
+  // recipient is prepended to the subject so you can see who it was meant for.
+  const overrideTo = process.env.EMAIL_OVERRIDE_TO?.trim();
+  if (overrideTo) {
+    log(`[REDIRECT] Sending Outlook email to override address ${overrideTo} (original recipient: ${opts.toEmail})`);
+    opts = {
+      ...opts,
+      toEmail: overrideTo,
+      toName: overrideTo,
+      subject: `[TEST → ${opts.toEmail}] ${opts.subject}`,
+      ccEmails: [],
+    };
+  }
+  // ───────────────────────────────────────────────────────────────────────────
+
   try {
     const token = await getGraphAccessToken();
 
