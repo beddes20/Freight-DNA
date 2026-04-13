@@ -28,7 +28,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals } from "@shared/schema";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
@@ -40,7 +40,7 @@ import { computeNextBestAction } from "./nextBestActionEngine";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { db } from "./storage";
-import { sql } from "drizzle-orm";
+import { sql, eq, and, desc, inArray } from "drizzle-orm";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -1358,6 +1358,45 @@ RULES FOR YOUR RESPONSES:
       res.json(company);
     } catch (error) {
       res.status(500).json({ error: "Failed to reassign company" });
+    }
+  });
+
+  // ── Customer Email Signals for a Company ─────────────────────────────────
+  app.get("/api/companies/:id/email-signals", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = req.params.id as string;
+      if (!(await canAccessCompany(currentUser, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const limit = Math.min(parseInt((req.query.limit as string) ?? "50", 10), 200);
+      const rows = await db
+        .select({
+          signalId: emailSignals.id,
+          intentType: emailSignals.intentType,
+          intentSubtype: emailSignals.intentSubtype,
+          actorType: emailSignals.actorType,
+          confidence: emailSignals.confidence,
+          extractedData: emailSignals.extractedData,
+          signalCreatedAt: emailSignals.createdAt,
+          messageId: emailMessages.id,
+          direction: emailMessages.direction,
+          fromEmail: emailMessages.fromEmail,
+          toEmail: emailMessages.toEmail,
+          subject: emailMessages.subject,
+          messageCreatedAt: emailMessages.createdAt,
+          threadId: emailMessages.threadId,
+        })
+        .from(emailSignals)
+        .innerJoin(emailMessages, eq(emailSignals.messageId, emailMessages.id))
+        .where(and(eq(emailMessages.linkedAccountId, companyId), eq(emailMessages.orgId, currentUser.organizationId)))
+        .orderBy(desc(emailSignals.createdAt))
+        .limit(limit);
+      res.json(rows);
+    } catch (err) {
+      console.error("[email-signals] company route error:", err);
+      res.status(500).json({ error: "Failed to fetch email signals" });
     }
   });
 

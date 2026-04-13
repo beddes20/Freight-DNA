@@ -1,5 +1,5 @@
 /**
- * Microsoft Graph Inbound Email Webhook — Task #183
+ * Microsoft Graph Inbound Email Webhook — Task #183 / Customer Email Extension
  *
  * Handles Microsoft Graph change notifications for inbound emails. When an email
  * arrives in a monitored mailbox, Graph POSTs a notification to this endpoint.
@@ -16,6 +16,11 @@
  *   alternate_contact — sender email matches a carrier_contacts.email
  *   ambiguous         — sender email matches multiple carriers
  *   unmatched         — no carrier found
+ *
+ * Customer contact matching:
+ *   When sender does not match a carrier, the webhook falls through to check
+ *   the CRM contacts table. If matched, an email_message row is inserted so
+ *   the AI intelligence scheduler can extract customer intent signals.
  *
  * Lane association:
  *   - Looks up an outbound outreach log with matching conversationId
@@ -63,6 +68,18 @@ export async function matchInboundSender(fromEmail: string, orgId: string): Prom
   }
 
   return { carrierId: null, contactId: null, confidence: "unmatched" };
+}
+
+/**
+ * Match an inbound sender email to a CRM customer contact in the given org.
+ * Returns company and contact IDs if found, null otherwise.
+ */
+export async function matchInboundSenderToAccount(
+  fromEmail: string,
+  orgId: string
+): Promise<{ companyId: string; contactId: string; contactName: string } | null> {
+  const normalized = fromEmail.trim().toLowerCase();
+  return storage.getContactByEmailInOrg(normalized, orgId);
 }
 
 interface GraphNotificationValue {
@@ -140,60 +157,87 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
   const receivedAt = messageDetails?.receivedDateTime ? new Date(messageDetails.receivedDateTime) : new Date();
 
   // Match sender to carrier
-  const match = await matchInboundSender(fromEmail, orgId);
+  const carrierMatch = await matchInboundSender(fromEmail, orgId);
 
-  // Lane association via conversationId
+  // Also try matching sender to CRM customer contact (independent of carrier match)
+  const accountMatch = carrierMatch.carrierId
+    ? null // Already a carrier — skip CRM contact lookup
+    : await matchInboundSenderToAccount(fromEmail, orgId);
+
+  // Lane association via conversationId (carrier path only)
   let laneId: string | null = null;
-  if (conversationId) {
+  if (conversationId && carrierMatch.carrierId) {
     const outboundLog = await storage.getCarrierOutreachLogByConversationId(conversationId, orgId);
     if (outboundLog) {
       laneId = outboundLog.laneId ?? null;
     }
   }
 
-  // We need a system actor user for the log — use null actorUserId approach by finding any admin
-  // For inbound logs we use a sentinel pattern: store with the system org context
-  // We must find a real user to satisfy the FK. Use the first admin of the org.
+  // We need a system actor user — use the first admin of the org.
   const systemUser = await storage.getFirstOrgAdmin(orgId);
   if (!systemUser) {
     log(`No admin user found for org ${orgId} — cannot create inbound log`);
     return;
   }
 
-  await storage.createCarrierOutreachLog({
-    orgId,
-    laneId,
-    companyId: null,
-    carrierIds: match.carrierId ? [match.carrierId] : [],
-    carrierNames: [],
-    actorUserId: systemUser.id,
-    ownerUserId: null,
-    overseerUserId: null,
-    outreachMode: "lane_building",
-    emailDrafts: [],
-    direction: "inbound",
-    providerMessageId,
-    conversationId,
-    fromEmail,
-    toEmail,
-    subject,
-    bodyPreview,
-    receivedAt,
-    processStatus: "processed",
-    matchedCarrierId: match.carrierId,
-    matchedLaneId: laneId,
-    matchConfidence: match.confidence,
-    deliveryStatus: "received",
-  });
+  // ── Path A: Carrier email ─────────────────────────────────────────────────
+  if (carrierMatch.carrierId || carrierMatch.confidence !== "unmatched") {
+    await storage.createCarrierOutreachLog({
+      orgId,
+      laneId,
+      companyId: null,
+      carrierIds: carrierMatch.carrierId ? [carrierMatch.carrierId] : [],
+      carrierNames: [],
+      actorUserId: systemUser.id,
+      ownerUserId: null,
+      overseerUserId: null,
+      outreachMode: "lane_building",
+      emailDrafts: [],
+      direction: "inbound",
+      providerMessageId,
+      conversationId,
+      fromEmail,
+      toEmail,
+      subject,
+      bodyPreview,
+      receivedAt,
+      processStatus: "processed",
+      matchedCarrierId: carrierMatch.carrierId,
+      matchedLaneId: laneId,
+      matchConfidence: carrierMatch.confidence,
+      deliveryStatus: "received",
+    });
+    log(`Carrier inbound logged: from=${fromEmail} confidence=${carrierMatch.confidence} laneId=${laneId ?? "none"} msgId=${providerMessageId}`);
+  }
 
-  log(`Inbound email logged: from=${fromEmail} confidence=${match.confidence} laneId=${laneId ?? "none"} msgId=${providerMessageId}`);
+  // ── Path B: Customer / CRM contact email ─────────────────────────────────
+  // Insert an email_message row so the AI intelligence scheduler can extract
+  // customer intent signals (pricing_request, urgency_signal, new_opportunity, etc.)
+  if (accountMatch) {
+    await storage.insertEmailMessage({
+      orgId,
+      providerMessageId,
+      threadId: conversationId,
+      direction: "inbound",
+      fromEmail,
+      toEmail,
+      subject,
+      body: bodyPreview, // bodyPreview truncated to 255; full body fetch can be added later
+      linkedAccountId: accountMatch.companyId,
+      linkedCarrierId: null,
+      linkedLaneId: null,
+      linkedLoadId: null,
+      linkedTaskId: null,
+      linkedNbaId: null,
+      linkedOutreachLogId: null,
+    });
+    log(`Customer inbound email_message created: from=${fromEmail} contact=${accountMatch.contactName} company=${accountMatch.companyId} msgId=${providerMessageId}`);
+  }
 
-  // No auto-task creation on email arrival.
-  // Follow-up tasks are only created when a rep explicitly classifies a reply
-  // as hot (available_now / available_next_week) via the classify-reply or
-  // carrier-interest endpoints. This prevents noisy task creation from
-  // non-actionable inbound emails.
-  log(`Inbound email processed — laneId=${laneId ?? "none"} confidence=${match.confidence} msgId=${providerMessageId}`);
+  // ── Unmatched: log for debugging ─────────────────────────────────────────
+  if (carrierMatch.confidence === "unmatched" && !accountMatch) {
+    log(`Unmatched inbound email: from=${fromEmail} msgId=${providerMessageId} — no carrier or CRM contact found`);
+  }
 }
 
 /**

@@ -704,6 +704,7 @@ export interface IStorage {
   getCarrierOutreachLogByConversationId(conversationId: string, orgId: string): Promise<CarrierOutreachLog | undefined>;
   getCarriersByPrimaryEmail(email: string, orgId: string): Promise<Carrier[]>;
   getCarrierContactByEmail(email: string, orgId: string): Promise<CarrierContact | undefined>;
+  getContactByEmailInOrg(email: string, orgId: string): Promise<{ contactId: string; companyId: string; contactName: string } | null>;
   getFirstOrg(): Promise<{ id: string; name: string } | undefined>;
   getFirstOrgAdmin(orgId: string): Promise<{ id: string } | undefined>;
   getOrgByOutlookMailbox(mailbox: string): Promise<{ id: string } | undefined>;
@@ -4914,6 +4915,25 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
     return results[0];
+  }
+
+  async getContactByEmailInOrg(email: string, orgId: string): Promise<{ contactId: string; companyId: string; contactName: string } | null> {
+    const normalized = email.trim().toLowerCase();
+    const rows = await db.select({
+      contactId: contacts.id,
+      companyId: contacts.companyId,
+      contactName: contacts.name,
+    })
+      .from(contacts)
+      .innerJoin(companies, eq(contacts.companyId, companies.id))
+      .where(
+        and(
+          eq(companies.organizationId, orgId),
+          ilike(contacts.email, normalized)
+        )
+      )
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   async getFirstOrg(): Promise<{ id: string; name: string } | undefined> {

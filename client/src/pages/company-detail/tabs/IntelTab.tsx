@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company, Touchpoint, User, Rfp } from "@shared/schema";
 import type { AccountPerf, SharedRepEntry, TouchLogEntry } from "../types";
+import { CustomerEmailSignalsSection } from "./CustomerEmailSignalsSection";
 
 const ONBOARDING_MILESTONES = [
   { id: "kickoff_call", label: "Kickoff call completed" },
@@ -650,6 +651,9 @@ export function IntelTab({
           )}
         </CardContent>
       </Card>
+
+      {/* Customer Email Intelligence */}
+      <CustomerEmailSignalsSection companyId={companyId} />
 
       {/* Add Shared Rep Dialog */}
       <Dialog open={addSharedRepOpen} onOpenChange={setAddSharedRepOpen}>
