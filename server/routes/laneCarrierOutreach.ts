@@ -2270,22 +2270,25 @@ Rules for suggestions:
 
     // ── Email Intelligence: log outbound email messages ────────────────────────
     // Fire-and-forget per sent carrier to avoid blocking the response.
-    for (const r of results) {
+    const fallbackThreadId = results.find(r => r.internetMessageId)?.internetMessageId ?? null;
+    for (let ri = 0; ri < results.length; ri++) {
+      const r = results[ri];
       if (r.status !== "sent") continue;
       const draftForCarrier = emailDrafts.find(d =>
         (d.carrierId && d.carrierId === r.carrierId) ||
         (d.carrierName && d.carrierName === r.carrierName)
       );
+      const matchedLog = logs[ri];
       logOutboundCarrierEmail({
         orgId: user.organizationId,
-        threadId: r.internetMessageId ?? primaryThreadId,
+        threadId: r.internetMessageId ?? fallbackThreadId,
         fromEmail: fromAddr,
         toEmail: r.email,
-        subject: draftForCarrier?.subject ?? primarySubject,
+        subject: draftForCarrier?.subject ?? emailDrafts[0]?.subject ?? null,
         body: draftForCarrier?.body ?? null,
         linkedCarrierId: r.carrierId ?? null,
         linkedLaneId: req.params.laneId,
-        linkedOutreachLogId: log.id,
+        linkedOutreachLogId: matchedLog?.id ?? null,
       }).catch(err =>
         console.error("[emailIntelligence] outbound log error:", err)
       );
