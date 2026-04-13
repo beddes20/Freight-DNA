@@ -29,6 +29,37 @@ function BoolCell({ value }: { value: boolean | null }) {
   return <Minus className="w-4 h-4 text-muted-foreground/40" />;
 }
 
+function safeFormatDate(dateValue: unknown): string {
+  try {
+    let dateStr: string;
+    if (dateValue instanceof Date) {
+      dateStr = dateValue.toISOString().slice(0, 10);
+    } else if (typeof dateValue === "string") {
+      dateStr = dateValue.slice(0, 10);
+    } else {
+      return String(dateValue ?? "");
+    }
+    return format(new Date(dateStr + "T12:00:00"), "EEEE, MMMM d, yyyy");
+  } catch {
+    return String(dateValue ?? "");
+  }
+}
+
+function normalizeCheckDate(dateValue: unknown): string {
+  try {
+    if (dateValue instanceof Date) {
+      if (isNaN(dateValue.getTime())) return "";
+      return dateValue.toISOString().slice(0, 10);
+    }
+    if (typeof dateValue === "string") {
+      return dateValue.slice(0, 10);
+    }
+    return String(dateValue ?? "");
+  } catch {
+    return "";
+  }
+}
+
 export default function LmCheckinHistory() {
   const { user } = useAuth();
   const [from, setFrom] = useState(format(subDays(new Date(), 14), "yyyy-MM-dd"));
@@ -50,11 +81,12 @@ export default function LmCheckinHistory() {
 
   const filtered = filterType === "all" ? rows : rows.filter(r => r.check_type === filterType);
 
-  // Group by date for visual separation
+  // Group by date for visual separation — normalize check_date to string in case DB returns a Date object
   const grouped: Record<string, CheckinRow[]> = {};
   for (const r of filtered) {
-    if (!grouped[r.check_date]) grouped[r.check_date] = [];
-    grouped[r.check_date].push(r);
+    const dateKey = normalizeCheckDate(r.check_date);
+    if (!grouped[dateKey]) grouped[dateKey] = [];
+    grouped[dateKey].push(r);
   }
   const dates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
 
@@ -172,7 +204,7 @@ export default function LmCheckinHistory() {
           {dates.map(date => (
             <div key={date}>
               <p className="text-xs font-semibold text-muted-foreground mb-2 sticky top-0 bg-background py-1">
-                {format(new Date(date + "T12:00:00"), "EEEE, MMMM d, yyyy")}
+                {safeFormatDate(date)}
               </p>
               <div className="rounded-xl border border-border overflow-hidden">
                 <table className="w-full text-xs" data-testid={`table-checkin-${date}`}>

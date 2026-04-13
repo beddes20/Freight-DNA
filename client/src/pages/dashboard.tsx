@@ -1392,7 +1392,11 @@ export default function Dashboard() {
            Server provides activeWindow — no client-side clock detection.
            Dismiss stored in localStorage (date-scoped, auto-clears next day).
       ──────────────────────────────────────────────────────────────────────── */}
-      {!isLmRole && <LmCheckinBanner />}
+      {!isLmRole && (
+        <PortletErrorBoundary label="LM Check-In Banner">
+          <LmCheckinBanner />
+        </PortletErrorBoundary>
+      )}
 
       {/* LM Daily Check-In Portlets — read-only history for LMs themselves */}
       {currentUser?.role === "logistics_manager" && currentUser.id && (

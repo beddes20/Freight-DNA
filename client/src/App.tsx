@@ -60,6 +60,7 @@ import TouchpointHistoryPage from "@/pages/touchpoint-history";
 import RfpCalendarPage from "@/pages/rfp-calendar";
 import RepScorecardPage from "@/pages/rep-scorecard";
 import LmCheckinHistoryPage from "@/pages/lm-checkin-history";
+import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
 import LaneWorkQueuePage from "@/pages/lane-work-queue";
 import MyProcurementPage from "@/pages/my-procurement";
 import IntelPage from "@/pages/intel";
@@ -147,7 +148,11 @@ function Router() {
       <Route path="/touchpoint-history" component={TouchpointHistoryPage} />
       <Route path="/rfp-calendar" component={RfpCalendarPage} />
       <Route path="/rep-scorecard" component={RepScorecardPage} />
-      <Route path="/lm-checkin-history" component={LmCheckinHistoryPage} />
+      <Route path="/lm-checkin-history">
+        <PortletErrorBoundary label="LM Check-In Log">
+          <LmCheckinHistoryPage />
+        </PortletErrorBoundary>
+      </Route>
       <Route path="/lanes/work-queue" component={LaneWorkQueuePage} />
       <Route path="/my-procurement" component={MyProcurementPage} />
       <Route path="/intel" component={IntelPage} />
