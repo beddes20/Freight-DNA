@@ -25,7 +25,8 @@ import {
 interface MarketPulse {
   otri: number;
   otriWoWDelta: number;
-  ntiPerMile: number;
+  ntiPerMove: number;   // NTI.USA $/move (spot, national)
+  ntiPerMile: number;   // VCRPM1.USA $/mile (contract)
   ntiWoWDelta: number;
   flatbedOtri: number;
   flatbedSignal: "hot" | "cool" | "neutral";
@@ -102,10 +103,20 @@ interface ExecutiveReport {
   weeklyTrend: Array<{ weekKey: string; revenue: number; margin: number; loads: number }>;
 }
 
+interface SonarMarketTrend {
+  market: string;
+  otri: number;
+  otriWoW: number;
+  votri: number | null;
+  signal: "hot" | "warm" | "cool";
+  trendDir: "↑" | "↓" | "→";
+}
+
 interface IntelPayload {
   viewUserId: string | null;
   viewUserName: string | null;
   availableReps: RepEntry[];
+  sonarMarketTrends?: SonarMarketTrend[];
   dailyInsights: {
     greeting: string;
     date: string;
@@ -144,10 +155,18 @@ function MarketPulseStrip({ pulse, isStale, timestamp }: { pulse: MarketPulse; i
       deltaColor: pulse.otriWoWDelta > 0 ? "text-red-400" : "text-green-400",
     },
     {
-      label: "NTI $/mi",
-      value: `$${pulse.ntiPerMile.toFixed(2)}`,
-      delta: `${pulse.ntiWoWDelta > 0 ? "↑" : "↓"} ${Math.abs(pulse.ntiWoWDelta).toFixed(2)} WoW`,
+      label: "NTI Spot/move",
+      value: pulse.ntiPerMove > 100
+        ? `$${Math.round(pulse.ntiPerMove).toLocaleString()}`
+        : `$${(pulse.ntiPerMile ?? 2.28).toFixed(2)}/mi`,
+      delta: `${pulse.ntiWoWDelta > 0 ? "↑" : "↓"} ${Math.abs(pulse.ntiWoWDelta).toFixed(0)} WoW`,
       deltaColor: pulse.ntiWoWDelta > 0 ? "text-amber-400" : "text-green-400",
+    },
+    {
+      label: "Contract $/mi",
+      value: `$${(pulse.ntiPerMile ?? 2.28).toFixed(2)}`,
+      delta: "VCRPM1",
+      deltaColor: "text-white/40",
     },
     {
       label: "Flatbed OTRI",
@@ -177,7 +196,7 @@ function MarketPulseStrip({ pulse, isStale, timestamp }: { pulse: MarketPulse; i
           As of {new Date(timestamp).toLocaleString()}
         </span>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-0">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-0">
         {metrics.map((m, i) => (
           <div
             key={m.label}
@@ -720,6 +739,56 @@ export default function IntelPage() {
           isStale={dailyInsights.sonarIsStale}
           timestamp={dailyInsights.sonarTimestamp}
         />
+
+        {/* ── Sonar Market Trend Table (top-20 org markets) ───── */}
+        {data.sonarMarketTrends && data.sonarMarketTrends.length > 0 && (
+          <div className="mb-6">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+              <Radio className="h-4 w-4 text-blue-500" /> Market Trends — Your Top Corridors
+            </h3>
+            <div className="border rounded-xl overflow-hidden">
+              <table className="w-full text-sm" data-testid="table-market-trends">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Market</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">OTRI</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">VOTRI</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">WoW</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">Trend</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">Signal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.sonarMarketTrends.map((m, i) => {
+                    const sigCls = m.signal === "hot"
+                      ? "text-red-600 bg-red-100 dark:bg-red-900/30 border-red-300"
+                      : m.signal === "warm"
+                      ? "text-amber-600 bg-amber-100 dark:bg-amber-900/30 border-amber-300"
+                      : "text-green-600 bg-green-100 dark:bg-green-900/30 border-green-300";
+                    return (
+                      <tr key={m.market} className={`border-b last:border-0 ${i % 2 === 0 ? "" : "bg-muted/20"}`} data-testid={`row-market-trend-${m.market}`}>
+                        <td className="px-4 py-2.5 font-medium capitalize">{m.market}</td>
+                        <td className="px-4 py-2.5 text-right font-mono">{m.otri.toFixed(1)}%</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-muted-foreground hidden sm:table-cell">
+                          {m.votri !== null ? `${m.votri.toFixed(1)}%` : "—"}
+                        </td>
+                        <td className={`px-4 py-2.5 text-right font-mono ${m.otriWoW > 0 ? "text-red-600" : m.otriWoW < 0 ? "text-green-600" : "text-muted-foreground"}`}>
+                          {m.otriWoW > 0 ? "+" : ""}{m.otriWoW.toFixed(1)}pp
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-base hidden sm:table-cell">{m.trendDir}</td>
+                        <td className="px-4 py-2.5 text-right">
+                          <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border ${sigCls}`}>
+                            {m.signal === "hot" ? "🔴 Hot" : m.signal === "warm" ? "🟡 Warm" : "🟢 Cool"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {dailyInsights.laneAlerts.length > 0 && (
           <div className="mb-6">

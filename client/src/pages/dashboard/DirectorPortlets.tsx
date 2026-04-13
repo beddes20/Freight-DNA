@@ -9,6 +9,7 @@ import {
 import { MarginGoalEditButton } from "./MarginGoalEditButton";
 import type { SafeUser, TeamActivity, RelationshipsMovedData, TrendingResponse, MarginMetrics, MarginUserMetric, OpportunityLog } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
+import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
 
 interface DirectorPortletsProps {
   isAdmin: boolean;
@@ -60,6 +61,9 @@ export function DirectorPortlets({
 }: DirectorPortletsProps) {
   return (
     <>
+      {/* ── Market Pulse ────────────────────────────────────────────────────── */}
+      <SonarMarketPulsePortlet role="director" />
+
       {/* Director filter toggle — admin only */}
       {isAdmin && (() => {
         const directors = allUsers.filter(u => u.role === "director");

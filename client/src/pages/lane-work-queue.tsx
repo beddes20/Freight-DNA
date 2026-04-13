@@ -493,6 +493,8 @@ function AssignToDropdown({
 
 const MANAGER_ROLES = ["admin", "director", "national_account_manager", "logistics_manager"];
 
+type LaneVotriData = { votri: number; votriWoW: number; signal: "hot" | "warm" | "cool"; isStale: boolean };
+
 function LaneRow({
   item,
   completionThreshold,
@@ -501,6 +503,7 @@ function LaneRow({
   teamMembers,
   selected = false,
   onToggleSelect,
+  votriData,
 }: {
   item: LaneItem;
   completionThreshold: number;
@@ -509,6 +512,7 @@ function LaneRow({
   teamMembers: TeamMember[];
   selected?: boolean;
   onToggleSelect?: (laneId: string) => void;
+  votriData?: LaneVotriData;
 }) {
   const { toast } = useToast();
 
@@ -698,7 +702,7 @@ function LaneRow({
             </Badge>
           </div>
 
-          {/* Coverage status badge */}
+          {/* Coverage status + reply badges + VOTRI signal */}
           <div className="mt-1.5 flex items-center gap-2 flex-wrap">
             {coverageData?.profile && (
               <CoverageStatusBadge
@@ -706,6 +710,37 @@ function LaneRow({
                 carriers={coverageData.carriers}
                 laneId={item.laneId}
               />
+            )}
+            {laneDetail?.replySummary && laneDetail.replySummary.totalReplied > 0 && (
+              <ReplyBadge summary={laneDetail.replySummary} laneId={item.laneId} />
+            )}
+            {votriData && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0 rounded-full border cursor-help ${
+                      votriData.isStale
+                        ? "border-gray-400/50 text-gray-400 bg-gray-500/10"
+                        : votriData.signal === "hot" ? "border-red-500/60 text-red-400 bg-red-500/10"
+                        : votriData.signal === "warm" ? "border-amber-500/50 text-amber-400 bg-amber-500/10"
+                        : "border-green-500/50 text-green-400 bg-green-500/10"
+                    }`}
+                    data-testid={`badge-votri-${item.laneId}`}
+                  >
+                    {votriData.isStale ? "VOTRI —" : `VOTRI ${votriData.votri.toFixed(0)}% ${votriData.votriWoW > 0.5 ? "↑" : votriData.votriWoW < -0.5 ? "↓" : "→"}`}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="text-xs p-2 max-w-[240px]">
+                  <p className="font-semibold">{item.origin} → {item.destination}</p>
+                  {votriData.isStale
+                    ? <p className="text-gray-400">Sonar signal unavailable for this lane</p>
+                    : <>
+                        <p>Van Tender Rejection: {votriData.votri.toFixed(1)}% {votriData.signal === "hot" ? "🔴 Hot" : votriData.signal === "warm" ? "🟡 Warm" : "🟢 Cool"}</p>
+                        <p>WoW: {votriData.votriWoW > 0 ? "+" : ""}{votriData.votriWoW.toFixed(1)} pp</p>
+                      </>
+                  }
+                </TooltipContent>
+              </Tooltip>
             )}
           </div>
 
@@ -1004,6 +1039,7 @@ function CustomerGroup({
   defaultExpanded,
   selectedLaneIds,
   onToggleSelect,
+  votriByLane,
 }: {
   customerName: string;
   items: LaneItem[];
@@ -1014,6 +1050,7 @@ function CustomerGroup({
   defaultExpanded: boolean;
   selectedLaneIds?: Set<string>;
   onToggleSelect?: (laneId: string) => void;
+  votriByLane?: Map<string, LaneVotriData>;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
@@ -1071,6 +1108,9 @@ function CustomerGroup({
               teamMembers={teamMembers}
               selected={selectedLaneIds?.has(item.laneId) ?? false}
               onToggleSelect={onToggleSelect}
+              votriData={item.origin && item.destination
+                ? votriByLane?.get(`${item.origin}|${item.destination}`)
+                : undefined}
             />
           ))}
         </div>
@@ -1094,6 +1134,7 @@ function BucketSection({
   highFreqOnly,
   selectedLaneIds,
   onToggleSelect,
+  votriByLane,
 }: {
   title: string;
   description: string;
@@ -1107,6 +1148,7 @@ function BucketSection({
   highFreqOnly: boolean;
   selectedLaneIds?: Set<string>;
   onToggleSelect?: (laneId: string) => void;
+  votriByLane?: Map<string, LaneVotriData>;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [allCustomersExpanded, setAllCustomersExpanded] = useState(false);
@@ -1198,6 +1240,7 @@ function BucketSection({
                 defaultExpanded={allCustomersExpanded}
                 selectedLaneIds={selectedLaneIds}
                 onToggleSelect={onToggleSelect}
+                votriByLane={votriByLane}
               />
             ))
           )}
@@ -1777,6 +1820,56 @@ export default function LaneWorkQueuePage() {
     staleTime: 60_000,
   });
 
+  // Collect all unique origin+destination pairs across all queue buckets for a single batched VOTRI fetch
+  const allLanePairs = useMemo(() => {
+    if (!queue) return [];
+    const seen = new Set<string>();
+    const pairs: Array<{ origin: string; destination: string }> = [];
+    const allItems = [
+      ...(queue.unassigned ?? []),
+      ...(queue.noContactable ?? []),
+      ...(queue.assignedUntouched ?? []),
+      ...(queue.inProgress ?? []),
+    ];
+    for (const item of allItems) {
+      if (item.lane.origin && item.lane.destination) {
+        const key = `${item.lane.origin}|${item.lane.destination}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          pairs.push({ origin: item.lane.origin, destination: item.lane.destination });
+        }
+      }
+    }
+    return pairs;
+  }, [queue]);
+
+  type LaneVotriResult = { origin: string; destination: string; qualifier: string; votri: number; votriWoW: number; signal: "hot" | "warm" | "cool"; timestamp: string; isStale: boolean };
+
+  // Pairs are semicolon-separated (not comma) so city names containing commas (e.g. "Los Angeles, CA") parse correctly.
+  const lanesParam = allLanePairs.map(p => `${p.origin}|${p.destination}`).join(";");
+
+  const { data: batchVotriData } = useQuery<{ signals: LaneVotriResult[] }>({
+    queryKey: ["/api/sonar/lane-signals", lanesParam],
+    queryFn: () =>
+      fetch(`/api/sonar/lane-signals?lanes=${encodeURIComponent(lanesParam)}`, {
+        credentials: "include",
+      }).then(r => r.ok ? r.json() : { signals: [] }),
+    enabled: allLanePairs.length > 0,
+    staleTime: 4 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  // Build a Map<"origin|destination", LaneVotriResult> for O(1) lookup in lane rows
+  const votriByLane = useMemo(() => {
+    const map = new Map<string, LaneVotriResult>();
+    if (batchVotriData?.signals) {
+      for (const r of batchVotriData.signals) {
+        map.set(`${r.origin}|${r.destination}`, r);
+      }
+    }
+    return map;
+  }, [batchVotriData]);
+
   // Helper to apply customer + high-freq filters to a bucket
   const filterBucket = (items: LaneItem[]) => {
     let out = items;
@@ -1816,15 +1909,26 @@ export default function LaneWorkQueuePage() {
     (queue?.assignedUntouched?.length ?? 0) +
     (queue?.inProgress?.length ?? 0);
 
-  // Sort unassigned by avgLoadsPerWeek descending so highest-frequency lanes appear first.
-  // Memoized so the O(n log n) sort only reruns when filtered data changes, not on every render.
-  const sortedUnassigned = useMemo(() =>
-    [...(filteredQueue?.unassigned ?? [])].sort((a, b) => {
+  // Sort unassigned: hot-market lanes (VOTRI signal = "hot") are elevated to the top,
+  // then warm, then cool, then stale/unknown — within each signal tier, sort by avgLoadsPerWeek desc.
+  const sortedUnassigned = useMemo(() => {
+    const SIGNAL_PRIORITY = { hot: 3, warm: 2, cool: 1, stale: 0 } as const;
+    const lanePriority = (origin?: string | null, destination?: string | null): number => {
+      if (!origin || !destination) return 0;
+      const v = votriByLane?.get(`${origin}|${destination}`);
+      if (!v) return 0;
+      if (v.isStale) return SIGNAL_PRIORITY.stale;
+      return SIGNAL_PRIORITY[v.signal] ?? 0;
+    };
+    return [...(filteredQueue?.unassigned ?? [])].sort((a, b) => {
+      const aSig = lanePriority(a.origin, a.destination);
+      const bSig = lanePriority(b.origin, b.destination);
+      if (bSig !== aSig) return bSig - aSig;
       const aVal = parseLoadsPerWeek(a.avgLoadsPerWeek) ?? 0;
       const bVal = parseLoadsPerWeek(b.avgLoadsPerWeek) ?? 0;
       return bVal - aVal;
-    }),
-  [filteredQueue?.unassigned]);
+    });
+  }, [filteredQueue?.unassigned, votriByLane]);
 
   return (
     <div className="flex flex-col h-full">
@@ -2111,6 +2215,7 @@ export default function LaneWorkQueuePage() {
                   highFreqOnly={highFreqOnly}
                   selectedLaneIds={selectedLaneIds}
                   onToggleSelect={handleToggleSelect}
+                  votriByLane={votriByLane}
                 />
                 <BucketSection
                   title="No Contactable Carriers"
@@ -2125,6 +2230,7 @@ export default function LaneWorkQueuePage() {
                   highFreqOnly={highFreqOnly}
                   selectedLaneIds={selectedLaneIds}
                   onToggleSelect={handleToggleSelect}
+                  votriByLane={votriByLane}
                 />
                 <BucketSection
                   title="Assigned — Untouched"
@@ -2139,6 +2245,7 @@ export default function LaneWorkQueuePage() {
                   highFreqOnly={highFreqOnly}
                   selectedLaneIds={selectedLaneIds}
                   onToggleSelect={handleToggleSelect}
+                  votriByLane={votriByLane}
                 />
                 <BucketSection
                   title="In Progress"
@@ -2153,6 +2260,7 @@ export default function LaneWorkQueuePage() {
                   highFreqOnly={highFreqOnly}
                   selectedLaneIds={selectedLaneIds}
                   onToggleSelect={handleToggleSelect}
+                  votriByLane={votriByLane}
                 />
               </>
             )}

@@ -41,6 +41,7 @@ import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification, LaneCarrier } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
 import { LmCareerPanel } from "@/components/lm-career-panel";
+import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
 import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
 import { LmCheckinBanner } from "@/components/lm-checkin-banner";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
@@ -1384,7 +1385,12 @@ export default function Dashboard() {
       )}
 
       {/* LM Career Panel — operational stats + path-to-AM progress */}
-      {currentUser?.role === "logistics_manager" && <LmCareerPanel />}
+      {currentUser?.role === "logistics_manager" && (
+        <>
+          <SonarMarketPulsePortlet role="logistics_manager" />
+          <LmCareerPanel />
+        </>
+      )}
 
       {/* ── LM Check-In Banner ───────────────────────────────────────────────
            Timed alert for managers with direct LM/LC reports.

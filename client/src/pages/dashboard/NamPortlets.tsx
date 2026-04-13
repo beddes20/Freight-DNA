@@ -9,6 +9,7 @@ import {
 import { MarginGoalEditButton } from "./MarginGoalEditButton";
 import type { SafeUser, TeamActivity, RelationshipsMovedData, TrendingResponse, MarginMetrics, OpportunityLog, AmRow, StaleAccount, PersonalMetrics } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
+import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
 
 interface NamPortletsProps {
   namRelationshipsMoved: RelationshipsMovedData | undefined;
@@ -58,6 +59,9 @@ export function NamPortlets({
 }: NamPortletsProps) {
   return (
     <>
+      {/* ── Market Pulse ────────────────────────────────────────────────────── */}
+      <SonarMarketPulsePortlet role="nam" />
+
       {/* Row 1: Team activity metrics */}
       <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-activity-row" data-tour="tour-kpi-tiles">
         <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-relationships-moved" onClick={() => setActivePortlet({ type: "relationships", personal: false, title: "Team Relationships Moved Up This Month" })}>

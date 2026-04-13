@@ -21,6 +21,8 @@ import { RfpDialog } from "@/components/rfp-dialog";
 import { AwardDialog } from "@/components/award-dialog";
 import { ConvertToAwardDialog } from "@/components/convert-to-award-dialog";
 import { ResearchLaneDialog } from "@/components/research-lane-dialog";
+import { VotriBadge } from "@/components/sonar-votri-badge";
+import { X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company, Contact, Rfp, Award, Touchpoint } from "@shared/schema";
@@ -67,6 +69,7 @@ export function RfpTab({
   const [rfpIntelCollapsed, setRfpIntelCollapsed] = useState(true);
   const [lanesCollapsed, setLanesCollapsed] = useState(true);
   const [laneGapInsights, setLaneGapInsights] = useState<Record<string, string>>({});
+  const [tighteningBannerDismissed, setTighteningBannerDismissed] = useState(false);
 
   // ── RFP / Award dialog state ──────────────────────────────────────────────
   const [cdRfpDialogOpen, setCdRfpDialogOpen] = useState(false);
@@ -109,6 +112,29 @@ export function RfpTab({
 
   const { data: lanePatterns } = useQuery<LanePatterns>({
     queryKey: ["/api/companies", companyId, "lane-patterns"],
+  });
+
+  // Batch VOTRI for top corridors — used for the tightening banner (2+ hot lanes)
+  const corridorPairs = (lanePatterns?.topCorridors ?? [])
+    .filter(c => c.origin && c.destination)
+    .slice(0, 8)
+    .map(c => ({ origin: c.origin as string, destination: c.destination as string }));
+  const { data: batchVotri } = useQuery<{ signals: Array<{ origin: string; destination: string; votri: number; votriWoW: number; signal: string; qualifier: string; timestamp: string; isStale: boolean }> }>({
+    queryKey: ["/api/sonar/lane-signals/batch", companyId],
+    queryFn: async () => {
+      if (corridorPairs.length === 0) return { signals: [] };
+      const res = await fetch("/api/sonar/lane-signals/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ lanes: corridorPairs }),
+      });
+      if (!res.ok) return { signals: [] };
+      return res.json();
+    },
+    enabled: corridorPairs.length > 0,
+    staleTime: 4 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: laneMatching } = useQuery<LaneMatching>({
@@ -656,8 +682,35 @@ export function RfpTab({
                         const topUnawarded = withPriority.filter(c => !c.rfpTitles.some(t => awardedRfpTitleSet.has(t))).slice(0, 3);
                         const top5 = withPriority.slice(0, 5);
                         const remaining = withPriority.length - 5;
+                        // Tightening banner: show if 2+ corridors are hot and not dismissed
+                        const hotSignals = (batchVotri?.signals ?? []).filter(s => s.signal === "hot");
+                        const showTighteningBanner = !tighteningBannerDismissed && hotSignals.length >= 2;
+
                         return (
                           <div className="space-y-3">
+                            {showTighteningBanner && (
+                              <div
+                                className="flex items-start gap-2 rounded-md px-3 py-2.5 border text-xs"
+                                style={{ background: "#2d0d0d", borderColor: "#7f1d1d" }}
+                                data-testid="banner-market-tightening"
+                              >
+                                <span className="text-red-400 shrink-0 mt-0.5">🔴</span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-semibold text-red-300">Market tightening on {hotSignals.length} active corridors</p>
+                                  <p className="text-red-200/70 mt-0.5">
+                                    Carrier rejection rates are elevated ({hotSignals.map(s => `${s.origin}→${s.destination} ${s.votri.toFixed(0)}%`).slice(0, 2).join("; ")}). Now is the time to call and lock in capacity before competitors do.
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => setTighteningBannerDismissed(true)}
+                                  className="shrink-0 text-red-400/60 hover:text-red-300 transition-colors"
+                                  aria-label="Dismiss tightening alert"
+                                  data-testid="button-dismiss-tightening-banner"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            )}
                             {topUnawarded.length > 0 && (
                               <div className="rounded-md px-3 py-2.5 bg-amber-50/60 dark:bg-amber-950/15 border border-amber-200/50 dark:border-amber-800/30 text-xs space-y-2">
                                 <div className="flex items-center justify-between gap-2">
@@ -695,6 +748,9 @@ export function RfpTab({
                                     <span className="text-sm font-medium truncate">{c.lane}</span>
                                     <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0 rounded-full shrink-0 ${c.priorityColor}`}>{c.priorityLabel}</span>
                                     {c.rfpTitles.some(t => awardedRfpTitleSet.has(t)) && <span className="text-[10px] text-green-600 dark:text-green-400 font-medium shrink-0">✓ We Ship</span>}
+                                    {c.origin && c.destination && (
+                                      <VotriBadge origin={c.origin} destination={c.destination} testId={`badge-votri-corridor-${i}`} />
+                                    )}
                                   </div>
                                   <span className="text-xs text-muted-foreground shrink-0 ml-2">{c.totalVolume.toLocaleString()} loads/yr</span>
                                 </div>

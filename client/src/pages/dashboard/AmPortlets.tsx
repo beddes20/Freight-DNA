@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import type { TrendingResponse, PersonalMetrics } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
+import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
 
 interface AmPortletsProps {
   setLocation: (path: string) => void;
@@ -36,6 +37,9 @@ export function AmPortlets({
 }: AmPortletsProps) {
   return (
     <>
+      {/* ── Market Pulse ────────────────────────────────────────────────────── */}
+      <SonarMarketPulsePortlet role="am" />
+
       {/* ── Trending accounts ───────────────────────────────────────────────── */}
       <div className="grid gap-4 md:grid-cols-2" data-testid="am-trending-row">
         <Card data-testid="am-portlet-trending-up">

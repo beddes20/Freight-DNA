@@ -289,6 +289,13 @@ export function PreCallPlanner({
     staleTime: 15 * 60 * 1000,
   });
 
+  const { data: lanePatterns } = useQuery<{ topCorridors: Array<{ lane: string; origin?: string; destination?: string; originState?: string; destinationState?: string; totalVolume: number }> }>({
+    queryKey: ["/api/companies", company.id, "lane-patterns"],
+    queryFn: () => fetch(`/api/companies/${company.id}/lane-patterns`, { credentials: "include" }).then(r => r.ok ? r.json() : null),
+    enabled: open,
+    staleTime: 15 * 60 * 1000,
+  });
+
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
   const logTouchMutation = useMutation({
@@ -395,6 +402,11 @@ export function PreCallPlanner({
   const generateTalkingPoints = async () => {
     setLoadingPoints(true);
     try {
+      const lanePairs = (lanePatterns?.topCorridors ?? [])
+        .filter(c => c.origin && c.destination)
+        .slice(0, 5)
+        .map(c => ({ origin: c.origin!, destination: c.destination! }));
+
       const res = await apiRequest("POST", "/api/ai/talking-points", {
         company, contacts, touchpoints, tasks, rfps,
         financialSummary: financialSummary
@@ -404,6 +416,7 @@ export function PreCallPlanner({
           quirks: (company as any).accountQuirks,
           spotProcess: (company as any).spotProcess,
         },
+        lanePairs: lanePairs.length > 0 ? lanePairs : undefined,
       });
       const data = await res.json();
       setTalkingPoints(data.points || []);

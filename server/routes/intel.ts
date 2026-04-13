@@ -480,6 +480,26 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
   const marketOtris = await getMarketOtris(uniqueMarkets);
   const otriByMarket = new Map(marketOtris.map(m => [m.market.toLowerCase(), m.otri]));
 
+  // Top-20 VOTRI/OTRI market trend table (spec: market trend table, color-coded by signal level)
+  // marketOtris includes OTRI (from OTRI.{MARKET}), otriWoW (from OTRIW.{MARKET}), and
+  // votriWoW (from VOTRIW.{MARKET}). trendDir arrows use VOTRIW per spec — the van outbound
+  // tender rejection WoW delta. Falls back to OTRIW if VOTRIW is unavailable for a market.
+  const sonarMarketTrends = marketOtris
+    .slice(0, 20)
+    .sort((a, b) => b.otri - a.otri)
+    .map(m => {
+      const trendSource = m.votriWoW ?? m.otriWoW; // prefer VOTRIW per spec, fall back to OTRIW
+      return {
+        market:   m.market,
+        otri:     m.otri,
+        otriWoW:  m.otriWoW,   // OTRIW.{MARKET} ticker
+        votri:    m.votri,
+        votriWoW: m.votriWoW,  // VOTRIW.{MARKET} ticker
+        signal:   m.signal,
+        trendDir: trendSource > 0.5 ? "↑" : trendSource < -0.5 ? "↓" : "→",
+      };
+    });
+
   // Daily insights for the (possibly filtered) lane set
   const laneAlerts = computeLaneAlerts(lanes, marketOtris);
   const spotOpportunities = await computeSpotOpportunities(lanes);
@@ -595,6 +615,7 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
     viewUserId: filterUserId ?? null,
     viewUserName: viewUser?.name ?? null,
     availableReps: repRoster,
+    sonarMarketTrends,
     dailyInsights: {
       greeting: `Good morning, ${greetingName}`,
       date: dateStr,

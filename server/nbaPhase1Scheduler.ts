@@ -14,11 +14,12 @@
 
 import cron from "node-cron";
 import { storage } from "./storage";
-import { runPhase1EngineForOrg } from "./nbaPhase1Engine";
+import { runPhase1EngineForOrg, evalR13MarketTightening, evalR14MarketLoosening } from "./nbaPhase1Engine";
 import { runRecurringLaneEngineForOrg } from "./recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes } from "./laneScoringService";
 import { syncMarketSignalNbas } from "./marketNbaService";
 import { generateConversationOwnershipNbas } from "./nextBestActionEngine";
+import { getAvgVotriWoW } from "./sonarClient";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -64,6 +65,10 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
         const engineOutput = await runPhase1EngineForOrg(org.id, storage);
         const now = new Date().toISOString();
 
+        // Track companies that already received a card this nightly run.
+        // R13/R14 market cards check this set to enforce "one winner per account per run".
+        const companiesWithCardsThisRun = new Set<string>();
+
         // ── Per-company winner cards ─────────────────────────────────────────
         for (const { userId, result } of engineOutput.companyResults) {
           if (!result.winner) { totalSkipped++; continue; }
@@ -95,6 +100,7 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
             contactId: result.winner.contactId,
             linkedTaskId: result.winner.linkedTaskId,
           });
+          companiesWithCardsThisRun.add(result.companyId);
           totalGenerated++;
         }
 
@@ -151,6 +157,126 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
           }
         } catch (convErr: any) {
           log(`Org ${org.id}: conversation NBA sync warning (non-fatal): ${convErr?.message ?? convErr}`);
+        }
+
+        // ── Sonar VOTRI Market NBAs (R13/R14) ─────────────────────────────────
+        // Per spec: derive top-3 origin markets per company from financial upload data.
+        // Each company's corridor list comes from its financial upload rows (by customer name match).
+        // Enforces "one winner per account per nightly run": if the main Phase 1
+        // engine already wrote a card for this company, skip market cards.
+        try {
+          const companies = await storage.getCompanies(org.id);
+          const uploads = await storage.getFinancialUploadsForOrg(org.id).catch(() => []);
+
+          if (uploads.length > 0 && companies.length > 0) {
+            // Use the most recent financial upload
+            const latestUpload = uploads.sort((a, b) =>
+              (b.uploadedAt ?? "").localeCompare(a.uploadedAt ?? "")
+            )[0];
+            const rawRows: unknown = latestUpload.rows;
+            const allRows: Record<string, unknown>[] = Array.isArray(rawRows) ? rawRows as Record<string, unknown>[] : [];
+
+            // Normalize name for matching
+            const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+            for (const company of companies) {
+              if (!company.assignedTo) continue;
+              if (companiesWithCardsThisRun.has(company.id)) continue;
+
+              const crmNorm = norm(company.name);
+              const aliasNorms = company.financialAlias
+                ? (company.financialAlias as string).split(",").map((s: string) => norm(s.trim())).filter(Boolean)
+                : [];
+              const nameNorms = [crmNorm, ...aliasNorms];
+
+              // Build origin market tally from financial rows matching this company
+              const originTally = new Map<string, number>();
+              const corrTally = new Map<string, { origin: string; dest: string; count: number }>();
+              for (const row of allRows) {
+                const cust = norm(String(row.customerName ?? row["Customer Name"] ?? row["CUSTOMER NAME"] ?? ""));
+                if (!cust || !nameNorms.some(n => n && cust.includes(n))) continue;
+                const origin = String(row.originCity ?? row["Shipper city"] ?? row["Origin city"] ?? row["shipper_city"] ?? "").trim();
+                const dest = String(row.destCity ?? row["Consignee city"] ?? row["Destination city"] ?? row["dest_city"] ?? "").trim();
+                if (!origin) continue;
+                originTally.set(origin, (originTally.get(origin) ?? 0) + 1);
+                if (dest) {
+                  const corrKey = `${origin}→${dest}`;
+                  const prev = corrTally.get(corrKey) ?? { origin, dest, count: 0 };
+                  prev.count++;
+                  corrTally.set(corrKey, prev);
+                }
+              }
+
+              if (originTally.size === 0) continue;
+
+              // Top 3 origin markets by load count
+              const topOrigins = Array.from(originTally.entries())
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 3)
+                .map(([city]) => city);
+
+              // Build lane pairs for each top origin → top destination from that origin
+              const topLanes: Array<{ origin: string; destination: string }> = [];
+              for (const origin of topOrigins) {
+                const bestCorr = Array.from(corrTally.values())
+                  .filter(c => c.origin === origin)
+                  .sort((a, b) => b.count - a.count)[0];
+                if (bestCorr) {
+                  topLanes.push({ origin: bestCorr.origin, destination: bestCorr.dest });
+                } else {
+                  // No corridor data — use origin only (will gracefully degrade in VOTRI lookup)
+                  topLanes.push({ origin, destination: "" });
+                }
+              }
+
+              const validLanes = topLanes.filter(l => l.destination);
+              if (validLanes.length === 0) continue;
+
+              const tier = (Number(company.estimatedFreightSpend ?? 0) >= 100_000 ? "A"
+                : Number(company.estimatedFreightSpend ?? 0) >= 25_000 ? "B" : null) as "A" | "B" | null;
+
+              const votriWoWAvg = await getAvgVotriWoW(validLanes).catch(() => null);
+              if (votriWoWAvg === null) continue;
+
+              const laneSummary = validLanes.slice(0, 3).map(l => `${l.origin}→${l.destination}`).join(", ");
+              const laneCount = validLanes.length;
+
+              const r13 = evalR13MarketTightening(company, tier, votriWoWAvg, laneSummary, laneCount);
+              const r14 = evalR14MarketLoosening(company, tier, votriWoWAvg, laneSummary, laneCount);
+              const marketCard = r13 ?? r14;
+              if (!marketCard) continue;
+
+              const ruleKey: string = marketCard.ruleType;
+              const existing = await storage.getRecentNbaCardByType(company.id, ruleKey, 7);
+              if (existing) continue;
+
+              await storage.supersedePreviousNbaCards(company.id, ruleKey);
+              await storage.createNbaCard({
+                orgId: org.id,
+                userId: company.assignedTo,
+                companyId: company.id,
+                companyName: company.name,
+                ruleType: ruleKey,
+                outcomeType: marketCard.outcomeType,
+                confidence: marketCard.confidence,
+                signalCount: marketCard.signalCount,
+                signalSummary: marketCard.signalSummary as string[],
+                whyThisNow: marketCard.whyThisNow,
+                suggestedAction: marketCard.suggestedAction,
+                expectedOutcome: marketCard.expectedOutcome,
+                growthLever: marketCard.growthLever,
+                relationshipMove: marketCard.relationshipMove,
+                accountTier: marketCard.accountTier,
+                urgencyScore: marketCard.urgencyScore,
+                status: "visible",
+                createdAt: now,
+              });
+              companiesWithCardsThisRun.add(company.id);
+              totalGenerated++;
+            }
+          }
+        } catch (sonarErr: any) {
+          log(`Org ${org.id}: Sonar VOTRI NBA warning (non-fatal): ${sonarErr?.message ?? sonarErr}`);
         }
 
         log(`Org ${org.id}: ${totalGenerated} generated this pass, ${totalSkipped} skipped`);

@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { sendEmail, buildFeedbackEmail } from "./emailService";
+import { getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch, buildVotriQualifier } from "./sonarClient";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
@@ -585,7 +586,12 @@ Keep it short and casual — reps are busy. No fluff, no filler.
 - When the user says they want to CREATE A TASK, SET A REMINDER, or ADD A TO-DO — use the create_task tool
 - When the user says they want to MARK A TASK DONE, COMPLETE A TASK, or CHECK OFF a to-do — use the complete_task tool
 - When the user says a conversation WAS MEANINGFUL, or wants to MARK A TOUCHPOINT MEANINGFUL — use the mark_meaningful tool
-- When the user asks about CARRIERS on a lane, who runs a corridor, carrier pay rates, what we're paying for a mode on a lane (e.g. "what carriers run TX-CA?", "how much are we paying for dry vans CA-TX?") — use the carrier_lane_search tool`;
+- When the user asks about CARRIERS on a lane, who runs a corridor, carrier pay rates, what we're paying for a mode on a lane (e.g. "what carriers run TX-CA?", "how much are we paying for dry vans CA-TX?") — use the carrier_lane_search tool
+- When the user asks about MARKET CONDITIONS, current spot rates, OTRI, tender rejections, market tightness, how hot/cool a lane is, or Sonar data — use the query_market_otri or query_national_rates tools
+- When the user asks about a SPECIFIC LANE's market signal, rejection index, or how tight that corridor is — use the query_lane_votri tool with origin and destination
+- When the user asks about NATIONAL rates, NTI spot $/move, contract $/mile, or the spread between spot and contract — use the query_national_rates tool
+- PROACTIVELY use Sonar market tools when the user asks about specific accounts' lanes, procurement strategy, buy rates on a corridor, or what action to take on a lane — don't wait for them to explicitly ask about "the market"
+- Example: if someone asks "what should I do for [Company] on the CHI-ATL lane?", query_lane_votri for Chicago→Atlanta and weave the signal into your advice`;
 
       const tools: any[] = [
         {
@@ -695,6 +701,50 @@ Keep it short and casual — reps are busy. No fluff, no filler.
             },
           },
         },
+        {
+          type: "function",
+          function: {
+            name: "query_national_rates",
+            description: "Fetch live national market data from FreightWaves Sonar: national OTRI (%), national spot $/move (NTI), contract $/mile (VCRPM1), and the RATES spread between spot and contract. Use when the user asks about overall market conditions, national OTRI, current spot rates, or the spread between spot and contract rates.",
+            parameters: {
+              type: "object",
+              properties: {},
+              required: [],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "query_lane_votri",
+            description: "Fetch live Sonar VOTRI (Van Outbound Tender Rejection Index) for a specific lane/corridor. Returns the rejection rate (%) and week-over-week delta. Use when the user asks how tight a specific lane is, the market signal for a corridor, VOTRI for a specific origin-destination pair, or what to target buying on a lane.",
+            parameters: {
+              type: "object",
+              properties: {
+                origin: { type: "string", description: "Origin city or market (e.g. 'Atlanta', 'Chicago', 'Dallas')" },
+                destination: { type: "string", description: "Destination city or market (e.g. 'Dallas', 'Los Angeles', 'Memphis')" },
+              },
+              required: ["origin", "destination"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "query_market_otri",
+            description: "Fetch live OTRI (Outbound Tender Rejection Index), VOTRI (Van Tender Rejection Index), and week-over-week trend for a specific market/city from FreightWaves Sonar. Use when the user asks about a specific market's tightness, rejection rate, OTRI, VOTRI, or trend direction. Examples: 'Is Chicago tight?', 'What's the OTRI in Atlanta?', 'How is the Dallas market moving?'",
+            parameters: {
+              type: "object",
+              properties: {
+                market: {
+                  type: "string",
+                  description: "City/market name to fetch OTRI and VOTRI for (e.g. 'Atlanta', 'Dallas', 'Chicago')",
+                },
+              },
+              required: ["market"],
+            },
+          },
+        },
       ];
 
       res.setHeader("Content-Type", "text/event-stream");
@@ -745,7 +795,7 @@ Keep it short and casual — reps are busy. No fluff, no filler.
             const args = JSON.parse(toolCallArgs);
 
             // ── Data-retrieval tools execute server-side then feed result back to GPT ──
-            const dataRetrievalTools = ["carrier_lane_search", "get_company_details"];
+            const dataRetrievalTools = ["carrier_lane_search", "get_company_details", "query_national_rates", "query_lane_votri", "query_market_otri"];
 
             if (dataRetrievalTools.includes(toolCallName)) {
               let searchResult = "";
@@ -764,6 +814,74 @@ Keep it short and casual — reps are busy. No fluff, no filler.
               } else if (toolCallName === "get_company_details") {
                 callLabel = "call_company";
                 searchResult = await getCompanyDetails(req.session.organizationId!, String(args.company_name || ""));
+              } else if (toolCallName === "query_national_rates") {
+                callLabel = "call_sonar_pulse";
+                try {
+                  const pulse = await getNationalMarketSummary();
+                  const signalLabel = pulse.otri > 20 ? "🔴 Hot" : pulse.otri > 8 ? "🟡 Warm" : "🟢 Cool";
+                  searchResult = [
+                    `FreightWaves Sonar — National Market Pulse (as of ${new Date(pulse.timestamp).toLocaleString()})${pulse.isStale ? " ⚠ Stale" : ""}`,
+                    `National OTRI: ${pulse.otri.toFixed(2)}% (${pulse.otriWoWDelta > 0 ? "+" : ""}${pulse.otriWoWDelta.toFixed(1)} pp WoW) — ${signalLabel}`,
+                    `NTI National Spot: $${pulse.ntiPerMove > 100 ? pulse.ntiPerMove.toLocaleString() : pulse.ntiPerMove.toFixed(2)}/move`,
+                    `Contract Rate (VCRPM1): $${pulse.ntiPerMile.toFixed(2)}/mile`,
+                    `Market Signal: ${pulse.otri > 20 ? "Tight — capacity scarce, rejection rates elevated. Good time to lock in contracts and position as reliable capacity source." : pulse.otri > 8 ? "Moderate — balanced market conditions." : "Loose — capacity abundant, good negotiating leverage on buy rates."}`,
+                  ].join("\n");
+                } catch {
+                  searchResult = "Sonar market data temporarily unavailable.";
+                }
+              } else if (toolCallName === "query_lane_votri") {
+                callLabel = "call_sonar_lane";
+                try {
+                  const origin = String(args.origin || "");
+                  const destination = String(args.destination || "");
+                  const votriMap = await getLaneVotrisBatch([{ origin, destination }]);
+                  const qualifier = buildVotriQualifier(origin, destination);
+                  const votri = votriMap.get(qualifier);
+                  if (votri) {
+                    const sig = votri.signal === "hot" ? "🔴 Hot" : votri.signal === "warm" ? "🟡 Warm" : "🟢 Cool";
+                    searchResult = [
+                      `Sonar VOTRI for ${origin} → ${destination} (qualifier: ${qualifier})${votri.isStale ? " ⚠ Stale" : ""}`,
+                      `Van Tender Rejection Rate: ${votri.votri.toFixed(1)}% — ${sig}`,
+                      `Week-over-Week: ${votri.votriWoW > 0 ? "+" : ""}${votri.votriWoW.toFixed(1)} pp`,
+                      votri.signal === "hot"
+                        ? "Market is tight on this lane — carriers rejecting frequently. Capacity is scarce, rates under upward pressure."
+                        : votri.signal === "warm"
+                        ? "Market is moderately active — some capacity pressure, normal booking lead times."
+                        : "Market is loose — plenty of capacity available, good leverage for negotiating buy rates.",
+                    ].join("\n");
+                  } else {
+                    searchResult = `No VOTRI data found for ${origin} → ${destination}. This qualifier (${qualifier}) may not have enough volume in Sonar.`;
+                  }
+                } catch {
+                  searchResult = "Sonar lane signal data temporarily unavailable.";
+                }
+              } else if (toolCallName === "query_market_otri") {
+                callLabel = "call_sonar_otris";
+                try {
+                  const market: string = typeof args.market === "string" ? args.market.trim() : "";
+                  if (!market) {
+                    searchResult = "No market specified.";
+                  } else {
+                    const otris = await getMarketOtris([market]);
+                    const m = otris[0];
+                    if (!m) {
+                      searchResult = `No Sonar data found for "${market}".`;
+                    } else {
+                      const sig = m.signal === "hot" ? "🔴 Hot" : m.signal === "warm" ? "🟡 Warm" : "🟢 Cool";
+                      const wowArrow = m.otriWoW > 0 ? "↑" : m.otriWoW < 0 ? "↓" : "→";
+                      const lines = [
+                        `Sonar market data for ${m.market}:`,
+                        `  OTRI: ${m.otri.toFixed(1)}% — ${sig} (WoW: ${wowArrow}${Math.abs(m.otriWoW).toFixed(1)} pp)`,
+                      ];
+                      if (m.votri !== null) {
+                        lines.push(`  VOTRI (Van Outbound Rejection): ${m.votri.toFixed(1)}%`);
+                      }
+                      searchResult = lines.join("\n");
+                    }
+                  }
+                } catch {
+                  searchResult = "Sonar market OTRI data temporarily unavailable.";
+                }
               }
 
               const toolResultMessages: any[] = [
@@ -1177,7 +1295,7 @@ ${ANALYST_RULES}`,
 
   app.post("/api/ai/talking-points", async (req: Request, res: Response) => {
     try {
-      const { company, contacts: contactList, touchpoints: tps, tasks: tsks, rfps: rfpList, financialSummary, accountIntelligence } = req.body;
+      const { company, contacts: contactList, touchpoints: tps, tasks: tsks, rfps: rfpList, financialSummary, accountIntelligence, lanePairs } = req.body;
       if (!company) return res.status(400).json({ error: "Company data required" });
 
       const lastTouches = (contactList || []).slice(0, 6).map((c: any) => {
@@ -1195,6 +1313,43 @@ ${ANALYST_RULES}`,
       const urgentRfps = rfpsWithDeadlines.filter((r: any) => r.daysLeft !== null && r.daysLeft <= 14 && r.daysLeft >= 0);
       const openTasksList = (tsks || []).filter((t: any) => t.status === "open");
 
+      // Resolve lane pairs: client may supply them, or we derive from server-side lane data.
+      let resolvedLanePairs: Array<{ origin: string; destination: string }> = [];
+      if (Array.isArray(lanePairs) && lanePairs.length > 0) {
+        resolvedLanePairs = lanePairs.slice(0, 5);
+      } else if (company.id) {
+        // Fall back: resolve top corridors server-side from recurring lane data
+        try {
+          const companyLanes = await storage.getRecurringLanesByCompany(company.id);
+          resolvedLanePairs = companyLanes
+            .filter((l: any) => l.origin && l.destination)
+            .sort((a: any, b: any) => (Number(b.weeklyFrequency ?? 0) - Number(a.weeklyFrequency ?? 0)))
+            .slice(0, 5)
+            .map((l: any) => ({ origin: l.origin as string, destination: l.destination as string }));
+        } catch { /* non-fatal */ }
+      }
+
+      // Fetch Sonar market context in parallel
+      let marketContext = "";
+      try {
+        const [pulse, laneVotris] = await Promise.all([
+          getNationalMarketSummary(),
+          resolvedLanePairs.length > 0
+            ? getLaneVotrisBatch(resolvedLanePairs)
+            : Promise.resolve(new Map()),
+        ]);
+        const marketSignal = pulse.otri > 20 ? "tight (carriers rejecting frequently)"
+          : pulse.otri > 8 ? "moderate"
+          : "loose (capacity abundant)";
+        marketContext = `\nCurrent market: National OTRI ${pulse.otri.toFixed(1)}% — market is ${marketSignal}.${pulse.isStale ? " (data may be slightly delayed)" : ""}`;
+        if (laneVotris.size > 0) {
+          const laneSignals = Array.from(laneVotris.values()).slice(0, 3).map(v =>
+            `${v.origin}→${v.destination}: VOTRI ${v.votri.toFixed(1)}% ${v.signal === "hot" ? "🔴 Hot" : v.signal === "warm" ? "🟡 Warm" : "🟢 Cool"} (${v.votriWoW > 0 ? "+" : ""}${v.votriWoW.toFixed(1)} pp WoW)`
+          ).join("; ");
+          marketContext += `\nLane signals: ${laneSignals}`;
+        }
+      } catch { /* non-fatal */ }
+
       const prompt = `You are a freight broker sales coach. Help prep for a call with ${company.name}${company.industry ? ` (${company.industry})` : ""}.
 
 ${(req.body.accountSummary) ? `Current account status: ${req.body.accountSummary}\n` : ""}Key contacts:\n${lastTouches || "None on file"}
@@ -1203,9 +1358,9 @@ ${urgentRfps.length > 0 ? `\nURGENT — RFPs due soon: ${urgentRfps.map((r: any)
 ${overdueTasks.length > 0 ? `\nOverdue tasks: ${overdueTasks.map((t: any) => t.title).join(", ")}` : openTasksList.length > 0 ? `\nOpen tasks: ${openTasksList.slice(0, 3).map((t: any) => t.title).join(", ")}` : ""}
 ${accountIntelligence?.quirks ? `\nAccount quirks: ${accountIntelligence.quirks}` : ""}
 ${accountIntelligence?.spotProcess ? `\nSpot process: ${accountIntelligence.spotProcess}` : ""}
-${accountIntelligence?.tenderStyle ? `\nTender style: ${accountIntelligence.tenderStyle}` : ""}
+${accountIntelligence?.tenderStyle ? `\nTender style: ${accountIntelligence.tenderStyle}` : ""}${marketContext}
 
-Generate exactly 3 sharp, specific talking points for this call. Each is 1-2 sentences. Be direct and actionable — reference the specific account details above. No generic freight advice. Numbered list.`;
+Generate exactly 3 sharp, specific talking points for this call. Each is 1-2 sentences. Be direct and actionable — reference the specific account details above. When market data is available and relevant, use it to make a talking point specific to current conditions. No generic freight advice. Numbered list.`;
 
       const message = await anthropic.messages.create({
         model: "claude-opus-4-5",

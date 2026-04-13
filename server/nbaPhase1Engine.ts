@@ -34,7 +34,11 @@ export type Phase1RuleType =
   | "spot_to_contract"
   | "rfp_coverage_gap"
   | "stalled_award_lanes"
-  | "recurring_lane_capacity";
+  | "recurring_lane_capacity"
+  | "market_tightening"
+  | "market_loosening"
+  | "R_MARKET_TIGHT"
+  | "R_MARKET_LOOSE";
 
 export type Phase1OutcomeType = "protect" | "execute" | "grow" | "deepen";
 
@@ -125,6 +129,7 @@ interface Phase1Signals {
   daysSinceLastTouch: number | null;
   lastTouchDate: string | null;
   hasRevenue: boolean;
+  hasOpenRfp?: boolean;
 }
 
 async function gatherPhase1Signals(
@@ -361,7 +366,7 @@ function evalR5(s: Phase1Signals, userId: string): CardCandidate | null {
   // Booster 2: company has an open RFP
   // (no direct storage here, but check via rfp data — approximated by checking if the tasks array has rfp-adjacent notes)
   // Use hasOpenRfp from signals — passed via the company + rfp check done in the runner
-  if ((s as any).hasOpenRfp) {
+  if (s.hasOpenRfp) {
     boosterCount++;
     boosterSignals.push("Open RFP on this account");
   }
@@ -644,6 +649,92 @@ function evalR11(s: Phase1Signals): CardCandidate | null {
   };
 }
 
+// ── R13: Market Tightening (Grow) ────────────────────────────────────────────
+
+/**
+ * R13 — Market Tightening
+ *
+ * Fires when the company has active recurring lanes AND the Sonar VOTRI WoW delta
+ * for those lanes averages >= +2.5 pp (market is getting tighter).
+ * This is a growth signal: carriers are rejecting more — capacity is shrinking,
+ * which means our customer needs a reliable broker more than ever.
+ *
+ * votriWoWAvg is injected by the caller from the pre-computed Sonar batch.
+ */
+export function evalR13MarketTightening(
+  company: Company,
+  tier: "A" | "B" | null,
+  votriWoWAvg: number,
+  laneSummary: string,
+  laneCount: number = 1,
+): CardCandidate | null {
+  if (votriWoWAvg < 2.5) return null;
+
+  const confidence: "high" | "medium" = votriWoWAvg >= 5 && tier !== null ? "high" : "medium";
+
+  const topCorridor = laneSummary.split(",")[0].trim();
+  const topMarket = topCorridor.split("→")[0].trim();
+  return {
+    ruleType: "R_MARKET_TIGHT",
+    outcomeType: "execute",
+    confidence,
+    signalCount: 2,
+    signalSummary: [
+      `Market tightening in ${topMarket} (+${votriWoWAvg.toFixed(1)} pts this week)`,
+      `Active corridors: ${laneSummary}`,
+    ],
+    whyThisNow: `Market tightening in ${topMarket} (+${votriWoWAvg.toFixed(1)}pts this week) — ${laneCount > 1 ? `${laneCount} of this account's corridors are at risk` : `${topCorridor} is at risk`}. Lock in capacity and reach out about rate protection.`,
+    suggestedAction: `Call ${company.name} now — position Value Truck as their committed capacity source while the market tightens. Lock in coverage before competitor brokers reach out.`,
+    expectedOutcome: "Protect existing volume and lock in contract commitment before spot rates spike further.",
+    growthLever: "R_MARKET_TIGHT",
+    relationshipMove: "Proactive capacity assurance call",
+    accountTier: tier,
+    urgencyScore: Math.round(votriWoWAvg * 10),
+  };
+}
+
+// ── R14: Market Loosening (Grow) ─────────────────────────────────────────────
+
+/**
+ * R14 — Market Loosening
+ *
+ * Fires when the Sonar VOTRI WoW delta for the company's lanes averages <= -2.5 pp
+ * (market is loosening — capacity increasing, rates softening).
+ * Grow signal: use improving leverage to negotiate better rates, expand volume,
+ * and deepen the relationship while shipper has market tailwind.
+ */
+export function evalR14MarketLoosening(
+  company: Company,
+  tier: "A" | "B" | null,
+  votriWoWAvg: number,
+  laneSummary: string,
+  laneCount: number = 1,
+): CardCandidate | null {
+  if (votriWoWAvg > -2.5) return null;
+
+  const confidence: "high" | "medium" = votriWoWAvg <= -5 && tier !== null ? "high" : "medium";
+
+  const topCorridor = laneSummary.split(",")[0].trim();
+  const topMarket = topCorridor.split("→")[0].trim();
+  return {
+    ruleType: "R_MARKET_LOOSE",
+    outcomeType: "grow",
+    confidence,
+    signalCount: 2,
+    signalSummary: [
+      `Market loosening in ${topMarket} (${Math.abs(votriWoWAvg).toFixed(1)} pts this week)`,
+      `Active corridors: ${laneSummary}`,
+    ],
+    whyThisNow: `Market loosening in ${topMarket} (${Math.abs(votriWoWAvg).toFixed(1)}pts this week) — opportunity to offer rate relief and capture more share on ${laneCount > 1 ? `${laneCount} active corridors (${topCorridor} + more)` : topCorridor}.`,
+    suggestedAction: `Contact ${company.name} with a market update. Use loosening conditions to negotiate expanded coverage, add new lanes, or grow share-of-wallet with favorable buy rates.`,
+    expectedOutcome: "Grow active lane count and volume while market conditions favor the shipper.",
+    growthLever: "R_MARKET_LOOSE",
+    relationshipMove: "Market intel briefing + expansion conversation",
+    accountTier: tier,
+    urgencyScore: Math.round(Math.abs(votriWoWAvg) * 10),
+  };
+}
+
 // ── R12: Recurring Lane Capacity ─────────────────────────────────────────────
 
 /**
@@ -777,7 +868,7 @@ export async function evaluateCompany(
   const signals = await gatherPhase1Signals(company, orgId, userId, storage, uploads, allAwards);
 
   // Inject open-RFP signal (gathered outside at batch level for efficiency)
-  (signals as any).hasOpenRfp = openRfpCompanyIds.has(company.id);
+  signals.hasOpenRfp = openRfpCompanyIds.has(company.id);
 
   // Filter RFPs to this company for R9
   const companyRfps = allRfps.filter(r => r.companyId === company.id);
