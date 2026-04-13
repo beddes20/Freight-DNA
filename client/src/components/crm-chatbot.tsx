@@ -536,7 +536,7 @@ export function CrmChatbot() {
       {/* Chat panel */}
       {open && (
         <div className={cn(
-          "fixed bottom-24 right-6 z-50 w-[390px] h-[600px] rounded-2xl shadow-2xl border border-border/50",
+          "fixed bottom-40 right-6 z-50 w-[390px] h-[600px] rounded-2xl shadow-2xl border border-border/50",
           "bg-background flex flex-col overflow-hidden",
           "animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
         )}>

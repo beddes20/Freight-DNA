@@ -62,7 +62,7 @@ export function LogTouchFab() {
       onClick={handleClick}
       title="Log Touch (Shift+T)"
       aria-label="Log a touch"
-      className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-full shadow-lg bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all duration-150 text-sm font-medium"
+      className="fixed bottom-24 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-full shadow-lg bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all duration-150 text-sm font-medium"
       style={{ boxShadow: "0 4px 20px rgba(0,0,0,0.25)" }}
     >
       <PhoneCall className="h-4 w-4 shrink-0" />
