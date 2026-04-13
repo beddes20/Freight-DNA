@@ -190,20 +190,36 @@ export function registerFinancialRoutes(app: Express): void {
 
       if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
+        const allOrgUsers = await storage.getUsers(req.session.organizationId!);
+        // Always include the current user in teamIds to handle directors who appear
+        // in financial data under their own name as well as their reports' names.
+        const effectiveIds = teamIds.includes(user.id) ? teamIds : [user.id, ...teamIds];
+        const teamUsers = allOrgUsers.filter(u => effectiveIds.includes(u.id));
         const lmNames = teamUsers.filter(u => u.role === "logistics_manager" || u.role === "logistics_coordinator").map(u => u.name.toLowerCase());
         const salesNames = teamUsers.filter(u => u.role !== "logistics_manager" && u.role !== "logistics_coordinator").map(u => u.name.toLowerCase());
+        // Also include financialRepIds as alternate name identifiers for matching
+        const repIds = teamUsers
+          .filter(u => u.financialRepId && u.role !== "logistics_manager" && u.role !== "logistics_coordinator")
+          .map(u => u.financialRepId!.toLowerCase());
+        const nameMatcher = (candidate: string, nameList: string[], repIdList?: string[]) => {
+          if (!candidate) return false;
+          if (nameList.some(n => n && (candidate.includes(n) || n.includes(candidate)))) return true;
+          if (repIdList && repIdList.some(n => n && (candidate.includes(n) || n.includes(candidate)))) return true;
+          return false;
+        };
         allRows = allRows.filter((r: any) => {
           const op = getRepFromRow(r, oppCols);
           const disp = getDispatcherFromRow(r, oppCols).toLowerCase();
-          return salesNames.some(n => op.includes(n) || n.includes(op))
-            || lmNames.some(n => disp.includes(n) || n.includes(disp));
+          return nameMatcher(op, salesNames, repIds)
+            || nameMatcher(disp, lmNames);
         });
       } else if (user.role === "account_manager") {
         const userName = user.name.toLowerCase();
+        const userRepId = user.financialRepId?.toLowerCase();
         allRows = allRows.filter((r: any) => {
           const op = getRepFromRow(r, oppCols);
-          return op.includes(userName) || userName.includes(op);
+          return op.includes(userName) || userName.includes(op)
+            || (userRepId && (op.includes(userRepId) || userRepId.includes(op)));
         });
       } else if (user.role === "logistics_manager" || user.role === "logistics_coordinator") {
         const userName = user.name.toLowerCase();

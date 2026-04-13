@@ -956,7 +956,10 @@ export type ProspectContact = typeof prospectContacts.$inferSelect;
 // Launchpad CRM — Opportunities
 export const crmOpportunities = pgTable("crm_opportunities", {
   id: serial("id").primaryKey(),
-  prospectId: integer("prospect_id").notNull().references(() => prospects.id, { onDelete: "cascade" }),
+  /** Null for company-linked opportunities (not tied to a prospect pipeline record) */
+  prospectId: integer("prospect_id").references(() => prospects.id, { onDelete: "cascade" }),
+  /** Company profile link — used when opportunity is created from a company detail page */
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "cascade" }),
   organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   recordType: text("record_type").notNull().default("single_multi_lane"),

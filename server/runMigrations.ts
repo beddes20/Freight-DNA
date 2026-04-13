@@ -2166,4 +2166,24 @@ export async function runMigrations() {
   } finally {
     clientPinnedCompanies.release();
   }
+
+  // Task #215 — Add company_id to crm_opportunities and make prospect_id nullable
+  const clientCrmOppCompany = await pool.connect();
+  try {
+    await clientCrmOppCompany.query(`
+      ALTER TABLE crm_opportunities
+        ADD COLUMN IF NOT EXISTS company_id varchar REFERENCES companies(id) ON DELETE CASCADE
+    `);
+    await clientCrmOppCompany.query(`
+      ALTER TABLE crm_opportunities ALTER COLUMN prospect_id DROP NOT NULL
+    `);
+    await clientCrmOppCompany.query(`
+      CREATE INDEX IF NOT EXISTS idx_crm_opp_company_id ON crm_opportunities (company_id)
+    `);
+    console.log("[migrations] crm_opportunities company_id column added, prospect_id made nullable (Task #215)");
+  } catch (err) {
+    console.error("[migrations] crm_opportunities Task #215 error:", err);
+  } finally {
+    clientCrmOppCompany.release();
+  }
 }

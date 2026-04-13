@@ -68,6 +68,7 @@ import { ActivityTab } from "./company-detail/tabs/ActivityTab";
 import { IntelTab } from "./company-detail/tabs/IntelTab";
 import { PeopleTab } from "./company-detail/tabs/PeopleTab";
 import { RfpTab } from "./company-detail/tabs/RfpTab";
+import { OpportunitiesTab } from "./company-detail/tabs/OpportunitiesTab";
 import { QuickTouchDialog } from "./company-detail/components/QuickTouchDialog";
 import { TrendsDialog } from "./company-detail/components/TrendsDialog";
 import { ImportContactsDialog } from "./company-detail/components/ImportContactsDialog";
@@ -104,7 +105,7 @@ export default function CompanyDetail() {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTaskItem, setEditingTaskItem] = useState<TaskWithCount | undefined>();
   const [focusTaskComments, setFocusTaskComments] = useState(false);
-  const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[] } | undefined>();
+  const [forceLanePrefill, setForceLanePrefill] = useState<{ title: string; notes?: string; attachedLaneData?: any[]; opportunityId?: number } | undefined>();
   const [showTrends, setShowTrends] = useState(false);
   const [calloutDialogOpen, setCalloutDialogOpen] = useState(false);
   const [calloutReplyTo, setCalloutReplyTo] = useState<{ id: string; title: string } | undefined>();
@@ -776,11 +777,12 @@ export default function CompanyDetail() {
       )}
 
       <Tabs value={detailTab} onValueChange={(t) => { setDetailTab(t); localStorage.setItem("cd_tab", t); }}>
-        <TabsList className="w-full grid grid-cols-5 mb-1">
+        <TabsList className="w-full grid grid-cols-6 mb-1">
           <TabsTrigger value="overview" data-testid="tab-detail-overview">Overview</TabsTrigger>
           <TabsTrigger value="activity" data-testid="tab-detail-activity">Activity</TabsTrigger>
           <TabsTrigger value="intelligence" data-testid="tab-detail-intelligence">Intel</TabsTrigger>
           <TabsTrigger value="people" data-testid="tab-detail-people">People</TabsTrigger>
+          <TabsTrigger value="opportunities" data-testid="tab-detail-opportunities">Opportunities</TabsTrigger>
           <TabsTrigger value="rfp" data-testid="tab-detail-rfp">RFP & Lanes</TabsTrigger>
         </TabsList>
 
@@ -876,6 +878,18 @@ export default function CompanyDetail() {
             setTaskDialogOpen={setTaskDialogOpen}
             setOrgEmailContact={setOrgEmailContact}
             currentUser={currentUser}
+          />
+        </TabsContent>
+
+        <TabsContent value="opportunities" className="space-y-4 mt-2">
+          <OpportunitiesTab
+            companyId={companyId}
+            companyName={company!.name}
+            onCreateTask={(title, notes, opportunityId) => {
+              setForceLanePrefill({ title, notes, opportunityId });
+              setEditingTaskItem(undefined);
+              setTaskDialogOpen(true);
+            }}
           />
         </TabsContent>
 

@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { storage } from "../storage";
 import { getCurrentUser, canAccessCompany, getVisibleCompanyIds, requireAuth } from "../auth";
-import { type Callout, internalPosts as internalPostsTable } from "@shared/schema";
+import { type Callout, internalPosts as internalPostsTable, type InsertCrmOpportunity } from "@shared/schema";
 import { db } from "../storage";
 import { eq } from "drizzle-orm";
 
@@ -186,10 +186,21 @@ export function registerEngagementRoutes(app: Express) {
       const { type, category, title, description, companyId, estimatedLoads, estimatedValue, loggedAt } = req.body;
       if (!type || !title) return res.status(400).json({ error: "type and title are required" });
 
+      // Guard: if a companyId is supplied, verify the caller can access that company
+      // and that the company belongs to the same org (prevents IDOR data injection)
+      let authorizedCompanyId: string | null = null;
+      if (companyId) {
+        const company = await storage.getCompany(companyId);
+        if (company && company.organizationId === user.organizationId && await canAccessCompany(user, companyId)) {
+          authorizedCompanyId = companyId;
+        }
+        // If not authorized we still allow the log, just without the company link
+      }
+
       const log = await storage.createOpportunityLog({
         organizationId: req.session.organizationId!,
         repId: user.id,
-        companyId: companyId || null,
+        companyId: authorizedCompanyId,
         type,
         category: category || "other",
         title,
@@ -199,6 +210,31 @@ export function registerEngagementRoutes(app: Express) {
         loggedAt: loggedAt || new Date().toISOString().split("T")[0],
         createdAt: new Date().toISOString(),
       });
+
+      // Bridge: also create a crm_opportunities record for the company-linked tab (Task #215)
+      if (authorizedCompanyId) {
+        const oppStage = type === "win" ? "closed_won" : "qualification";
+        const oppOutcome: string | null = type === "win" ? "closed_won" : null;
+        try {
+          await storage.createCrmOpportunity({
+            name: title,
+            stage: oppStage,
+            outcome: oppOutcome,
+            amount: estimatedValue != null ? String(estimatedValue) : null,
+            closeDate: type === "win" ? (loggedAt || new Date().toISOString().split("T")[0]) : null,
+            notes: description || null,
+            probability: null,
+            lostReason: null,
+            recordType: "single_multi_lane",
+            prospectId: null,
+            companyId: authorizedCompanyId,
+            organizationId: user.organizationId,
+            createdById: user.id,
+          });
+        } catch (bridgeErr) {
+          console.error("[opportunity-log bridge] Failed to create crm_opportunity:", bridgeErr);
+        }
+      }
 
       if (type === "win") {
         const categoryLabels: Record<string, string> = {
@@ -229,6 +265,24 @@ export function registerEngagementRoutes(app: Express) {
       res.status(201).json({ ...log });
     } catch (error) {
       res.status(500).json({ error: "Failed to create opportunity log" });
+    }
+  });
+
+  app.patch("/api/opportunity-logs/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const logs = await storage.getOpportunityLogs(req.session.organizationId!);
+      const log = logs.find(l => l.id === req.params.id);
+      if (!log) return res.status(404).json({ error: "Not found" });
+      if (log.repId !== user.id && user.role !== "admin" && user.role !== "director" && user.role !== "sales_director") {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+      const { description } = req.body;
+      const updated = await storage.updateOpportunityLog(req.params.id as string, { description: description ?? null });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update opportunity log" });
     }
   });
 
@@ -542,6 +596,106 @@ export function registerEngagementRoutes(app: Express) {
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to toggle feed reaction" });
+    }
+  });
+
+  // ── Company Opportunities (Task #215) ─────────────────────────────────────────
+
+  app.get("/api/companies/:id/opportunities", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = req.params.id as string;
+      const canAccess = await canAccessCompany(user, companyId);
+      if (!canAccess) return res.status(403).json({ error: "Forbidden" });
+      const rows = await storage.getCrmOpportunitiesByCompanyId(companyId);
+      res.json(rows);
+    } catch (err) {
+      console.error("GET /api/companies/:id/opportunities error:", err);
+      res.status(500).json({ error: "Failed to fetch opportunities" });
+    }
+  });
+
+  app.post("/api/companies/:id/opportunities", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = req.params.id as string;
+      const canAccess = await canAccessCompany(user, companyId);
+      if (!canAccess) return res.status(403).json({ error: "Forbidden" });
+      const { name, stage, amount, closeDate, probability, notes, lostReason, outcome } = req.body;
+      if (!name || typeof name !== "string" || name.trim().length === 0) {
+        return res.status(400).json({ error: "name is required" });
+      }
+      const row = await storage.createCrmOpportunity({
+        name: name.trim(),
+        stage: stage ?? "qualification",
+        amount: amount ?? null,
+        closeDate: closeDate ?? null,
+        probability: probability ?? null,
+        notes: notes ?? null,
+        lostReason: lostReason ?? null,
+        outcome: outcome ?? null,
+        recordType: "single_multi_lane",
+        prospectId: null,
+        companyId,
+        organizationId: user.organizationId,
+        createdById: user.id,
+      });
+      res.json(row);
+    } catch (err) {
+      console.error("POST /api/companies/:id/opportunities error:", err);
+      res.status(500).json({ error: "Failed to create opportunity" });
+    }
+  });
+
+  app.patch("/api/companies/:id/opportunities/:oppId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = req.params.id as string;
+      const oppId = parseInt(req.params.oppId);
+      const canAccess = await canAccessCompany(user, companyId);
+      if (!canAccess) return res.status(403).json({ error: "Forbidden" });
+      const existing = await storage.getCrmOpportunityById(oppId);
+      if (!existing || existing.companyId !== companyId || existing.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "Opportunity not found" });
+      }
+      type OppEditableFields = Pick<InsertCrmOpportunity, "name" | "stage" | "amount" | "closeDate" | "probability" | "notes" | "lostReason" | "outcome">;
+      const allowedFields: (keyof OppEditableFields)[] = ["name", "stage", "amount", "closeDate", "probability", "notes", "lostReason", "outcome"];
+      const safeUpdate: Partial<OppEditableFields> = {};
+      for (const field of allowedFields) {
+        if (field in req.body) (safeUpdate as Record<string, unknown>)[field] = req.body[field];
+      }
+      if ("name" in safeUpdate && (!safeUpdate.name || safeUpdate.name.trim().length === 0)) {
+        return res.status(400).json({ error: "name cannot be empty" });
+      }
+      const row = await storage.updateCrmOpportunity(oppId, safeUpdate);
+      if (!row) return res.status(404).json({ error: "Not found" });
+      res.json(row);
+    } catch (err) {
+      console.error("PATCH /api/companies/:id/opportunities/:oppId error:", err);
+      res.status(500).json({ error: "Failed to update opportunity" });
+    }
+  });
+
+  app.delete("/api/companies/:id/opportunities/:oppId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = req.params.id as string;
+      const oppId = parseInt(req.params.oppId);
+      const canAccess = await canAccessCompany(user, companyId);
+      if (!canAccess) return res.status(403).json({ error: "Forbidden" });
+      const existing = await storage.getCrmOpportunityById(oppId);
+      if (!existing || existing.companyId !== companyId || existing.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "Opportunity not found" });
+      }
+      await storage.deleteCrmOpportunity(oppId);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("DELETE /api/companies/:id/opportunities/:oppId error:", err);
+      res.status(500).json({ error: "Failed to delete opportunity" });
     }
   });
 }

@@ -551,6 +551,7 @@ export interface IStorage {
 
   createOpportunityLog(data: InsertOpportunityLog & { createdAt: string }): Promise<OpportunityLog>;
   getOpportunityLogs(orgId: string, filters?: { repId?: string; companyId?: string; type?: string; startDate?: string; endDate?: string }): Promise<OpportunityLog[]>;
+  updateOpportunityLog(id: string, data: { description?: string | null }): Promise<OpportunityLog | undefined>;
   deleteOpportunityLog(id: string): Promise<boolean>;
   getOpportunityLogSummary(repIds: string[], startDate: string, endDate: string): Promise<Array<{ repId: string; opportunities: number; wins: number }>>;
 
@@ -570,6 +571,7 @@ export interface IStorage {
 
   // Launchpad CRM — Opportunities
   getCrmOpportunities(prospectId: number): Promise<import('../shared/schema').CrmOpportunity[]>;
+  getCrmOpportunitiesByCompanyId(companyId: string): Promise<import('../shared/schema').CrmOpportunity[]>;
   getCrmOpportunityById(id: number): Promise<import('../shared/schema').CrmOpportunity | undefined>;
   createCrmOpportunity(data: import('../shared/schema').InsertCrmOpportunity): Promise<import('../shared/schema').CrmOpportunity>;
   updateCrmOpportunity(id: number, data: Partial<import('../shared/schema').InsertCrmOpportunity>): Promise<import('../shared/schema').CrmOpportunity | undefined>;
@@ -2948,6 +2950,14 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(opportunityLogs).where(and(...conditions)).orderBy(desc(opportunityLogs.loggedAt));
   }
 
+  async updateOpportunityLog(id: string, data: { description?: string | null }): Promise<OpportunityLog | undefined> {
+    const [updated] = await db.update(opportunityLogs)
+      .set({ description: data.description ?? null })
+      .where(eq(opportunityLogs.id, id))
+      .returning();
+    return updated;
+  }
+
   async deleteOpportunityLog(id: string): Promise<boolean> {
     const result = await db.delete(opportunityLogs).where(eq(opportunityLogs.id, id)).returning();
     return result.length > 0;
@@ -3117,6 +3127,11 @@ export class DatabaseStorage implements IStorage {
   async getCrmOpportunities(prospectId: number): Promise<import('../shared/schema').CrmOpportunity[]> {
     const { crmOpportunities } = await import('../shared/schema');
     return db.select().from(crmOpportunities).where(eq(crmOpportunities.prospectId, prospectId)).orderBy(crmOpportunities.createdAt);
+  }
+
+  async getCrmOpportunitiesByCompanyId(companyId: string): Promise<import('../shared/schema').CrmOpportunity[]> {
+    const { crmOpportunities } = await import('../shared/schema');
+    return db.select().from(crmOpportunities).where(eq(crmOpportunities.companyId, companyId)).orderBy(desc(crmOpportunities.createdAt));
   }
 
   async getCrmOpportunityById(id: number): Promise<import('../shared/schema').CrmOpportunity | undefined> {

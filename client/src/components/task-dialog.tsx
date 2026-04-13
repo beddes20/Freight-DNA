@@ -44,6 +44,7 @@ interface PrefillData {
   title: string;
   notes?: string;
   attachedLaneData?: any[];
+  opportunityId?: number;
 }
 
 interface TaskDialogProps {
@@ -283,6 +284,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
           assignedTo,
           companyId: effectiveCompanyId && effectiveCompanyId !== "none" ? effectiveCompanyId : null,
           attachedLaneData,
+          opportunityId: prefillData?.opportunityId ?? null,
         });
         taskResult = await res.json() as { id: string };
       }
