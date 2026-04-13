@@ -1832,11 +1832,11 @@ export default function LaneWorkQueuePage() {
       ...(queue.inProgress ?? []),
     ];
     for (const item of allItems) {
-      if (item.lane.origin && item.lane.destination) {
-        const key = `${item.lane.origin}|${item.lane.destination}`;
+      if (item.origin && item.destination) {
+        const key = `${item.origin}|${item.destination}`;
         if (!seen.has(key)) {
           seen.add(key);
-          pairs.push({ origin: item.lane.origin, destination: item.lane.destination });
+          pairs.push({ origin: item.origin, destination: item.destination });
         }
       }
     }
