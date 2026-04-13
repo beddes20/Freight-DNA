@@ -362,7 +362,7 @@ export function registerCarrierHubRoutes(app: Express) {
       if (!c) return res.status(404).json({ error: "Carrier not found" });
 
       // Proven lane history from lane_carrier_interest (read-only, system-derived)
-      const [provenHistory, outreachActivity] = await Promise.all([
+      const [provenHistory, outreachActivity, inboundReplies, commitmentSignals] = await Promise.all([
         storage.pool.query(
           `
           SELECT
@@ -401,21 +401,71 @@ export function registerCarrierHubRoutes(app: Express) {
           `,
           [id]
         ),
+        // Inbound replies from this carrier (matched by matchedCarrierId)
+        storage.pool.query(
+          `SELECT COUNT(*)::int AS reply_count
+           FROM carrier_outreach_logs
+           WHERE matched_carrier_id = $1 AND direction = 'inbound'`,
+          [id]
+        ),
+        // Commitment signals extracted from emails with this carrier
+        storage.pool.query(
+          `SELECT es.intent_type, COUNT(*)::int AS cnt
+           FROM email_signals es
+           JOIN email_messages em ON em.id = es.message_id
+           WHERE em.linked_carrier_id = $1
+             AND es.intent_type IN ('soft_commitment','hard_commitment','lane_offer','lane_decline','price_pushback')
+           GROUP BY es.intent_type`,
+          [id]
+        ),
       ]);
 
       // TMS history: pull from financial uploads for this carrier by payee code or name.
       // This surfaces historical load data that predates the Carrier Hub catalog.
       const tmsLaneSummary = await buildCarrierTmsHistory(org, c.payeeCode, c.name);
 
+      // Compute reliability score (0–100)
+      const outreachSent = outreachActivity.rows.length;
+      const repliesReceived = inboundReplies.rows[0]?.reply_count ?? 0;
+      const replyRate = outreachSent > 0 ? Math.round((repliesReceived / outreachSent) * 100) : 0;
+
+      const signalCounts: Record<string, number> = {};
+      for (const row of commitmentSignals.rows) {
+        signalCounts[row.intent_type] = row.cnt;
+      }
+      const softCommitments = signalCounts["soft_commitment"] ?? 0;
+      const hardCommitments = signalCounts["hard_commitment"] ?? 0;
+      const laneOffers = signalCounts["lane_offer"] ?? 0;
+      const laneDeclines = signalCounts["lane_decline"] ?? 0;
+      const totalCommitmentOpps = softCommitments + hardCommitments;
+      const hardCommitmentRate = totalCommitmentOpps > 0
+        ? Math.round((hardCommitments / totalCommitmentOpps) * 100) : 0;
+
+      // Reliability score: weighted composite of reply rate (40%), commitment conversion (30%), positive outcomes (30%)
+      const positiveOutcomeCount = provenHistory.rows.filter(
+        (r: { interest_status: string }) => r.interest_status === "available" || r.interest_status === "available_next_week"
+      ).length;
+      const positiveOutcomeRate = outreachSent > 0 ? Math.round((positiveOutcomeCount / outreachSent) * 100) : 0;
+      const reliabilityScore = outreachSent === 0
+        ? null // Not enough data
+        : Math.min(100, Math.round(replyRate * 0.4 + hardCommitmentRate * 0.3 + positiveOutcomeRate * 0.3));
+
       const stats = {
         provenLaneCount: provenHistory.rows.length,
-        outreachSentCount: outreachActivity.rows.length,
-        positiveOutcomes: provenHistory.rows.filter(
-          r => r.interest_status === "available" || r.interest_status === "available_next_week"
-        ).length,
+        outreachSentCount: outreachSent,
+        positiveOutcomes: positiveOutcomeCount,
         lastUsed: provenHistory.rows[0]?.updated_at ?? null,
         tmsLaneCount: tmsLaneSummary.length,
-        tmsTotalLoads: tmsLaneSummary.reduce((sum, l) => sum + l.loads, 0),
+        tmsTotalLoads: tmsLaneSummary.reduce((sum: number, l: { loads: number }) => sum + l.loads, 0),
+        // Reliability stats
+        repliesReceived,
+        replyRate,
+        softCommitments,
+        hardCommitments,
+        laneOffers,
+        laneDeclines,
+        hardCommitmentRate,
+        reliabilityScore,
       };
 
       res.json({

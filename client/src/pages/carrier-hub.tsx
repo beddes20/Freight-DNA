@@ -24,7 +24,7 @@ import {
   Truck, Building2, Phone, Mail, MapPin, Search, Plus, X, ChevronRight,
   AlertTriangle, CheckCircle2, Star, User, Route, Activity, Settings,
   Globe, Loader2, Edit2, Trash2, Shield, History, Zap, ExternalLink,
-  HelpCircle, Brain, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp,
+  HelpCircle, Brain, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, ShieldCheck,
 } from "lucide-react";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -645,7 +645,22 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
   interface ActivityData {
     provenHistory: ProvenLane[];
     outreachActivity: any[];
-    stats: { provenLaneCount: number; outreachSentCount: number; positiveOutcomes: number; lastUsed: string | null };
+    stats: {
+      provenLaneCount: number;
+      outreachSentCount: number;
+      positiveOutcomes: number;
+      lastUsed: string | null;
+      tmsLaneCount?: number;
+      tmsTotalLoads?: number;
+      repliesReceived?: number;
+      replyRate?: number | null;
+      softCommitments?: number;
+      hardCommitments?: number;
+      laneOffers?: number;
+      laneDeclines?: number;
+      hardCommitmentRate?: number;
+      reliabilityScore?: number | null;
+    };
   }
   const activityEnabled = (activeTab === "lanes" || activeTab === "activity") && !!carrierId;
   const { data: activityData, isLoading: activityLoading } = useQuery<ActivityData>({
@@ -817,6 +832,68 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
             </div>
           ))}
         </div>
+
+        {/* Reliability Score Panel — shown once activity is loaded */}
+        {activityData && (
+          <div className="mt-2 rounded-lg border border-border bg-muted/20 px-3 py-2.5" data-testid="reliability-panel">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                Reliability Score
+              </span>
+              {activityData.stats.reliabilityScore == null ? (
+                <span className="text-[10px] text-muted-foreground italic">Not enough data</span>
+              ) : (
+                <span
+                  className={`text-sm font-bold ${
+                    activityData.stats.reliabilityScore >= 70 ? "text-green-500" :
+                    activityData.stats.reliabilityScore >= 40 ? "text-amber-500" : "text-red-500"
+                  }`}
+                  data-testid="reliability-score-value"
+                >
+                  {activityData.stats.reliabilityScore}/100
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-4 mt-2 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground">Reply Rate</span>
+                <span className="text-[11px] font-semibold text-foreground">
+                  {activityData.stats.replyRate != null ? `${activityData.stats.replyRate}%` : "—"}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground">Hard Commits</span>
+                <span className="text-[11px] font-semibold text-foreground">
+                  {activityData.stats.hardCommitments ?? 0}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground">Soft Commits</span>
+                <span className="text-[11px] font-semibold text-foreground">
+                  {activityData.stats.softCommitments ?? 0}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground">Lane Offers</span>
+                <span className="text-[11px] font-semibold text-foreground">
+                  {activityData.stats.laneOffers ?? 0}
+                </span>
+              </div>
+              {activityData.stats.reliabilityScore != null && (
+                <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden min-w-[60px]">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      activityData.stats.reliabilityScore >= 70 ? "bg-green-500" :
+                      activityData.stats.reliabilityScore >= 40 ? "bg-amber-500" : "bg-red-500"
+                    }`}
+                    style={{ width: `${activityData.stats.reliabilityScore}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
