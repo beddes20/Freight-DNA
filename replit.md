@@ -48,6 +48,7 @@ The application uses React, TypeScript, Tailwind CSS, and `shadcn/ui` for a mode
     - **Stable Coverage System**: Computes per-lane coverage profiles from TMS history, tracks incumbent carriers, and broadens search modes.
     - **My Procurement**: Personal unified work surface for reps showing LWQ lane assignments and open award carrier procurement tasks.
     - **Carrier Hub (Phase 1)**: Central carrier intelligence layer with contact management, claimed lanes, and activity tracking.
+    - **Rate Intelligence & Rep Coaching Engine** (Task #219): SONAR-driven lane rate benchmarks (4-hour TTL), `ratePositioning` computation layer (ABOVE/AT/BELOW market classifications with ±10% threshold), GPT-4o coaching cards per lane, Rate Positioning Panel on Intel page, Director portfolio rate exposure portlet, daily rate positioning email summary, and `get_lane_rate_positioning` chatbot tool.
     - **LWQ ↔ Carrier Hub Cross-Linking**: Provides explanations for ranked carrier suggestions and allows navigation to Carrier Hub profiles.
     - **Customer Contact Capture from Email**: Detects new people in account-linked email threads and surfaces lightweight contact suggestions. Suggestions shown on company People tab; count badge visible in the Customers list. Batch count API: `GET /api/internal/accounts/suggestion-counts`.
     - **Two-Way Carrier Email**: Outbound emails to carriers include a reply-to address routed through Microsoft Graph webhook; inbound replies matched to outreach logs.
@@ -89,5 +90,6 @@ The application uses React, TypeScript, Tailwind CSS, and `shadcn/ui` for a mode
 - **OneDrive API (Microsoft Graph API)**: For financial data synchronization and reply webhook routing.
 - **node-cron**: For scheduling recurring jobs.
 - **Resend / GoDaddy SMTP**: For sending transactional and report emails.
-- **OpenAI (GPT-4o-mini)**: For AI-assisted features (RFP column mapping, lane gap insights, email drafting).
+- **OpenAI (GPT-4o / GPT-4o-mini)**: For AI-assisted features (RFP column mapping, lane gap insights, email drafting, lane coaching cards).
 - **Microsoft Graph API (Outlook)**: Two-way carrier email via webhook subscription.
+- **FreightWaves SONAR**: Market rate benchmarking (VCRPM1/VOTRI signals) with 4-hour TTL cache for lane rate intelligence.

@@ -28,7 +28,7 @@ import {
   AlertTriangle, TrendingUp, TrendingDown, Zap, Truck, DollarSign,
   Radio, Clock, BarChart2, ArrowRight, Send, Users, Building2,
   Trophy, Package, ChevronRight, RefreshCw, CloudRain, Sparkles,
-  MapPin, ThermometerSun, Activity,
+  MapPin, ThermometerSun, Activity, Target,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -179,6 +179,52 @@ interface TracForecastDay {
   date: string;
   forecastRpm: number | null;
   forecastIndexValue: number | null;
+}
+
+interface RatePositioningEntry {
+  lane: string;
+  origin: string;
+  destination: string;
+  avgCarrierPayPerMile: number;
+  marketRatePerMile: number;
+  deltaPerMile: number;
+  deltaPct: number;
+  classification: "ABOVE_MARKET" | "AT_MARKET" | "BELOW_MARKET";
+  forecastDirection: "TIGHTENING" | "EASING" | "STABLE";
+  forecastWeeklyRates: Array<{ week: number; ratePerMile: number }>;
+  historicalWeeklyPaidRates: Array<{ weekLabel: string; ratePerMile: number }>;
+  historicalWeeklyMarketRates: Array<{ weekLabel: string; ratePerMile: number }>;
+  votri: number | null;
+  totalLoads: number;
+  coachingCard: string | null;
+  source: "lane" | "national_fallback";
+  isStale: boolean;
+}
+
+interface RatePositioningSummary {
+  lanes: RatePositioningEntry[];
+  portfolioExposure: {
+    aboveMarketCount: number;
+    atMarketCount: number;
+    belowMarketCount: number;
+    aboveMarketPct: number;
+    atMarketPct: number;
+    belowMarketPct: number;
+    avgDeltaPct: number;
+    worstLane: string | null;
+    bestLane: string | null;
+    monthlyOverMarketDollars: number;
+    tighteningActionLanes: string[];
+  };
+  repLeaderboard: Array<{
+    repName: string;
+    avgDeltaPct: number;
+    aboveCount: number;
+    belowCount: number;
+    atCount: number;
+    totalLanes: number;
+  }>;
+  generatedAt: string;
 }
 
 interface TracLaneCard {
@@ -1145,6 +1191,326 @@ function IntelSkeleton() {
   );
 }
 
+// ── Rate Positioning Panel ─────────────────────────────────────────────────────
+
+function classificationBadge(cls: RatePositioningEntry["classification"]) {
+  if (cls === "ABOVE_MARKET") return <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-700">▲ Above Market</span>;
+  if (cls === "BELOW_MARKET") return <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-700">▼ Below Market</span>;
+  return <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-700">◆ At Market</span>;
+}
+
+function forecastBadge(dir: RatePositioningEntry["forecastDirection"]) {
+  if (dir === "TIGHTENING") return <span className="text-[10px] font-semibold text-red-600 dark:text-red-400">📈 Tightening</span>;
+  if (dir === "EASING") return <span className="text-[10px] font-semibold text-green-600 dark:text-green-400">📉 Easing</span>;
+  return <span className="text-[10px] font-semibold text-muted-foreground">📊 Stable</span>;
+}
+
+/** Inline SVG sparkline for the rate trend chart */
+function RateTrendSparkline({ historicalPaid, historicalMarket, forecast }: {
+  historicalPaid: Array<{ weekLabel: string; ratePerMile: number }>;
+  historicalMarket: Array<{ weekLabel: string; ratePerMile: number }>;
+  forecast: Array<{ week: number; ratePerMile: number }>;
+}) {
+  const W = 220, H = 52, PAD = 6;
+
+  // Combine historical + forecast market rates for a continuous market line
+  const allPoints: Array<{ x: number; paid?: number; market: number; isForecast: boolean }> = [];
+  const totalHistPoints = historicalPaid.length;
+  const totalForecastPoints = forecast.length;
+  const totalPoints = totalHistPoints + totalForecastPoints;
+  if (totalPoints === 0) return null;
+
+  for (let i = 0; i < totalHistPoints; i++) {
+    allPoints.push({
+      x: i,
+      paid: historicalPaid[i]?.ratePerMile,
+      market: historicalMarket[i]?.ratePerMile ?? historicalPaid[i]?.ratePerMile,
+      isForecast: false,
+    });
+  }
+  for (let i = 0; i < totalForecastPoints; i++) {
+    allPoints.push({
+      x: totalHistPoints + i,
+      market: forecast[i].ratePerMile,
+      isForecast: true,
+    });
+  }
+
+  const allRates = allPoints.flatMap(p => [p.paid ?? p.market, p.market]).filter(v => v > 0);
+  if (allRates.length < 2) return null;
+
+  const minR = Math.min(...allRates) * 0.97;
+  const maxR = Math.max(...allRates) * 1.03;
+  const xScale = (x: number) => PAD + (x / (totalPoints - 1)) * (W - PAD * 2);
+  const yScale = (v: number) => H - PAD - ((v - minR) / (maxR - minR)) * (H - PAD * 2);
+
+  const marketPath = allPoints.map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.x).toFixed(1)},${yScale(p.market).toFixed(1)}`).join(" ");
+  const paidPoints = allPoints.filter(p => p.paid !== undefined);
+  const paidPath = paidPoints.map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.x).toFixed(1)},${yScale(p.paid!).toFixed(1)}`).join(" ");
+
+  // Forecast divider x position
+  const divX = xScale(totalHistPoints - 0.5);
+
+  return (
+    <svg width={W} height={H} data-testid="chart-rate-trend-sparkline" style={{ overflow: "visible" }}>
+      {/* Forecast zone shading */}
+      {totalForecastPoints > 0 && (
+        <rect x={divX} y={PAD} width={W - PAD - divX} height={H - PAD * 2} fill="rgba(99,102,241,0.06)" rx="2" />
+      )}
+      {/* Market rate line */}
+      <path d={marketPath} fill="none" stroke="#6366f1" strokeWidth="1.5" strokeDasharray={totalForecastPoints > 0 ? `${(totalHistPoints * (W - PAD * 2)) / totalPoints} 4` : "none"} />
+      {/* Paid rate line (solid, historical only) */}
+      {paidPath && <path d={paidPath} fill="none" stroke="#dc2626" strokeWidth="2" />}
+      {/* Divider line */}
+      {totalForecastPoints > 0 && <line x1={divX} y1={PAD} x2={divX} y2={H - PAD} stroke="#94a3b8" strokeWidth="1" strokeDasharray="3 2" />}
+    </svg>
+  );
+}
+
+function RatePositioningLaneCard({ entry }: { entry: RatePositioningEntry }) {
+  const [expanded, setExpanded] = useState(false);
+  const [showChart, setShowChart] = useState(false);
+  const aboveBelow = entry.deltaPerMile >= 0 ? "above" : "below";
+  const deltaColor = entry.classification === "ABOVE_MARKET"
+    ? "text-red-600 dark:text-red-400"
+    : entry.classification === "BELOW_MARKET"
+    ? "text-green-600 dark:text-green-400"
+    : "text-yellow-600 dark:text-yellow-400";
+
+  const hasTrendData = (entry.historicalWeeklyPaidRates?.length ?? 0) > 0 || (entry.forecastWeeklyRates?.length ?? 0) > 0;
+
+  return (
+    <div className="border rounded-xl p-4 bg-card" data-testid={`card-rate-positioning-${entry.lane.replace(/\s+/g, "-").toLowerCase()}`}>
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div>
+          <div className="text-sm font-semibold text-foreground capitalize">
+            {entry.origin} → {entry.destination}
+          </div>
+          <div className="text-xs text-muted-foreground mt-0.5">{entry.totalLoads} loads</div>
+        </div>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          {classificationBadge(entry.classification)}
+          {forecastBadge(entry.forecastDirection)}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 my-3">
+        <div className="text-center bg-muted/40 rounded-lg p-2">
+          <div className="text-xs text-muted-foreground mb-0.5">Paid $/mi</div>
+          <div className="text-sm font-bold text-foreground">${entry.avgCarrierPayPerMile.toFixed(2)}</div>
+        </div>
+        <div className="text-center bg-muted/40 rounded-lg p-2">
+          <div className="text-xs text-muted-foreground mb-0.5">Market $/mi</div>
+          <div className="text-sm font-bold text-foreground">${entry.marketRatePerMile.toFixed(2)}</div>
+        </div>
+        <div className="text-center bg-muted/40 rounded-lg p-2">
+          <div className="text-xs text-muted-foreground mb-0.5">Delta</div>
+          <div className={`text-sm font-bold ${deltaColor}`}>
+            {aboveBelow === "above" ? "+" : "-"}${Math.abs(entry.deltaPerMile).toFixed(2)}
+            <span className="text-[10px] font-normal ml-0.5">({Math.abs(entry.deltaPct).toFixed(1)}%)</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Trend chart toggle */}
+      {hasTrendData && (
+        <div className="mb-2">
+          <button
+            className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-1"
+            onClick={() => setShowChart(c => !c)}
+            data-testid={`button-trend-expand-${entry.lane.replace(/\s+/g, "-").toLowerCase()}`}
+          >
+            <BarChart2 className="h-3 w-3" />
+            {showChart ? "Hide" : "Show"} Rate Trend
+          </button>
+          {showChart && (
+            <div className="mt-2 rounded-lg bg-muted/20 border p-3 overflow-x-auto" data-testid={`chart-rate-trend-${entry.lane.replace(/\s+/g, "-").toLowerCase()}`}>
+              <div className="flex items-center gap-3 mb-2">
+                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <span className="inline-block w-3 h-0.5 bg-red-500 rounded" /> Org paid $/mi
+                </div>
+                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <span className="inline-block w-3 h-0.5 bg-indigo-500 rounded" /> Market $/mi
+                </div>
+                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <span className="inline-block w-3 h-2 bg-indigo-100 dark:bg-indigo-900/30 rounded" /> Forecast
+                </div>
+              </div>
+              <RateTrendSparkline
+                historicalPaid={entry.historicalWeeklyPaidRates ?? []}
+                historicalMarket={entry.historicalWeeklyMarketRates ?? []}
+                forecast={entry.forecastWeeklyRates ?? []}
+              />
+              <div className="flex justify-between mt-1 text-[9px] text-muted-foreground">
+                <span>6 wks ago</span>
+                <span>Now</span>
+                <span>+3 wk forecast</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {entry.coachingCard && (
+        <div className="mt-2">
+          <button
+            className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-1"
+            onClick={() => setExpanded(e => !e)}
+            data-testid={`button-coaching-expand-${entry.lane.replace(/\s+/g, "-").toLowerCase()}`}
+          >
+            <Sparkles className="h-3 w-3" />
+            {expanded ? "Hide" : "Show"} Coaching Card
+          </button>
+          {expanded && (
+            <div className="mt-2 rounded-lg bg-primary/5 border border-primary/20 p-3 text-xs text-foreground/80 leading-relaxed italic">
+              {entry.coachingCard}
+            </div>
+          )}
+        </div>
+      )}
+
+      {entry.isStale && (
+        <div className="mt-1 text-[10px] text-amber-500">⚠ Market data may be stale</div>
+      )}
+    </div>
+  );
+}
+
+type RateFilter = "all" | "ABOVE_MARKET" | "AT_MARKET" | "BELOW_MARKET";
+
+function RatePositioningPanel({ rp }: { rp: RatePositioningSummary }) {
+  const [filter, setFilter] = useState<RateFilter>("all");
+  const exp = rp.portfolioExposure;
+
+  const filteredLanes = filter === "all"
+    ? rp.lanes
+    : rp.lanes.filter(e => e.classification === filter);
+
+  return (
+    <section className="mb-10" data-testid="section-rate-positioning">
+      <h2 className="text-lg font-bold text-foreground flex items-center gap-2 mb-4">
+        <Target className="h-5 w-5 text-indigo-600" /> Rate Intelligence & Positioning
+      </h2>
+
+      {/* Portfolio Exposure Summary — clickable filter tiles */}
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <button
+          className={`rounded-xl border p-4 text-center transition-all ${filter === "ABOVE_MARKET" ? "ring-2 ring-red-500 bg-red-100 dark:bg-red-900/30" : "bg-red-50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-900/20"}`}
+          onClick={() => setFilter(f => f === "ABOVE_MARKET" ? "all" : "ABOVE_MARKET")}
+          data-testid="filter-above-market"
+        >
+          <div className="text-2xl font-black text-red-600 dark:text-red-400">{exp.aboveMarketCount}</div>
+          <div className="text-xs font-semibold text-red-700 dark:text-red-300 mt-0.5">Above Market</div>
+          <div className="text-[10px] text-muted-foreground">{exp.aboveMarketPct.toFixed(0)}% of lanes</div>
+        </button>
+        <button
+          className={`rounded-xl border p-4 text-center transition-all ${filter === "AT_MARKET" ? "ring-2 ring-yellow-500 bg-yellow-100 dark:bg-yellow-900/30" : "bg-yellow-50 dark:bg-yellow-950/20 hover:bg-yellow-100 dark:hover:bg-yellow-900/20"}`}
+          onClick={() => setFilter(f => f === "AT_MARKET" ? "all" : "AT_MARKET")}
+          data-testid="filter-at-market"
+        >
+          <div className="text-2xl font-black text-yellow-600 dark:text-yellow-400">{exp.atMarketCount}</div>
+          <div className="text-xs font-semibold text-yellow-700 dark:text-yellow-300 mt-0.5">At Market</div>
+          <div className="text-[10px] text-muted-foreground">{exp.atMarketPct.toFixed(0)}% of lanes</div>
+        </button>
+        <button
+          className={`rounded-xl border p-4 text-center transition-all ${filter === "BELOW_MARKET" ? "ring-2 ring-green-500 bg-green-100 dark:bg-green-900/30" : "bg-green-50 dark:bg-green-950/20 hover:bg-green-100 dark:hover:bg-green-900/20"}`}
+          onClick={() => setFilter(f => f === "BELOW_MARKET" ? "all" : "BELOW_MARKET")}
+          data-testid="filter-below-market"
+        >
+          <div className="text-2xl font-black text-green-600 dark:text-green-400">{exp.belowMarketCount}</div>
+          <div className="text-xs font-semibold text-green-700 dark:text-green-300 mt-0.5">Below Market</div>
+          <div className="text-[10px] text-muted-foreground">{exp.belowMarketPct.toFixed(0)}% of lanes</div>
+        </button>
+      </div>
+
+      {/* Filter tab strip */}
+      <div className="flex items-center gap-2 mb-4">
+        {(["all", "ABOVE_MARKET", "AT_MARKET", "BELOW_MARKET"] as RateFilter[]).map(f => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            data-testid={`tab-rate-filter-${f.toLowerCase()}`}
+            className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all ${
+              filter === f
+                ? f === "ABOVE_MARKET" ? "bg-red-600 text-white border-red-600"
+                  : f === "AT_MARKET" ? "bg-yellow-500 text-white border-yellow-500"
+                  : f === "BELOW_MARKET" ? "bg-green-600 text-white border-green-600"
+                  : "bg-foreground text-background border-foreground"
+                : "bg-background text-muted-foreground border-border hover:border-foreground/50"
+            }`}
+          >
+            {f === "all" ? `All (${rp.lanes.length})` : f === "ABOVE_MARKET" ? `Above (${exp.aboveMarketCount})` : f === "AT_MARKET" ? `At Market (${exp.atMarketCount})` : `Below (${exp.belowMarketCount})`}
+          </button>
+        ))}
+        {filter !== "all" && (
+          <span className="text-xs text-muted-foreground ml-1">Click tile or tab to clear filter</span>
+        )}
+      </div>
+
+      {/* Avg delta summary bar */}
+      {(exp.worstLane || exp.avgDeltaPct !== 0) && (
+        <div className="rounded-xl border bg-muted/20 p-4 mb-4 flex flex-wrap gap-4 text-sm">
+          <div>
+            <span className="text-muted-foreground">Portfolio avg delta: </span>
+            <span className={`font-bold ${exp.avgDeltaPct > 5 ? "text-red-600" : exp.avgDeltaPct < -5 ? "text-green-600" : "text-foreground"}`}>
+              {exp.avgDeltaPct > 0 ? "+" : ""}{exp.avgDeltaPct.toFixed(1)}% vs market
+            </span>
+          </div>
+          {exp.monthlyOverMarketDollars > 0 && (
+            <div>
+              <span className="text-muted-foreground">Est. monthly over-market spend: </span>
+              <span className="font-bold text-red-600 dark:text-red-400">
+                ${(exp.monthlyOverMarketDollars / 1000).toFixed(0)}K
+              </span>
+            </div>
+          )}
+          {exp.worstLane && (
+            <div>
+              <span className="text-muted-foreground">Worst exposure: </span>
+              <span className="font-semibold text-red-600 dark:text-red-400 capitalize">{exp.worstLane}</span>
+            </div>
+          )}
+          {exp.bestLane && (
+            <div>
+              <span className="text-muted-foreground">Best position: </span>
+              <span className="font-semibold text-green-600 dark:text-green-400 capitalize">{exp.bestLane}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tightening action callout */}
+      {exp.tighteningActionLanes?.length > 0 && (
+        <div className="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/20 p-3 mb-4 flex items-start gap-2">
+          <TrendingUp className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <div className="text-xs">
+            <span className="font-semibold text-amber-700 dark:text-amber-400">Act this week — tightening markets: </span>
+            <span className="text-amber-600 dark:text-amber-300 capitalize">{exp.tighteningActionLanes.join(", ")}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Lane cards */}
+      {filteredLanes.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {filteredLanes.map((entry, i) => (
+            <RatePositioningLaneCard key={i} entry={entry} />
+          ))}
+        </div>
+      ) : rp.lanes.length > 0 ? (
+        <div className="rounded-xl border bg-muted/30 p-6 text-center text-muted-foreground text-sm">
+          No lanes match this filter.
+        </div>
+      ) : (
+        <div className="rounded-xl border bg-muted/30 p-8 text-center text-muted-foreground text-sm">
+          <Target className="h-8 w-8 mx-auto mb-3 opacity-30" />
+          No rate positioning data available. Upload financial data to enable rate intelligence.
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function IntelPage() {
@@ -1156,13 +1522,14 @@ export default function IntelPage() {
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
 
   const isAdmin = user?.role === "admin";
-  const allowedRoles = ["admin", "account_manager", "national_account_manager"];
+  const isDirector = user?.role === "director" || user?.role === "sales_director";
+  const allowedRoles = ["admin", "director", "sales_director", "account_manager", "national_account_manager"];
   if (user && !allowedRoles.includes(user.role)) {
     setLocation("/");
     return null;
   }
 
-  const queryUserId = isAdmin && selectedUserId !== "all" ? selectedUserId : undefined;
+  const queryUserId = (isAdmin || isDirector) && selectedUserId !== "all" ? selectedUserId : undefined;
 
   const { data, isLoading, error, isFetching, dataUpdatedAt } = useQuery<IntelPayload>({
     queryKey: ["/api/intel", queryUserId ?? "all"],
@@ -1287,11 +1654,11 @@ export default function IntelPage() {
     );
   }
 
-  const { dailyInsights, biweeklyScorecard, executiveReport, availableReps } = data;
+  const { dailyInsights, biweeklyScorecard, executiveReport, availableReps, ratePositioning } = data as typeof data & { ratePositioning?: RatePositioningSummary };
   const { overallStats } = biweeklyScorecard;
-  // For admins: isFiltered means they've selected a specific rep in the dropdown
+  // For admins/directors: isFiltered means they've selected a specific rep in the dropdown
   // For non-admins: always showing their own data (not "filtered" in the UI sense)
-  const isFiltered = isAdmin && selectedUserId !== "all";
+  const isFiltered = (isAdmin || isDirector) && selectedUserId !== "all";
   const viewLabel = isFiltered ? (availableReps.find(r => r.id === selectedUserId)?.name ?? "Rep") : null;
 
   return (
@@ -1667,6 +2034,13 @@ export default function IntelPage() {
           </div>
         )}
       </section>
+
+      {/* ══════════════════════════════════════════════════════
+          SECTION: RATE INTELLIGENCE & POSITIONING
+      ══════════════════════════════════════════════════════ */}
+      {ratePositioning && (
+        <RatePositioningPanel rp={ratePositioning} />
+      )}
 
       {/* ══════════════════════════════════════════════════════
           SECTION: EXECUTIVE REPORT (admin only, always org-wide)

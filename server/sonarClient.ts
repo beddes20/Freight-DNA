@@ -94,6 +94,18 @@ export interface LaneSpotRate {
   timestamp: string;
 }
 
+export interface LaneMarketRate {
+  origin: string;
+  destination: string;
+  marketRatePerMile: number;
+  forecastDirection: "TIGHTENING" | "EASING" | "STABLE";
+  forecastWeeklyRates: Array<{ week: number; ratePerMile: number }>;
+  confidence: "high" | "medium" | "low";
+  source: "lane" | "national_fallback";
+  timestamp: string;
+  isStale: boolean;
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const SONAR_BASE = "https://api.freightwaves.com";
@@ -102,6 +114,7 @@ const VOTRI_TTL   = 4 * 60 * 60 * 1000;
 const OTRI_TTL    = 4 * 60 * 60 * 1000;
 const NTI_TTL     = 1 * 60 * 60 * 1000;
 const EIA_TTL     = 24 * 60 * 60 * 1000;  // EIA diesel — 24-hour TTL
+const TRAC_MARKET_RATE_TTL = 4 * 60 * 60 * 1000; // 4-hour TTL for lane market rates
 
 // ── EIA diesel cache ──────────────────────────────────────────────────────────
 
@@ -836,4 +849,146 @@ export async function getAvgVotriWoW(
   const deltas = Array.from(votris.values()).map(v => v.votriWoW);
   if (deltas.length === 0) return null;
   return Math.round((deltas.reduce((s, d) => s + d, 0) / deltas.length) * 100) / 100;
+}
+
+// ── Lane Market Rate (TRAC benchmark + 3-week forecast) ───────────────────────
+// Caches per-lane with 4-hour TTL. Falls back to national VCRPM1 average.
+
+const laneMarketRateCache = new Map<string, CacheEntry<LaneMarketRate>>();
+
+/**
+ * Get SONAR TRAC contract rate benchmark and 3-week forward forecast for a lane.
+ * Uses VCRPM1 lane-level data when available; falls back to national VCRPM1 average.
+ * Generates a synthetic 3-week forecast by projecting the WoW VOTRI trend onto rates.
+ * Cache TTL: 4 hours.
+ */
+export async function getLaneMarketRate(origin: string, destination: string): Promise<LaneMarketRate> {
+  const qualifier = buildVotriQualifier(origin, destination);
+  const cacheKey = `lmr:${qualifier}`;
+  const cached = laneMarketRateCache.get(cacheKey);
+  if (cached && isFresh(cached)) return cached.value;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+  // Fetch national VCRPM1, lane VOTRI, and attempt lane-level VCRPM1 ticker in parallel.
+  // Lane-level TRAC benchmark uses VCRPM1.{QUALIFIER} — supported on some FreightWaves plans.
+  // Falls back to national VCRPM1 + VOTRI demand premium when unavailable.
+  const [national, laneVotri, laneTRAC] = await Promise.all([
+    getNationalMarketSummary(),
+    getLaneVotri(origin, destination),
+    sonarGet(`/data/VCRPM1/${qualifier}/${yesterday}/${today}`).catch(() => null),
+  ]);
+
+  const nationalRate = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
+
+  // Determine market rate: prefer lane-level TRAC benchmark if available, else use VOTRI-adjusted national rate
+  let marketRatePerMile: number;
+  let source: "lane" | "national_fallback";
+
+  const laneTRACRate = laneTRAC !== null ? extractValue(laneTRAC) : null;
+
+  if (laneTRACRate !== null && laneTRACRate > 0) {
+    // Lane-level VCRPM1 TRAC benchmark is available — use it directly
+    marketRatePerMile = Math.round(laneTRACRate * 100) / 100;
+    source = "lane";
+    log(`Lane TRAC benchmark found for ${qualifier}: $${marketRatePerMile.toFixed(2)}/mi`);
+  } else {
+    // Lane-level TRAC not available — synthesize from national VCRPM1 + VOTRI demand signal:
+    // - hot lane (VOTRI >= 20): +5% above national contract rate
+    // - warm lane (VOTRI >= 8): +2% above national contract rate
+    // - cool lane: national contract rate (no premium)
+    source = "national_fallback";
+    marketRatePerMile = nationalRate;
+    if (!laneVotri.isStale) {
+      const votriPremium = laneVotri.signal === "hot" ? 0.05 : laneVotri.signal === "warm" ? 0.02 : 0;
+      marketRatePerMile = Math.round(nationalRate * (1 + votriPremium) * 100) / 100;
+    }
+  }
+
+  // 3-week forward forecast: derive trajectory from SONAR rate data when available.
+  // Strategy:
+  //  1. Fetch VCRPM1.{QUALIFIER} historical series (4 weeks) for lane-level rate trend if available.
+  //  2. Fallback: fetch national VCRPM1 prior-week (NTIL.USA) to compute WoW contract rate velocity.
+  //  3. Fallback: use VOTRI WoW delta as demand proxy (VOTRI velocity is the best forward signal
+  //     available via SONAR public API when rate series unavailable).
+  const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+
+  // Attempt to fetch SONAR prior-week VCRPM1 for WoW rate velocity (national fallback path)
+  const [priorVCRPM1Data] = await Promise.all([
+    sonarGet(`/data/VCRPM1/USA/${twoWeeksAgo}/${yesterday}`).catch(() => null),
+  ]);
+
+  const priorNationalRate = priorVCRPM1Data !== null ? extractValue(priorVCRPM1Data) : null;
+
+  // Compute WoW rate change rate if prior rate is available
+  let weeklyRateChange = 0;
+  let forecastDirection: "TIGHTENING" | "EASING" | "STABLE";
+
+  if (priorNationalRate && priorNationalRate > 0 && nationalRate > 0) {
+    // Use actual SONAR rate data to derive WoW contract rate velocity
+    const rateWoW = (nationalRate - priorNationalRate) / priorNationalRate; // fractional WoW change
+    if (rateWoW > 0.005) {
+      forecastDirection = "TIGHTENING";
+      weeklyRateChange = Math.min(rateWoW, 0.03); // cap at 3%/week
+    } else if (rateWoW < -0.005) {
+      forecastDirection = "EASING";
+      weeklyRateChange = Math.max(rateWoW, -0.025); // cap at -2.5%/week
+    } else {
+      forecastDirection = "STABLE";
+      weeklyRateChange = 0;
+    }
+  } else {
+    // SONAR rate history unavailable — use VOTRI WoW delta as demand-signal proxy
+    // (VOTRI velocity is the best leading indicator for rate direction from SONAR public API)
+    const votriWoW = laneVotri.votriWoW;
+    if (votriWoW > 1.5) {
+      forecastDirection = "TIGHTENING";
+      weeklyRateChange = 0.02;
+    } else if (votriWoW < -1.5) {
+      forecastDirection = "EASING";
+      weeklyRateChange = -0.015;
+    } else {
+      forecastDirection = "STABLE";
+      weeklyRateChange = 0;
+    }
+  }
+
+  // Project 3-week forward rate series from the derived weekly velocity
+  const forecastWeeklyRates = [1, 2, 3].map(week => ({
+    week,
+    ratePerMile: Math.round(marketRatePerMile * Math.pow(1 + weeklyRateChange, week) * 100) / 100,
+  }));
+
+  const result: LaneMarketRate = {
+    origin,
+    destination,
+    marketRatePerMile,
+    forecastDirection,
+    forecastWeeklyRates,
+    confidence: source === "lane" ? "high" : laneVotri.isStale ? "low" : "medium",
+    source,
+    timestamp: new Date().toISOString(),
+    isStale: laneVotri.isStale && source === "national_fallback",
+  };
+
+  laneMarketRateCache.set(cacheKey, { value: result, fetchedAt: Date.now(), ttlMs: TRAC_MARKET_RATE_TTL });
+  log(`Lane market rate: ${qualifier} → $${marketRatePerMile.toFixed(2)}/mi [${forecastDirection}] source=${source}`);
+  return result;
+}
+
+/**
+ * Batch fetch lane market rates for multiple lanes in parallel.
+ */
+export async function getLaneMarketRatesBatch(
+  lanes: Array<{ origin: string; destination: string }>,
+): Promise<Map<string, LaneMarketRate>> {
+  const results = new Map<string, LaneMarketRate>();
+  await Promise.all(
+    lanes.map(async ({ origin, destination }) => {
+      const rate = await getLaneMarketRate(origin, destination);
+      results.set(buildVotriQualifier(origin, destination), rate);
+    }),
+  );
+  return results;
 }

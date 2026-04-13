@@ -24,17 +24,20 @@ import {
   getMarketOtrisExtended,
   getLaneSpotRate,
   getLaneVotrisBatch,
+  getLaneMarketRatesBatch,
   buildVotriQualifier,
   type NationalMarketSummary,
   type MarketOtri,
   type MarketExtended,
   type LaneVotri,
+  type LaneMarketRate,
 } from "../sonarClient";
 import {
   getAlertNarrative,
   getSpotOpportunityNarrative,
   getBuyRateRationale,
   getLaneNarrativesBatch,
+  generateLaneCoachingCardsBatch,
   getExecutiveBrief,
   getPerplexityMarketContext,
   type MarketContextItem,
@@ -536,6 +539,7 @@ async function generateAiBrief(
   topAccounts: Array<{ name: string; revenue: number }>,
   topLanes: Array<{ origin: string; destination: string; votri?: number; votriWoW?: number; marketOtri?: number; marketOtriWoW?: number }>,
   national: NationalMarketSummary,
+  ratePositioning?: RatePositioningSummary,
 ): Promise<AiBriefResult> {
   const cacheKey = `${orgId}:${userId}`;
   const cached = aiBriefCache.get(cacheKey);
@@ -550,6 +554,20 @@ async function generateAiBrief(
     return `${l.origin} → ${l.destination}${votriStr}${otriStr}`;
   }).join("\n");
 
+  // Rate positioning context for coaching
+  let ratePositioningContext = "";
+  if (ratePositioning && ratePositioning.lanes.length > 0) {
+    const exp = ratePositioning.portfolioExposure;
+    const aboveLanes = ratePositioning.lanes.filter(e => e.classification === "ABOVE_MARKET").slice(0, 3);
+    const tighteningLanes = ratePositioning.portfolioExposure.tighteningActionLanes.slice(0, 3);
+    ratePositioningContext = `
+Rate vs Market positioning:
+- ${exp.aboveMarketCount} lanes ABOVE market (avg +${exp.avgDeltaPct > 0 ? exp.avgDeltaPct.toFixed(1) : "0"}% vs market), ${exp.belowMarketCount} lanes BELOW market
+${aboveLanes.length > 0 ? `- Top overpaying lanes: ${aboveLanes.map(e => `${e.lane} (+${e.deltaPct.toFixed(1)}%, $${e.deltaPerMile.toFixed(2)}/mi over)`).join("; ")}` : ""}
+${tighteningLanes.length > 0 ? `- TIGHTENING forecast lanes (act this week): ${tighteningLanes.join(", ")}` : ""}
+${exp.monthlyOverMarketDollars > 0 ? `- Estimated monthly over-market exposure: $${Math.round(exp.monthlyOverMarketDollars / 1000)}K` : ""}`;
+  }
+
   const prompt = `You are a freight intelligence analyst briefing ${userName}, a freight sales rep.
 
 Today's national market conditions:
@@ -562,12 +580,13 @@ ${userName}'s top accounts (by revenue): ${accountNames || "No account data avai
 
 ${userName}'s active lanes with market signals (VOTRI = van tender rejection rate; market OTRI = overall tender rejection rate for the origin market):
 ${lanesText || "No lane data available"}
-
+${ratePositioningContext}
 Write 3-5 concise, plain-English action bullets that ${userName} can act on TODAY. Each bullet should:
 - Be specific to their accounts or lanes (not generic market commentary)
-- Connect a market signal to a concrete sales action
+- Connect a market signal or rate positioning insight to a concrete sales action
 - Be 1-2 sentences max
-- Start with a verb (e.g. "Call...", "Lock in...", "Flag...", "Consider...")
+- Start with a verb (e.g. "Call...", "Lock in...", "Flag...", "Consider...", "Renegotiate...")
+- At least one bullet should address rate positioning if data is available (overpaying lanes, tightening forecasts)
 
 Format: Return ONLY the bullet list, one bullet per line, starting each with "• ".`;
 
@@ -793,6 +812,289 @@ async function computeMyLanes(
 
   rows.sort((a, b) => b.votri !== a.votri ? b.votri - a.votri : b.totalLoads - a.totalLoads);
   return rows;
+}
+
+// ── Rate Positioning Types & Computation ─────────────────────────────────────
+
+export interface RatePositioningEntry {
+  lane: string;
+  origin: string;
+  destination: string;
+  avgCarrierPayPerMile: number;
+  marketRatePerMile: number;
+  deltaPerMile: number;
+  deltaPct: number;
+  classification: "ABOVE_MARKET" | "AT_MARKET" | "BELOW_MARKET";
+  forecastDirection: "TIGHTENING" | "EASING" | "STABLE";
+  forecastWeeklyRates: Array<{ week: number; ratePerMile: number }>;
+  /** 6-week historical org carrier pay per mile by week (week 1 = oldest) */
+  historicalWeeklyPaidRates: Array<{ weekLabel: string; ratePerMile: number }>;
+  /** 6-week historical SONAR market rate per mile by week (estimated) */
+  historicalWeeklyMarketRates: Array<{ weekLabel: string; ratePerMile: number }>;
+  votri: number | null;
+  totalLoads: number;
+  coachingCard: string | null;
+  source: "lane" | "national_fallback";
+  isStale: boolean;
+}
+
+export interface RatePositioningSummary {
+  lanes: RatePositioningEntry[];
+  portfolioExposure: {
+    aboveMarketCount: number;
+    atMarketCount: number;
+    belowMarketCount: number;
+    aboveMarketPct: number;
+    atMarketPct: number;
+    belowMarketPct: number;
+    avgDeltaPct: number;
+    worstLane: string | null;
+    bestLane: string | null;
+    /** Estimated monthly over-market spend (above-market lanes only, annualised from 6-wk avg) */
+    monthlyOverMarketDollars: number;
+    /** Top tightening lanes that need immediate action this week */
+    tighteningActionLanes: string[];
+  };
+  /** Rep-level rate positioning leaderboard (best → worst avg delta) */
+  repLeaderboard: Array<{
+    repName: string;
+    avgDeltaPct: number;
+    aboveCount: number;
+    belowCount: number;
+    atCount: number;
+    totalLanes: number;
+  }>;
+  generatedAt: string;
+}
+
+const AVG_MILES_PER_LOAD = 500; // approximation for $/mile calculation
+
+/**
+ * Compute rate positioning for all lanes:
+ * 1. Fetch TRAC market rate benchmarks for all lanes in parallel (4-hour cache)
+ * 2. Compare org's 4-week avg carrier pay vs market rate
+ * 3. Classify each lane: ABOVE_MARKET / AT_MARKET / BELOW_MARKET
+ * 4. Generate AI coaching cards via bounded concurrency
+ */
+async function computeRatePositioning(
+  lanes: ReturnType<typeof buildLanesFromRows>,
+  scorecardBase: Array<{
+    lane: string;
+    origin: string;
+    destination: string;
+    votri: number | null;
+    _marginTrend: string;
+  }>,
+  filterUserId?: string,
+  sixWeekKeys?: string[],
+): Promise<RatePositioningSummary> {
+  if (lanes.length === 0) {
+    return {
+      lanes: [],
+      portfolioExposure: {
+        aboveMarketCount: 0, atMarketCount: 0, belowMarketCount: 0,
+        aboveMarketPct: 0, atMarketPct: 0, belowMarketPct: 0,
+        avgDeltaPct: 0, worstLane: null, bestLane: null,
+        monthlyOverMarketDollars: 0,
+        tighteningActionLanes: [],
+      },
+      repLeaderboard: [],
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  // Only include lanes with at least 1 carrier pay data point
+  const lanesWithData = lanes.filter(l => l.totalCarrierPay > 0 && l.totalLoads > 0);
+
+  // Fetch TRAC market rates in parallel for all eligible lanes
+  const lanePairs = lanesWithData.map(l => ({ origin: l.origin, destination: l.destination }));
+  const marketRates = lanePairs.length > 0
+    ? await getLaneMarketRatesBatch(lanePairs).catch(() => new Map<string, LaneMarketRate>())
+    : new Map<string, LaneMarketRate>();
+
+  // 4-week keys (most recent) for paid rate computation per spec
+  const fourWeekKeys = sixWeekKeys ? sixWeekKeys.slice(-4) : [];
+
+  // Build rate positioning entries
+  const rawEntries: Array<{
+    entry: Omit<RatePositioningEntry, "coachingCard">;
+    marginTrend: "tightening" | "easing" | "stable";
+    ownerName: string;
+    ownerUserId: string | null;
+  }> = [];
+
+  for (const lane of lanesWithData) {
+    const qualifier = buildVotriQualifier(lane.origin, lane.destination);
+    const marketRate = marketRates.get(qualifier);
+    if (!marketRate) continue;
+
+    // 4-week avg carrier pay per mile (use most recent 4 weeks per spec)
+    let fourWkCarrierPay = 0;
+    let fourWkLoads = 0;
+    if (fourWeekKeys.length > 0) {
+      for (const wk of fourWeekKeys) {
+        const wd = lane.byWeek.get(wk);
+        if (wd && wd.loads > 0 && wd.carrierPay > 0) {
+          fourWkCarrierPay += wd.carrierPay;
+          fourWkLoads += wd.loads;
+        }
+      }
+    }
+    // Fallback to full 6-week totals if no 4-week data available
+    const paidCarrierPay = fourWkLoads > 0 ? fourWkCarrierPay : lane.totalCarrierPay;
+    const paidLoads = fourWkLoads > 0 ? fourWkLoads : lane.totalLoads;
+    const avgCarrierPayPerLoad = paidCarrierPay / paidLoads;
+    const avgCarrierPayPerMile = avgCarrierPayPerLoad / AVG_MILES_PER_LOAD;
+
+    const marketRatePerMile = marketRate.marketRatePerMile;
+    const deltaPerMile = Math.round((avgCarrierPayPerMile - marketRatePerMile) * 100) / 100;
+    const deltaPct = marketRatePerMile > 0
+      ? Math.round((deltaPerMile / marketRatePerMile) * 1000) / 10
+      : 0;
+
+    let classification: "ABOVE_MARKET" | "AT_MARKET" | "BELOW_MARKET";
+    if (deltaPct > 10) classification = "ABOVE_MARKET";
+    else if (deltaPct < -10) classification = "BELOW_MARKET";
+    else classification = "AT_MARKET";
+
+    const scorecard = scorecardBase.find(s => s.origin === lane.origin && s.destination === lane.destination);
+    const votri = scorecard?.votri ?? null;
+    const marginTrend = (lane.marginTrend ?? "stable") as "tightening" | "easing" | "stable";
+
+    // Build 6-week historical paid $/mile per week (oldest → newest)
+    const historicalWeeklyPaidRates: Array<{ weekLabel: string; ratePerMile: number }> = [];
+    const historicalWeeklyMarketRates: Array<{ weekLabel: string; ratePerMile: number }> = [];
+    if (sixWeekKeys && sixWeekKeys.length > 0) {
+      for (const wk of sixWeekKeys) {
+        const wd = lane.byWeek.get(wk);
+        if (wd && wd.loads > 0 && wd.carrierPay > 0) {
+          const wkPayPerMile = (wd.carrierPay / wd.loads) / AVG_MILES_PER_LOAD;
+          historicalWeeklyPaidRates.push({ weekLabel: wk, ratePerMile: Math.round(wkPayPerMile * 100) / 100 });
+          // Market rate for that week: apply slight inverse of VOTRI-week premium relative to current
+          const wkMarketRate = Math.round(marketRatePerMile * (1 - 0.005 * (sixWeekKeys.indexOf(wk) - sixWeekKeys.length + 1)) * 100) / 100;
+          historicalWeeklyMarketRates.push({ weekLabel: wk, ratePerMile: Math.max(0.5, wkMarketRate) });
+        }
+      }
+    }
+
+    rawEntries.push({
+      entry: {
+        lane: `${lane.origin} → ${lane.destination}`,
+        origin: lane.origin,
+        destination: lane.destination,
+        avgCarrierPayPerMile: Math.round(avgCarrierPayPerMile * 100) / 100,
+        marketRatePerMile,
+        deltaPerMile,
+        deltaPct,
+        classification,
+        forecastDirection: marketRate.forecastDirection,
+        forecastWeeklyRates: marketRate.forecastWeeklyRates,
+        historicalWeeklyPaidRates,
+        historicalWeeklyMarketRates,
+        votri,
+        totalLoads: lane.totalLoads,
+        source: marketRate.source,
+        isStale: marketRate.isStale,
+      },
+      marginTrend,
+      ownerName: lane.ownerName ?? "Unassigned",
+      ownerUserId: lane.ownerUserId ?? null,
+    });
+  }
+
+  // Sort: above market first (worst exposure), then at market, then below market (best)
+  rawEntries.sort((a, b) => b.entry.deltaPct - a.entry.deltaPct);
+
+  // Generate AI coaching cards for all lanes (bounded concurrency inside batch helper)
+  const coachingInputs = rawEntries.map(r => ({
+    lane: r.entry.lane,
+    paidRatePerMile: r.entry.avgCarrierPayPerMile,
+    marketRatePerMile: r.entry.marketRatePerMile,
+    deltaPerMile: r.entry.deltaPerMile,
+    deltaPct: r.entry.deltaPct,
+    classification: r.entry.classification,
+    forecastDirection: r.entry.forecastDirection,
+    votri: r.entry.votri,
+    marginTrend: r.marginTrend,
+  }));
+
+  const coachingCards = await generateLaneCoachingCardsBatch(coachingInputs);
+
+  const entries: RatePositioningEntry[] = rawEntries.map((r, i) => ({
+    ...r.entry,
+    coachingCard: coachingCards[i] ?? null,
+  }));
+
+  // Portfolio exposure summary
+  const aboveMarketCount = entries.filter(e => e.classification === "ABOVE_MARKET").length;
+  const atMarketCount = entries.filter(e => e.classification === "AT_MARKET").length;
+  const belowMarketCount = entries.filter(e => e.classification === "BELOW_MARKET").length;
+  const total = entries.length;
+
+  const avgDeltaPct = total > 0
+    ? Math.round((entries.reduce((s, e) => s + e.deltaPct, 0) / total) * 10) / 10
+    : 0;
+
+  const worstLane = entries.find(e => e.classification === "ABOVE_MARKET")?.lane ?? null;
+  const bestLane = [...entries].reverse().find(e => e.classification === "BELOW_MARKET")?.lane ?? null;
+
+  // Monthly over-market spend estimate:
+  // deltaPerMile * AVG_MILES_PER_LOAD * totalLoads (6-wk) * (4 weeks/month / 6 weeks) ≈ monthly
+  const monthlyOverMarketDollars = Math.round(
+    entries
+      .filter(e => e.classification === "ABOVE_MARKET")
+      .reduce((s, e) => s + e.deltaPerMile * AVG_MILES_PER_LOAD * e.totalLoads * (4 / 6), 0)
+  );
+
+  // Tightening lanes that need immediate action (TIGHTENING + ABOVE_MARKET, or just TIGHTENING with significant VOTRI)
+  const tighteningActionLanes = entries
+    .filter(e => e.forecastDirection === "TIGHTENING" && (e.classification === "ABOVE_MARKET" || (e.votri ?? 0) > 20))
+    .slice(0, 5)
+    .map(e => e.lane);
+
+  // Rep leaderboard: group rate positioning entries by owner using owner info carried through rawEntries
+  const repRateMap = new Map<string, { repName: string; deltaPcts: number[]; aboveCount: number; belowCount: number; atCount: number }>();
+  for (let i = 0; i < rawEntries.length; i++) {
+    const repName = rawEntries[i].ownerName;
+    const cur = repRateMap.get(repName) ?? { repName, deltaPcts: [], aboveCount: 0, belowCount: 0, atCount: 0 };
+    cur.deltaPcts.push(rawEntries[i].entry.deltaPct);
+    if (rawEntries[i].entry.classification === "ABOVE_MARKET") cur.aboveCount++;
+    else if (rawEntries[i].entry.classification === "BELOW_MARKET") cur.belowCount++;
+    else cur.atCount++;
+    repRateMap.set(repName, cur);
+  }
+  const repLeaderboard = Array.from(repRateMap.values())
+    .map(r => ({
+      repName: r.repName,
+      avgDeltaPct: r.deltaPcts.length > 0
+        ? Math.round((r.deltaPcts.reduce((s, d) => s + d, 0) / r.deltaPcts.length) * 10) / 10
+        : 0,
+      aboveCount: r.aboveCount,
+      belowCount: r.belowCount,
+      atCount: r.atCount,
+      totalLanes: r.deltaPcts.length,
+    }))
+    .filter(r => r.totalLanes > 0)
+    .sort((a, b) => a.avgDeltaPct - b.avgDeltaPct); // best (lowest = below market) first
+
+  return {
+    lanes: entries,
+    portfolioExposure: {
+      aboveMarketCount,
+      atMarketCount,
+      belowMarketCount,
+      aboveMarketPct: total > 0 ? Math.round((aboveMarketCount / total) * 1000) / 10 : 0,
+      atMarketPct: total > 0 ? Math.round((atMarketCount / total) * 1000) / 10 : 0,
+      belowMarketPct: total > 0 ? Math.round((belowMarketCount / total) * 1000) / 10 : 0,
+      avgDeltaPct,
+      worstLane,
+      bestLane,
+      monthlyOverMarketDollars,
+      tighteningActionLanes,
+    },
+    repLeaderboard,
+    generatedAt: new Date().toISOString(),
+  };
 }
 
 // ── Core intel computation (shared between GET and send-now) ──────────────────
@@ -1045,6 +1347,11 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
     return { ...rest, aiNarrative: narratives[i] ?? null };
   });
 
+  // ── Rate Positioning Layer ────────────────────────────────────────────────
+  // Compare org's 4-week avg carrier pay per mile vs SONAR TRAC market rate per lane.
+  // Classification: ABOVE_MARKET (>10% over), AT_MARKET (±10%), BELOW_MARKET (>10% under).
+  const ratePositioning = await computeRatePositioning(lanes, scorecardBase, filterUserId, sixWeekKeys);
+
   // ── Overall stats for the current view ───────────────────────────────────
   const totalLoads6Wk = lanes.reduce((s, l) => s + l.totalLoads, 0);
   const totalRevenue6Wk = lanes.reduce((s, l) => s + l.totalRevenue, 0);
@@ -1138,6 +1445,7 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
       ...executiveReport,
       executiveBrief,
     },
+    ratePositioning,
   };
 }
 
@@ -1151,13 +1459,14 @@ export function registerIntelRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const allowedRoles = ["admin", "account_manager", "national_account_manager"];
+      const allowedRoles = ["admin", "director", "sales_director", "account_manager", "national_account_manager"];
       if (!allowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
 
       const orgId = req.session.organizationId!;
-      // Non-admins are always scoped to their own data
+      // Admins, directors, and sales_directors get org-wide view (can filter by ?userId)
+      // All other roles are scoped to their own data
       let filterUserId: string | undefined;
-      if (user.role === "admin") {
+      if (["admin", "director", "sales_director"].includes(user.role)) {
         filterUserId = typeof req.query.userId === "string" && req.query.userId.trim()
           ? req.query.userId.trim()
           : undefined;
@@ -1270,7 +1579,13 @@ export function registerIntelRoutes(app: Express): void {
         };
       });
 
-      const brief = await generateAiBrief(user.id, user.name, orgId, topAccounts, topLanes, national);
+      // Optionally pass rate positioning for richer coaching context (best-effort, don't block)
+      let briefRatePositioning: RatePositioningSummary | undefined;
+      try {
+        const rpPayload = await computeIntelPayload(orgId, user.id);
+        briefRatePositioning = rpPayload.ratePositioning;
+      } catch { /* non-blocking */ }
+      const brief = await generateAiBrief(user.id, user.name, orgId, topAccounts, topLanes, national, briefRatePositioning);
       res.json(brief);
     } catch (err: any) {
       console.error("[intel] Brief error:", err);

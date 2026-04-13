@@ -2,7 +2,8 @@ import type { Express, Request, Response } from "express";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { sendEmail, buildFeedbackEmail } from "./emailService";
-import { getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch, buildVotriQualifier } from "./sonarClient";
+import { getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch, getLaneMarketRate, buildVotriQualifier } from "./sonarClient";
+import { computeIntelPayload } from "./routes/intel";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
@@ -17,6 +18,37 @@ import { geocodeCity, haversineDistance } from "./geocoding";
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const db = drizzle(pool);
+
+// Rate positioning context cache: 30-minute TTL per org to avoid heavy recomputation on every chat message
+const ratePositioningCache = new Map<string, { context: string; fetchedAt: number }>();
+const RATE_POSITIONING_CACHE_TTL_MS = 30 * 60 * 1000;
+
+async function getCachedRatePositioningContext(orgId: string, filterUserId?: string): Promise<string> {
+  const cacheKey = `rpc:${orgId}:${filterUserId ?? "all"}`;
+  const cached = ratePositioningCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < RATE_POSITIONING_CACHE_TTL_MS) {
+    return cached.context;
+  }
+  try {
+    const intel = await computeIntelPayload(orgId, filterUserId);
+    const rp = intel.ratePositioning;
+    if (!rp || rp.lanes.length === 0) return "";
+    const pe = rp.portfolioExposure;
+    const topAbove = rp.lanes.filter(l => l.classification === "ABOVE_MARKET").slice(0, 3);
+    const topBelow = rp.lanes.filter(l => l.classification === "BELOW_MARKET").slice(0, 3);
+    const context = `\n\n=== RATE POSITIONING SUMMARY (SONAR TRAC-adjusted, 4-week avg vs national VCRPM1 benchmark) ===
+Portfolio: ${pe.aboveMarketCount} lanes above market (${pe.aboveMarketPct}%), ${pe.atMarketCount} at market (${pe.atMarketPct}%), ${pe.belowMarketCount} below market (${pe.belowMarketPct}%).
+Avg delta: ${pe.avgDeltaPct > 0 ? "+" : ""}${pe.avgDeltaPct}% vs benchmark. Est. monthly over-market spend: $${pe.monthlyOverMarketDollars?.toLocaleString() ?? 0}.
+${topAbove.length > 0 ? `TOP ABOVE-MARKET LANES (paying too much): ${topAbove.map(l => `${l.lane} (+${l.deltaPct.toFixed(1)}%, $${l.avgCarrierPayPerMile.toFixed(2)}/mi vs $${l.marketRatePerMile.toFixed(2)} benchmark)`).join("; ")}.` : ""}
+${topBelow.length > 0 ? `TOP BELOW-MARKET LANES (favorable rate): ${topBelow.map(l => `${l.lane} (${l.deltaPct.toFixed(1)}%, $${l.avgCarrierPayPerMile.toFixed(2)}/mi vs $${l.marketRatePerMile.toFixed(2)} benchmark)`).join("; ")}.` : ""}
+${pe.tighteningActionLanes?.length ? `TIGHTENING LANES (act fast): ${pe.tighteningActionLanes.join(", ")}.` : ""}
+Use the get_lane_rate_positioning tool for full coaching detail on any specific lane or when the user asks about rate competitiveness.`;
+    ratePositioningCache.set(cacheKey, { context, fetchedAt: Date.now() });
+    return context;
+  } catch {
+    return "";
+  }
+}
 
 const anthropic = new Anthropic({
   apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
@@ -566,13 +598,21 @@ export function registerChatbotRoutes(app: Express): void {
 
       const scopeLabel = effectiveScope === "everyone" ? "the entire organization (all reps and teams)" : "the current user's team only";
 
+      // Build lightweight rate positioning summary for Guru default context (cached 30-min per org)
+      let ratePositioningContext = "";
+      const orgId = req.session?.organizationId;
+      if (orgId) {
+        const filterUserId = effectiveScope === "everyone" ? undefined : user.id;
+        ratePositioningContext = await getCachedRatePositioningContext(orgId, filterUserId);
+      }
+
       const systemPrompt = `You are DNA Guru, an AI assistant built into the OrgChart CRM for Value Truck transportation brokerage. You have access to live CRM data.
 
 Current user: ${user.name} (${user.role.replace(/_/g, " ")})
 Data scope: ${scopeLabel}
 
 Here is the current CRM data:
-${crmContext}
+${crmContext}${ratePositioningContext}
 
 Keep it short and casual — reps are busy. No fluff, no filler.
 - Use the data above to answer questions about accounts, contacts, RFPs, touchpoints, tasks, and goals
@@ -590,6 +630,7 @@ Keep it short and casual — reps are busy. No fluff, no filler.
 - When the user asks about MARKET CONDITIONS, current spot rates, OTRI, tender rejections, market tightness, how hot/cool a lane is, or Sonar data — use the query_market_otri or query_national_rates tools
 - When the user asks about a SPECIFIC LANE's market signal, rejection index, or how tight that corridor is — use the query_lane_votri tool with origin and destination
 - When the user asks about NATIONAL rates, NTI spot $/move, contract $/mile, or the spread between spot and contract — use the query_national_rates tool
+- When the user asks about RATE COMPETITIVENESS, whether we're paying too much/little on a lane, or wants coaching on a specific lane's rate positioning — use the get_lane_rate_positioning tool
 - PROACTIVELY use Sonar market tools when the user asks about specific accounts' lanes, procurement strategy, buy rates on a corridor, or what action to take on a lane — don't wait for them to explicitly ask about "the market"
 - Example: if someone asks "what should I do for [Company] on the CHI-ATL lane?", query_lane_votri for Chicago→Atlanta and weave the signal into your advice`;
 
@@ -745,6 +786,21 @@ Keep it short and casual — reps are busy. No fluff, no filler.
             },
           },
         },
+        {
+          type: "function",
+          function: {
+            name: "get_lane_rate_positioning",
+            description: "Get the rate positioning intelligence for a specific lane: TRAC contract rate benchmark, how the org's paid carrier rate compares to market (above/at/below market), the delta in $/mile and %, and a 3-week rate forecast direction. Use when the user asks about rate positioning, whether we're above or below market on a lane, TRAC benchmarks, carrier rate competitiveness, or market rate comparison for a specific origin-destination pair.",
+            parameters: {
+              type: "object",
+              properties: {
+                origin: { type: "string", description: "Origin city or market (e.g. 'Atlanta', 'Chicago', 'Dallas')" },
+                destination: { type: "string", description: "Destination city or market (e.g. 'Dallas', 'Los Angeles', 'Memphis')" },
+              },
+              required: ["origin", "destination"],
+            },
+          },
+        },
       ];
 
       res.setHeader("Content-Type", "text/event-stream");
@@ -795,7 +851,7 @@ Keep it short and casual — reps are busy. No fluff, no filler.
             const args = JSON.parse(toolCallArgs);
 
             // ── Data-retrieval tools execute server-side then feed result back to GPT ──
-            const dataRetrievalTools = ["carrier_lane_search", "get_company_details", "query_national_rates", "query_lane_votri", "query_market_otri"];
+            const dataRetrievalTools = ["carrier_lane_search", "get_company_details", "query_national_rates", "query_lane_votri", "query_market_otri", "get_lane_rate_positioning"];
 
             if (dataRetrievalTools.includes(toolCallName)) {
               let searchResult = "";
@@ -881,6 +937,67 @@ Keep it short and casual — reps are busy. No fluff, no filler.
                   }
                 } catch {
                   searchResult = "Sonar market OTRI data temporarily unavailable.";
+                }
+              } else if (toolCallName === "get_lane_rate_positioning") {
+                callLabel = "call_rate_positioning";
+                try {
+                  const origin = String(args.origin || "").trim().toLowerCase();
+                  const destination = String(args.destination || "").trim().toLowerCase();
+                  if (!origin || !destination) {
+                    searchResult = "Both origin and destination are required for rate positioning.";
+                  } else {
+                    const orgId = req.session.organizationId!;
+                    // Fetch TRAC market benchmark
+                    const rate = await getLaneMarketRate(origin, destination);
+                    const classLabel = rate.forecastDirection === "TIGHTENING"
+                      ? "📈 Tightening (rates rising — act now to lock in capacity)"
+                      : rate.forecastDirection === "EASING"
+                      ? "📉 Easing (rates declining — leverage for negotiations)"
+                      : "📊 Stable";
+                    const forecastLines = rate.forecastWeeklyRates.map(
+                      w => `  Week +${w.week}: $${w.ratePerMile.toFixed(2)}/mi`
+                    ).join("\n");
+
+                    // Look up org's actual rate positioning for this lane from the intel payload
+                    // Respect effectiveScope: only expose org-wide data to admin/director users
+                    let orgRateContext = "";
+                    try {
+                      const toolFilterUserId = effectiveScope === "everyone" ? undefined : user.id;
+                      const intel = await computeIntelPayload(orgId, toolFilterUserId);
+                      const laneEntry = intel.ratePositioning?.lanes.find(
+                        e => e.origin.toLowerCase() === origin && e.destination.toLowerCase() === destination
+                      );
+                      if (laneEntry) {
+                        const classificationLabel = laneEntry.classification === "ABOVE_MARKET"
+                          ? "🔴 ABOVE MARKET (overpaying)"
+                          : laneEntry.classification === "BELOW_MARKET"
+                          ? "🟢 BELOW MARKET (favorable)"
+                          : "🟡 AT MARKET (competitive)";
+                        orgRateContext = [
+                          ``,
+                          `Your Org's Rate vs Market (${origin} → ${destination}):`,
+                          `  Your avg carrier pay: $${laneEntry.avgCarrierPayPerMile.toFixed(2)}/mi`,
+                          `  Market benchmark:     $${laneEntry.marketRatePerMile.toFixed(2)}/mi`,
+                          `  Delta: ${laneEntry.deltaPerMile >= 0 ? "+" : ""}$${laneEntry.deltaPerMile.toFixed(2)}/mi (${laneEntry.deltaPct >= 0 ? "+" : ""}${laneEntry.deltaPct.toFixed(1)}%)`,
+                          `  Classification: ${classificationLabel}`,
+                          laneEntry.coachingCard ? `  Coaching: ${laneEntry.coachingCard}` : "",
+                        ].filter(Boolean).join("\n");
+                      } else {
+                        orgRateContext = `\nNo org-specific carrier pay data found for ${origin} → ${destination}. Upload financial data for this lane to get org vs market comparison.`;
+                      }
+                    } catch { /* best-effort */ }
+
+                    searchResult = [
+                      `Rate Positioning Intelligence: ${origin} → ${destination}${rate.isStale ? " ⚠ Stale" : ""}`,
+                      `TRAC Market Benchmark: $${rate.marketRatePerMile.toFixed(2)}/mile (source: ${rate.source === "lane" ? "lane-level VCRPM1 TRAC benchmark" : "national VCRPM1 + VOTRI-adjusted fallback"})`,
+                      `3-Week Market Forecast: ${classLabel}`,
+                      forecastLines,
+                      `Confidence: ${rate.confidence}`,
+                      orgRateContext,
+                    ].join("\n");
+                  }
+                } catch {
+                  searchResult = "Rate positioning data temporarily unavailable.";
                 }
               }
 

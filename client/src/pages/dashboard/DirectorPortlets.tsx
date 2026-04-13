@@ -1,15 +1,181 @@
+import { useState } from "react";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChevronRight, ChevronDown, TrendingUp, TrendingDown,
   Repeat2, MessageSquare, UserPlus, Activity, Trophy,
-  ShieldCheck, UserCircle, ArrowUpRight, ArrowDownRight,
+  ShieldCheck, UserCircle, ArrowUpRight, ArrowDownRight, Target, ExternalLink,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { MarginGoalEditButton } from "./MarginGoalEditButton";
 import type { SafeUser, TeamActivity, RelationshipsMovedData, TrendingResponse, MarginMetrics, MarginUserMetric, OpportunityLog } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
+
+// ── Rate Exposure Portlet ──────────────────────────────────────────────────────
+
+interface PortfolioExposure {
+  aboveMarketCount: number;
+  atMarketCount: number;
+  belowMarketCount: number;
+  aboveMarketPct: number;
+  atMarketPct: number;
+  belowMarketPct: number;
+  avgDeltaPct: number;
+  worstLane: string | null;
+  bestLane: string | null;
+  monthlyOverMarketDollars: number;
+  tighteningActionLanes: string[];
+}
+
+interface RepRateEntry {
+  repName: string;
+  avgDeltaPct: number;
+  aboveCount: number;
+  belowCount: number;
+  atCount: number;
+  totalLanes: number;
+}
+
+interface RatePositioningSummary {
+  portfolioExposure: PortfolioExposure;
+  repLeaderboard: RepRateEntry[];
+  generatedAt: string;
+}
+
+interface IntelData {
+  ratePositioning?: RatePositioningSummary;
+}
+
+function RateExposurePortlet() {
+  const [showRepBoard, setShowRepBoard] = useState(false);
+  const { data, isLoading } = useQuery<IntelData>({
+    queryKey: ["/api/intel", "all"],
+    queryFn: async () => {
+      const res = await fetch("/api/intel", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load intel");
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+
+  const exp = data?.ratePositioning?.portfolioExposure;
+  const repLeaderboard = data?.ratePositioning?.repLeaderboard ?? [];
+
+  return (
+    <Card data-testid="portlet-rate-exposure">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Target className="h-4 w-4 text-indigo-600" />
+          Portfolio Rate Exposure
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+          </div>
+        ) : !exp ? (
+          <p className="text-xs text-muted-foreground">Upload financial data to enable rate intelligence.</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="text-center rounded-lg bg-red-50 dark:bg-red-950/20 p-2" data-testid="exposure-above-market">
+                <div className="text-lg font-black text-red-600 dark:text-red-400">{exp.aboveMarketCount}</div>
+                <div className="text-[10px] text-red-700 dark:text-red-300 font-semibold">Above Mkt</div>
+                <div className="text-[10px] text-muted-foreground">{exp.aboveMarketPct.toFixed(0)}%</div>
+              </div>
+              <div className="text-center rounded-lg bg-yellow-50 dark:bg-yellow-950/20 p-2" data-testid="exposure-at-market">
+                <div className="text-lg font-black text-yellow-600 dark:text-yellow-400">{exp.atMarketCount}</div>
+                <div className="text-[10px] text-yellow-700 dark:text-yellow-300 font-semibold">At Market</div>
+                <div className="text-[10px] text-muted-foreground">{exp.atMarketPct.toFixed(0)}%</div>
+              </div>
+              <div className="text-center rounded-lg bg-green-50 dark:bg-green-950/20 p-2" data-testid="exposure-below-market">
+                <div className="text-lg font-black text-green-600 dark:text-green-400">{exp.belowMarketCount}</div>
+                <div className="text-[10px] text-green-700 dark:text-green-300 font-semibold">Below Mkt</div>
+                <div className="text-[10px] text-muted-foreground">{exp.belowMarketPct.toFixed(0)}%</div>
+              </div>
+            </div>
+            <div className="text-xs text-muted-foreground space-y-1 mb-3">
+              <div>
+                Avg delta:{" "}
+                <span className={`font-semibold ${exp.avgDeltaPct > 5 ? "text-red-600" : exp.avgDeltaPct < -5 ? "text-green-600" : "text-foreground"}`}>
+                  {exp.avgDeltaPct > 0 ? "+" : ""}{exp.avgDeltaPct.toFixed(1)}% vs market
+                </span>
+              </div>
+              {exp.monthlyOverMarketDollars > 0 && (
+                <div data-testid="exposure-monthly-over-market">
+                  Est. monthly over-market spend:{" "}
+                  <span className="font-semibold text-red-600 dark:text-red-400">
+                    ${(exp.monthlyOverMarketDollars / 1000).toFixed(0)}K
+                  </span>
+                </div>
+              )}
+              {exp.worstLane && (
+                <div>Worst: <span className="font-medium text-red-600 dark:text-red-400 capitalize">{exp.worstLane}</span></div>
+              )}
+              {exp.bestLane && (
+                <div>Best: <span className="font-medium text-green-600 dark:text-green-400 capitalize">{exp.bestLane}</span></div>
+              )}
+              {exp.tighteningActionLanes.length > 0 && (
+                <div className="text-amber-600 dark:text-amber-400">
+                  ⚡ Act now: <span className="capitalize">{exp.tighteningActionLanes.slice(0, 2).join(", ")}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Rep leaderboard toggle */}
+            {repLeaderboard.length > 0 && (
+              <>
+                <button
+                  className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-1 mb-2"
+                  onClick={() => setShowRepBoard(b => !b)}
+                  data-testid="button-toggle-rep-leaderboard"
+                >
+                  {showRepBoard ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  Rep Rate Positioning ({repLeaderboard.length})
+                </button>
+                {showRepBoard && (
+                  <div className="space-y-1" data-testid="portlet-rep-rate-leaderboard">
+                    {repLeaderboard.slice(0, 8).map((r, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-border/40 last:border-0">
+                        <span className="font-medium text-foreground truncate max-w-[110px]" title={r.repName}>{r.repName}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className={`font-bold text-[11px] ${r.avgDeltaPct > 5 ? "text-red-600" : r.avgDeltaPct < -5 ? "text-green-600" : "text-foreground"}`}>
+                            {r.avgDeltaPct > 0 ? "+" : ""}{r.avgDeltaPct.toFixed(1)}%
+                          </span>
+                          {r.aboveCount > 0 && <span className="text-[9px] bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-1 rounded">{r.aboveCount}↑</span>}
+                          {r.belowCount > 0 && <span className="text-[9px] bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-1 rounded">{r.belowCount}↓</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Link-through to full Intel Rate Positioning panel */}
+            <div className="mt-3 pt-2 border-t border-border/40">
+              <Link
+                href="/intel"
+                className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
+                data-testid="link-view-full-rate-intel"
+              >
+                <ExternalLink className="h-3 w-3" />
+                View Full Rate Intelligence Panel
+              </Link>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 interface DirectorPortletsProps {
   isAdmin: boolean;
@@ -63,6 +229,9 @@ export function DirectorPortlets({
     <>
       {/* ── Market Pulse ────────────────────────────────────────────────────── */}
       <SonarMarketPulsePortlet role="director" />
+
+      {/* ── Rate Exposure Summary ──────────────────────────────────────────── */}
+      <RateExposurePortlet />
 
       {/* Director filter toggle — admin only */}
       {isAdmin && (() => {

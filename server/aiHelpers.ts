@@ -447,3 +447,98 @@ export async function getLaneNarrativesBatch(
   ));
   return runConcurrent(tasks, MAX_CLAUDE_CONCURRENCY);
 }
+
+// ── Rate Positioning Coaching Card ───────────────────────────────────────────
+
+/**
+ * Generate a 2–3 sentence rep-facing coaching card for a lane's rate positioning.
+ * Incorporates: paid rate vs. TRAC benchmark delta, 3-week forecast direction,
+ * VOTRI signal, and margin trend.
+ * Cached 60 min keyed by lane + rounded rate values.
+ */
+export async function generateLaneCoachingCard(
+  lane: string,
+  paidRatePerMile: number,
+  marketRatePerMile: number,
+  deltaPerMile: number,
+  deltaPct: number,
+  classification: "ABOVE_MARKET" | "AT_MARKET" | "BELOW_MARKET",
+  forecastDirection: "TIGHTENING" | "EASING" | "STABLE",
+  votri: number | null,
+  marginTrend: "tightening" | "easing" | "stable",
+): Promise<string | null> {
+  if (!process.env.OPENAI_API_KEY) return null;
+
+  const key = `coaching:${lane}:${Math.round(paidRatePerMile * 100)}:${Math.round(marketRatePerMile * 100)}:${forecastDirection}:${classification}`;
+  const cached = getCached(key);
+  if (cached) return cached;
+
+  try {
+    const aboveBelow = deltaPerMile >= 0 ? "above" : "below";
+    const aboveBelowAbs = Math.abs(deltaPerMile);
+    const targetRate = marketRatePerMile;
+
+    const forecastText = forecastDirection === "TIGHTENING"
+      ? "Rates on this lane are forecast to rise over the next 3 weeks."
+      : forecastDirection === "EASING"
+      ? "Rates on this lane are forecast to ease over the next 3 weeks."
+      : "Rates on this lane are expected to remain stable over the next 3 weeks.";
+
+    const votriText = votri !== null
+      ? `Lane VOTRI (van tender rejection): ${votri.toFixed(1)}%.`
+      : "";
+
+    const prompt = `You are a freight market intelligence coach. Write a 2–3 sentence, direct, action-oriented coaching recommendation for a freight rep about their carrier rate positioning on this lane.
+
+Lane: ${lane}
+Your paid carrier rate: $${paidRatePerMile.toFixed(2)}/mile
+TRAC market benchmark: $${marketRatePerMile.toFixed(2)}/mile
+Delta: ${aboveBelow === "above" ? "+" : "-"}$${aboveBelowAbs.toFixed(2)}/mile (${Math.abs(deltaPct).toFixed(1)}% ${aboveBelow} market)
+Rate classification: ${classification}
+3-week rate forecast: ${forecastText}
+${votriText}
+Carrier margin trend (last 6 weeks): ${marginTrend}
+Target benchmark rate: $${targetRate.toFixed(2)}/mile
+
+Write a coaching card that tells the rep EXACTLY what action to take (renegotiate, lock in current rates, hold, or capitalize on favorable positioning). Be specific: include the dollar amount and the reason. 2–3 sentences only, direct and action-oriented. No bullet points, no headers.`;
+
+    const result = await callAI(prompt, 180);
+    setCached(key, result, TTL_60);
+    log(`Coaching card generated for ${lane}`);
+    return result;
+  } catch (err: unknown) {
+    log(`Coaching card error: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * Batch generate coaching cards for multiple lanes with bounded concurrency.
+ */
+export async function generateLaneCoachingCardsBatch(
+  lanes: Array<{
+    lane: string;
+    paidRatePerMile: number;
+    marketRatePerMile: number;
+    deltaPerMile: number;
+    deltaPct: number;
+    classification: "ABOVE_MARKET" | "AT_MARKET" | "BELOW_MARKET";
+    forecastDirection: "TIGHTENING" | "EASING" | "STABLE";
+    votri: number | null;
+    marginTrend: "tightening" | "easing" | "stable";
+  }>,
+): Promise<Array<string | null>> {
+  const MAX_CONCURRENCY = 6;
+  const tasks = lanes.map(l => () => generateLaneCoachingCard(
+    l.lane,
+    l.paidRatePerMile,
+    l.marketRatePerMile,
+    l.deltaPerMile,
+    l.deltaPct,
+    l.classification,
+    l.forecastDirection,
+    l.votri,
+    l.marginTrend,
+  ));
+  return runConcurrent(tasks, MAX_CONCURRENCY);
+}
