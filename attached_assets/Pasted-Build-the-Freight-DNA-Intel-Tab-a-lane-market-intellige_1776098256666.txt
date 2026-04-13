@@ -1,0 +1,210 @@
+Build the Freight DNA Intel Tab — a lane market intelligence module inside the existing Freight DNA CRM platform.
+
+Stack: React 18, TypeScript, Shadcn/ui components, Express.js backend, Drizzle ORM, PostgreSQL. This is an addition to the existing codebase, not a standalone app. The Intel Tab appears as a new tab in the Freight DNA navigation alongside existing tabs.
+
+--- CREDENTIALS & API ---
+FreightWaves API Base URL: https://api.freightwaves.com
+Bearer Token (store in env as FREIGHTWAVES_TOKEN, valid until 2027-04-13):
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1bmlxdWVfbmFtZSI6ImpvcmRhbi5iYXVtZ2FydEB2YWx1ZXRydWNrLmNvbSIsIkVtYWlsIjoiam9yZGFuLmJhdW1nYXJ0QHZhbHVldHJ1Y2suY29tIiwiT3JnYW5pemF0aW9uSUQiOiI2NjYiLCJPcmdhbml6YXRpb25OYW1lIjoiVmFsdWUgTG9naXN0aWNzIExMQyIsIk1heFJlY29yZHMiOiI3MjAwMDAiLCJFbnRpdGxlbWVudCI6IlllcyIsIlVzZXJJZCI6IjE0NzciLCJuYmYiOjE3NzYwOTU4NDgsImV4cCI6MTgwNzYzMTg0OCwiaWF0IjoxNzc2MDk1ODQ4fQ.H7efYALlsYHqBGg0XjzhDxUFZZvI5GhecW47VFOTFdY
+
+Endpoints used:
+- POST /v2/truckload/rates/trac           → spot rates
+- POST /v2/truckload/rates/trac/forecast  → 14-day daily forecast
+- POST /v2/truckload/rates/trac/statistics → monthly historical stats (aggregation: "monthly")
+- POST /v2/truckload/rates/contract       → contract rates + FSC
+- GET  /market/summary                    → national market pulse
+
+Lane request format (KMA airport codes):
+{
+  "start_date": "YYYY-MM-DD",
+  "end_date": "YYYY-MM-DD",
+  "lanes": [{
+    "lane_id": "string",
+    "origin": "SLC",
+    "origin_country_code": "USA",
+    "destination": "LAX",
+    "destination_country_code": "USA",
+    "equipment_type": "VAN"  // VAN, REEFER, or FLATBED
+  }]
+}
+
+Spot response key fields: rpm, rpm_high, rpm_low, rate, rate_high, rate_low, confidence_score, miles, total_load_count
+Forecast response key fields: data_timestamp, forecast_rpm_trac, forecast_index_value
+Statistics response key fields: avg_rpm, lowest_rpm, highest_rpm, std_dev_rpm, avg_rate, period_start_date
+Contract response key fields: rpm, rate, fuel_surcharge_rpm, confidence_score
+
+---
+
+== DATABASE TABLES (add to existing Drizzle schema) ==
+
+1. intel_tracked_lanes
+   - id, user_id, origin (KMA code), destination (KMA code), equipment_type
+   - lane_label (e.g. "SLC → LAX VAN"), active (boolean), created_at
+   - source: "auto" (from load history) or "manual" (user added)
+   - display_order (integer, for ranking top 10)
+
+2. intel_lane_rates
+   - id, lane_id (FK to intel_tracked_lanes), refreshed_at
+   - spot_rpm, spot_rpm_high, spot_rpm_low
+   - spot_rate, spot_rate_high, spot_rate_low
+   - contract_rpm, contract_rate, contract_fsc_rpm
+   - confidence_score, load_count, miles
+   - avg_rpm_30d, avg_rpm_90d (from statistics endpoint)
+   - forecast_json (JSONB — stores full 14-day array)
+   - rate_alert (enum: 'spike', 'drop', 'reprice', null)
+   - alert_reason (text)
+
+3. intel_market_pulse
+   - id, fetched_at
+   - otri, otri_wow_pct, otvi, otvi_wow_pct
+   - fuel_price, fuel_mom_pct
+   - spot_rpm_national, contract_rpm_national
+   - actionable_insights (JSONB array)
+
+---
+
+== BACKEND SERVICES ==
+
+1. tracService.ts
+   - fetchSpotRates(lanes) → calls /v2/truckload/rates/trac, last 7 days
+   - fetchForecast(lanes) → calls /v2/truckload/rates/trac/forecast, next 14 days
+   - fetchStatistics(lanes) → calls /v2/truckload/rates/trac/statistics, last 90 days monthly
+   - fetchContractRates(lanes) → calls /v2/truckload/rates/contract, last 30 days
+   - fetchMarketPulse() → calls GET /market/summary
+   - All functions accept lanes array, run with 200ms delay between calls if >50 lanes
+   - All functions use Authorization: Bearer $FREIGHTWAVES_TOKEN header
+
+2. alertEngine.ts
+   - generateAlert(spotRpm, forecastJson, contractRpm, avg90dRpm)
+   - Logic:
+     * If avg forecast RPM next 7 days > today spot RPM by 8%+ → alert: 'spike', reason: "Rates forecast to rise X% over next 7 days. Lock in carrier capacity now."
+     * If avg forecast RPM next 7 days < today spot RPM by 5%+ → alert: 'drop', reason: "Rates softening over next 7 days. Hold spot coverage, leverage spot market."
+     * If spot RPM > contract RPM by 10%+ → alert: 'reprice', reason: "Spot is running X% above contract. Strong reprice opportunity with shipper."
+     * Otherwise → null
+
+3. driverEngine.ts
+   - generateDriverText(forecastIndexValues: number[], spotRpm, avg90dRpm)
+   - Reads the forecast_index_value array (positive = tightening, negative = loosening)
+   - Returns plain-English driver string, examples:
+     * "Capacity tightening — rejection rates rising in this corridor"
+     * "Rates softening — carriers adding capacity into destination market"
+     * "Seasonal demand peak driving rate increase next week"
+     * "Market stabilizing after recent volatility — rates near 90-day average"
+   - Logic: look at the avg forecast_index_value across days 1–7
+     * > +0.08 → tightening/rising language
+     * < -0.05 → softening/loosening language
+     * Near 0 and spot within 5% of avg90d → stabilizing language
+     * Near 0 but spot > avg90d by 10%+ → elevated but stable language
+
+4. intelRefreshService.ts
+   - Cron: runs at 6:00 AM Mountain Time (12:00 UTC) daily using node-cron
+   - Steps:
+     1. Fetch all active lanes from intel_tracked_lanes grouped by user_id
+     2. For each batch: run fetchSpotRates, fetchForecast, fetchStatistics, fetchContractRates in parallel (Promise.all)
+     3. Run alertEngine and driverEngine on each result
+     4. Upsert into intel_lane_rates
+     5. Fetch market pulse, upsert into intel_market_pulse
+     6. Log: "Intel refresh complete — X lanes updated at [time]"
+
+---
+
+== API ROUTES (add to existing Express router) ==
+
+GET  /api/intel/dashboard?user_id=X
+  → Returns: market pulse + top 10 lanes for user with spot, contract, forecast, alert, driver text, historical avg
+  → Checks if intel_lane_rates.refreshed_at is today. If stale → triggers live fetch before returning.
+
+GET  /api/intel/lanes?user_id=X
+  → Returns all tracked lanes for a user
+
+POST /api/intel/lanes
+  → Body: { user_id, origin, destination, equipment_type }
+  → Adds lane to intel_tracked_lanes, triggers immediate rate fetch, returns full rate card
+
+DELETE /api/intel/lanes/:id
+  → Removes lane from tracking
+
+GET  /api/intel/lane/:id
+  → Returns full rate card for a single lane including 14-day forecast array
+
+POST /api/intel/lookup
+  → Body: { origin, destination, equipment_type }
+  → On-demand lookup for any lane (not necessarily tracked) — hits TRAC live, returns full rate card
+  → Does not save to DB
+
+POST /api/intel/refresh?user_id=X
+  → Manually triggers full refresh for a user's lanes (admin/debug use)
+
+---
+
+== FRONTEND COMPONENTS ==
+
+Page: IntelTab.tsx
+Route: /freight-dna/intel
+Role-scoped: each user sees only their own lanes (user_id from auth context)
+
+Layout:
+┌─────────────────────────────────────────────────┐
+│  MARKET PULSE STRIP (always visible, top)        │
+├─────────────────────────────────────────────────┤
+│  [Search any lane bar]    [+ Add Lane button]    │
+├─────────────────────────────────────────────────┤
+│  LANE CARDS GRID (top 10, 2-column layout)       │
+│  Each card: rate info + sparkline + alert badge  │
+└─────────────────────────────────────────────────┘
+
+Component 1: MarketPulseStrip.tsx
+- Single horizontal bar at top of page
+- Shows: OTRI value + WoW% change (colored red if up, green if down from carrier perspective)
+- National spot NTI RPM + vs 30-day avg
+- Diesel price + MoM% change
+- One actionable insight pulled from the API's insight array (rotate or show the most rate-relevant one)
+- Refreshes from intel_market_pulse table, timestamp shown ("Updated Apr 13, 6:00 AM")
+
+Component 2: LaneCard.tsx
+Props: lane data object from /api/intel/dashboard
+Card layout:
+- Header: "SLC → LAX | VAN | 690 mi"
+- Confidence dots (1–5 filled circles)
+- Big number: Today's spot rate "$1.30/rpm — $897/load"
+- Rate range: "$856 low — $938 high" in smaller text
+- Contract comparison: "Contract: $X.XX/rpm" with badge showing "SPOT +X% vs CONTRACT" colored orange if >10% above
+- vs 90-day avg: "90d avg: $1.25/rpm — running X% above avg"
+- Forecast sparkline: 14-day line chart using Recharts, minimal/clean
+  * X axis: date labels (Apr 14, Apr 16, Apr 18...)
+  * Y axis: RPM values
+  * Highlight today's rate as a reference line
+  * Color line green if trending up, red if trending down, gray if flat
+- Driver text: italic, muted color — "Capacity tightening — rejection rates rising in this corridor"
+- Alert badge (if present): pill badge — "⚡ Spike Incoming" (yellow), "📉 Rates Softening" (blue), "💰 Reprice Opportunity" (green)
+- Footer: "Last updated 6:02 AM today" + refresh icon (triggers on-demand refresh for this lane)
+
+Component 3: LaneSearchModal.tsx
+- Triggered by search bar or "+ Add Lane" button
+- Inputs: Origin (KMA code or city name with autocomplete), Destination, Equipment type dropdown (VAN/REEFER/FLATBED)
+- On submit: calls POST /api/intel/lookup
+- Shows full rate card result in modal: spot + contract + 14-day forecast chart + driver text + alert
+- Button: "Add to My Lanes" → calls POST /api/intel/lanes
+
+Component 4: ForecastChart.tsx (used inside LaneCard and LaneSearchModal)
+- Recharts LineChart
+- 14-day daily forecast_rpm_trac values
+- Reference line at today's spot rate
+- Tooltip on hover: shows date, forecast RPM, est. all-in rate (rpm × miles)
+- Subtle gradient fill under line
+
+---
+
+== UX DETAILS ==
+- Loading state: skeleton cards while fetching (Shadcn Skeleton component)
+- Empty state: "No lanes tracked yet. Search a lane above to get started."
+- Error state: "Unable to load rates. Using last cached data from [timestamp]."
+- Mobile responsive: cards stack to 1 column on mobile
+- Color system: use existing Freight DNA color tokens. Alert badges use amber/blue/green.
+- "Last refreshed" timestamp shown on each card
+- Stale data (>24h old) shows a subtle warning indicator on the card
+
+---
+
+== ENVIRONMENT VARIABLES NEEDED ==
+FREIGHTWAVES_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...full token here
