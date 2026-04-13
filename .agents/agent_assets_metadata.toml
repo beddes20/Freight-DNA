@@ -12,3 +12,9 @@ id = "ydx5Op6ubgJRxzMxwgDUw"
 uri = "file://assets/linkedin/freight-dna-banner.png"
 type = "image"
 title = "Freight DNA — LinkedIn Banner (1584x396)"
+
+[[outputs]]
+id = "eJ5Z1SwM305gu8zA1xuS4"
+uri = "file://FreightDNA_Platform_Reference.md"
+type = "text"
+title = "FreightDNA Platform Reference Guide"
