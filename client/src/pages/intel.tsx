@@ -41,6 +41,8 @@ interface LaneAlert {
   signal: string;
   action: string;
   severity: "high" | "medium" | "low";
+  aiNarrative?: string | null;
+  votri?: number | null;
 }
 
 interface SpotOpportunity {
@@ -50,6 +52,7 @@ interface SpotOpportunity {
   historicalCustomerRate: number;
   expectedCarrierCost: number;
   estimatedMarginGap: number;
+  aiNarrative?: string | null;
 }
 
 interface BuyRateLane {
@@ -61,6 +64,8 @@ interface BuyRateLane {
   buyRateLow: number;
   buyRateHigh: number;
   originOtri: number;
+  votri?: number | null;
+  aiRationale?: string | null;
 }
 
 interface ScorecardLane {
@@ -81,8 +86,17 @@ interface ScorecardLane {
   buyRateHigh: number;
   originOtri: number;
   destOtri: number;
+  votri?: number | null;
   originSignal: string;
   destSignal: string;
+  aiNarrative?: string | null;
+}
+
+interface MarketContextItem {
+  market: string;
+  headline: string;
+  summary: string;
+  relevance: string;
 }
 
 interface RepEntry {
@@ -110,6 +124,11 @@ interface SonarMarketTrend {
   votri: number | null;
   signal: "hot" | "warm" | "cool";
   trendDir: "↑" | "↓" | "→";
+  ibOtri: number | null;
+}
+
+interface ExecutiveReportWithBrief extends ExecutiveReport {
+  executiveBrief?: string | null;
 }
 
 interface IntelPayload {
@@ -126,6 +145,7 @@ interface IntelPayload {
     buyRateQuickLook: BuyRateLane[];
     sonarTimestamp: string;
     sonarIsStale: boolean;
+    marketContext?: MarketContextItem[];
   };
   biweeklyScorecard: {
     lastRefreshDate: string;
@@ -141,7 +161,7 @@ interface IntelPayload {
     };
     lanes: ScorecardLane[];
   };
-  executiveReport: ExecutiveReport;
+  executiveReport: ExecutiveReportWithBrief;
 }
 
 // ── Market Pulse Strip ────────────────────────────────────────────────────────
@@ -280,10 +300,18 @@ function AlertCard({ alert }: { alert: LaneAlert }) {
     <div className={`border-l-4 rounded-r-lg px-3 py-3 ${sev}`} data-testid={`alert-card-${alert.severity}`}>
       <div className="flex items-start gap-2">
         {icon}
-        <div>
+        <div className="flex-1 min-w-0">
           <div className="text-xs font-bold text-foreground mb-0.5">{alert.lane}</div>
           <div className="text-xs text-muted-foreground mb-1">{alert.signal}</div>
+          {alert.votri !== null && alert.votri !== undefined && (
+            <div className="text-[10px] text-muted-foreground mb-1">Lane VOTRI: {alert.votri.toFixed(1)}%</div>
+          )}
           <div className="text-xs font-medium text-foreground">→ {alert.action}</div>
+          {alert.aiNarrative && (
+            <div className="mt-1.5 text-xs text-muted-foreground italic border-t border-current/10 pt-1.5">
+              {alert.aiNarrative}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -296,11 +324,16 @@ function SpotCard({ opp }: { opp: SpotOpportunity }) {
   return (
     <div className="border rounded-lg p-3 bg-card" data-testid="card-spot-opportunity">
       <div className="flex items-start justify-between">
-        <div>
+        <div className="flex-1 min-w-0">
           <div className="text-sm font-bold text-foreground">{opp.lane}</div>
           <div className="text-xs text-muted-foreground mt-0.5">
             Hist. rate: ${opp.historicalCustomerRate.toFixed(0)} · Expected carrier: ${opp.expectedCarrierCost.toFixed(0)}
           </div>
+          {opp.aiNarrative && (
+            <div className="mt-1.5 text-xs text-muted-foreground italic">
+              {opp.aiNarrative}
+            </div>
+          )}
         </div>
         <Badge className="bg-green-600 text-white text-xs ml-2 shrink-0">
           {opp.estimatedMarginGap.toFixed(1)}% est. margin
@@ -364,15 +397,26 @@ function LaneScorecardCard({ lane, idx }: { lane: ScorecardLane; idx: number }) 
             <span className="text-xs font-normal text-white/50 ml-1">/mile</span>
           </div>
           <div className="text-[10px] text-white/50 mt-1">
-            Based on your last 3 weeks · adjusted for origin OTRI {lane.originOtri.toFixed(1)}%
+            Based on your last 3 weeks · adjusted for {lane.votri !== null && lane.votri !== undefined ? `VOTRI ${lane.votri.toFixed(1)}%` : `origin OTRI ${lane.originOtri.toFixed(1)}%`}
           </div>
         </div>
       )}
 
       <div className="flex gap-2 mt-3 flex-wrap">
-        <OtriChip label="Origin" otri={lane.originOtri} signal={lane.originSignal} />
-        <OtriChip label="Dest" otri={lane.destOtri} signal={lane.destSignal} />
+        <OtriChip label="Origin OB" otri={lane.originOtri} signal={lane.originSignal} />
+        <OtriChip label="Dest IB" otri={lane.destOtri} signal={lane.destSignal} />
+        {lane.votri !== null && lane.votri !== undefined && (
+          <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+            🎯 <strong>VOTRI:</strong> {lane.votri.toFixed(1)}%
+          </span>
+        )}
       </div>
+
+      {lane.aiNarrative && (
+        <div className="mt-3 text-xs text-muted-foreground italic bg-muted/30 rounded-lg px-3 py-2 leading-relaxed">
+          {lane.aiNarrative}
+        </div>
+      )}
     </div>
   );
 }
@@ -400,7 +444,7 @@ function HealthBar({ label, count, pct, color }: { label: string; count: number;
   );
 }
 
-function ExecutiveReportSection({ report }: { report: ExecutiveReport }) {
+function ExecutiveReportSection({ report }: { report: ExecutiveReportWithBrief }) {
   const totalRevenue = report.topCompanies.reduce((s, c) => s + c.revenue, 0);
 
   return (
@@ -408,6 +452,16 @@ function ExecutiveReportSection({ report }: { report: ExecutiveReport }) {
       <h2 className="text-lg font-bold text-foreground mb-4 flex items-center gap-2" data-testid="section-executive-report">
         <Trophy className="h-5 w-5 text-amber-500" /> Executive Intel Report
       </h2>
+
+      {report.executiveBrief && (
+        <div className="mb-5 rounded-xl border border-amber-200 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-950/20 px-5 py-4" data-testid="text-executive-brief">
+          <div className="flex items-center gap-2 mb-2">
+            <Trophy className="h-4 w-4 text-amber-600 shrink-0" />
+            <span className="text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">AI Executive Brief</span>
+          </div>
+          <p className="text-sm text-foreground leading-relaxed">{report.executiveBrief}</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* ── Lane Health Distribution ─────────────────────────────── */}
@@ -751,7 +805,8 @@ export default function IntelPage() {
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Market</th>
-                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">OTRI</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">OB OTRI</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">IB OTRI</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">VOTRI</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">WoW</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">Trend</th>
@@ -769,6 +824,9 @@ export default function IntelPage() {
                       <tr key={m.market} className={`border-b last:border-0 ${i % 2 === 0 ? "" : "bg-muted/20"}`} data-testid={`row-market-trend-${m.market}`}>
                         <td className="px-4 py-2.5 font-medium capitalize">{m.market}</td>
                         <td className="px-4 py-2.5 text-right font-mono">{m.otri.toFixed(1)}%</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-muted-foreground hidden sm:table-cell" data-testid={`cell-ibotri-${m.market}`}>
+                          {m.ibOtri !== null ? `${m.ibOtri.toFixed(1)}%` : "—"}
+                        </td>
                         <td className="px-4 py-2.5 text-right font-mono text-muted-foreground hidden sm:table-cell">
                           {m.votri !== null ? `${m.votri.toFixed(1)}%` : "—"}
                         </td>
@@ -824,17 +882,22 @@ export default function IntelPage() {
                     <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Lane</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">Loads (6wk)</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">Buy Rate $/mi</th>
-                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden md:table-cell">Origin OTRI</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden md:table-cell">VOTRI / OTRI</th>
                   </tr>
                 </thead>
                 <tbody>
                   {dailyInsights.buyRateQuickLook.map((lane, i) => (
                     <tr key={i} className={`border-b last:border-0 ${i % 2 === 0 ? "" : "bg-muted/20"}`} data-testid={`row-buy-rate-${i}`}>
                       <td className="px-4 py-2.5 font-medium text-foreground">
-                        <span className="capitalize">{lane.origin}</span>
-                        <span className="text-muted-foreground mx-1">→</span>
-                        <span className="capitalize">{lane.destination}</span>
-                        {lane.equipment && <span className="text-muted-foreground text-xs ml-1">({lane.equipment})</span>}
+                        <div>
+                          <span className="capitalize">{lane.origin}</span>
+                          <span className="text-muted-foreground mx-1">→</span>
+                          <span className="capitalize">{lane.destination}</span>
+                          {lane.equipment && <span className="text-muted-foreground text-xs ml-1">({lane.equipment})</span>}
+                        </div>
+                        {lane.aiRationale && (
+                          <div className="text-[10px] text-muted-foreground italic mt-0.5 max-w-xs leading-tight">{lane.aiRationale}</div>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-right text-muted-foreground">{lane.totalLoads}</td>
                       <td className="px-4 py-2.5 text-right font-bold text-foreground">
@@ -844,12 +907,38 @@ export default function IntelPage() {
                         }
                       </td>
                       <td className="px-4 py-2.5 text-right text-muted-foreground hidden md:table-cell">
-                        {lane.originOtri.toFixed(1)}%
+                        {lane.votri !== null && lane.votri !== undefined
+                          ? <span className="text-blue-600 dark:text-blue-400 font-medium">{lane.votri.toFixed(1)}% VOTRI</span>
+                          : `${lane.originOtri.toFixed(1)}% OB`
+                        }
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── Perplexity Market Context ──────────────────────────────── */}
+        {dailyInsights.marketContext && dailyInsights.marketContext.length > 0 && (
+          <div className="mb-6">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+              <Radio className="h-4 w-4 text-purple-500" /> Market Context — Real-World Freight News
+            </h3>
+            <div className="space-y-3">
+              {dailyInsights.marketContext.map((item, i) => (
+                <div key={i} className="border rounded-xl p-4 bg-card" data-testid={`card-market-context-${i}`}>
+                  <div className="flex items-start gap-2 mb-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 bg-purple-100 dark:bg-purple-900/30 px-2 py-0.5 rounded-full shrink-0">
+                      {item.market}
+                    </span>
+                    <span className="text-xs font-semibold text-foreground leading-snug">{item.headline}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mb-1">{item.summary}</p>
+                  <p className="text-xs text-foreground/70 italic">→ {item.relevance}</p>
+                </div>
+              ))}
             </div>
           </div>
         )}

@@ -212,7 +212,9 @@ export function registerSonarRoutes(app: Express): void {
       // ── Logistics Manager: capacity urgency list (lanes ranked by VOTRI) ────
       if (resolvedRole === "logistics_manager") {
         const allLanes = await storage.getRecurringLanes(orgId, user.id).catch(() => []);
-        const validLanes = allLanes.filter(l => l.origin && l.destination).slice(0, 30);
+        // All valid lanes — no cap — so VOTRI is evaluated for every owned recurring lane.
+        // The UI display list is trimmed to top-10 by urgency (see urgencyLanes.slice below).
+        const validLanes = allLanes.filter(l => l.origin && l.destination);
 
         let urgencyLanes: Array<{
           origin: string;

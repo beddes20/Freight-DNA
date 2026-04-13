@@ -15,9 +15,21 @@ import {
   getNationalMarketSummary,
   getMarketOtris,
   getLaneSpotRate,
+  getLaneVotrisBatch,
+  buildVotriQualifier,
   type NationalMarketSummary,
   type MarketOtri,
+  type LaneVotri,
 } from "../sonarClient";
+import {
+  getAlertNarrative,
+  getSpotOpportunityNarrative,
+  getBuyRateRationale,
+  getLaneNarrativesBatch,
+  getExecutiveBrief,
+  getPerplexityMarketContext,
+  type MarketContextItem,
+} from "../aiHelpers";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -217,10 +229,16 @@ function buildLanesFromRows(
 
 // ── Buy rate calculation ──────────────────────────────────────────────────────
 
+/**
+ * Compute buy rate range using lane-level VOTRI when available,
+ * falling back to origin market OTRI.
+ * VOTRI (van tender rejection index) at the lane level is more precise
+ * than origin market OTRI for determining carrier availability pressure.
+ */
 function computeBuyRateRange(
   carrierPays: number[],
   loadCount: number,
-  originOtri: number,
+  votriOrOtri: number,  // prefer lane VOTRI, fall back to origin OTRI
 ): { low: number; high: number } {
   if (carrierPays.length === 0) return { low: 0, high: 0 };
 
@@ -234,9 +252,10 @@ function computeBuyRateRange(
   const lowPerMile = p25 / avgMiles;
   const highPerMile = p75 / avgMiles;
 
+  // Use VOTRI (or OTRI fallback) for adjustment — hot market = higher buy rate
   let adjustment = 0;
-  if (originOtri > 25) adjustment = 0.1;
-  else if (originOtri > 10) adjustment = 0.05;
+  if (votriOrOtri > 25) adjustment = 0.1;
+  else if (votriOrOtri > 10) adjustment = 0.05;
 
   return {
     low: Math.round((lowPerMile * (1 + adjustment)) * 100) / 100,
@@ -251,22 +270,43 @@ interface LaneAlert {
   signal: string;
   action: string;
   severity: "high" | "medium" | "low";
+  aiNarrative?: string | null;
+  votri?: number | null;
 }
 
-function computeLaneAlerts(lanes: LaneData[], marketOtris: MarketOtri[]): LaneAlert[] {
+/**
+ * Compute lane alerts using lane-level VOTRI for alert severity when available,
+ * with origin market OTRI as fallback for lanes where VOTRI is stale/unavailable.
+ */
+function computeLaneAlerts(
+  lanes: LaneData[],
+  marketOtris: MarketOtri[],
+  votriByQualifier: Map<string, LaneVotri>,
+): LaneAlert[] {
   const alerts: LaneAlert[] = [];
   const otriByMarket = new Map(marketOtris.map(m => [m.market.toLowerCase(), m.otri]));
 
   for (const lane of lanes) {
     const laneDisplay = `${lane.origin} → ${lane.destination}`;
+    const qualifier = buildVotriQualifier(lane.origin, lane.destination);
+    const laneVotri = votriByQualifier.get(qualifier);
 
-    const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? 15;
-    if (originOtri > 25) {
+    // Prefer lane-level VOTRI for alert severity; fall back to origin market OTRI
+    const effectiveRejectionRate = (laneVotri && !laneVotri.isStale)
+      ? laneVotri.votri
+      : (otriByMarket.get(lane.origin.toLowerCase()) ?? 15);
+    const votriValue = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
+
+    if (effectiveRejectionRate > 25) {
+      const signalLabel = laneVotri && !laneVotri.isStale
+        ? `Lane VOTRI tight (${effectiveRejectionRate.toFixed(1)}%)`
+        : `Origin market tight (OTRI ${effectiveRejectionRate.toFixed(1)}%)`;
       alerts.push({
         lane: laneDisplay,
-        signal: `Origin market tight (OTRI ${originOtri.toFixed(1)}%)`,
+        signal: signalLabel,
         action: "Consider booking carriers earlier or adjusting buy rate upward.",
         severity: "high",
+        votri: votriValue,
       });
     }
 
@@ -276,6 +316,7 @@ function computeLaneAlerts(lanes: LaneData[], marketOtris: MarketOtri[]): LaneAl
         signal: "Carrier rates tightening (last 3 weeks vs prior 3 weeks)",
         action: "Review carrier relationships and consider locking in capacity now.",
         severity: "medium",
+        votri: votriValue,
       });
     }
 
@@ -292,6 +333,7 @@ function computeLaneAlerts(lanes: LaneData[], marketOtris: MarketOtri[]): LaneAl
         signal: `Margin declining ${declineStreak} weeks in a row (now ${latestMargin.toFixed(1)}%)`,
         action: "Re-price with customer or reduce carrier cost to protect margin.",
         severity: "high",
+        votri: votriValue,
       });
     }
   }
@@ -308,6 +350,7 @@ interface SpotOpportunity {
   historicalCustomerRate: number;
   expectedCarrierCost: number;
   estimatedMarginGap: number;
+  aiNarrative?: string | null;
 }
 
 async function computeSpotOpportunities(lanes: LaneData[]): Promise<SpotOpportunity[]> {
@@ -471,45 +514,113 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
     ? allLanes.filter(l => l.ownerUserId === filterUserId)
     : allLanes;
 
-  // Sonar data
+  // ── Sonar data ────────────────────────────────────────────────────────────
   const national = await getNationalMarketSummary();
-  const uniqueMarkets = Array.from(new Set([
-    ...allLanes.map(l => l.origin),
-    ...allLanes.map(l => l.destination),
-  ])).filter(Boolean).slice(0, 20);
-  const marketOtris = await getMarketOtris(uniqueMarkets);
-  const otriByMarket = new Map(marketOtris.map(m => [m.market.toLowerCase(), m.otri]));
 
-  // Top-20 VOTRI/OTRI market trend table (spec: market trend table, color-coded by signal level)
-  // marketOtris includes OTRI (from OTRI.{MARKET}), otriWoW (from OTRIW.{MARKET}), and
-  // votriWoW (from VOTRIW.{MARKET}). trendDir arrows use VOTRIW per spec — the van outbound
-  // tender rejection WoW delta. Falls back to OTRIW if VOTRIW is unavailable for a market.
+  // Collect all unique origin and destination markets across all lanes
+  const uniqueOrigins = Array.from(new Set(allLanes.map(l => l.origin))).filter(Boolean);
+  const uniqueDestinations = Array.from(new Set(allLanes.map(l => l.destination))).filter(Boolean);
+  const allUniqueMarkets = Array.from(new Set([...uniqueOrigins, ...uniqueDestinations]));
+
+  // Fetch OTRI for all markets (origins + destinations) — no cap;
+  // getMarketOtris fetches in parallel per-market with 4-hour per-market cache.
+  const marketOtris = await getMarketOtris(allUniqueMarkets);
+  const otriByMarket = new Map(marketOtris.map(m => [m.market.toLowerCase(), m]));
+
+  // ── VOTRI: fetch for ALL lanes owned by the user (not capped at top N) ────
+  // Use getLaneVotrisBatch for parallelism — already respects 4-hour cache per qualifier
+  const allLanePairs = lanes.map(l => ({ origin: l.origin, destination: l.destination }));
+  let votriByQualifier = new Map<string, LaneVotri>();
+  if (allLanePairs.length > 0) {
+    votriByQualifier = await getLaneVotrisBatch(allLanePairs);
+    logIntel(`VOTRI fetched for ${votriByQualifier.size} lanes`);
+  }
+
+  // ── Sonar Market Trends table ──────────────────────────────────────────────
+  // Sort by OTRI descending; top 20 shown. Every market that appears as a
+  // destination gets ibOtri populated — including markets that are BOTH origin
+  // and destination (mixed-use), so no IB data is silently dropped.
+  const destinationSet = new Set(uniqueDestinations);
   const sonarMarketTrends = marketOtris
-    .slice(0, 20)
     .sort((a, b) => b.otri - a.otri)
+    .slice(0, 20)
     .map(m => {
-      const trendSource = m.votriWoW ?? m.otriWoW; // prefer VOTRIW per spec, fall back to OTRIW
+      const trendSource = m.votriWoW ?? m.otriWoW;
       return {
         market:   m.market,
         otri:     m.otri,
-        otriWoW:  m.otriWoW,   // OTRIW.{MARKET} ticker
+        otriWoW:  m.otriWoW,
         votri:    m.votri,
-        votriWoW: m.votriWoW,  // VOTRIW.{MARKET} ticker
+        votriWoW: m.votriWoW,
         signal:   m.signal,
         trendDir: trendSource > 0.5 ? "↑" : trendSource < -0.5 ? "↓" : "→",
+        // ibOtri: always set for any market that is used as a destination (IB = inbound)
+        ibOtri: destinationSet.has(m.market) ? m.otri : null,
       };
     });
 
   // Daily insights for the (possibly filtered) lane set
-  const laneAlerts = computeLaneAlerts(lanes, marketOtris);
+  const laneAlerts = computeLaneAlerts(lanes, marketOtris, votriByQualifier);
   const spotOpportunities = await computeSpotOpportunities(lanes);
 
-  const top5Lanes = [...lanes]
+  // ── AI: generate narratives in parallel (OpenAI) ──────────────────────────
+  // Alert narratives
+  const alertsWithNarratives = await Promise.all(
+    laneAlerts.map(async (alert) => {
+      const qualifier = buildVotriQualifier(
+        alert.lane.split(" → ")[0]?.trim() ?? "",
+        alert.lane.split(" → ")[1]?.trim() ?? "",
+      );
+      const laneVotri = votriByQualifier.get(qualifier);
+      const originOtri = otriByMarket.get((alert.lane.split(" → ")[0]?.trim() ?? "").toLowerCase())?.otri ?? 15;
+      const narrative = await getAlertNarrative(
+        alert.lane,
+        alert.signal,
+        alert.action,
+        alert.severity,
+        originOtri,
+        laneVotri && !laneVotri.isStale ? laneVotri.votri : null,
+      );
+      return { ...alert, aiNarrative: narrative };
+    }),
+  );
+
+  // Spot opportunity narratives
+  const spotWithNarratives = await Promise.all(
+    spotOpportunities.map(async (opp) => {
+      const narrative = await getSpotOpportunityNarrative(
+        opp.lane,
+        opp.historicalCustomerRate,
+        opp.expectedCarrierCost,
+        opp.estimatedMarginGap,
+      );
+      return { ...opp, aiNarrative: narrative };
+    }),
+  );
+
+  // Buy rate quick-look (top 5 lanes by load count)
+  const top5LanesData = [...lanes]
     .sort((a, b) => b.totalLoads - a.totalLoads)
-    .slice(0, 5)
-    .map(lane => {
-      const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? 15;
-      const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, originOtri);
+    .slice(0, 5);
+
+  const top5Lanes = await Promise.all(
+    top5LanesData.map(async (lane) => {
+      const qualifier = buildVotriQualifier(lane.origin, lane.destination);
+      const laneVotri = votriByQualifier.get(qualifier);
+      const votriVal = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
+      const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? 15;
+      // Use lane VOTRI for buy rate adjustment if available; otherwise use origin market OTRI
+      const effectiveRate = votriVal !== null ? votriVal : originMarketOtri;
+      const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, effectiveRate);
+
+      const rationale = await getBuyRateRationale(
+        `${lane.origin} → ${lane.destination}`,
+        buyRate.low,
+        buyRate.high,
+        originMarketOtri,
+        votriVal,
+      );
+
       return {
         lane: `${lane.origin} → ${lane.destination}`,
         origin: lane.origin,
@@ -518,11 +629,24 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
         totalLoads: lane.totalLoads,
         buyRateLow: buyRate.low,
         buyRateHigh: buyRate.high,
-        originOtri,
+        originOtri: originMarketOtri,
+        votri: votriVal,
+        aiRationale: rationale,
       };
-    });
+    }),
+  );
 
-  // Bi-weekly scorecard
+  // ── Perplexity market context ─────────────────────────────────────────────
+  // Query using top 3–5 origin markets by load count
+  const topOriginMarkets = [...uniqueOrigins]
+    .map(m => ({ market: m, loads: lanes.filter(l => l.origin === m).reduce((s, l) => s + l.totalLoads, 0) }))
+    .sort((a, b) => b.loads - a.loads)
+    .slice(0, 5)
+    .map(m => m.market);
+
+  const perplexityContext = await getPerplexityMarketContext(topOriginMarkets).catch(() => null);
+
+  // ── Bi-weekly scorecard ───────────────────────────────────────────────────
   const now = Date.now();
   const lastBiweeklyTs = getLastBiweeklyTs();
   const daysSinceRefresh = (now - lastBiweeklyTs) / (1000 * 60 * 60 * 24);
@@ -531,44 +655,77 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
 
   const nextUpdateDays = biweeklyDue ? 14 : Math.ceil(14 - daysSinceRefresh);
 
-  const top10Lanes = [...lanes]
-    .sort((a, b) => b.totalLoads - a.totalLoads)
-    .slice(0, 10)
-    .map(lane => {
-      const avg6WkMarginPct = lane.totalRevenue > 0
-        ? ((lane.totalRevenue - lane.totalCarrierPay) / lane.totalRevenue) * 100
-        : 0;
-      const statusInfo = getScorecardStatus(avg6WkMarginPct);
-      const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? 15;
-      const destOtri = otriByMarket.get(lane.destination.toLowerCase()) ?? 15;
-      const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, originOtri);
-      const originSignal = originOtri > 25 ? "red" : originOtri > 10 ? "yellow" : "green";
-      const destSignal = destOtri > 25 ? "red" : destOtri > 10 ? "yellow" : "green";
+  // All recurring lanes for the scorecard (no top-N cap; show all user lanes)
+  const allScorecardLanesData = [...lanes].sort((a, b) => b.totalLoads - a.totalLoads);
 
-      return {
-        lane: `${lane.origin} → ${lane.destination}`,
-        origin: lane.origin,
-        originState: lane.originState,
-        destination: lane.destination,
-        destinationState: lane.destinationState,
-        equipment: lane.equipmentType,
-        status: statusInfo.status,
-        statusColor: statusInfo.color,
-        avg6WkMarginPct: Math.round(avg6WkMarginPct * 10) / 10,
-        totalLoads: lane.totalLoads,
-        avgPayPerLoad: Math.round(lane.avgPayPerLoad),
-        carrierRateTrend: lane.marginTrend,
-        weeklyMarginPcts: lane.marginPctLast6Weeks.map(p => Math.round(p * 10) / 10),
-        buyRateLow: buyRate.low,
-        buyRateHigh: buyRate.high,
-        originOtri,
-        destOtri,
-        originSignal,
-        destSignal,
-      };
-    });
+  // Build deterministic scorecard data first (VOTRI, buy rates, signals)
+  const scorecardBase = allScorecardLanesData.map((lane) => {
+    const avg6WkMarginPct = lane.totalRevenue > 0
+      ? ((lane.totalRevenue - lane.totalCarrierPay) / lane.totalRevenue) * 100
+      : 0;
+    const statusInfo = getScorecardStatus(avg6WkMarginPct);
 
-  // Overall stats for the current view
+    const qualifier = buildVotriQualifier(lane.origin, lane.destination);
+    const laneVotri = votriByQualifier.get(qualifier);
+    const votriVal = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
+
+    const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? 15;
+    const destMarketOtri = otriByMarket.get(lane.destination.toLowerCase())?.otri ?? 15;
+
+    const effectiveRate = votriVal !== null ? votriVal : originMarketOtri;
+    const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, effectiveRate);
+
+    const originSignal = originMarketOtri > 25 ? "red" : originMarketOtri > 10 ? "yellow" : "green";
+    const destSignal = destMarketOtri > 25 ? "red" : destMarketOtri > 10 ? "yellow" : "green";
+
+    return {
+      lane: `${lane.origin} → ${lane.destination}`,
+      origin: lane.origin,
+      originState: lane.originState,
+      destination: lane.destination,
+      destinationState: lane.destinationState,
+      equipment: lane.equipmentType,
+      status: statusInfo.status,
+      statusColor: statusInfo.color,
+      avg6WkMarginPct: Math.round(avg6WkMarginPct * 10) / 10,
+      totalLoads: lane.totalLoads,
+      avgPayPerLoad: Math.round(lane.avgPayPerLoad),
+      carrierRateTrend: lane.marginTrend,
+      weeklyMarginPcts: lane.marginPctLast6Weeks.map(p => Math.round(p * 10) / 10),
+      buyRateLow: buyRate.low,
+      buyRateHigh: buyRate.high,
+      originOtri: originMarketOtri,
+      destOtri: destMarketOtri,
+      votri: votriVal,
+      originSignal,
+      destSignal,
+      // narrative placeholder; filled below via bounded-concurrency batch
+      aiNarrative: null as string | null,
+      // kept for AI call
+      _marginTrend: lane.marginTrend,
+      _marginPcts: lane.marginPctLast6Weeks,
+    };
+  });
+
+  // Claude: 2–3 sentence strategic lane narratives with bounded concurrency
+  // (MAX_CLAUDE_CONCURRENCY cap prevents rate-limit errors on large lane sets)
+  const narrativeInputs = scorecardBase.map(e => ({
+    lane: e.lane,
+    avg6WkMarginPct: e.avg6WkMarginPct,
+    marginTrend: e._marginTrend,
+    weeklyMarginPcts: e._marginPcts,
+    totalLoads: e.totalLoads,
+    votri: e.votri,
+    destOtri: e.destOtri,
+  }));
+  const narratives = await getLaneNarrativesBatch(narrativeInputs);
+
+  const scorecardEntries = scorecardBase.map((e, i) => {
+    const { _marginTrend: _mt, _marginPcts: _mp, ...rest } = e;
+    return { ...rest, aiNarrative: narratives[i] ?? null };
+  });
+
+  // ── Overall stats for the current view ───────────────────────────────────
   const totalLoads6Wk = lanes.reduce((s, l) => s + l.totalLoads, 0);
   const totalRevenue6Wk = lanes.reduce((s, l) => s + l.totalRevenue, 0);
   const totalCarrierPay6Wk = lanes.reduce((s, l) => s + l.totalCarrierPay, 0);
@@ -592,7 +749,26 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
     if (pct > bestWeekMargin) { bestWeekMargin = pct; bestWeekLabel = wkKey; }
   }
 
-  // Who we're looking at
+  // ── Claude: executive brief ───────────────────────────────────────────────
+  const executiveReport = computeExecutiveReport(allLanes, allUsers, sixWeekKeys);
+  const healthDistFlat = {
+    SCALE: executiveReport.healthDistribution.SCALE.count,
+    GROW:  executiveReport.healthDistribution.GROW.count,
+    WATCH: executiveReport.healthDistribution.WATCH.count,
+    HOLD:  executiveReport.healthDistribution.HOLD.count,
+  };
+  const topCompanyForBrief = executiveReport.topCompanies[0]?.name ?? "";
+
+  const executiveBrief = await getExecutiveBrief(
+    totalLoads6Wk,
+    totalRevenue6Wk,
+    overallMarginPct,
+    healthDistFlat,
+    topCompanyForBrief,
+    bestWeekLabel,
+  );
+
+  // ── Who we're looking at ──────────────────────────────────────────────────
   const viewUser = filterUserId ? allUsers.find(u => u.id === filterUserId) : null;
   const greetingName = viewUser ? viewUser.name.split(" ")[0] : (allUsers.find(u => u.role === "admin")?.name.split(" ")[0] ?? "there");
 
@@ -608,9 +784,6 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
     ).values()
   ).sort((a, b) => a.name.localeCompare(b.name));
 
-  // Executive report (always org-wide)
-  const executiveReport = computeExecutiveReport(allLanes, allUsers, sixWeekKeys);
-
   return {
     viewUserId: filterUserId ?? null,
     viewUserName: viewUser?.name ?? null,
@@ -620,11 +793,12 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
       greeting: `Good morning, ${greetingName}`,
       date: dateStr,
       marketPulse: national,
-      laneAlerts,
-      spotOpportunities,
+      laneAlerts: alertsWithNarratives,
+      spotOpportunities: spotWithNarratives,
       buyRateQuickLook: top5Lanes,
       sonarTimestamp: national.timestamp,
       sonarIsStale: national.isStale,
+      marketContext: perplexityContext ?? undefined,
     },
     biweeklyScorecard: {
       lastRefreshDate: new Date(lastBiweeklyTs || now).toISOString(),
@@ -638,9 +812,12 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
         bestWeek: bestWeekLabel,
         bestWeekMarginPct: Math.round(bestWeekMargin * 10) / 10,
       },
-      lanes: top10Lanes,
+      lanes: scorecardEntries,
     },
-    executiveReport,
+    executiveReport: {
+      ...executiveReport,
+      executiveBrief,
+    },
   };
 }
 
