@@ -22,6 +22,7 @@ import {
 import {
   Truck, MapPin, Flame, Package, TrendingUp, Building2,
   FileText, Zap, Plus, ExternalLink, Trash2, RotateCcw, EyeOff, ChevronDown,
+  Users, Briefcase,
 } from "lucide-react";
 
 type OpportunityMatch = {
@@ -72,11 +73,61 @@ type TaskPrefill = {
 
 type Dismissal = { company_id: string; company_name: string; dismissed_at: string };
 
+type FieldCreatedOpportunity = {
+  id: number;
+  name: string;
+  record_type: string;
+  stage: string;
+  outcome: string | null;
+  company_id: string | null;
+  company_name: string;
+};
+
+type FieldCreatedCompanyGroup = {
+  companyId: string | null;
+  companyName: string;
+  opportunities: FieldCreatedOpportunity[];
+};
+
+const RECORD_TYPE_LABELS: Record<string, string> = {
+  single_multi_lane: "Single/Multi-Lane",
+  private_hauling: "Private Hauling",
+  trucking_opportunity: "Trucking Opportunity",
+};
+
+const STAGE_LABELS: Record<string, string> = {
+  qualification: "Qualification",
+  proposal: "Proposal",
+  negotiation: "Negotiation",
+  closed_won: "Closed Won",
+  closed_lost: "Closed Lost",
+};
+
+const STAGE_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
+  qualification: "outline",
+  proposal: "secondary",
+  negotiation: "default",
+  closed_won: "default",
+  closed_lost: "destructive",
+};
+
+function getRecordTypeLabel(rt: string) {
+  return RECORD_TYPE_LABELS[rt] ?? rt.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function getStageLabel(stage: string) {
+  return STAGE_LABELS[stage] ?? stage.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+type ViewMode = "rfp" | "field";
+
 export default function TopOpportunities() {
   const [, navigate] = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
   const canManage = ["admin", "director", "national_account_manager", "sales_director"].includes(user?.role || "");
+
+  const [viewMode, setViewMode] = useState<ViewMode>("rfp");
 
   const { data: opportunities, isLoading } = useQuery<Opportunity[]>({
     queryKey: ["/api/opportunities"],
@@ -85,6 +136,10 @@ export default function TopOpportunities() {
   const { data: dismissals = [] } = useQuery<Dismissal[]>({
     queryKey: ["/api/opportunities/dismissals"],
     enabled: canManage,
+  });
+
+  const { data: fieldOpportunities = [], isLoading: isFieldLoading } = useQuery<FieldCreatedOpportunity[]>({
+    queryKey: ["/api/opportunities/field-created"],
   });
 
   const [confirmDismiss, setConfirmDismiss] = useState<{ companyId: string; companyName: string } | null>(null);
@@ -150,6 +205,22 @@ export default function TopOpportunities() {
     return Array.from(map.values()).sort((a, b) => b.hotZoneCount - a.hotZoneCount || b.totalMatches - a.totalMatches);
   }, [opportunities]);
 
+  const fieldByCompany = useMemo<FieldCreatedCompanyGroup[]>(() => {
+    const map = new Map<string, FieldCreatedCompanyGroup>();
+    fieldOpportunities.forEach(opp => {
+      const key = opp.company_id ?? `__no_company__${opp.company_name}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          companyId: opp.company_id,
+          companyName: opp.company_name || "Unknown Company",
+          opportunities: [],
+        });
+      }
+      map.get(key)!.opportunities.push(opp);
+    });
+    return Array.from(map.values()).sort((a, b) => a.companyName.localeCompare(b.companyName));
+  }, [fieldOpportunities]);
+
   const openTask = (group: CompanyGroup, match: CompanyGroup["matches"][number]) => {
     setTaskPrefill({
       companyId: group.companyId,
@@ -163,6 +234,11 @@ export default function TopOpportunities() {
     navigate(`/companies/${companyId}?rfpTab=matching`);
   };
 
+  const handleViewChange = (mode: ViewMode) => {
+    setViewMode(mode);
+    window.scrollTo({ top: 0 });
+  };
+
   return (
     <div className="p-4 sm:p-6 space-y-6">
       <div>
@@ -171,216 +247,361 @@ export default function TopOpportunities() {
           <h1 className="text-2xl font-bold tracking-tight">Top Opportunities</h1>
         </div>
         <p className="text-muted-foreground text-sm mt-1">
-          Accounts with RFP lanes that overlap our delivery zones — grouped by customer for easy follow-up.
+          {viewMode === "rfp"
+            ? "Accounts with RFP lanes that overlap our delivery zones — grouped by customer for easy follow-up."
+            : "Manually entered CRM opportunities from your field sales team."}
         </p>
       </div>
 
-      {isLoading ? (
-        <div className="space-y-4">
-          {[...Array(4)].map((_, i) => (
-            <Card key={i}>
-              <CardHeader><Skeleton className="h-5 w-48" /></CardHeader>
-              <CardContent className="space-y-2">
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-12 w-full" />
+      {/* Pill toggle */}
+      <div
+        className="inline-flex items-center rounded-full border bg-muted p-1 gap-1"
+        data-testid="toggle-view-mode"
+      >
+        <button
+          type="button"
+          onClick={() => handleViewChange("rfp")}
+          data-testid="btn-toggle-rfp"
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+            viewMode === "rfp"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <FileText className="h-3.5 w-3.5" />
+          RFP / Mini-Bid Matches
+        </button>
+        <button
+          type="button"
+          onClick={() => handleViewChange("field")}
+          data-testid="btn-toggle-field"
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+            viewMode === "field"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Users className="h-3.5 w-3.5" />
+          Field-Created Opportunities
+        </button>
+      </div>
+
+      {/* RFP / Mini-Bid Matches View */}
+      {viewMode === "rfp" && (
+        <>
+          {isLoading ? (
+            <div className="space-y-4">
+              {[...Array(4)].map((_, i) => (
+                <Card key={i}>
+                  <CardHeader><Skeleton className="h-5 w-48" /></CardHeader>
+                  <CardContent className="space-y-2">
+                    <Skeleton className="h-12 w-full" />
+                    <Skeleton className="h-12 w-full" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : !byCompany || byCompany.length === 0 ? (
+            <Card>
+              <CardContent className="py-20 text-center">
+                <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="font-semibold text-lg text-muted-foreground">No opportunities found</p>
+                <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+                  Opportunities appear when historical data has destinations with 5+ loads in any week AND
+                  matching RFP lane origins exist. Upload dispatch data and add RFPs with lane data to get started.
+                </p>
               </CardContent>
             </Card>
-          ))}
-        </div>
-      ) : !byCompany || byCompany.length === 0 ? (
-        <Card>
-          <CardContent className="py-20 text-center">
-            <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <p className="font-semibold text-lg text-muted-foreground">No opportunities found</p>
-            <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
-              Opportunities appear when historical data has destinations with 5+ loads in any week AND
-              matching RFP lane origins exist. Upload dispatch data and add RFPs with lane data to get started.
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-4" data-testid="opportunities-list">
-          {byCompany.map((group, idx) => (
-            <Card key={group.companyId} data-testid={`card-opportunity-company-${group.companyId}`} className="overflow-hidden">
-              <CardHeader
-                className="pb-3 bg-gradient-to-r from-primary/5 to-transparent border-b cursor-pointer select-none"
-                onClick={() => toggleCollapsed(group.companyId)}
-                data-testid={`btn-toggle-company-${group.companyId}`}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center justify-center h-8 w-8 rounded-full bg-primary/10 text-primary font-bold text-sm shrink-0">
-                      {idx + 1}
+          ) : (
+            <div className="space-y-4" data-testid="opportunities-list">
+              {byCompany.map((group, idx) => (
+                <Card key={group.companyId} data-testid={`card-opportunity-company-${group.companyId}`} className="overflow-hidden">
+                  <CardHeader
+                    className="pb-3 bg-gradient-to-r from-primary/5 to-transparent border-b cursor-pointer select-none"
+                    onClick={() => toggleCollapsed(group.companyId)}
+                    data-testid={`btn-toggle-company-${group.companyId}`}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center justify-center h-8 w-8 rounded-full bg-primary/10 text-primary font-bold text-sm shrink-0">
+                          {idx + 1}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Building2 className="h-4 w-4 text-primary" />
+                            <span
+                              className="font-semibold text-base text-primary hover:underline cursor-pointer"
+                              data-testid={`text-company-name-${group.companyId}`}
+                              onClick={(e) => { e.stopPropagation(); goToAccount(group.companyId); }}
+                            >
+                              {group.companyName}
+                            </span>
+                            {group.hotZoneCount > 0 && (
+                              <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-xs">
+                                <Flame className="h-3 w-3 mr-1" /> {group.hotZoneCount} hot zone{group.hotZoneCount !== 1 ? "s" : ""}
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {group.totalMatches} delivery zone{group.totalMatches !== 1 ? "s" : ""} match their RFP lanes
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs gap-1"
+                          onClick={(e) => { e.stopPropagation(); goToAccount(group.companyId); }}
+                          data-testid={`btn-view-account-${group.companyId}`}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          Account
+                        </Button>
+                        <Badge variant="outline" className="text-xs">
+                          <Truck className="h-3 w-3 mr-1" />
+                          {group.totalMatches} match{group.totalMatches !== 1 ? "es" : ""}
+                        </Badge>
+                        {canManage && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                            onClick={(e) => { e.stopPropagation(); setConfirmDismiss({ companyId: group.companyId, companyName: group.companyName }); }}
+                            data-testid={`btn-dismiss-opportunity-${group.companyId}`}
+                            title="Remove from list"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        <ChevronDown
+                          className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${expandedCompanies[group.companyId] ? "" : "-rotate-90"}`}
+                          data-testid={`icon-chevron-${group.companyId}`}
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
+                  </CardHeader>
+
+                  {expandedCompanies[group.companyId] && (
+                  <CardContent className="p-0">
+                    <div className="divide-y">
+                      {group.matches.map((match, mIdx) => (
+                        <div
+                          key={`${match.rfpId}-${match.destination}-${mIdx}`}
+                          data-testid={`row-match-${group.companyId}-${mIdx}`}
+                          className="px-4 py-3 hover:bg-muted/40 transition-colors group"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-start gap-3 min-w-0">
+                              <MapPin className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-medium text-sm" data-testid={`text-destination-${group.companyId}-${mIdx}`}>
+                                    {match.city}, {match.state}
+                                  </span>
+                                  {match.maxWeekly >= 5 && (
+                                    <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-xs">
+                                      <Flame className="h-3 w-3 mr-1" /> Hot Zone
+                                    </Badge>
+                                  )}
+                                  <span className="text-muted-foreground text-xs">·</span>
+                                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                    <FileText className="h-3 w-3" />
+                                    {match.rfpTitle}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <Building2 className="h-3 w-3 text-primary/60 shrink-0" />
+                                  <span
+                                    className="text-xs text-primary/80 hover:text-primary hover:underline cursor-pointer font-medium"
+                                    onClick={() => goToAccount(group.companyId)}
+                                    data-testid={`text-match-company-${group.companyId}-${mIdx}`}
+                                  >
+                                    {group.companyName}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
+                                  <span className="font-medium text-foreground">{match.lane}</span>
+                                  <span className="text-muted-foreground/50 mx-1">·</span>
+                                  <span>~{match.weeklyLoadCount}/wk avg · peak {match.maxWeekly}/wk</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                              {match.volume > 0 && (
+                                <Badge variant="secondary" className="text-xs">
+                                  <TrendingUp className="h-3 w-3 mr-1" />
+                                  {match.volume} loads
+                                </Badge>
+                              )}
+                              {match.equipment && (
+                                <Badge variant="outline" className="text-xs">
+                                  {match.equipment}
+                                </Badge>
+                              )}
+                              {match.rate > 0 && (
+                                <Badge variant="outline" className="text-xs font-mono">
+                                  ${Number(match.rate).toLocaleString()}
+                                </Badge>
+                              )}
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 px-2 text-xs gap-1 text-primary border-primary/30 hover:bg-primary/5"
+                                  onClick={() => openTask(group, match)}
+                                  data-testid={`btn-add-task-${group.companyId}-${mIdx}`}
+                                  title="Create a task for this opportunity"
+                                >
+                                  <Plus className="h-3 w-3" />
+                                  Task
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                  )}
+                </Card>
+              ))}
+            </div>
+          )}
+
+          {/* Dismissed companies section */}
+          {canManage && dismissals.length > 0 && (
+            <div className="border rounded-lg p-4 bg-muted/30 space-y-2">
+              <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <EyeOff className="h-4 w-4" />
+                Removed from list ({dismissals.length})
+              </div>
+              <div className="space-y-1">
+                {dismissals.map(d => (
+                  <div key={d.company_id} className="flex items-center justify-between gap-2 text-sm py-1 border-b last:border-0" data-testid={`row-dismissed-${d.company_id}`}>
+                    <span className="text-muted-foreground">{d.company_name || d.company_id}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-xs gap-1 text-primary hover:text-primary hover:bg-primary/10"
+                      onClick={() => restoreMutation.mutate(d.company_id)}
+                      disabled={restoreMutation.isPending}
+                      data-testid={`btn-restore-opportunity-${d.company_id}`}
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      Restore
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Field-Created Opportunities View */}
+      {viewMode === "field" && (
+        <>
+          {isFieldLoading ? (
+            <div className="space-y-4">
+              {[...Array(3)].map((_, i) => (
+                <Card key={i}>
+                  <CardHeader><Skeleton className="h-5 w-48" /></CardHeader>
+                  <CardContent className="space-y-2">
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : fieldByCompany.length === 0 ? (
+            <Card>
+              <CardContent className="py-20 text-center" data-testid="field-empty-state">
+                <Briefcase className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="font-semibold text-lg text-muted-foreground">No field-created opportunities</p>
+                <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+                  Field-created opportunities appear here once your team adds Single/Multi-Lane, Private Hauling,
+                  or Trucking Opportunity records to company accounts in the CRM.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4" data-testid="field-opportunities-list">
+              {fieldByCompany.map((group) => (
+                <Card key={group.companyId ?? group.companyName} data-testid={`card-field-company-${group.companyId ?? group.companyName}`} className="overflow-hidden">
+                  <CardHeader className="pb-3 bg-gradient-to-r from-primary/5 to-transparent border-b">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-2">
                         <Building2 className="h-4 w-4 text-primary" />
                         <span
-                          className="font-semibold text-base text-primary hover:underline cursor-pointer"
-                          data-testid={`text-company-name-${group.companyId}`}
-                          onClick={(e) => { e.stopPropagation(); goToAccount(group.companyId); }}
+                          className={`font-semibold text-base text-primary ${group.companyId ? "hover:underline cursor-pointer" : ""}`}
+                          data-testid={`text-field-company-name-${group.companyId ?? group.companyName}`}
+                          onClick={() => group.companyId ? goToAccount(group.companyId) : undefined}
                         >
                           {group.companyName}
                         </span>
-                        {group.hotZoneCount > 0 && (
-                          <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-xs">
-                            <Flame className="h-3 w-3 mr-1" /> {group.hotZoneCount} hot zone{group.hotZoneCount !== 1 ? "s" : ""}
-                          </Badge>
-                        )}
+                        <Badge variant="outline" className="text-xs">
+                          {group.opportunities.length} opportunit{group.opportunities.length !== 1 ? "ies" : "y"}
+                        </Badge>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {group.totalMatches} delivery zone{group.totalMatches !== 1 ? "s" : ""} match their RFP lanes
-                      </p>
+                      {group.companyId && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs gap-1 shrink-0"
+                          onClick={() => goToAccount(group.companyId!)}
+                          data-testid={`btn-field-view-account-${group.companyId}`}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          Account
+                        </Button>
+                      )}
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-xs gap-1"
-                      onClick={(e) => { e.stopPropagation(); goToAccount(group.companyId); }}
-                      data-testid={`btn-view-account-${group.companyId}`}
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                      Account
-                    </Button>
-                    <Badge variant="outline" className="text-xs">
-                      <Truck className="h-3 w-3 mr-1" />
-                      {group.totalMatches} match{group.totalMatches !== 1 ? "es" : ""}
-                    </Badge>
-                    {canManage && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                        onClick={(e) => { e.stopPropagation(); setConfirmDismiss({ companyId: group.companyId, companyName: group.companyName }); }}
-                        data-testid={`btn-dismiss-opportunity-${group.companyId}`}
-                        title="Remove from list"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
-                    <ChevronDown
-                      className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${expandedCompanies[group.companyId] ? "" : "-rotate-90"}`}
-                      data-testid={`icon-chevron-${group.companyId}`}
-                    />
-                  </div>
-                </div>
-              </CardHeader>
-
-              {expandedCompanies[group.companyId] && (
-              <CardContent className="p-0">
-                <div className="divide-y">
-                  {group.matches.map((match, mIdx) => (
-                    <div
-                      key={`${match.rfpId}-${match.destination}-${mIdx}`}
-                      data-testid={`row-match-${group.companyId}-${mIdx}`}
-                      className="px-4 py-3 hover:bg-muted/40 transition-colors group"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-3 min-w-0">
-                          <MapPin className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-medium text-sm" data-testid={`text-destination-${group.companyId}-${mIdx}`}>
-                                {match.city}, {match.state}
-                              </span>
-                              {match.maxWeekly >= 5 && (
-                                <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-xs">
-                                  <Flame className="h-3 w-3 mr-1" /> Hot Zone
-                                </Badge>
-                              )}
-                              <span className="text-muted-foreground text-xs">·</span>
-                              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                <FileText className="h-3 w-3" />
-                                {match.rfpTitle}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-1 mt-0.5">
-                              <Building2 className="h-3 w-3 text-primary/60 shrink-0" />
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="divide-y">
+                      {group.opportunities.map((opp) => (
+                        <div
+                          key={opp.id}
+                          data-testid={`row-field-opportunity-${opp.id}`}
+                          className="px-4 py-3 hover:bg-muted/40 transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Briefcase className="h-4 w-4 text-muted-foreground shrink-0" />
                               <span
-                                className="text-xs text-primary/80 hover:text-primary hover:underline cursor-pointer font-medium"
-                                onClick={() => goToAccount(group.companyId)}
-                                data-testid={`text-match-company-${group.companyId}-${mIdx}`}
+                                className="font-medium text-sm"
+                                data-testid={`text-field-opp-name-${opp.id}`}
                               >
-                                {group.companyName}
+                                {opp.name}
                               </span>
                             </div>
-                            <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
-                              <span className="font-medium text-foreground">{match.lane}</span>
-                              <span className="text-muted-foreground/50 mx-1">·</span>
-                              <span>~{match.weeklyLoadCount}/wk avg · peak {match.maxWeekly}/wk</span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Badge
+                                variant="secondary"
+                                className="text-xs"
+                                data-testid={`badge-record-type-${opp.id}`}
+                              >
+                                {getRecordTypeLabel(opp.record_type)}
+                              </Badge>
+                              <Badge
+                                variant={STAGE_VARIANT[opp.stage] ?? "outline"}
+                                className="text-xs"
+                                data-testid={`badge-stage-${opp.id}`}
+                              >
+                                {getStageLabel(opp.stage)}
+                              </Badge>
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                          {match.volume > 0 && (
-                            <Badge variant="secondary" className="text-xs">
-                              <TrendingUp className="h-3 w-3 mr-1" />
-                              {match.volume} loads
-                            </Badge>
-                          )}
-                          {match.equipment && (
-                            <Badge variant="outline" className="text-xs">
-                              {match.equipment}
-                            </Badge>
-                          )}
-                          {match.rate > 0 && (
-                            <Badge variant="outline" className="text-xs font-mono">
-                              ${Number(match.rate).toLocaleString()}
-                            </Badge>
-                          )}
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 px-2 text-xs gap-1 text-primary border-primary/30 hover:bg-primary/5"
-                              onClick={() => openTask(group, match)}
-                              data-testid={`btn-add-task-${group.companyId}-${mIdx}`}
-                              title="Create a task for this opportunity"
-                            >
-                              <Plus className="h-3 w-3" />
-                              Task
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </CardContent>
-              )}
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {/* Dismissed companies section */}
-      {canManage && dismissals.length > 0 && (
-        <div className="border rounded-lg p-4 bg-muted/30 space-y-2">
-          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-            <EyeOff className="h-4 w-4" />
-            Removed from list ({dismissals.length})
-          </div>
-          <div className="space-y-1">
-            {dismissals.map(d => (
-              <div key={d.company_id} className="flex items-center justify-between gap-2 text-sm py-1 border-b last:border-0" data-testid={`row-dismissed-${d.company_id}`}>
-                <span className="text-muted-foreground">{d.company_name || d.company_id}</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2 text-xs gap-1 text-primary hover:text-primary hover:bg-primary/10"
-                  onClick={() => restoreMutation.mutate(d.company_id)}
-                  disabled={restoreMutation.isPending}
-                  data-testid={`btn-restore-opportunity-${d.company_id}`}
-                >
-                  <RotateCcw className="h-3 w-3" />
-                  Restore
-                </Button>
-              </div>
-            ))}
-          </div>
-        </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {taskPrefill && (

@@ -413,6 +413,48 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
+  app.get("/api/opportunities/field-created", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const orgId = req.session.organizationId!;
+
+      const { rows } = await storage.pool.query(
+        `SELECT
+           o.id,
+           o.name,
+           o.record_type,
+           o.stage,
+           o.outcome,
+           o.company_id,
+           COALESCE(c.name, p.name, '') AS company_name
+         FROM crm_opportunities o
+         LEFT JOIN companies c ON c.id = o.company_id
+         LEFT JOIN prospects p ON p.id = o.prospect_id
+         WHERE o.organization_id = $1
+           AND LOWER(o.record_type) != 'rfp'
+           AND (o.outcome IS NULL OR o.outcome = '')
+         ORDER BY
+           CASE o.stage
+             WHEN 'qualification' THEN 1
+             WHEN 'proposal' THEN 2
+             WHEN 'negotiation' THEN 3
+             WHEN 'closed_won' THEN 4
+             WHEN 'closed_lost' THEN 5
+             ELSE 6
+           END ASC,
+           company_name ASC`,
+        [orgId]
+      );
+
+      res.json(rows);
+    } catch (err) {
+      console.error("Error fetching field-created opportunities:", err);
+      res.status(500).json({ error: "Failed to fetch field-created opportunities" });
+    }
+  });
+
   app.get("/api/financials", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
