@@ -8,9 +8,14 @@
  * POST /api/intel/send-now — triggers an immediate intel email to all org admins
  */
 
-import type { Express } from "express";
-import { storage } from "../storage";
+import type { Express, Request, Response } from "express";
+import { db, storage } from "../storage";
+import { eq, and, gte } from "drizzle-orm";
+import { intelTrackedLanes, intelLaneRates, recurringLanes } from "../../shared/schema";
 import { requireAuth, getCurrentUser } from "../auth";
+import { cityToKma, toTracEquipment } from "../kmaMapping";
+import { fetchFullLaneBatch } from "../tracService";
+import { generateAlert, generateDriverText } from "../tracAlertEngine";
 import { resolveColumns, getRepFromRow, getCustomerFromRow, getStatusFromRow } from "../colResolver";
 import { isExcludedRow } from "../financialHelpers";
 import {
@@ -1334,6 +1339,333 @@ export function registerIntelRoutes(app: Express): void {
     } catch (err: any) {
       console.error("[intel] My-lanes error:", err);
       res.status(500).json({ error: "Failed to load my lanes" });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // TRAC RATE INTELLIGENCE
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── GET /api/intel/trac/my-lanes ────────────────────────────────────────
+  // Returns TRAC rate cards for the current user's assigned LWQ lanes.
+  // Auto-syncs tracked lanes from recurring_lanes on first call.
+  // Uses a daily cache — live-fetches when stale.
+  app.get("/api/intel/trac/my-lanes", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = req.session.organizationId!;
+
+      // 1. Pull user's assigned recurring lanes
+      const lwqLanes = await db
+        .select({
+          id: recurringLanes.id,
+          origin: recurringLanes.origin,
+          originState: recurringLanes.originState,
+          destination: recurringLanes.destination,
+          destinationState: recurringLanes.destinationState,
+          equipmentType: recurringLanes.equipmentType,
+        })
+        .from(recurringLanes)
+        .where(
+          and(
+            eq(recurringLanes.orgId, orgId),
+            eq(recurringLanes.ownerUserId, user.id),
+            eq(recurringLanes.isEligible, true),
+          ),
+        )
+        .limit(20);
+
+      // 2. Map to KMA codes — skip lanes we can't map
+      type MappedLane = { laneId: string; origin: string; originLabel: string; destination: string; destinationLabel: string; equipment: "VAN" | "REEFER" | "FLATBED"; cityOrigin: string; cityDest: string };
+      const mapped: MappedLane[] = [];
+      for (const lane of lwqLanes) {
+        const originKma = cityToKma(lane.origin, lane.originState);
+        const destKma = cityToKma(lane.destination, lane.destinationState);
+        if (!originKma || !destKma) continue;
+        if (originKma.kma === destKma.kma) continue; // same market = skip
+        const equipment = toTracEquipment(lane.equipmentType);
+        const key = `${originKma.kma}|${destKma.kma}|${equipment}`;
+        if (mapped.some((m) => `${m.origin}|${m.destination}|${m.equipment}` === key)) continue; // dedup
+        mapped.push({
+          laneId: lane.id,
+          origin: originKma.kma,
+          originLabel: originKma.label,
+          destination: destKma.kma,
+          destinationLabel: destKma.label,
+          equipment,
+          cityOrigin: lane.origin,
+          cityDest: lane.destination,
+        });
+        if (mapped.length >= 12) break;
+      }
+
+      if (!mapped.length) {
+        return res.json({ lanes: [], source: "empty", reason: "No mapped lanes" });
+      }
+
+      // 3. Upsert tracked lane records
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const trackedRows: Array<{ id: string; origin: string; destination: string; equipment: string; originLabel: string | null; destinationLabel: string | null }> = [];
+
+      for (const m of mapped) {
+        const existing = await db
+          .select({ id: intelTrackedLanes.id, origin: intelTrackedLanes.origin, destination: intelTrackedLanes.destination, equipment: intelTrackedLanes.equipmentType, originLabel: intelTrackedLanes.originLabel, destinationLabel: intelTrackedLanes.destinationLabel })
+          .from(intelTrackedLanes)
+          .where(
+            and(
+              eq(intelTrackedLanes.userId, user.id),
+              eq(intelTrackedLanes.origin, m.origin),
+              eq(intelTrackedLanes.destination, m.destination),
+              eq(intelTrackedLanes.equipmentType, m.equipment),
+            ),
+          )
+          .limit(1);
+
+        if (existing.length) {
+          trackedRows.push(existing[0]);
+        } else {
+          const [inserted] = await db
+            .insert(intelTrackedLanes)
+            .values({
+              userId: user.id,
+              orgId,
+              laneId: m.laneId,
+              origin: m.origin,
+              originLabel: m.originLabel,
+              destination: m.destination,
+              destinationLabel: m.destinationLabel,
+              equipmentType: m.equipment,
+              source: "lwq",
+            })
+            .returning({ id: intelTrackedLanes.id, origin: intelTrackedLanes.origin, destination: intelTrackedLanes.destination, equipment: intelTrackedLanes.equipmentType, originLabel: intelTrackedLanes.originLabel, destinationLabel: intelTrackedLanes.destinationLabel });
+          if (inserted) trackedRows.push(inserted);
+        }
+      }
+
+      // 4. Check cache freshness — fetch stale ones
+      const staleIds: string[] = [];
+      const cachedRates = new Map<string, typeof intelLaneRates.$inferSelect>();
+
+      for (const t of trackedRows) {
+        const rate = await db
+          .select()
+          .from(intelLaneRates)
+          .where(
+            and(
+              eq(intelLaneRates.trackedLaneId, t.id),
+              gte(intelLaneRates.refreshedAt, today),
+            ),
+          )
+          .limit(1);
+        if (rate.length) {
+          cachedRates.set(t.id, rate[0]);
+        } else {
+          staleIds.push(t.id);
+        }
+      }
+
+      // 5. Live-fetch stale lanes from TRAC
+      if (staleIds.length) {
+        const staleTracked = trackedRows.filter((t) => staleIds.includes(t.id));
+        const inputs = staleTracked.map((t) => ({
+          origin: t.origin,
+          destination: t.destination,
+          equipment: t.equipment as "VAN" | "REEFER" | "FLATBED",
+          laneId: t.id,
+        }));
+
+        const fullData = await fetchFullLaneBatch(inputs).catch((err: Error) => {
+          logIntel(`TRAC batch fetch error: ${err.message}`);
+          return [];
+        });
+
+        for (const d of fullData) {
+          const alertResult = generateAlert(
+            d.spot.rpm,
+            d.forecast,
+            d.contract.contractRpm,
+            d.stats.avgRpm90d,
+          );
+          const driver = generateDriverText(d.forecast, d.spot.rpm, d.stats.avgRpm90d);
+
+          // Upsert rate record (delete old + insert new for simplicity)
+          await db.delete(intelLaneRates).where(eq(intelLaneRates.trackedLaneId, d.laneId));
+          const [newRate] = await db
+            .insert(intelLaneRates)
+            .values({
+              trackedLaneId: d.laneId,
+              spotRpm: d.spot.rpm?.toString() ?? null,
+              spotRpmHigh: d.spot.rpmHigh?.toString() ?? null,
+              spotRpmLow: d.spot.rpmLow?.toString() ?? null,
+              spotRate: d.spot.rate?.toString() ?? null,
+              spotRateHigh: d.spot.rateHigh?.toString() ?? null,
+              spotRateLow: d.spot.rateLow?.toString() ?? null,
+              contractRpm: d.contract.contractRpm?.toString() ?? null,
+              contractRate: d.contract.contractRate?.toString() ?? null,
+              contractFscRpm: d.contract.contractFscRpm?.toString() ?? null,
+              confidenceScore: d.spot.confidenceScore?.toString() ?? null,
+              loadCount: d.spot.totalLoadCount ?? null,
+              miles: d.spot.miles ?? null,
+              avgRpm30d: d.stats.avgRpm30d?.toString() ?? null,
+              avgRpm90d: d.stats.avgRpm90d?.toString() ?? null,
+              forecastJson: d.forecast as unknown as Record<string, unknown>[],
+              rateAlert: alertResult.alert,
+              alertReason: alertResult.reason,
+              driverText: driver,
+            })
+            .returning();
+          if (newRate) cachedRates.set(d.laneId, newRate);
+        }
+      }
+
+      // 6. Build response
+      const responseCards = trackedRows.map((t) => {
+        const r = cachedRates.get(t.id);
+        const n = (v: string | null | undefined) => v !== null && v !== undefined ? parseFloat(v) : null;
+        return {
+          id: t.id,
+          origin: t.origin,
+          originLabel: t.originLabel ?? t.origin,
+          destination: t.destination,
+          destinationLabel: t.destinationLabel ?? t.destination,
+          equipment: t.equipment,
+          spotRpm: r ? n(r.spotRpm) : null,
+          spotRpmHigh: r ? n(r.spotRpmHigh) : null,
+          spotRpmLow: r ? n(r.spotRpmLow) : null,
+          spotRate: r ? n(r.spotRate) : null,
+          spotRateHigh: r ? n(r.spotRateHigh) : null,
+          spotRateLow: r ? n(r.spotRateLow) : null,
+          contractRpm: r ? n(r.contractRpm) : null,
+          contractRate: r ? n(r.contractRate) : null,
+          avgRpm30d: r ? n(r.avgRpm30d) : null,
+          avgRpm90d: r ? n(r.avgRpm90d) : null,
+          miles: r?.miles ?? null,
+          confidenceScore: r ? n(r.confidenceScore) : null,
+          loadCount: r?.loadCount ?? null,
+          forecastDays: (r?.forecastJson as unknown as Array<{ date: string; forecastRpm: number | null; forecastIndexValue: number | null }>) ?? [],
+          rateAlert: r?.rateAlert ?? null,
+          alertReason: r?.alertReason ?? null,
+          driverText: r?.driverText ?? null,
+          refreshedAt: r?.refreshedAt?.toISOString() ?? null,
+        };
+      });
+
+      res.json({ lanes: responseCards, source: staleIds.length ? "live" : "cache" });
+    } catch (err: unknown) {
+      console.error("[intel] TRAC my-lanes error:", err);
+      res.status(500).json({ error: "Failed to load TRAC lane rates" });
+    }
+  });
+
+  // ── POST /api/intel/trac/lookup ──────────────────────────────────────────
+  // On-demand TRAC rate lookup for any KMA pair (no DB persistence).
+  app.post("/api/intel/trac/lookup", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const { origin, destination, equipment = "VAN" } = req.body as {
+        origin: string;
+        destination: string;
+        equipment?: string;
+      };
+
+      if (!origin || !destination) {
+        return res.status(400).json({ error: "origin and destination required" });
+      }
+
+      const equip = toTracEquipment(equipment) as "VAN" | "REEFER" | "FLATBED";
+      const laneId = `lookup-${origin}-${destination}-${equip}`;
+      const data = await fetchFullLaneBatch([{ origin: origin.toUpperCase(), destination: destination.toUpperCase(), equipment: equip, laneId }]);
+      if (!data.length) return res.status(404).json({ error: "No data returned from TRAC" });
+
+      const d = data[0];
+      const alertResult = generateAlert(d.spot.rpm, d.forecast, d.contract.contractRpm, d.stats.avgRpm90d);
+      const driver = generateDriverText(d.forecast, d.spot.rpm, d.stats.avgRpm90d);
+      const n = (v: number | null) => v;
+
+      res.json({
+        origin: origin.toUpperCase(),
+        destination: destination.toUpperCase(),
+        equipment: equip,
+        spotRpm: n(d.spot.rpm),
+        spotRpmHigh: n(d.spot.rpmHigh),
+        spotRpmLow: n(d.spot.rpmLow),
+        spotRate: n(d.spot.rate),
+        spotRateHigh: n(d.spot.rateHigh),
+        spotRateLow: n(d.spot.rateLow),
+        contractRpm: n(d.contract.contractRpm),
+        contractRate: n(d.contract.contractRate),
+        contractFscRpm: n(d.contract.contractFscRpm),
+        avgRpm30d: n(d.stats.avgRpm30d),
+        avgRpm90d: n(d.stats.avgRpm90d),
+        miles: d.spot.miles,
+        confidenceScore: d.spot.confidenceScore,
+        loadCount: d.spot.totalLoadCount,
+        forecastDays: d.forecast,
+        rateAlert: alertResult.alert,
+        alertReason: alertResult.reason,
+        driverText: driver,
+      });
+    } catch (err: unknown) {
+      console.error("[intel] TRAC lookup error:", err);
+      res.status(500).json({ error: "TRAC lookup failed" });
+    }
+  });
+
+  // ── POST /api/intel/trac/refresh ─────────────────────────────────────────
+  // Force-refresh TRAC rates for a specific tracked lane.
+  app.post("/api/intel/trac/refresh/:trackedLaneId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const { trackedLaneId } = req.params;
+      const [tracked] = await db
+        .select()
+        .from(intelTrackedLanes)
+        .where(and(eq(intelTrackedLanes.id, trackedLaneId), eq(intelTrackedLanes.userId, user.id)))
+        .limit(1);
+
+      if (!tracked) return res.status(404).json({ error: "Lane not found" });
+
+      const equip = tracked.equipmentType as "VAN" | "REEFER" | "FLATBED";
+      const inputs = [{ origin: tracked.origin, destination: tracked.destination, equipment: equip, laneId: tracked.id }];
+      const [d] = await fetchFullLaneBatch(inputs);
+      if (!d) return res.status(502).json({ error: "TRAC returned no data" });
+
+      const alertResult = generateAlert(d.spot.rpm, d.forecast, d.contract.contractRpm, d.stats.avgRpm90d);
+      const driver = generateDriverText(d.forecast, d.spot.rpm, d.stats.avgRpm90d);
+
+      await db.delete(intelLaneRates).where(eq(intelLaneRates.trackedLaneId, tracked.id));
+      await db.insert(intelLaneRates).values({
+        trackedLaneId: tracked.id,
+        spotRpm: d.spot.rpm?.toString() ?? null,
+        spotRpmHigh: d.spot.rpmHigh?.toString() ?? null,
+        spotRpmLow: d.spot.rpmLow?.toString() ?? null,
+        spotRate: d.spot.rate?.toString() ?? null,
+        spotRateHigh: d.spot.rateHigh?.toString() ?? null,
+        spotRateLow: d.spot.rateLow?.toString() ?? null,
+        contractRpm: d.contract.contractRpm?.toString() ?? null,
+        contractRate: d.contract.contractRate?.toString() ?? null,
+        contractFscRpm: d.contract.contractFscRpm?.toString() ?? null,
+        confidenceScore: d.spot.confidenceScore?.toString() ?? null,
+        loadCount: d.spot.totalLoadCount ?? null,
+        miles: d.spot.miles ?? null,
+        avgRpm30d: d.stats.avgRpm30d?.toString() ?? null,
+        avgRpm90d: d.stats.avgRpm90d?.toString() ?? null,
+        forecastJson: d.forecast as unknown as Record<string, unknown>[],
+        rateAlert: alertResult.alert,
+        alertReason: alertResult.reason,
+        driverText: driver,
+      });
+
+      res.json({ ok: true, message: `Refreshed ${tracked.origin} → ${tracked.destination}` });
+    } catch (err: unknown) {
+      console.error("[intel] TRAC refresh error:", err);
+      res.status(500).json({ error: "Refresh failed" });
     }
   });
 

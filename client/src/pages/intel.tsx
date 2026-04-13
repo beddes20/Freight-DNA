@@ -1,5 +1,9 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import {
+  LineChart, Line, ResponsiveContainer, ReferenceLine,
+  Tooltip as RechartsTooltip,
+} from "recharts";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -171,6 +175,39 @@ interface MyLanesRow {
   companyName: string;
 }
 
+interface TracForecastDay {
+  date: string;
+  forecastRpm: number | null;
+  forecastIndexValue: number | null;
+}
+
+interface TracLaneCard {
+  id: string;
+  origin: string;
+  originLabel: string;
+  destination: string;
+  destinationLabel: string;
+  equipment: string;
+  spotRpm: number | null;
+  spotRpmHigh: number | null;
+  spotRpmLow: number | null;
+  spotRate: number | null;
+  spotRateHigh: number | null;
+  spotRateLow: number | null;
+  contractRpm: number | null;
+  contractRate: number | null;
+  avgRpm30d: number | null;
+  avgRpm90d: number | null;
+  miles: number | null;
+  confidenceScore: number | null;
+  loadCount: number | null;
+  forecastDays: TracForecastDay[];
+  rateAlert: "spike" | "drop" | "reprice" | null;
+  alertReason: string | null;
+  driverText: string | null;
+  refreshedAt: string | null;
+}
+
 interface IntelPayload {
   viewUserId: string | null;
   viewUserName: string | null;
@@ -202,6 +239,228 @@ interface IntelPayload {
     lanes: ScorecardLane[];
   };
   executiveReport: ExecutiveReportWithBrief;
+}
+
+// ── TRAC Rate Cards ───────────────────────────────────────────────────────────
+
+const ALERT_STYLES: Record<string, { label: string; cls: string }> = {
+  spike:   { label: "⬆ Rate Spike",  cls: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 border border-red-300 dark:border-red-700" },
+  drop:    { label: "⬇ Rate Drop",   cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border border-blue-300 dark:border-blue-700" },
+  reprice: { label: "↕ Reprice Opp", cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-300 dark:border-amber-700" },
+};
+
+function TinyForecastChart({ days }: { days: TracForecastDay[] }) {
+  const data = days
+    .filter(d => d.forecastRpm != null)
+    .slice(0, 14)
+    .map(d => ({ date: d.date.slice(5), rpm: Number(d.forecastRpm!.toFixed(3)) }));
+  if (data.length < 2) return <div className="h-12 flex items-center justify-center text-[10px] text-muted-foreground">No forecast</div>;
+  const minV = Math.min(...data.map(d => d.rpm));
+  const maxV = Math.max(...data.map(d => d.rpm));
+  const mid = ((minV + maxV) / 2);
+  return (
+    <ResponsiveContainer width="100%" height={48}>
+      <LineChart data={data} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
+        <ReferenceLine y={mid} stroke="#6b7280" strokeDasharray="3 2" strokeWidth={0.8} />
+        <Line
+          type="monotone"
+          dataKey="rpm"
+          dot={false}
+          stroke="#3b82f6"
+          strokeWidth={1.5}
+        />
+        <RechartsTooltip
+          content={({ active, payload }) => {
+            if (!active || !payload?.length) return null;
+            const d = payload[0].payload;
+            return (
+              <div className="bg-black/80 text-white text-[10px] px-2 py-1 rounded shadow">
+                {d.date}: <strong>${d.rpm.toFixed(2)}/mi</strong>
+              </div>
+            );
+          }}
+        />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+function TracRateCardsPanel({
+  lanes,
+  isLoading,
+  onRefresh,
+  isRefreshing,
+}: {
+  lanes: TracLaneCard[];
+  isLoading: boolean;
+  onRefresh: (id: string) => void;
+  isRefreshing: string | null;
+}) {
+  if (isLoading) {
+    return (
+      <div className="mb-6">
+        <div className="flex items-center gap-2 mb-3">
+          <TrendingUp className="h-4 w-4 text-blue-500" />
+          <span className="text-sm font-bold uppercase tracking-wider text-muted-foreground">TRAC Market Rates</span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+          {[1, 2, 3].map(i => <Skeleton key={i} className="h-44 w-full rounded-xl" />)}
+        </div>
+      </div>
+    );
+  }
+
+  if (!lanes || lanes.length === 0) return null;
+
+  const alertLanes = lanes.filter(l => l.rateAlert != null);
+
+  return (
+    <div className="mb-6" data-testid="panel-trac-rate-cards">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+          <TrendingUp className="h-4 w-4 text-blue-500" /> TRAC Market Rates — My Assigned Lanes
+        </h3>
+        {alertLanes.length > 0 && (
+          <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+            {alertLanes.length} {alertLanes.length === 1 ? "alert" : "alerts"}
+          </span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+        {lanes.map(lane => {
+          const alert = lane.rateAlert ? ALERT_STYLES[lane.rateAlert] : null;
+          const spotVsContract = lane.spotRpm != null && lane.contractRpm != null
+            ? ((lane.spotRpm - lane.contractRpm) / lane.contractRpm) * 100
+            : null;
+          const spotVsContract90 = lane.spotRpm != null && lane.avgRpm90d != null
+            ? ((lane.spotRpm - lane.avgRpm90d) / lane.avgRpm90d) * 100
+            : null;
+
+          return (
+            <div
+              key={lane.id}
+              className="rounded-xl border bg-card overflow-hidden hover:shadow-md transition-shadow"
+              data-testid={`card-trac-${lane.id}`}
+            >
+              {/* Header */}
+              <div className="px-3 py-2.5 border-b flex items-start justify-between gap-2 bg-muted/40">
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-sm text-foreground leading-tight">
+                    {lane.originLabel || lane.origin}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <span>→</span>
+                    {lane.destinationLabel || lane.destination}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1 shrink-0">
+                  <span className="text-[10px] font-semibold uppercase bg-muted border rounded px-1.5 py-0.5 text-muted-foreground">
+                    {lane.equipment}
+                  </span>
+                  {lane.miles && (
+                    <span className="text-[9px] text-muted-foreground">{lane.miles.toLocaleString()} mi</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Alert banner */}
+              {alert && (
+                <div className={`px-3 py-1.5 text-[11px] font-semibold flex items-center gap-1.5 ${alert.cls}`}>
+                  <span>{alert.label}</span>
+                  {lane.alertReason && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="underline decoration-dotted cursor-help truncate flex-1">{lane.alertReason}</span>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs text-xs">{lane.alertReason}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+                </div>
+              )}
+
+              {/* Rate grid */}
+              <div className="grid grid-cols-3 gap-0 border-b">
+                <div className="px-3 py-2 text-center border-r">
+                  <div className="text-base font-extrabold text-foreground leading-none">
+                    {lane.spotRpm != null ? `$${lane.spotRpm.toFixed(2)}` : "—"}
+                  </div>
+                  <div className="text-[9px] uppercase tracking-wider text-muted-foreground mt-0.5">Spot/mi</div>
+                  {lane.spotRpmHigh != null && lane.spotRpmLow != null && (
+                    <div className="text-[9px] text-muted-foreground">
+                      ${lane.spotRpmLow.toFixed(2)}–${lane.spotRpmHigh.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+                <div className="px-3 py-2 text-center border-r">
+                  <div className="text-base font-extrabold text-foreground leading-none">
+                    {lane.contractRpm != null ? `$${lane.contractRpm.toFixed(2)}` : "—"}
+                  </div>
+                  <div className="text-[9px] uppercase tracking-wider text-muted-foreground mt-0.5">Contract/mi</div>
+                  {spotVsContract != null && (
+                    <div className={`text-[9px] font-bold ${spotVsContract > 3 ? "text-red-500" : spotVsContract < -3 ? "text-green-500" : "text-muted-foreground"}`}>
+                      {spotVsContract > 0 ? "+" : ""}{spotVsContract.toFixed(1)}% vs spt
+                    </div>
+                  )}
+                </div>
+                <div className="px-3 py-2 text-center">
+                  <div className="text-base font-extrabold text-foreground leading-none">
+                    {lane.avgRpm90d != null ? `$${lane.avgRpm90d.toFixed(2)}` : "—"}
+                  </div>
+                  <div className="text-[9px] uppercase tracking-wider text-muted-foreground mt-0.5">90d Avg/mi</div>
+                  {spotVsContract90 != null && (
+                    <div className={`text-[9px] font-bold ${spotVsContract90 > 5 ? "text-red-500" : spotVsContract90 < -5 ? "text-green-500" : "text-muted-foreground"}`}>
+                      {spotVsContract90 > 0 ? "+" : ""}{spotVsContract90.toFixed(1)}% vs 90d
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Forecast sparkline */}
+              {lane.forecastDays && lane.forecastDays.length > 0 && (
+                <div className="px-2 pt-1 pb-0.5">
+                  <div className="text-[9px] text-muted-foreground mb-0.5">14-day forecast</div>
+                  <TinyForecastChart days={lane.forecastDays} />
+                </div>
+              )}
+
+              {/* Driver text + footer */}
+              <div className="px-3 pb-2.5">
+                {lane.driverText && (
+                  <p className="text-[10px] text-muted-foreground leading-snug mt-1.5 line-clamp-2">
+                    {lane.driverText}
+                  </p>
+                )}
+                <div className="flex items-center justify-between mt-2">
+                  {lane.loadCount != null && (
+                    <span className="text-[9px] text-muted-foreground">{lane.loadCount.toLocaleString()} loads</span>
+                  )}
+                  {lane.confidenceScore != null && (
+                    <span className="text-[9px] text-muted-foreground">{lane.confidenceScore}% conf.</span>
+                  )}
+                  <button
+                    onClick={() => onRefresh(lane.id)}
+                    disabled={isRefreshing === lane.id}
+                    className="text-[9px] text-blue-500 hover:text-blue-600 disabled:opacity-40 transition-colors ml-auto"
+                    data-testid={`button-refresh-trac-${lane.id}`}
+                  >
+                    {isRefreshing === lane.id ? "Refreshing…" : "↻ Refresh"}
+                  </button>
+                </div>
+                {lane.refreshedAt && (
+                  <div className="text-[9px] text-muted-foreground/60 mt-0.5">
+                    Rate as of {new Date(lane.refreshedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ── Market Pulse Strip ────────────────────────────────────────────────────────
@@ -960,6 +1219,30 @@ export default function IntelPage() {
     retry: 1,
   });
 
+  // TRAC rate cards query
+  const [refreshingTracId, setRefreshingTracId] = useState<string | null>(null);
+  const {
+    data: tracData,
+    isLoading: tracLoading,
+  } = useQuery<{ lanes: TracLaneCard[] }>({
+    queryKey: ["/api/intel/trac/my-lanes"],
+    staleTime: 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+
+  const handleTracRefresh = async (id: string) => {
+    setRefreshingTracId(id);
+    try {
+      await apiRequest("POST", `/api/intel/trac/refresh/${id}`);
+      queryClient.invalidateQueries({ queryKey: ["/api/intel/trac/my-lanes"] });
+    } catch {
+      // silently ignore
+    } finally {
+      setRefreshingTracId(null);
+    }
+  };
+
   const sendNowMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/intel/send-now"),
     onSuccess: () => {
@@ -1150,6 +1433,14 @@ export default function IntelPage() {
           lanes={myLanesData?.lanes ?? []}
           isLoading={myLanesLoading}
           lastUpdated={myLanesData?.lastUpdated ?? null}
+        />
+
+        {/* ── TRAC Market Rate Cards ───────────────────────────── */}
+        <TracRateCardsPanel
+          lanes={tracData?.lanes ?? []}
+          isLoading={tracLoading}
+          onRefresh={handleTracRefresh}
+          isRefreshing={refreshingTracId}
         />
 
         {/* ── Sonar Market Trend Table (top-20 org markets) ───── */}

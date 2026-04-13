@@ -2024,3 +2024,57 @@ export const pinnedCompanies = pgTable("pinned_companies", {
 export const insertPinnedCompanySchema = createInsertSchema(pinnedCompanies).omit({ id: true, pinnedAt: true });
 export type InsertPinnedCompany = z.infer<typeof insertPinnedCompanySchema>;
 export type PinnedCompany = typeof pinnedCompanies.$inferSelect;
+
+// ── TRAC Rate Intelligence Cache ─────────────────────────────────────────────
+// Caches FreightWaves TRAC API responses for user lane rate cards (refreshed daily).
+
+export const intelTrackedLanes = pgTable("intel_tracked_lanes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  laneId: varchar("lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
+  origin: text("origin").notNull(),           // KMA code e.g. "SLC"
+  originLabel: text("origin_label"),          // Display name e.g. "Salt Lake City, UT"
+  destination: text("destination").notNull(), // KMA code e.g. "LAX"
+  destinationLabel: text("destination_label"),
+  equipmentType: text("equipment_type").notNull().default("VAN"),
+  source: text("source").notNull().default("lwq"), // "lwq" | "manual"
+  active: boolean("active").notNull().default(true),
+  displayOrder: integer("display_order").default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+},
+(table) => [
+  uniqueIndex("intel_tracked_lanes_user_lane_idx").on(table.userId, table.origin, table.destination, table.equipmentType),
+]);
+
+export const insertIntelTrackedLaneSchema = createInsertSchema(intelTrackedLanes).omit({ id: true, createdAt: true });
+export type InsertIntelTrackedLane = z.infer<typeof insertIntelTrackedLaneSchema>;
+export type IntelTrackedLane = typeof intelTrackedLanes.$inferSelect;
+
+export const intelLaneRates = pgTable("intel_lane_rates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  trackedLaneId: varchar("tracked_lane_id").notNull().references(() => intelTrackedLanes.id, { onDelete: "cascade" }),
+  refreshedAt: timestamp("refreshed_at").defaultNow().notNull(),
+  spotRpm: decimal("spot_rpm", { precision: 8, scale: 4 }),
+  spotRpmHigh: decimal("spot_rpm_high", { precision: 8, scale: 4 }),
+  spotRpmLow: decimal("spot_rpm_low", { precision: 8, scale: 4 }),
+  spotRate: decimal("spot_rate", { precision: 10, scale: 2 }),
+  spotRateHigh: decimal("spot_rate_high", { precision: 10, scale: 2 }),
+  spotRateLow: decimal("spot_rate_low", { precision: 10, scale: 2 }),
+  contractRpm: decimal("contract_rpm", { precision: 8, scale: 4 }),
+  contractRate: decimal("contract_rate", { precision: 10, scale: 2 }),
+  contractFscRpm: decimal("contract_fsc_rpm", { precision: 8, scale: 4 }),
+  confidenceScore: decimal("confidence_score", { precision: 5, scale: 2 }),
+  loadCount: integer("load_count"),
+  miles: integer("miles"),
+  avgRpm30d: decimal("avg_rpm_30d", { precision: 8, scale: 4 }),
+  avgRpm90d: decimal("avg_rpm_90d", { precision: 8, scale: 4 }),
+  forecastJson: jsonb("forecast_json"),       // TracForecastDay[]
+  rateAlert: text("rate_alert"),              // "spike" | "drop" | "reprice" | null
+  alertReason: text("alert_reason"),
+  driverText: text("driver_text"),
+});
+
+export const insertIntelLaneRateSchema = createInsertSchema(intelLaneRates).omit({ id: true, refreshedAt: true });
+export type InsertIntelLaneRate = z.infer<typeof insertIntelLaneRateSchema>;
+export type IntelLaneRate = typeof intelLaneRates.$inferSelect;
