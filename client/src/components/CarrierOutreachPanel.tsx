@@ -276,7 +276,7 @@ interface OutreachLog {
   replySnippet: string | null;
 }
 
-type PerDraftSendStatus = "idle" | "sending" | "sent" | "failed" | "no_email" | "dedup_skipped";
+type PerDraftSendStatus = "idle" | "sending" | "sent" | "failed" | "no_email" | "dedup_skipped" | "throttled_daily_cap" | "throttled_too_soon";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -594,7 +594,7 @@ export function CarrierOutreachPanel({
       outreachMode: string;
       capturedEmails?: Record<string, string>;
     }) => apiRequest("POST", `/api/lanes/${laneId}/send-outreach-emails`, body).then(r => r.json()),
-    onSuccess: (data: { results: Array<{ carrierId: string | null; carrierName: string; email: string | null; status: string; error?: string }>; sentCount: number; failedCount: number; carriersContactedCount: number; resolved: boolean }) => {
+    onSuccess: (data: { results: Array<{ carrierId: string | null; carrierName: string; email: string | null; status: string; error?: string; throttleReason?: string; throttleMessage?: string }>; sentCount: number; failedCount: number; throttledCount?: number; carriersContactedCount: number; resolved: boolean }) => {
       // Map results back to per-draft statuses by index (safer than name-match for duplicate ad-hoc entries)
       const newStatuses: Record<number, PerDraftSendStatus> = {};
       emailDrafts.forEach((_draft, idx) => {
@@ -622,9 +622,13 @@ export function CarrierOutreachPanel({
         const skipReasons: string[] = [];
         const noEmailCt = data.results.filter((r: { status: string }) => r.status === "no_email").length;
         const dedupCt = data.results.filter((r: { status: string }) => r.status === "dedup_skipped").length;
+        const dailyCapCt = data.results.filter((r: { status: string }) => r.status === "throttled_daily_cap").length;
+        const tooSoonCt = data.results.filter((r: { status: string }) => r.status === "throttled_too_soon").length;
         if (noEmailCt > 0) skipReasons.push(`${noEmailCt} missing email`);
         if (dedupCt > 0) skipReasons.push(`${dedupCt} recently contacted`);
-        toast({ title: "No emails sent", description: skipReasons.length ? skipReasons.join(", ") + ". Add carrier emails or wait 48h." : "All carriers were skipped.", variant: "destructive" });
+        if (dailyCapCt > 0) skipReasons.push(`${dailyCapCt} daily limit reached`);
+        if (tooSoonCt > 0) skipReasons.push(`${tooSoonCt} sent too recently`);
+        toast({ title: "No emails sent", description: skipReasons.length ? skipReasons.join(", ") + "." : "All carriers were skipped.", variant: "destructive" });
       } else if (data.failedCount === 0) {
         toast({ title: `${data.sentCount} email${data.sentCount > 1 ? "s" : ""} sent!`, description: "Outreach logged to lane history." });
       } else if (data.sentCount > 0) {
@@ -2374,6 +2378,8 @@ export function CarrierOutreachPanel({
                           status === "failed" ? "bg-red-500/5 border-red-500/20" :
                           status === "no_email" ? "bg-orange-500/5 border-orange-500/20" :
                           status === "dedup_skipped" ? "bg-yellow-500/5 border-yellow-500/20" :
+                          status === "throttled_daily_cap" ? "bg-rose-500/5 border-rose-500/20" :
+                          status === "throttled_too_soon" ? "bg-amber-500/5 border-amber-500/20" :
                           "bg-muted/10 border-border"
                         }`}>
                           <div className="flex items-center justify-between mb-2">
@@ -2386,6 +2392,8 @@ export function CarrierOutreachPanel({
                               {status === "failed" && <span className="text-[9px] text-red-400 flex items-center gap-0.5" data-testid={`draft-status-failed-${i}`}><XCircle className="w-2.5 h-2.5" /> Failed</span>}
                               {status === "no_email" && <span className="text-[9px] text-orange-400 flex items-center gap-0.5" data-testid={`draft-status-no-email-${i}`}><AlertCircle className="w-2.5 h-2.5" /> No email</span>}
                               {status === "dedup_skipped" && <span className="text-[9px] text-yellow-400 flex items-center gap-0.5" data-testid={`draft-status-dedup-skipped-${i}`}><AlertCircle className="w-2.5 h-2.5" /> Already contacted (48h)</span>}
+                              {status === "throttled_daily_cap" && <span className="text-[9px] text-rose-400 flex items-center gap-0.5" data-testid={`draft-status-throttled-daily-cap-${i}`}><AlertCircle className="w-2.5 h-2.5" /> Daily limit reached</span>}
+                              {status === "throttled_too_soon" && <span className="text-[9px] text-amber-400 flex items-center gap-0.5" data-testid={`draft-status-throttled-too-soon-${i}`}><AlertCircle className="w-2.5 h-2.5" /> Sent too recently</span>}
                               {status === "sending" && <span className="text-[9px] text-blue-400 flex items-center gap-0.5" data-testid={`draft-status-sending-${i}`}><Loader2 className="w-2.5 h-2.5 animate-spin" /> Sending</span>}
                             </div>
                           </div>
@@ -2407,6 +2415,17 @@ export function CarrierOutreachPanel({
                             className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[140px] disabled:opacity-60"
                             data-testid={`email-draft-${i}`}
                           />
+                          {(status === "throttled_daily_cap" || status === "throttled_too_soon") && (() => {
+                            const result = sendOutreachMutation.data?.results?.[i] as { throttleMessage?: string } | undefined;
+                            const msg = result?.throttleMessage;
+                            if (!msg) return null;
+                            return (
+                              <p className="mt-1.5 text-[9px] text-muted-foreground flex items-start gap-1" data-testid={`throttle-reason-${i}`}>
+                                <AlertCircle className="w-2.5 h-2.5 mt-0.5 shrink-0 text-rose-400" />
+                                {msg}
+                              </p>
+                            );
+                          })()}
                         </div>
                       );
                     })}
@@ -2415,19 +2434,36 @@ export function CarrierOutreachPanel({
                     const sentCt = Object.values(draftSendStatus).filter(s => s === "sent").length;
                     const noEmailCt = Object.values(draftSendStatus).filter(s => s === "no_email").length;
                     const dedupCt = Object.values(draftSendStatus).filter(s => s === "dedup_skipped").length;
+                    const dailyCapCt = Object.values(draftSendStatus).filter(s => s === "throttled_daily_cap").length;
+                    const tooSoonCt = Object.values(draftSendStatus).filter(s => s === "throttled_too_soon").length;
                     if (sentCt > 0) {
+                      const blockedParts: string[] = [];
+                      if (dailyCapCt > 0) blockedParts.push(`${dailyCapCt} daily limit reached`);
+                      if (tooSoonCt > 0) blockedParts.push(`${tooSoonCt} sent too recently`);
+                      if (dedupCt > 0) blockedParts.push(`${dedupCt} already contacted (48h)`);
+                      if (noEmailCt > 0) blockedParts.push(`${noEmailCt} missing email`);
                       return (
-                        <p className="mt-3 text-[10px] text-emerald-400/70 flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" />
-                          {sentCt} email{sentCt > 1 ? "s" : ""} sent and logged. Check the History tab for details.
-                        </p>
+                        <div className="mt-3 flex flex-col gap-1">
+                          <p className="text-[10px] text-emerald-400/70 flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            {sentCt} email{sentCt > 1 ? "s" : ""} sent and logged. Check the History tab for details.
+                          </p>
+                          {blockedParts.length > 0 && (
+                            <p className="text-[10px] text-amber-400/70 flex items-center gap-1" data-testid="throttle-summary-message">
+                              <AlertCircle className="w-3 h-3" />
+                              {blockedParts.join(", ")}.
+                            </p>
+                          )}
+                        </div>
                       );
                     }
                     const parts: string[] = [];
                     if (noEmailCt > 0) parts.push(`${noEmailCt} carrier${noEmailCt > 1 ? "s" : ""} missing email`);
                     if (dedupCt > 0) parts.push(`${dedupCt} already contacted within 48h`);
+                    if (dailyCapCt > 0) parts.push(`${dailyCapCt} daily limit reached`);
+                    if (tooSoonCt > 0) parts.push(`${tooSoonCt} sent too recently`);
                     return (
-                      <p className="mt-3 text-[10px] text-orange-400/80 flex items-center gap-1">
+                      <p className="mt-3 text-[10px] text-orange-400/80 flex items-center gap-1" data-testid="throttle-summary-message">
                         <AlertCircle className="w-3 h-3" />
                         No emails sent — {parts.length ? parts.join(", ") + "." : "all carriers skipped."}
                       </p>

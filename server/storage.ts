@@ -182,6 +182,22 @@ import {
 
 const { Pool } = pg;
 
+/**
+ * Configurable daily email budget per carrier (cross-lane).
+ * Change these constants to tune throttling without a code change.
+ */
+export const CARRIER_DAILY_BUDGET_CONFIG = {
+  /** Maximum emails a single carrier can receive across all lanes in one calendar day. */
+  dailyCap: 5,
+  /** Minimum gap in hours between any two emails sent to the same carrier. */
+  minGapHours: 4,
+} as const;
+
+export type CarrierDailyBudgetResult =
+  | { allowed: true }
+  | { allowed: false; reason: "daily_cap"; message: string; sentToday: number; cap: number }
+  | { allowed: false; reason: "too_soon"; message: string; nextAvailableAt: Date; minGapHours: number };
+
 export interface TeamMemberSummary {
   id: string;
   name: string;
@@ -781,6 +797,11 @@ export interface IStorage {
    * on transient failures — only prevents re-contact after confirmed successful sends.
    */
   getRecentSuccessfulOutreachCarrierIds(laneId: string, windowMs: number): Promise<Set<string>>;
+  /**
+   * Cross-lane daily budget check for a single carrier within an org.
+   * Returns allowed / blocked-daily-cap / blocked-too-soon with human-readable reason.
+   */
+  checkCarrierDailyBudget(orgId: string, carrierId: string): Promise<CarrierDailyBudgetResult>;
   getCarrierMarketNbaByDedup(carrierId: string, marketSignalId: string, recommendationType: string): Promise<CarrierMarketNba | undefined>;
   /** Dedup lookup by (carrierId, marketSignalId) only — ignores recommendationType. */
   getCarrierMarketNbaBySignalKey(carrierId: string, marketSignalId: string): Promise<CarrierMarketNba | undefined>;
@@ -5197,6 +5218,89 @@ export class DatabaseStorage implements IStorage {
       }
     }
     return result;
+  }
+
+  async checkCarrierDailyBudget(orgId: string, carrierId: string): Promise<CarrierDailyBudgetResult> {
+    const { dailyCap, minGapHours } = CARRIER_DAILY_BUDGET_CONFIG;
+    const now = new Date();
+
+    // ── Daily cap: count successful sends within the current calendar day ────
+    // Scoped to today (UTC midnight) to count how many times this carrier
+    // has been emailed today across all lanes in the org.
+    const startOfDay = new Date(now);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+
+    const todayLogs = await db
+      .select({ sentAt: carrierOutreachLogs.sentAt })
+      .from(carrierOutreachLogs)
+      .where(and(
+        eq(carrierOutreachLogs.orgId, orgId),
+        sql`${carrierOutreachLogs.carrierIds} @> ARRAY[${carrierId}]::text[]`,
+        or(
+          eq(carrierOutreachLogs.deliveryStatus, "sent"),
+          eq(carrierOutreachLogs.deliveryStatus, "delivered"),
+          eq(carrierOutreachLogs.deliveryStatus, "opened"),
+        ),
+        gte(carrierOutreachLogs.sentAt, startOfDay),
+      ))
+      .orderBy(desc(carrierOutreachLogs.sentAt));
+
+    const sentToday = todayLogs.length;
+
+    // Check daily cap first (most restrictive)
+    if (sentToday >= dailyCap) {
+      return {
+        allowed: false,
+        reason: "daily_cap",
+        message: `Daily limit reached for this carrier (${sentToday}/${dailyCap} emails sent today)`,
+        sentToday,
+        cap: dailyCap,
+      };
+    }
+
+    // ── Minimum gap: check most recent send across any day ────────────────────
+    // The gap window (4h) must span day boundaries. A carrier emailed at 11:30 PM
+    // must still be blocked at 1:00 AM the next day. So we query independently
+    // using a window of minGapHours back from now, without a day boundary cutoff.
+    const minGapMs = minGapHours * 60 * 60 * 1000;
+    const gapWindowCutoff = new Date(now.getTime() - minGapMs);
+
+    const recentLog = await db
+      .select({ sentAt: carrierOutreachLogs.sentAt })
+      .from(carrierOutreachLogs)
+      .where(and(
+        eq(carrierOutreachLogs.orgId, orgId),
+        sql`${carrierOutreachLogs.carrierIds} @> ARRAY[${carrierId}]::text[]`,
+        or(
+          eq(carrierOutreachLogs.deliveryStatus, "sent"),
+          eq(carrierOutreachLogs.deliveryStatus, "delivered"),
+          eq(carrierOutreachLogs.deliveryStatus, "opened"),
+        ),
+        gte(carrierOutreachLogs.sentAt, gapWindowCutoff),
+      ))
+      .orderBy(desc(carrierOutreachLogs.sentAt))
+      .limit(1);
+
+    if (recentLog.length > 0 && recentLog[0].sentAt) {
+      const mostRecentSentAt = recentLog[0].sentAt;
+      const nextAvailableAt = new Date(mostRecentSentAt.getTime() + minGapMs);
+      if (now < nextAvailableAt) {
+        const timeStr = nextAvailableAt.toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+        return {
+          allowed: false,
+          reason: "too_soon",
+          message: `Next available send at ${timeStr} (${minGapHours}h minimum gap between emails)`,
+          nextAvailableAt,
+          minGapHours,
+        };
+      }
+    }
+
+    return { allowed: true };
   }
 
   async getCarrierMarketNbaByDedup(

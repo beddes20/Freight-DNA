@@ -30,7 +30,7 @@
 import type { Express, Response } from "express";
 import multer from "multer";
 import XLSX from "xlsx";
-import { storage, db } from "../storage";
+import { storage, db, CARRIER_DAILY_BUDGET_CONFIG } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
 import { rankCarriersForLane, isHighFrequencyLane, buildHighFrequencyIndex, isHighFrequencyLaneFromIndex, HIGH_FREQUENCY_CONFIG } from "../carrierRankingService";
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
@@ -2102,10 +2102,12 @@ Rules for suggestions:
       carrierId: string | null;
       carrierName: string;
       email: string | null;
-      status: "sent" | "failed" | "no_email" | "dedup_skipped";
+      status: "sent" | "failed" | "no_email" | "dedup_skipped" | "throttled_daily_cap" | "throttled_too_soon";
       error?: string;
       internetMessageId?: string;
       dedupBlocked?: boolean;
+      throttleReason?: "daily_cap" | "too_soon";
+      throttleMessage?: string;
     };
 
     const results: RecipientResult[] = [];
@@ -2134,6 +2136,25 @@ Rules for suggestions:
             status: "dedup_skipped",
             error: `Carrier already successfully contacted within ${HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours}h dedup window`,
             dedupBlocked: true,
+          });
+          continue;
+        }
+      }
+
+      // ── Daily budget check: cross-lane throttle per carrier per calendar day ──────────
+      // Applies to ALL lanes (not just HF). Enforces: max 5 sends/day and 4h minimum gap.
+      if (draft.carrierId) {
+        const budgetCheck = await storage.checkCarrierDailyBudget(user.organizationId, draft.carrierId);
+        if (!budgetCheck.allowed) {
+          const throttleStatus = budgetCheck.reason === "daily_cap" ? "throttled_daily_cap" : "throttled_too_soon";
+          results.push({
+            carrierId: draft.carrierId,
+            carrierName: draft.carrierName,
+            email: null,
+            status: throttleStatus,
+            error: budgetCheck.message,
+            throttleReason: budgetCheck.reason,
+            throttleMessage: budgetCheck.message,
           });
           continue;
         }
@@ -2200,9 +2221,10 @@ Rules for suggestions:
     }
 
     const dedupSkippedCount = results.filter(r => r.status === "dedup_skipped").length;
-    const effectiveTotalCount = emailDrafts.length - dedupSkippedCount;
+    const throttledCount = results.filter(r => r.status === "throttled_daily_cap" || r.status === "throttled_too_soon").length;
+    const effectiveTotalCount = emailDrafts.length - dedupSkippedCount - throttledCount;
     const overallStatus =
-      sentCount === 0 && effectiveTotalCount === 0 ? "sent" : // all were dedup-skipped
+      sentCount === 0 && effectiveTotalCount === 0 ? "sent" : // all were dedup-skipped or throttled
       sentCount === effectiveTotalCount ? "sent" :
       sentCount === 0 ? "failed" :
       "partial";
@@ -2218,6 +2240,7 @@ Rules for suggestions:
       if (!result) continue;
       const perCarrierStatus = result.status === "sent" ? "sent" :
         result.status === "dedup_skipped" ? "dedup_skipped" :
+        result.status === "throttled_daily_cap" || result.status === "throttled_too_soon" ? "dedup_skipped" :
         result.status === "failed" ? "failed" : "draft";
       const internetMsgId = (result as { internetMessageId?: string }).internetMessageId ?? null;
       const log = await storage.createCarrierOutreachLog({
@@ -2273,6 +2296,7 @@ Rules for suggestions:
     for (const r of results) {
       if (r.status === "no_email") continue; // don't mark as contacted if no email existed
       if (r.status === "dedup_skipped") continue; // dedup-blocked carriers are not re-marked
+      if (r.status === "throttled_daily_cap" || r.status === "throttled_too_soon") continue; // throttled carriers are not re-marked
       await storage.upsertLaneCarrierInterest({
         laneId: req.params.laneId,
         carrierId: r.carrierId,
@@ -2313,7 +2337,7 @@ Rules for suggestions:
       ...(resolved && resolveNowSend ? { resolvedAt: resolveNowSend } : {}),
     }).catch(() => {});
 
-    res.json({ logs, results, sentCount, failedCount, dedupSkippedCount, carriersContactedCount: newCount, resolved, overallStatus });
+    res.json({ logs, results, sentCount, failedCount, dedupSkippedCount, throttledCount, carriersContactedCount: newCount, resolved, overallStatus });
   });
 
   // ── Outreach Log & Card Completion ────────────────────────────────────────
