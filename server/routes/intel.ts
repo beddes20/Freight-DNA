@@ -682,7 +682,7 @@ export interface MyLanesRow {
   votriWoW: number;
   signal: "hot" | "warm" | "cool";
   avgCustomerRate: number | null;
-  ntiBaseline: number | null;
+  tracSpotRpm: number | null;
   rateDelta: "above" | "below" | "unknown";
   rateDeltaPct: number | null;
   weatherOrigin: WeatherFlag | null;
@@ -694,29 +694,24 @@ export interface MyLanesRow {
 async function computeMyLanes(
   lanes: LaneData[],
   national: NationalMarketSummary,
+  orgId: string,
 ): Promise<MyLanesRow[]> {
   if (lanes.length === 0) return [];
 
-  // Deduplicate by (origin, destination, companyName) to preserve per-account context
-  // while avoiding duplicate entries from multiple weeks of the same load.
   const dedupedLanes = Array.from(
     new Map(lanes.map(l => [`${l.origin}|${l.destination}|${l.companyName}`, l])).values()
   );
 
-  // Fetch VOTRI for unique O→D pairs (avoid hammering SONAR with duplicate queries)
   const uniqueOdPairs = Array.from(
     new Map(dedupedLanes.map(l => [`${l.origin}|${l.destination}`, { origin: l.origin, destination: l.destination }])).values()
   );
   const votriMap = await getLaneVotrisBatch(uniqueOdPairs);
 
-  // Collect unique city strings for weather lookup
-  // We pass the raw city strings and let getCityCoords normalize them (handles "city" and "city, st")
   const allCities = Array.from(new Set([
     ...dedupedLanes.map(l => l.origin),
     ...dedupedLanes.map(l => l.destination),
   ])).filter(Boolean);
 
-  // Weather flags — graceful on failure, non-blocking
   let weatherMap = new Map<string, WeatherFlag>();
   try {
     weatherMap = await getWeatherFlagsForCities(allCities);
@@ -724,7 +719,32 @@ async function computeMyLanes(
     // weather failure is non-blocking
   }
 
-  const ntiBaseline = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
+  // Build TRAC lane-specific rate lookup from cached intel_lane_rates
+  const tracRateMap = new Map<string, number>(); // "ORIG_KMA|DEST_KMA" → spotRpm
+  try {
+    const tracRows = await db
+      .select({
+        origin: intelTrackedLanes.origin,
+        destination: intelTrackedLanes.destination,
+        spotRpm: intelLaneRates.spotRpm,
+        avgRpm90d: intelLaneRates.avgRpm90d,
+      })
+      .from(intelLaneRates)
+      .innerJoin(intelTrackedLanes, eq(intelLaneRates.trackedLaneId, intelTrackedLanes.id))
+      .where(
+        and(
+          eq(intelTrackedLanes.orgId, orgId),
+          eq(intelTrackedLanes.active, true),
+        )
+      );
+    for (const r of tracRows) {
+      const key = `${r.origin}|${r.destination}`;
+      const rate = r.spotRpm ? parseFloat(r.spotRpm) : (r.avgRpm90d ? parseFloat(r.avgRpm90d) : null);
+      if (rate && rate > 0) tracRateMap.set(key, rate);
+    }
+  } catch (err) {
+    console.log("[intel] TRAC rate lookup for My Lanes failed (non-blocking):", err);
+  }
 
   const rows: MyLanesRow[] = dedupedLanes.map(lane => {
     const qualifier = buildVotriQualifier(lane.origin, lane.destination);
@@ -733,20 +753,23 @@ async function computeMyLanes(
     const votriWoW = votriData?.votriWoW ?? 0;
     const signal = votriData?.signal ?? "cool";
 
-    // Rate benchmark: compare avg customer rate/mile vs NTI baseline
-    // avgPayPerLoad is customer revenue per load, assume 500mi avg distance
     const avgMiles = 500;
     const avgCustomerRatePerMile = lane.avgPayPerLoad > 0 ? lane.avgPayPerLoad / avgMiles : null;
     let rateDelta: "above" | "below" | "unknown" = "unknown";
     let rateDeltaPct: number | null = null;
 
-    if (avgCustomerRatePerMile !== null && ntiBaseline > 0) {
-      const delta = ((avgCustomerRatePerMile - ntiBaseline) / ntiBaseline) * 100;
+    // Look up TRAC lane-specific spot rate by mapping city to KMA
+    const origKma = cityToKma(lane.origin);
+    const destKma = cityToKma(lane.destination);
+    const tracKey = origKma && destKma ? `${origKma.kma}|${destKma.kma}` : null;
+    const tracSpot = tracKey ? (tracRateMap.get(tracKey) ?? null) : null;
+
+    if (avgCustomerRatePerMile !== null && tracSpot !== null && tracSpot > 0) {
+      const delta = ((avgCustomerRatePerMile - tracSpot) / tracSpot) * 100;
       rateDelta = delta >= 0 ? "above" : "below";
       rateDeltaPct = Math.round(delta * 10) / 10;
     }
 
-    // Weather map keys are normalized lowercased versions of what was passed to getWeatherFlagsForCities
     const weatherOrigin = weatherMap.get(lane.origin.toLowerCase().trim()) ?? null;
     const weatherDest = weatherMap.get(lane.destination.toLowerCase().trim()) ?? null;
 
@@ -758,7 +781,7 @@ async function computeMyLanes(
       votriWoW,
       signal,
       avgCustomerRate: avgCustomerRatePerMile !== null ? Math.round(avgCustomerRatePerMile * 100) / 100 : null,
-      ntiBaseline: Math.round(ntiBaseline * 100) / 100,
+      tracSpotRpm: tracSpot !== null ? Math.round(tracSpot * 100) / 100 : null,
       rateDelta,
       rateDeltaPct,
       weatherOrigin,
@@ -768,7 +791,6 @@ async function computeMyLanes(
     };
   });
 
-  // Sort by VOTRI descending (hottest lanes first), then by totalLoads descending
   rows.sort((a, b) => b.votri !== a.votri ? b.votri - a.votri : b.totalLoads - a.totalLoads);
   return rows;
 }
@@ -1292,7 +1314,7 @@ export function registerIntelRoutes(app: Express): void {
         getAwardedRfpLanesForUser(orgId, filterUserId),
         getNationalMarketSummary(),
       ]);
-      const myLanes = await computeMyLanes(userLanes, national);
+      const myLanes = await computeMyLanes(userLanes, national, orgId);
 
       // Compute VOTRI for RFP lanes not already covered by financial lanes
       const existingKeys = new Set(myLanes.map(r => `${r.origin}|${r.destination}|${r.companyName}`));
@@ -1305,10 +1327,38 @@ export function registerIntelRoutes(app: Express): void {
         let rfpWeatherMap = new Map<string, WeatherFlag>();
         try { rfpWeatherMap = await getWeatherFlagsForCities(rfpCities); } catch { /* non-blocking */ }
 
-        const ntiBaseline = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
+        // Reuse TRAC rate map from computeMyLanes context for RFP lanes
+        let rfpTracMap = new Map<string, number>();
+        try {
+          const tracRows = await db
+            .select({
+              origin: intelTrackedLanes.origin,
+              destination: intelTrackedLanes.destination,
+              spotRpm: intelLaneRates.spotRpm,
+              avgRpm90d: intelLaneRates.avgRpm90d,
+            })
+            .from(intelLaneRates)
+            .innerJoin(intelTrackedLanes, eq(intelLaneRates.trackedLaneId, intelTrackedLanes.id))
+            .where(
+              and(
+                eq(intelTrackedLanes.orgId, orgId),
+                eq(intelTrackedLanes.active, true),
+              )
+            );
+          for (const r of tracRows) {
+            const key = `${r.origin}|${r.destination}`;
+            const rate = r.spotRpm ? parseFloat(r.spotRpm) : (r.avgRpm90d ? parseFloat(r.avgRpm90d) : null);
+            if (rate && rate > 0) rfpTracMap.set(key, rate);
+          }
+        } catch { /* non-blocking */ }
+
         rfpRows = rfpOnly.map(lane => {
           const qualifier = buildVotriQualifier(lane.origin, lane.destination);
           const votriData = rfpVotriMap.get(qualifier);
+          const origKma = cityToKma(lane.origin);
+          const destKma = cityToKma(lane.destination);
+          const tracKey = origKma && destKma ? `${origKma.kma}|${destKma.kma}` : null;
+          const tracSpot = tracKey ? (rfpTracMap.get(tracKey) ?? null) : null;
           return {
             origin: lane.origin,
             destination: lane.destination,
@@ -1316,8 +1366,8 @@ export function registerIntelRoutes(app: Express): void {
             votri: votriData?.votri ?? 0,
             votriWoW: votriData?.votriWoW ?? 0,
             signal: votriData?.signal ?? "cool",
-            avgCustomerRate: null, // no historical rate data for RFP-only lanes
-            ntiBaseline: Math.round(ntiBaseline * 100) / 100,
+            avgCustomerRate: null,
+            tracSpotRpm: tracSpot !== null ? Math.round(tracSpot * 100) / 100 : null,
             rateDelta: "unknown" as const,
             rateDeltaPct: null,
             weatherOrigin: rfpWeatherMap.get(lane.origin.toLowerCase().trim()) ?? null,

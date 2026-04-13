@@ -166,7 +166,7 @@ interface MyLanesRow {
   votriWoW: number;
   signal: "hot" | "warm" | "cool";
   avgCustomerRate: number | null;
-  ntiBaseline: number | null;
+  tracSpotRpm: number | null;
   rateDelta: "above" | "below" | "unknown";
   rateDeltaPct: number | null;
   weatherOrigin: WeatherFlag | null;
@@ -1067,7 +1067,7 @@ function MyLanesPanel({ lanes, isLoading, lastUpdated }: {
               <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Lane</th>
               <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">VOTRI</th>
               <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">WoW</th>
-              <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden md:table-cell">Rate vs NTI</th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden md:table-cell">Rate vs TRAC</th>
               <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">Signal</th>
             </tr>
           </thead>
@@ -1107,7 +1107,7 @@ function MyLanesPanel({ lanes, isLoading, lastUpdated }: {
                   </td>
                   <td className={`px-4 py-2.5 text-right text-xs hidden md:table-cell ${rateColor}`}>
                     {lane.rateDeltaPct !== null
-                      ? `${lane.rateDelta === "above" ? "▲" : "▼"} ${Math.abs(lane.rateDeltaPct).toFixed(1)}% vs NTI`
+                      ? `${lane.rateDelta === "above" ? "▲" : "▼"} ${Math.abs(lane.rateDeltaPct).toFixed(1)}% vs TRAC`
                       : "—"}
                   </td>
                   <td className="px-4 py-2.5 text-right">
