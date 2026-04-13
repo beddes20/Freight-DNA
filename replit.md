@@ -1,7 +1,7 @@
-# OrgChart CRM - Transportation Brokerage Sales Tool
+# FreightDNA - Transportation Brokerage Sales Tool
 
 ## Overview
-OrgChart CRM is a specialized mini CRM application for transportation brokerage sales teams. Its purpose is to streamline sales workflows by managing customer accounts, organizational charts, contacts, and shipping data. It includes RFP and Award management with Excel upload and analytical tools. The system aims to enhance customer relationship management, drive sales efficiency, facilitate strategic account penetration, and increase revenue for transportation brokers, supported by robust role-based access control (RBAC).
+FreightDNA is a specialized mini CRM application for transportation brokerage sales teams. Its purpose is to streamline sales workflows by managing customer accounts, organizational charts, contacts, and shipping data. It includes RFP and Award management with Excel upload and analytical tools. The system aims to enhance customer relationship management, drive sales efficiency, facilitate strategic account penetration, and increase revenue for transportation brokers, supported by robust role-based access control (RBAC).
 
 ## User Preferences
 I prefer clear and concise information. I like iterative development with regular updates. Please ask for my approval before implementing any major architectural changes or significant feature modifications. I value clean code and well-documented solutions.
