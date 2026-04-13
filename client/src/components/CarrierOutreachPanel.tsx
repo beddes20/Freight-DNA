@@ -618,12 +618,19 @@ export function CarrierOutreachPanel({
       if (data.resolved) {
         onCarriersContacted?.();
         toast({ title: "Lane bench complete!", description: "Carrier emails sent — bench resolved. Snoozing 30 days." });
+      } else if (data.sentCount === 0 && data.failedCount === 0) {
+        const skipReasons: string[] = [];
+        const noEmailCt = data.results.filter((r: { status: string }) => r.status === "no_email").length;
+        const dedupCt = data.results.filter((r: { status: string }) => r.status === "dedup_skipped").length;
+        if (noEmailCt > 0) skipReasons.push(`${noEmailCt} missing email`);
+        if (dedupCt > 0) skipReasons.push(`${dedupCt} recently contacted`);
+        toast({ title: "No emails sent", description: skipReasons.length ? skipReasons.join(", ") + ". Add carrier emails or wait 48h." : "All carriers were skipped.", variant: "destructive" });
       } else if (data.failedCount === 0) {
         toast({ title: `${data.sentCount} email${data.sentCount > 1 ? "s" : ""} sent!`, description: "Outreach logged to lane history." });
       } else if (data.sentCount > 0) {
         toast({ title: `${data.sentCount} sent, ${data.failedCount} failed`, description: "Check per-carrier status below.", variant: "destructive" });
       } else {
-        toast({ title: "All sends failed", description: data.results.map(r => r.error).filter(Boolean).join("; "), variant: "destructive" });
+        toast({ title: "All sends failed", description: data.results.map((r: { error?: string }) => r.error).filter(Boolean).join("; "), variant: "destructive" });
       }
     },
     onError: () => {
@@ -2404,12 +2411,28 @@ export function CarrierOutreachPanel({
                       );
                     })}
                   </div>
-                  {sendOverallStatus === "done" && (
-                    <p className="mt-3 text-[10px] text-emerald-400/70 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" />
-                      Emails sent and logged. Check the History tab for details.
-                    </p>
-                  )}
+                  {sendOverallStatus === "done" && (() => {
+                    const sentCt = Object.values(draftSendStatus).filter(s => s === "sent").length;
+                    const noEmailCt = Object.values(draftSendStatus).filter(s => s === "no_email").length;
+                    const dedupCt = Object.values(draftSendStatus).filter(s => s === "dedup_skipped").length;
+                    if (sentCt > 0) {
+                      return (
+                        <p className="mt-3 text-[10px] text-emerald-400/70 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" />
+                          {sentCt} email{sentCt > 1 ? "s" : ""} sent and logged. Check the History tab for details.
+                        </p>
+                      );
+                    }
+                    const parts: string[] = [];
+                    if (noEmailCt > 0) parts.push(`${noEmailCt} carrier${noEmailCt > 1 ? "s" : ""} missing email`);
+                    if (dedupCt > 0) parts.push(`${dedupCt} already contacted within 48h`);
+                    return (
+                      <p className="mt-3 text-[10px] text-orange-400/80 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        No emails sent — {parts.length ? parts.join(", ") + "." : "all carriers skipped."}
+                      </p>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -2736,12 +2759,23 @@ export function CarrierOutreachPanel({
                 {!showEmails && selectedCarriers.size === 0 && adHocParsed.valid.length === 0 && (
                   <p className="text-[10px] text-muted-foreground w-full text-center">Select carriers first to generate outreach drafts.</p>
                 )}
-                {sendOverallStatus === "done" && (
-                  <div className="flex-1 flex items-center justify-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span className="text-sm text-emerald-400 font-medium">Outreach complete</span>
-                  </div>
-                )}
+                {sendOverallStatus === "done" && (() => {
+                  const sentCt = Object.values(draftSendStatus).filter(s => s === "sent").length;
+                  if (sentCt > 0) {
+                    return (
+                      <div className="flex-1 flex items-center justify-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <span className="text-sm text-emerald-400 font-medium">Outreach complete</span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="flex-1 flex items-center justify-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-orange-400" />
+                      <span className="text-sm text-orange-400 font-medium">No emails sent — check carrier email addresses</span>
+                    </div>
+                  );
+                })()}
               </>
             )}
           </div>
