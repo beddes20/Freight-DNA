@@ -97,6 +97,34 @@ let nationalCache: CacheEntry<NationalMarketSummary> | null = null;
 const otriCache  = new Map<string, CacheEntry<MarketOtri>>();
 const votriCache = new Map<string, CacheEntry<LaneVotri>>();
 
+// ── Auth mode health-check (logged once on first use) ─────────────────────────
+
+let _authModeLogged = false;
+function logAuthMode() {
+  if (_authModeLogged) return;
+  _authModeLogged = true;
+  const directToken = process.env.FREIGHTWAVES_TOKEN;
+  if (directToken) {
+    log(`Auth mode: FREIGHTWAVES_TOKEN (direct bearer token, ${directToken.length} chars) — username/password auth skipped`);
+  } else {
+    const hasCredentials = !!(process.env.SONAR_USERNAME && process.env.SONAR_PASSWORD);
+    log(`Auth mode: ${hasCredentials ? "username/password (SONAR_USERNAME + SONAR_PASSWORD)" : "no credentials configured — all Sonar calls will return fallback data"}`);
+  }
+}
+
+// ── Lane pricing verification (logged once on first live lane data) ────────────
+
+let _lanePricingVerified = false;
+function logFirstLiveLane(entry: LaneVotri) {
+  if (_lanePricingVerified) return;
+  _lanePricingVerified = true;
+  log(
+    `Lane pricing verified (first live result): ${entry.qualifier} — ` +
+    `VOTRI=${entry.votri.toFixed(2)}% WoW=${entry.votriWoW >= 0 ? "+" : ""}${entry.votriWoW.toFixed(2)}pp ` +
+    `signal=${entry.signal} isStale=false`
+  );
+}
+
 // ── Logging ───────────────────────────────────────────────────────────────────
 
 function log(msg: string) {
@@ -107,6 +135,13 @@ function log(msg: string) {
 // ── Authentication ────────────────────────────────────────────────────────────
 
 async function getSonarToken(): Promise<string | null> {
+  logAuthMode();
+
+  // Prefer direct bearer token when present — no auth call needed
+  const directToken = process.env.FREIGHTWAVES_TOKEN;
+  if (directToken) return directToken;
+
+  // Fall back to username/password auth flow
   const username = process.env.SONAR_USERNAME;
   const password = process.env.SONAR_PASSWORD;
   if (!username || !password) return null;
@@ -588,6 +623,10 @@ export async function getLaneVotri(origin: string, destination: string): Promise
   };
 
   votriCache.set(qualifier, { value: entry, fetchedAt: Date.now(), ttlMs: VOTRI_TTL });
+
+  // Log first successful live lane result for end-to-end verification
+  if (!entry.isStale) logFirstLiveLane(entry);
+
   return entry;
 }
 
