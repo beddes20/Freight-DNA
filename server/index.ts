@@ -29,6 +29,20 @@ import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "./emailGate";
 const app = express();
 const httpServer = createServer(app);
 
+const MIRROR_PORT = 23636;
+let earlyClaimBound = false;
+const earlyClaimServer = createServer((_req, res) => {
+  res.writeHead(503);
+  res.end("Starting…");
+});
+earlyClaimServer.listen({ port: MIRROR_PORT, host: "0.0.0.0" }, () => {
+  earlyClaimBound = true;
+  console.log(`[mirror] pre-claimed port ${MIRROR_PORT}`);
+});
+earlyClaimServer.on("error", (err: NodeJS.ErrnoException) => {
+  console.warn(`[mirror] pre-claim failed (${err.code || err.message}) — will retry after main server starts`);
+});
+
 app.set("trust proxy", 1);
 
 app.use(compression());
@@ -222,6 +236,22 @@ async function initStripe() {
     },
     () => {
       log(`serving on port ${port}`);
+
+      const startMirror = () => {
+        const mirrorServer = createServer(app);
+        mirrorServer.listen({ port: MIRROR_PORT, host: "0.0.0.0" }, () => {
+          log(`mirror serving on port ${MIRROR_PORT} (public URL)`);
+        });
+        mirrorServer.on("error", (err: NodeJS.ErrnoException) => {
+          if (err.code === "EADDRINUSE") log(`mirror port ${MIRROR_PORT} in use — skipping`);
+          else console.error("[mirror]", err);
+        });
+      };
+      if (earlyClaimBound) {
+        earlyClaimServer.close(startMirror);
+      } else {
+        startMirror();
+      }
       initMonthlyGoalScheduler();
       initMonthlyDataRefreshScheduler();
       initRfpDeadlineScheduler();

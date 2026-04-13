@@ -15,10 +15,13 @@ import { requireAuth, getCurrentUser } from "../auth";
 
 export function registerEmailAnalyticsRoutes(app: Express): void {
 
+  const ALLOWED_ROLES = ["admin", "director", "national_account_manager", "sales_director"];
+
   app.get("/api/analytics/email-intelligence", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
       const orgId = user.organizationId;
 
       const [
@@ -101,7 +104,6 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
                SELECT COUNT(*) FROM touchpoints t
                WHERE t.company_id = em.linked_account_id
                  AND t.created_at::timestamptz > es.created_at::timestamptz
-                 AND t.created_at::timestamptz > NOW() - INTERVAL '24 hours'
              )::int AS touchpoints_after
            FROM email_signals es
            JOIN email_messages em ON em.id = es.message_id
