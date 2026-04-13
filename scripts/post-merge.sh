@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 npm install
-npx drizzle-kit push --force
+echo "no" | npx drizzle-kit push --force
 # Ensure the session table used by connect-pg-simple is always present.
 # drizzle-kit push does not manage this table (excluded via tablesFilter),
 # but this guard recreates it if it was ever accidentally dropped.
