@@ -427,7 +427,14 @@ export function registerFinancialRoutes(app: Express): void {
            o.record_type,
            o.stage,
            o.outcome,
+           o.amount,
+           o.close_date,
+           o.probability,
+           o.notes,
+           o.lost_reason,
+           o.created_at,
            o.company_id,
+           o.prospect_id,
            COALESCE(c.name, p.name, '') AS company_name
          FROM crm_opportunities o
          LEFT JOIN companies c ON c.id = o.company_id

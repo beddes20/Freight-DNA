@@ -4,6 +4,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
+import { Separator } from "@/components/ui/separator";
 import { useLocation } from "wouter";
 import { TaskDialog } from "@/components/task-dialog";
 import { useAuth } from "@/hooks/use-auth";
@@ -22,7 +30,7 @@ import {
 import {
   Truck, MapPin, Flame, Package, TrendingUp, Building2,
   FileText, Zap, Plus, ExternalLink, Trash2, RotateCcw, EyeOff, ChevronDown,
-  Users, Briefcase,
+  Users, Briefcase, DollarSign, Calendar, BarChart2, StickyNote, ChevronRight,
 } from "lucide-react";
 
 type OpportunityMatch = {
@@ -79,7 +87,14 @@ type FieldCreatedOpportunity = {
   record_type: string;
   stage: string;
   outcome: string | null;
+  amount: string | null;
+  close_date: string | null;
+  probability: number | null;
+  notes: string | null;
+  lost_reason: string | null;
+  created_at: string | null;
   company_id: string | null;
+  prospect_id: number | null;
   company_name: string;
 };
 
@@ -146,6 +161,7 @@ export default function TopOpportunities() {
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskPrefill, setTaskPrefill] = useState<TaskPrefill | null>(null);
   const [expandedCompanies, setExpandedCompanies] = useState<Record<string, boolean>>({});
+  const [selectedFieldOpp, setSelectedFieldOpp] = useState<FieldCreatedOpportunity | null>(null);
 
   const toggleCollapsed = (companyId: string) => {
     setExpandedCompanies(prev => ({ ...prev, [companyId]: !prev[companyId] }));
@@ -389,7 +405,8 @@ export default function TopOpportunities() {
                         <div
                           key={`${match.rfpId}-${match.destination}-${mIdx}`}
                           data-testid={`row-match-${group.companyId}-${mIdx}`}
-                          className="px-4 py-3 hover:bg-muted/40 transition-colors group"
+                          className="px-4 py-3 hover:bg-muted/40 transition-colors group cursor-pointer"
+                          onClick={() => navigate(`/companies/${group.companyId}?tab=rfp`)}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0">
@@ -413,8 +430,7 @@ export default function TopOpportunities() {
                                 <div className="flex items-center gap-1 mt-0.5">
                                   <Building2 className="h-3 w-3 text-primary/60 shrink-0" />
                                   <span
-                                    className="text-xs text-primary/80 hover:text-primary hover:underline cursor-pointer font-medium"
-                                    onClick={() => goToAccount(group.companyId)}
+                                    className="text-xs text-primary/80 font-medium"
                                     data-testid={`text-match-company-${group.companyId}-${mIdx}`}
                                   >
                                     {group.companyName}
@@ -444,11 +460,11 @@ export default function TopOpportunities() {
                                   ${Number(match.rate).toLocaleString()}
                                 </Badge>
                               )}
-                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  className="h-7 px-2 text-xs gap-1 text-primary border-primary/30 hover:bg-primary/5"
+                                  className="h-7 px-2 text-xs gap-1 text-primary border-primary/30 hover:bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity"
                                   onClick={() => openTask(group, match)}
                                   data-testid={`btn-add-task-${group.companyId}-${mIdx}`}
                                   title="Create a task for this opportunity"
@@ -457,6 +473,7 @@ export default function TopOpportunities() {
                                   Task
                                 </Button>
                               </div>
+                              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
                             </div>
                           </div>
                         </div>
@@ -564,7 +581,8 @@ export default function TopOpportunities() {
                         <div
                           key={opp.id}
                           data-testid={`row-field-opportunity-${opp.id}`}
-                          className="px-4 py-3 hover:bg-muted/40 transition-colors"
+                          className="px-4 py-3 hover:bg-muted/40 transition-colors cursor-pointer group"
+                          onClick={() => setSelectedFieldOpp(opp)}
                         >
                           <div className="flex items-center justify-between gap-3 flex-wrap">
                             <div className="flex items-center gap-2 min-w-0">
@@ -591,6 +609,7 @@ export default function TopOpportunities() {
                               >
                                 {getStageLabel(opp.stage)}
                               </Badge>
+                              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
                             </div>
                           </div>
                         </div>
@@ -603,6 +622,114 @@ export default function TopOpportunities() {
           )}
         </>
       )}
+
+      {/* Field-Created Opportunity Detail Sheet */}
+      <Sheet open={!!selectedFieldOpp} onOpenChange={(open) => { if (!open) setSelectedFieldOpp(null); }}>
+        <SheetContent className="w-full sm:max-w-md overflow-y-auto" data-testid="sheet-field-opp-detail">
+          {selectedFieldOpp && (
+            <>
+              <SheetHeader className="mb-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Briefcase className="h-5 w-5 text-primary" />
+                  <Badge variant="secondary" className="text-xs">{getRecordTypeLabel(selectedFieldOpp.record_type)}</Badge>
+                  <Badge variant={STAGE_VARIANT[selectedFieldOpp.stage] ?? "outline"} className="text-xs">{getStageLabel(selectedFieldOpp.stage)}</Badge>
+                </div>
+                <SheetTitle className="text-lg leading-tight" data-testid="text-sheet-opp-name">{selectedFieldOpp.name}</SheetTitle>
+                {selectedFieldOpp.company_name && (
+                  <SheetDescription className="flex items-center gap-1 mt-1">
+                    <Building2 className="h-3.5 w-3.5" />
+                    {selectedFieldOpp.company_name}
+                  </SheetDescription>
+                )}
+              </SheetHeader>
+
+              <Separator className="mb-4" />
+
+              <div className="space-y-4">
+                {/* Financial details */}
+                {(selectedFieldOpp.amount || selectedFieldOpp.close_date || selectedFieldOpp.probability != null) && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Details</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      {selectedFieldOpp.amount && (
+                        <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                          <DollarSign className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                          <div>
+                            <p className="text-xs text-muted-foreground">Amount</p>
+                            <p className="text-sm font-semibold" data-testid="text-sheet-amount">{selectedFieldOpp.amount}</p>
+                          </div>
+                        </div>
+                      )}
+                      {selectedFieldOpp.close_date && (
+                        <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                          <Calendar className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
+                          <div>
+                            <p className="text-xs text-muted-foreground">Close Date</p>
+                            <p className="text-sm font-semibold" data-testid="text-sheet-close-date">{selectedFieldOpp.close_date}</p>
+                          </div>
+                        </div>
+                      )}
+                      {selectedFieldOpp.probability != null && (
+                        <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                          <BarChart2 className="h-4 w-4 text-purple-500 mt-0.5 shrink-0" />
+                          <div>
+                            <p className="text-xs text-muted-foreground">Probability</p>
+                            <p className="text-sm font-semibold" data-testid="text-sheet-probability">{selectedFieldOpp.probability}%</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Notes */}
+                {selectedFieldOpp.notes && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+                      <StickyNote className="h-3.5 w-3.5" /> Notes
+                    </p>
+                    <p className="text-sm text-foreground/80 bg-muted/30 rounded-md px-3 py-2 whitespace-pre-wrap" data-testid="text-sheet-notes">{selectedFieldOpp.notes}</p>
+                  </div>
+                )}
+
+                {/* Lost reason */}
+                {selectedFieldOpp.lost_reason && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Lost Reason</p>
+                    <p className="text-sm text-foreground/80 bg-muted/30 rounded-md px-3 py-2" data-testid="text-sheet-lost-reason">{selectedFieldOpp.lost_reason}</p>
+                  </div>
+                )}
+
+                {/* Created date */}
+                {selectedFieldOpp.created_at && (
+                  <p className="text-xs text-muted-foreground">
+                    Created {new Date(selectedFieldOpp.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </p>
+                )}
+              </div>
+
+              {/* Go to Account button */}
+              {selectedFieldOpp.company_id && (
+                <>
+                  <Separator className="my-4" />
+                  <Button
+                    className="w-full gap-2"
+                    variant="outline"
+                    onClick={() => {
+                      navigate(`/companies/${selectedFieldOpp.company_id}?tab=opportunities`);
+                      setSelectedFieldOpp(null);
+                    }}
+                    data-testid="btn-sheet-go-to-account"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    Go to Account Opportunities
+                  </Button>
+                </>
+              )}
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
 
       {taskPrefill && (
         <TaskDialog
