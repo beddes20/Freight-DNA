@@ -19,7 +19,9 @@ import { runRecurringLaneEngineForOrg } from "./recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes } from "./laneScoringService";
 import { syncMarketSignalNbas } from "./marketNbaService";
 import { generateConversationOwnershipNbas } from "./nextBestActionEngine";
-import { getAvgVotriWoW } from "./sonarClient";
+import { getAvgVotriWoW, getLaneVotrisBatch, getLaneVotrisBatchFresh, buildVotriQualifier } from "./sonarClient";
+import { resolveColumns, getRepFromRow } from "./colResolver";
+import { isExcludedRow } from "./financialHelpers";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -291,7 +293,136 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
   }
 }
 
+// ── Intraday VOTRI Alert Job ──────────────────────────────────────────────────
+// Runs every 2 hours. For each active user's top 10 lanes, checks if VOTRIW
+// (week-over-week VOTRI change, as returned by getLaneVotrisBatch) exceeds
+// ±3 percentage points. Uses hasUnreadNotification for same-lane deduplication.
+// This avoids in-memory baseline drift across restarts.
+
+async function runIntradayVotriAlerts(): Promise<void> {
+  log("Running intraday VOTRIW alert check…");
+  try {
+    const EXCLUDED_ORG_ID = "da3ed822";
+    const orgs = await storage.getOrganizations?.() ?? [];
+    const activeOrgs = orgs.filter((o: any) => o.id && !o.id.startsWith(EXCLUDED_ORG_ID));
+    if (activeOrgs.length === 0) return;
+
+    for (const org of activeOrgs) {
+      try {
+        const uploads = await storage.getFinancialUploadsForOrg(org.id).catch(() => []);
+        if (uploads.length === 0) continue;
+
+        const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+        let allRows: any[] = [];
+        for (const upload of sorted.slice(0, 2)) {
+          allRows = allRows.concat((upload.rows as any[]) ?? []);
+        }
+        if (allRows.length === 0) continue;
+
+        const cols = resolveColumns(allRows);
+        const allUsers = await storage.getUsers(org.id);
+
+        // Build lane frequency map per user (count loads per lane, then take top 10 by frequency)
+        const userLaneFrequency = new Map<string, Map<string, number>>();
+
+        for (const row of allRows) {
+          if (isExcludedRow(row, cols)) continue;
+          const rep = getRepFromRow(row, cols);
+          const origin = String(row[cols.origin] ?? row[cols.shipperCity] ?? "").trim().toLowerCase();
+          const destination = String(row[cols.destination] ?? row[cols.consigneeCity] ?? "").trim().toLowerCase();
+          if (!origin || !destination) continue;
+
+          const ownerUser = allUsers.find((u: any) => {
+            if (u.financialRepId && rep && u.financialRepId.toLowerCase() === rep.toLowerCase()) return true;
+            return u.name && rep && (u.name.toLowerCase().includes(rep) || rep.includes(u.name.toLowerCase()));
+          });
+          if (!ownerUser) continue;
+
+          const userId = ownerUser.id;
+          if (!userLaneFrequency.has(userId)) userLaneFrequency.set(userId, new Map());
+          const laneKey = `${origin}|${destination}`;
+          const freqMap = userLaneFrequency.get(userId)!;
+          freqMap.set(laneKey, (freqMap.get(laneKey) ?? 0) + 1);
+        }
+
+        // Convert frequency maps to sorted top-10 lane arrays
+        const userLaneMap = new Map<string, Array<{ origin: string; destination: string }>>();
+        for (const [userId, freqMap] of userLaneFrequency) {
+          const sorted = Array.from(freqMap.entries())
+            .sort((a, b) => b[1] - a[1]) // sort by load count descending
+            .slice(0, 10)
+            .map(([key]) => {
+              const [origin, destination] = key.split("|");
+              return { origin, destination };
+            });
+          userLaneMap.set(userId, sorted);
+        }
+
+        // Check each user's top 10 lanes using VOTRIW (week-over-week movement)
+        const VOTRIW_THRESHOLD = 3; // percentage points
+        for (const [userId, lanes] of userLaneMap) {
+          if (lanes.length === 0) continue;
+          // Use fresh fetch (bypass 4-hour cache) to meet the 2-hour alert SLA
+          const votriMap = await getLaneVotrisBatchFresh(lanes);
+
+          for (const lane of lanes) {
+            const qualifier = buildVotriQualifier(lane.origin, lane.destination);
+            const votriData = votriMap.get(qualifier);
+            if (!votriData || votriData.isStale) continue;
+
+            // Use VOTRIW — the week-over-week change in van outbound tender rejection rate
+            const votriWoW = votriData.votriWoW ?? 0;
+            if (Math.abs(votriWoW) < VOTRIW_THRESHOLD) continue;
+
+            const direction = votriWoW > 0 ? "tightened" : "loosened";
+            const action = votriWoW > 0
+              ? "Capacity getting tight — reach out to your carriers now to lock in coverage."
+              : "Market loosening — good time to negotiate rates with customers.";
+
+            // Dedup: include direction + magnitude bucket (5pp bands) + 6-hour time bucket
+            // This allows re-firing if the move grows significantly or reverses direction,
+            // but suppresses duplicate alerts within the same 6-hour window for the same move.
+            const magnitudeBucket = Math.floor(Math.abs(votriWoW) / 5); // 0=3-4pp, 1=5-9pp, 2=10-14pp …
+            const hourBucket = Math.floor(Date.now() / (6 * 60 * 60 * 1000)); // changes every 6 hours
+            const dedupeKey = `${qualifier}:${votriWoW > 0 ? "up" : "dn"}:${magnitudeBucket}:${hourBucket}`;
+
+            const alreadyNotified = await storage.hasUnreadNotification(
+              userId,
+              "votri_alert",
+              dedupeKey,
+            ).catch(() => false);
+
+            if (!alreadyNotified) {
+              const originTitle = lane.origin.charAt(0).toUpperCase() + lane.origin.slice(1);
+              const destTitle = lane.destination.charAt(0).toUpperCase() + lane.destination.slice(1);
+              await storage.createNotification({
+                userId,
+                type: "votri_alert",
+                title: `${originTitle} → ${destTitle} VOTRIW ${direction} ${Math.abs(votriWoW).toFixed(1)}pts`,
+                body: `VOTRIW is ${votriWoW > 0 ? "+" : ""}${votriWoW.toFixed(1)}pp this week on this lane. ${action}`,
+                link: "/intel",
+                relatedId: dedupeKey,
+                read: false,
+              }).catch(err => log(`VOTRIW alert notification error: ${err.message}`));
+              log(`VOTRIW alert fired: ${qualifier} for user ${userId} (${direction} ${Math.abs(votriWoW).toFixed(1)}pp)`);
+            }
+          }
+        }
+      } catch (orgErr: any) {
+        log(`VOTRIW alert error for org ${org.id}: ${orgErr?.message ?? orgErr}`);
+      }
+    }
+    log("Intraday VOTRIW alert check complete");
+  } catch (err: any) {
+    log(`VOTRIW alert FATAL: ${err?.message ?? err}`);
+  }
+}
+
 export function initNbaPhase1Scheduler(): void {
   cron.schedule("0 3 * * *", runNbaPhase1ForAllOrgs, { timezone: "America/Chicago" });
   log("NBA Phase 1 nightly scheduler registered (3:00 AM CT)");
+
+  // Intraday VOTRI alerts — every 2 hours
+  cron.schedule("0 */2 * * *", runIntradayVotriAlerts, { timezone: "America/Chicago" });
+  log("Intraday VOTRI alert scheduler registered (every 2 hours)");
 }

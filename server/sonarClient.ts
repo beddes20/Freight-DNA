@@ -50,8 +50,20 @@ export interface NationalMarketSummary {
   flatbedSignal: "hot" | "cool" | "neutral";
   dieselPerGal: number;
   dieselMoMDelta: number;
+  dieselSource: "eia" | "estimated";
   timestamp: string;
   isStale: boolean;
+}
+
+export interface MarketExtended {
+  market: string;
+  otri: number;
+  otriWoW: number;
+  votri: number | null;
+  votriWoW: number | null;
+  otvi: number | null;   // Outbound Tender Volume Index
+  hai: number | null;    // Headhaul/Backhaul Imbalance Index
+  signal: "hot" | "warm" | "cool";
 }
 
 export interface MarketOtri {
@@ -86,9 +98,20 @@ export interface LaneSpotRate {
 
 const SONAR_BASE = "https://api.freightwaves.com";
 const TOKEN_BUFFER_MS = 5 * 60 * 1000;
-const VOTRI_TTL = 4 * 60 * 60 * 1000;
-const OTRI_TTL  = 4 * 60 * 60 * 1000;
-const NTI_TTL   = 1 * 60 * 60 * 1000;
+const VOTRI_TTL   = 4 * 60 * 60 * 1000;
+const OTRI_TTL    = 4 * 60 * 60 * 1000;
+const NTI_TTL     = 1 * 60 * 60 * 1000;
+const EIA_TTL     = 24 * 60 * 60 * 1000;  // EIA diesel — 24-hour TTL
+
+// ── EIA diesel cache ──────────────────────────────────────────────────────────
+
+interface EiaDieselResult {
+  pricePerGal: number;
+  weekOverWeekDelta: number;
+  fetchedAt: number;
+}
+
+let eiaDieselCache: EiaDieselResult | null = null;
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
@@ -381,6 +404,75 @@ function otriSignal(otri: number): "hot" | "warm" | "cool" {
   return "cool";
 }
 
+// ── EIA Diesel Price Fetch ────────────────────────────────────────────────────
+// U.S. Energy Information Administration — on-highway diesel (series EMD_EPD2D_PTE_NUS_DPG)
+// Public API, no key required.
+
+async function fetchEiaDieselPrice(): Promise<EiaDieselResult | null> {
+  // Check cache
+  if (eiaDieselCache && Date.now() - eiaDieselCache.fetchedAt < EIA_TTL) {
+    return eiaDieselCache;
+  }
+
+  try {
+    const url = "https://api.eia.gov/v2/petroleum/pri/gnd/data/" +
+      "?frequency=weekly" +
+      "&data[0]=value" +
+      "&facets[series][]=EMD_EPD2D_PTE_NUS_DPG" +
+      "&sort[0][column]=period" +
+      "&sort[0][direction]=desc" +
+      "&length=2" +
+      "&out=json";
+
+    const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!resp.ok) {
+      log(`EIA diesel fetch failed: ${resp.status}`);
+      return null;
+    }
+    const json = await resp.json() as { response?: { data?: Array<{ period: string; value: string | number }> } };
+    const rows = json?.response?.data ?? [];
+
+    if (rows.length === 0) {
+      log("EIA diesel: no data rows returned");
+      return null;
+    }
+
+    const latest = parseFloat(String(rows[0]?.value ?? "0")) || 0;
+    const prior  = rows.length > 1 ? (parseFloat(String(rows[1]?.value ?? "0")) || 0) : latest;
+    const wowDelta = Math.round((latest - prior) * 1000) / 1000;
+
+    const result: EiaDieselResult = { pricePerGal: latest, weekOverWeekDelta: wowDelta, fetchedAt: Date.now() };
+    eiaDieselCache = result;
+    log(`EIA diesel: $${latest}/gal, WoW ${wowDelta >= 0 ? "+" : ""}${wowDelta}`);
+    return result;
+  } catch (err: any) {
+    log(`EIA diesel error: ${err.message}`);
+    return null;
+  }
+}
+
+// Export for external access
+export async function getEiaDieselPrice(): Promise<EiaDieselResult | null> {
+  return fetchEiaDieselPrice();
+}
+
+// ── OTVI + HAI fetch for a market ─────────────────────────────────────────────
+// OTVI.{MARKET} — Outbound Tender Volume Index
+// HAI.{MARKET}  — Headhaul/Backhaul Imbalance Index
+
+async function fetchOtviHai(marketCode: string): Promise<{ otvi: number | null; hai: number | null }> {
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const [otviData, haiData] = await Promise.all([
+    sonarGet(`/data/OTVI/${marketCode}/${yesterday}/${today}`),
+    sonarGet(`/data/HAI/${marketCode}/${yesterday}/${today}`),
+  ]);
+  return {
+    otvi: extractValue(otviData) !== null ? Math.round((extractValue(otviData) as number) * 100) / 100 : null,
+    hai:  extractValue(haiData)  !== null ? Math.round((extractValue(haiData)  as number) * 100) / 100 : null,
+  };
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -427,6 +519,9 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
   const resolvedVcrp = vcrpm ?? fallback.ntiPerMile;
   const ratesSpread  = rates !== null ? Math.round(rates * 100) / 100 : null;
 
+  // Try to fetch EIA diesel price (24-hour cache, non-blocking)
+  const eiaDiesel = await fetchEiaDieselPrice();
+
   const summary: NationalMarketSummary = {
     otri:          otri  ?? fallback.otri,
     otriWoWDelta:  otriW !== null ? Math.round(otriW * 100) / 100
@@ -440,8 +535,9 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
     ratesSpread,
     flatbedOtri:   otri  ?? fallback.flatbedOtri,
     flatbedSignal: otri !== null ? (otri > 25 ? "hot" : otri > 12 ? "neutral" : "cool") : fallback.flatbedSignal,
-    dieselPerGal:  fallback.dieselPerGal,
-    dieselMoMDelta: fallback.dieselMoMDelta,
+    dieselPerGal:  eiaDiesel?.pricePerGal ?? fallback.dieselPerGal,
+    dieselMoMDelta: eiaDiesel?.weekOverWeekDelta ?? fallback.dieselMoMDelta,
+    dieselSource:  eiaDiesel ? "eia" : "estimated",
     timestamp:     new Date().toISOString(),
     isStale:       false,
   };
@@ -466,6 +562,7 @@ function buildFallbackNational(): NationalMarketSummary {
     flatbedSignal: "neutral",
     dieselPerGal: 3.72,
     dieselMoMDelta: -0.04,
+    dieselSource: "estimated",
     timestamp: new Date().toISOString(),
     isStale: true,
   };
@@ -515,6 +612,34 @@ export async function getMarketOtris(markets: string[]): Promise<MarketOtri[]> {
   }));
 
   return results;
+}
+
+/**
+ * Fetch OTRI + OTVI + HAI for a list of markets.
+ * Extends getMarketOtris with two additional Sonar indices.
+ * Uses same 4-hour TTL logic per market.
+ */
+export async function getMarketOtrisExtended(markets: string[]): Promise<MarketExtended[]> {
+  if (markets.length === 0) return [];
+  const baseResults = await getMarketOtris(markets);
+  const extended: MarketExtended[] = [];
+
+  await Promise.all(baseResults.map(async (base) => {
+    const code = cityToMarketCode(base.market);
+    const { otvi, hai } = await fetchOtviHai(code);
+    extended.push({
+      market: base.market,
+      otri: base.otri,
+      otriWoW: base.otriWoW,
+      votri: base.votri,
+      votriWoW: base.votriWoW,
+      otvi,
+      hai,
+      signal: base.signal,
+    });
+  }));
+
+  return extended;
 }
 
 /**
@@ -640,6 +765,34 @@ export async function getLaneVotrisBatch(
   await Promise.all(
     lanes.map(async ({ origin, destination }) => {
       const votri = await getLaneVotri(origin, destination);
+      results.set(buildVotriQualifier(origin, destination), votri);
+    }),
+  );
+  return results;
+}
+
+/**
+ * Fetch VOTRI bypassing the in-memory cache, then store the fresh result.
+ * Use this for time-sensitive alert jobs that need up-to-date data.
+ */
+export async function getLaneVotriFresh(origin: string, destination: string): Promise<LaneVotri> {
+  const qualifier = buildVotriQualifier(origin, destination);
+  // Force evict any stale cache entry before fetching
+  votriCache.delete(qualifier);
+  return getLaneVotri(origin, destination);
+}
+
+/**
+ * Batch fresh VOTRI fetch — bypasses cache for all lanes.
+ * Use for alert jobs where recency is critical.
+ */
+export async function getLaneVotrisBatchFresh(
+  lanes: Array<{ origin: string; destination: string }>,
+): Promise<Map<string, LaneVotri>> {
+  const results = new Map<string, LaneVotri>();
+  await Promise.all(
+    lanes.map(async ({ origin, destination }) => {
+      const votri = await getLaneVotriFresh(origin, destination);
       results.set(buildVotriQualifier(origin, destination), votri);
     }),
   );

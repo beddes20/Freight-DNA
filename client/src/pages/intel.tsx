@@ -15,9 +15,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   AlertTriangle, TrendingUp, TrendingDown, Zap, Truck, DollarSign,
   Radio, Clock, BarChart2, ArrowRight, Send, Users, Building2,
-  Trophy, Package, ChevronRight,
+  Trophy, Package, ChevronRight, RefreshCw, CloudRain, Sparkles,
+  MapPin, ThermometerSun, Activity,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -122,6 +129,9 @@ interface SonarMarketTrend {
   otri: number;
   otriWoW: number;
   votri: number | null;
+  votriWoW: number | null;
+  otvi: number | null;
+  hai: number | null;
   signal: "hot" | "warm" | "cool";
   trendDir: "↑" | "↓" | "→";
   ibOtri: number | null;
@@ -129,6 +139,36 @@ interface SonarMarketTrend {
 
 interface ExecutiveReportWithBrief extends ExecutiveReport {
   executiveBrief?: string | null;
+}
+
+interface AiBrief {
+  bullets: string[];
+  generatedAt: string;
+  isStale: boolean;
+}
+
+interface WeatherFlag {
+  city: string;
+  severity: "severe" | "moderate";
+  description: string;
+  maxCode: number;
+}
+
+interface MyLanesRow {
+  origin: string;
+  destination: string;
+  qualifier: string;
+  votri: number;
+  votriWoW: number;
+  signal: "hot" | "warm" | "cool";
+  avgCustomerRate: number | null;
+  ntiBaseline: number | null;
+  rateDelta: "above" | "below" | "unknown";
+  rateDeltaPct: number | null;
+  weatherOrigin: WeatherFlag | null;
+  weatherDest: WeatherFlag | null;
+  totalLoads: number;
+  companyName: string;
 }
 
 interface IntelPayload {
@@ -195,9 +235,9 @@ function MarketPulseStrip({ pulse, isStale, timestamp }: { pulse: MarketPulse; i
       deltaColor: pulse.flatbedSignal === "hot" ? "text-red-400" : pulse.flatbedSignal === "cool" ? "text-green-400" : "text-amber-400",
     },
     {
-      label: "Diesel/gal",
+      label: "Diesel/gal (EIA)",
       value: `$${pulse.dieselPerGal.toFixed(2)}`,
-      delta: `${pulse.dieselMoMDelta > 0 ? "▲" : "▼"} $${Math.abs(pulse.dieselMoMDelta).toFixed(2)} MoM`,
+      delta: `${pulse.dieselMoMDelta > 0 ? "▲" : "▼"} $${Math.abs(pulse.dieselMoMDelta).toFixed(3)} WoW`,
       deltaColor: pulse.dieselMoMDelta > 0 ? "text-red-400" : "text-green-400",
     },
   ];
@@ -611,6 +651,227 @@ function ExecutiveReportSection({ report }: { report: ExecutiveReportWithBrief }
   );
 }
 
+// ── AI Brief Panel ────────────────────────────────────────────────────────────
+
+function AiBriefPanel({ brief, isLoading, onRefresh, isFetchingRefresh }: {
+  brief: AiBrief | undefined;
+  isLoading: boolean;
+  onRefresh: () => void;
+  isFetchingRefresh: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="mb-6 rounded-xl border p-4 bg-card">
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles className="h-4 w-4 text-violet-500" />
+          <span className="text-sm font-bold uppercase tracking-wider text-muted-foreground">AI Daily Brief</span>
+        </div>
+        <div className="space-y-2">
+          {[1, 2, 3].map(i => <Skeleton key={i} className="h-4 w-full" />)}
+        </div>
+      </div>
+    );
+  }
+
+  if (!brief) return null;
+
+  return (
+    <div
+      className="mb-6 rounded-xl border overflow-hidden"
+      style={{ background: "linear-gradient(135deg, #1a0a2e 0%, #16213e 100%)", borderColor: "#4c1d95" }}
+      data-testid="panel-ai-brief"
+    >
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-violet-900/50">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-violet-400" />
+          <span className="text-xs font-bold uppercase tracking-wider text-violet-300">AI Daily Brief</span>
+          {brief.isStale && (
+            <span className="text-[10px] text-amber-400 font-medium">⚠ Stale</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-white/30">
+            {new Date(brief.generatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onRefresh}
+            disabled={isFetchingRefresh}
+            className="h-6 w-6 p-0 text-violet-400 hover:text-violet-200 hover:bg-violet-900/40"
+            data-testid="button-refresh-brief"
+          >
+            <RefreshCw className={`h-3 w-3 ${isFetchingRefresh ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
+      </div>
+      <div className="px-4 py-3 space-y-2">
+        {brief.bullets.map((bullet, i) => (
+          <div key={i} className="flex items-start gap-2.5" data-testid={`text-brief-bullet-${i}`}>
+            <div className="mt-1 h-1.5 w-1.5 rounded-full bg-violet-400 shrink-0" />
+            <p className="text-sm text-white/80 leading-relaxed">{bullet}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── My Lanes Heat Panel ───────────────────────────────────────────────────────
+
+function MyLanesPanel({ lanes, isLoading, lastUpdated }: {
+  lanes: MyLanesRow[];
+  isLoading: boolean;
+  lastUpdated: string | null;
+}) {
+  if (isLoading) {
+    return (
+      <div className="mb-6 rounded-xl border p-4 bg-card">
+        <div className="flex items-center gap-2 mb-3">
+          <MapPin className="h-4 w-4 text-blue-500" />
+          <span className="text-sm font-bold uppercase tracking-wider text-muted-foreground">My Lanes</span>
+        </div>
+        <div className="space-y-2">
+          {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full rounded-lg" />)}
+        </div>
+      </div>
+    );
+  }
+
+  if (lanes.length === 0) return null;
+
+  const hotLanes = lanes.filter(l => l.signal === "hot");
+  const warmLanes = lanes.filter(l => l.signal === "warm");
+  const coolLanes = lanes.filter(l => l.signal === "cool");
+
+  const SignalDot = ({ signal }: { signal: "hot" | "warm" | "cool" }) => {
+    const colors = { hot: "#ef4444", warm: "#f59e0b", cool: "#22c55e" };
+    return <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: colors[signal] }} />;
+  };
+
+  const WeatherBadge = ({ flag, label }: { flag: WeatherFlag | null; label: string }) => {
+    if (!flag) return null;
+    const isSevere = flag.severity === "severe";
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className={`inline-flex items-center gap-0.5 text-[9px] font-bold rounded px-1 py-0.5 cursor-help ${isSevere ? "text-red-300 bg-red-900/40" : "text-amber-300 bg-amber-900/40"}`}>
+              <CloudRain className="h-2.5 w-2.5" />
+              {label}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-[200px] text-xs">
+            {label}: {flag.description} (WMO {flag.maxCode})
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  };
+
+  return (
+    <div className="mb-6" data-testid="panel-my-lanes">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+          <MapPin className="h-4 w-4 text-blue-500" /> My Lanes — Personalized Heat Map
+        </h3>
+        {lastUpdated && (
+          <span className="text-[10px] text-muted-foreground">
+            Updated {new Date(lastUpdated).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}
+          </span>
+        )}
+      </div>
+
+      {/* Heat summary pills */}
+      <div className="flex gap-2 mb-3 flex-wrap">
+        {hotLanes.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300">
+            🔴 {hotLanes.length} Hot
+          </span>
+        )}
+        {warmLanes.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+            🟡 {warmLanes.length} Warm
+          </span>
+        )}
+        {coolLanes.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300">
+            🟢 {coolLanes.length} Cool
+          </span>
+        )}
+      </div>
+
+      <div className="border rounded-xl overflow-hidden">
+        <table className="w-full text-sm" data-testid="table-my-lanes">
+          <thead>
+            <tr className="border-b bg-muted/50">
+              <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Lane</th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">VOTRI</th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">WoW</th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden md:table-cell">Rate vs NTI</th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">Signal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lanes.map((lane, i) => {
+              const sigBg = lane.signal === "hot"
+                ? "bg-red-50 dark:bg-red-950/10"
+                : lane.signal === "warm"
+                ? "bg-amber-50 dark:bg-amber-950/10"
+                : "";
+              const votriColor = lane.signal === "hot"
+                ? "text-red-600 dark:text-red-400"
+                : lane.signal === "warm"
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-green-600 dark:text-green-400";
+              const wowColor = lane.votriWoW > 0 ? "text-red-500" : lane.votriWoW < 0 ? "text-green-500" : "text-muted-foreground";
+              const rateColor = lane.rateDelta === "above" ? "text-green-600 dark:text-green-400" : lane.rateDelta === "below" ? "text-red-600 dark:text-red-400" : "text-muted-foreground";
+
+              return (
+                <tr key={lane.qualifier} className={`border-b last:border-0 ${sigBg}`} data-testid={`row-my-lane-${i}`}>
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <SignalDot signal={lane.signal} />
+                      <span className="font-medium capitalize">{lane.origin}</span>
+                      <span className="text-muted-foreground">→</span>
+                      <span className="font-medium capitalize">{lane.destination}</span>
+                      <WeatherBadge flag={lane.weatherOrigin} label="Orig" />
+                      <WeatherBadge flag={lane.weatherDest} label="Dest" />
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5 pl-3.5">{lane.companyName} · {lane.totalLoads} loads</div>
+                  </td>
+                  <td className={`px-4 py-2.5 text-right font-mono font-bold ${votriColor}`}>
+                    {lane.votri.toFixed(1)}%
+                  </td>
+                  <td className={`px-4 py-2.5 text-right font-mono text-xs hidden sm:table-cell ${wowColor}`}>
+                    {lane.votriWoW > 0 ? "+" : ""}{lane.votriWoW.toFixed(1)}pp
+                  </td>
+                  <td className={`px-4 py-2.5 text-right text-xs hidden md:table-cell ${rateColor}`}>
+                    {lane.rateDeltaPct !== null
+                      ? `${lane.rateDelta === "above" ? "▲" : "▼"} ${Math.abs(lane.rateDeltaPct).toFixed(1)}% vs NTI`
+                      : "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      lane.signal === "hot"
+                        ? "text-red-600 bg-red-100 border-red-300 dark:bg-red-900/30 dark:text-red-300"
+                        : lane.signal === "warm"
+                        ? "text-amber-600 bg-amber-100 border-amber-300 dark:bg-amber-900/30 dark:text-amber-300"
+                        : "text-green-600 bg-green-100 border-green-300 dark:bg-green-900/30 dark:text-green-300"
+                    }`}>
+                      {lane.signal === "hot" ? "🔴 Hot" : lane.signal === "warm" ? "🟡 Warm" : "🟢 Cool"}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
 function IntelSkeleton() {
@@ -632,24 +893,71 @@ export default function IntelPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [selectedUserId, setSelectedUserId] = useState<string>("all");
+  const [briefRefreshKey, setBriefRefreshKey] = useState(0);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
 
-  if (user && user.role !== "admin") {
+  const isAdmin = user?.role === "admin";
+  const allowedRoles = ["admin", "account_manager", "national_account_manager"];
+  if (user && !allowedRoles.includes(user.role)) {
     setLocation("/");
     return null;
   }
 
-  const queryUserId = selectedUserId !== "all" ? selectedUserId : undefined;
+  const queryUserId = isAdmin && selectedUserId !== "all" ? selectedUserId : undefined;
 
-  const { data, isLoading, error, isFetching } = useQuery<IntelPayload>({
+  const { data, isLoading, error, isFetching, dataUpdatedAt } = useQuery<IntelPayload>({
     queryKey: ["/api/intel", queryUserId ?? "all"],
     queryFn: async () => {
       const url = queryUserId ? `/api/intel?userId=${encodeURIComponent(queryUserId)}` : "/api/intel";
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load intel");
-      return res.json();
+      const result = await res.json();
+      setLastRefreshedAt(new Date());
+      return result;
     },
     staleTime: 5 * 60 * 1000,
+    refetchInterval: 15 * 60 * 1000, // 15-minute auto-refresh
     refetchOnWindowFocus: false,
+  });
+
+  // AI Daily Brief query — per current user (not filtered by selectedUserId for main intel)
+  const {
+    data: aiBrief,
+    isLoading: briefLoading,
+    isFetching: briefFetching,
+  } = useQuery<AiBrief>({
+    queryKey: ["/api/intel/brief", briefRefreshKey],
+    queryFn: async () => {
+      const url = briefRefreshKey > 0
+        ? "/api/intel/brief?refresh=true"
+        : "/api/intel/brief";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load brief");
+      return res.json();
+    },
+    staleTime: 4 * 60 * 60 * 1000, // 4 hours
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+
+  // My Lanes query — respects selectedUserId filter
+  const {
+    data: myLanesData,
+    isLoading: myLanesLoading,
+  } = useQuery<{ lanes: MyLanesRow[]; lastUpdated: string; userId: string }>({
+    queryKey: ["/api/intel/my-lanes", queryUserId ?? "self"],
+    queryFn: async () => {
+      const url = queryUserId
+        ? `/api/intel/my-lanes?userId=${encodeURIComponent(queryUserId)}`
+        : "/api/intel/my-lanes";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load my lanes");
+      return res.json();
+    },
+    staleTime: 10 * 60 * 1000,
+    refetchInterval: 15 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: 1,
   });
 
   const sendNowMutation = useMutation({
@@ -668,6 +976,12 @@ export default function IntelPage() {
       });
     },
   });
+
+  const handleManualRefresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/intel"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/intel/my-lanes"] });
+    setLastRefreshedAt(new Date());
+  };
 
   if (isLoading) {
     return (
@@ -692,7 +1006,9 @@ export default function IntelPage() {
 
   const { dailyInsights, biweeklyScorecard, executiveReport, availableReps } = data;
   const { overallStats } = biweeklyScorecard;
-  const isFiltered = selectedUserId !== "all";
+  // For admins: isFiltered means they've selected a specific rep in the dropdown
+  // For non-admins: always showing their own data (not "filtered" in the UI sense)
+  const isFiltered = isAdmin && selectedUserId !== "all";
   const viewLabel = isFiltered ? (availableReps.find(r => r.id === selectedUserId)?.name ?? "Rep") : null;
 
   return (
@@ -747,38 +1063,73 @@ export default function IntelPage() {
 
       {/* ── Controls Bar ────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-6">
-        {/* User Dropdown */}
-        <div className="flex items-center gap-2 flex-1">
-          <Users className="h-4 w-4 text-muted-foreground shrink-0" />
-          <Select value={selectedUserId} onValueChange={setSelectedUserId}>
-            <SelectTrigger className="w-56" data-testid="select-rep-filter" disabled={isFetching}>
-              <SelectValue placeholder="All reps" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Reps (Org-Wide)</SelectItem>
-              {availableReps.map(rep => (
-                <SelectItem key={rep.id} value={rep.id} data-testid={`option-rep-${rep.id}`}>
-                  {rep.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {isFetching && <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>}
+        {/* User Dropdown — admin only */}
+        {isAdmin && (
+          <div className="flex items-center gap-2 flex-1">
+            <Users className="h-4 w-4 text-muted-foreground shrink-0" />
+            <Select value={selectedUserId} onValueChange={setSelectedUserId}>
+              <SelectTrigger className="w-56" data-testid="select-rep-filter" disabled={isFetching}>
+                <SelectValue placeholder="All reps" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Reps (Org-Wide)</SelectItem>
+                {availableReps.map(rep => (
+                  <SelectItem key={rep.id} value={rep.id} data-testid={`option-rep-${rep.id}`}>
+                    {rep.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {isFetching && <span className="text-xs text-muted-foreground animate-pulse">Loading…</span>}
+          </div>
+        )}
+
+        {/* Last updated + manual refresh */}
+        <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0 ml-auto">
+          {lastRefreshedAt && (
+            <span data-testid="text-last-updated">
+              Updated {lastRefreshedAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}
+            </span>
+          )}
+          {!isAdmin && isFetching && <span className="animate-pulse">Loading…</span>}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleManualRefresh}
+            disabled={isFetching}
+            data-testid="button-manual-refresh"
+            className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+            title="Refresh market data"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`} />
+          </Button>
         </div>
 
-        {/* Send Report Now */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => sendNowMutation.mutate()}
-          disabled={sendNowMutation.isPending}
-          data-testid="button-send-now"
-          className="flex items-center gap-2 shrink-0"
-        >
-          <Send className="h-3.5 w-3.5" />
-          {sendNowMutation.isPending ? "Sending…" : "Send Report Now"}
-        </Button>
+        {/* Send Report Now — admin only */}
+        {isAdmin && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => sendNowMutation.mutate()}
+            disabled={sendNowMutation.isPending}
+            data-testid="button-send-now"
+            className="flex items-center gap-2 shrink-0"
+          >
+            <Send className="h-3.5 w-3.5" />
+            {sendNowMutation.isPending ? "Sending…" : "Send Report Now"}
+          </Button>
+        )}
       </div>
+
+      {/* ══════════════════════════════════════════════════════
+          SECTION: AI BRIEF (top of page, most prominent)
+      ══════════════════════════════════════════════════════ */}
+      <AiBriefPanel
+        brief={aiBrief}
+        isLoading={briefLoading}
+        onRefresh={() => setBriefRefreshKey(k => k + 1)}
+        isFetchingRefresh={briefFetching}
+      />
 
       {/* ══════════════════════════════════════════════════════
           SECTION: DAILY INSIGHTS
@@ -792,6 +1143,13 @@ export default function IntelPage() {
           pulse={dailyInsights.marketPulse}
           isStale={dailyInsights.sonarIsStale}
           timestamp={dailyInsights.sonarTimestamp}
+        />
+
+        {/* ── My Lanes Heat Panel ─────────────────────────────── */}
+        <MyLanesPanel
+          lanes={myLanesData?.lanes ?? []}
+          isLoading={myLanesLoading}
+          lastUpdated={myLanesData?.lastUpdated ?? null}
         />
 
         {/* ── Sonar Market Trend Table (top-20 org markets) ───── */}
@@ -808,6 +1166,26 @@ export default function IntelPage() {
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">OB OTRI</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">IB OTRI</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">VOTRI</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden lg:table-cell">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger className="cursor-help underline decoration-dotted">OTVI</TooltipTrigger>
+                          <TooltipContent className="text-xs max-w-[200px]">
+                            Outbound Tender Volume Index — measures load volume relative to capacity
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden lg:table-cell">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger className="cursor-help underline decoration-dotted">HAI</TooltipTrigger>
+                          <TooltipContent className="text-xs max-w-[200px]">
+                            Headhaul-Backhaul Imbalance Index — higher = more headhaul demand vs. backhaul
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">WoW</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground hidden sm:table-cell">Trend</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">Signal</th>
@@ -820,6 +1198,7 @@ export default function IntelPage() {
                       : m.signal === "warm"
                       ? "text-amber-600 bg-amber-100 dark:bg-amber-900/30 border-amber-300"
                       : "text-green-600 bg-green-100 dark:bg-green-900/30 border-green-300";
+                    const wowVal = m.votriWoW ?? m.otriWoW;
                     return (
                       <tr key={m.market} className={`border-b last:border-0 ${i % 2 === 0 ? "" : "bg-muted/20"}`} data-testid={`row-market-trend-${m.market}`}>
                         <td className="px-4 py-2.5 font-medium capitalize">{m.market}</td>
@@ -830,8 +1209,14 @@ export default function IntelPage() {
                         <td className="px-4 py-2.5 text-right font-mono text-muted-foreground hidden sm:table-cell">
                           {m.votri !== null ? `${m.votri.toFixed(1)}%` : "—"}
                         </td>
-                        <td className={`px-4 py-2.5 text-right font-mono ${m.otriWoW > 0 ? "text-red-600" : m.otriWoW < 0 ? "text-green-600" : "text-muted-foreground"}`}>
-                          {m.otriWoW > 0 ? "+" : ""}{m.otriWoW.toFixed(1)}pp
+                        <td className="px-4 py-2.5 text-right font-mono text-muted-foreground hidden lg:table-cell">
+                          {m.otvi !== null ? m.otvi.toFixed(0) : "—"}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono text-muted-foreground hidden lg:table-cell">
+                          {m.hai !== null ? m.hai.toFixed(2) : "—"}
+                        </td>
+                        <td className={`px-4 py-2.5 text-right font-mono ${wowVal > 0 ? "text-red-600" : wowVal < 0 ? "text-green-600" : "text-muted-foreground"}`}>
+                          {wowVal > 0 ? "+" : ""}{wowVal.toFixed(1)}pp
                         </td>
                         <td className="px-4 py-2.5 text-right text-base hidden sm:table-cell">{m.trendDir}</td>
                         <td className="px-4 py-2.5 text-right">
@@ -993,9 +1378,9 @@ export default function IntelPage() {
       </section>
 
       {/* ══════════════════════════════════════════════════════
-          SECTION: EXECUTIVE REPORT (always org-wide)
+          SECTION: EXECUTIVE REPORT (admin only, always org-wide)
       ══════════════════════════════════════════════════════ */}
-      <ExecutiveReportSection report={executiveReport} />
+      {isAdmin && <ExecutiveReportSection report={executiveReport} />}
     </div>
   );
 }

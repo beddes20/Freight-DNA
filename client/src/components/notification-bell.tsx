@@ -33,6 +33,7 @@ const typeIcon: Record<string, React.ReactNode> = {
   lane_assigned:          <Truck className="h-3.5 w-3.5 text-amber-500" />,
   momentum_drop:          <TrendingDown className="h-3.5 w-3.5 text-red-500" />,
   momentum_weekly_digest: <BarChart2 className="h-3.5 w-3.5 text-blue-500" />,
+  votri_alert:            <TrendingDown className="h-3.5 w-3.5 text-orange-500" />,
 };
 
 

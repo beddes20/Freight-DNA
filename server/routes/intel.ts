@@ -3,6 +3,8 @@
  * GET  /api/intel          — returns Daily Insights + Bi-Weekly Scorecard + Executive Report
  *   ?userId=xxx            — filters lane scorecard/insights to a specific rep's lanes
  * GET  /api/intel/users    — returns list of reps who appear in financial data
+ * GET  /api/intel/brief    — AI-generated personalized daily brief (4-hour cache)
+ * GET  /api/intel/my-lanes — personalized heat panel for the current user's lanes
  * POST /api/intel/send-now — triggers an immediate intel email to all org admins
  */
 
@@ -14,11 +16,13 @@ import { isExcludedRow } from "../financialHelpers";
 import {
   getNationalMarketSummary,
   getMarketOtris,
+  getMarketOtrisExtended,
   getLaneSpotRate,
   getLaneVotrisBatch,
   buildVotriQualifier,
   type NationalMarketSummary,
   type MarketOtri,
+  type MarketExtended,
   type LaneVotri,
 } from "../sonarClient";
 import {
@@ -30,13 +34,42 @@ import {
   getPerplexityMarketContext,
   type MarketContextItem,
 } from "../aiHelpers";
+import { getWeatherFlagsForCities, type WeatherFlag } from "../weatherService";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
+import OpenAI from "openai";
 
 function logIntel(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
   console.log(`${t} [intel] ${msg}`);
 }
+
+// ── OpenAI client (lazy-initialized) ─────────────────────────────────────────
+
+let _openai: OpenAI | null = null;
+
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    if (!apiKey) {
+      throw new Error("AI_INTEGRATIONS_OPENAI_API_KEY is not configured — AI brief unavailable");
+    }
+    _openai = new OpenAI({ apiKey, baseURL });
+  }
+  return _openai;
+}
+
+// ── AI Brief cache (4-hour TTL per user) ─────────────────────────────────────
+
+interface AiBriefResult {
+  bullets: string[];
+  generatedAt: string;
+  isStale: boolean;
+}
+
+const aiBriefCache = new Map<string, { result: AiBriefResult; fetchedAt: number }>();
+const AI_BRIEF_TTL = 4 * 60 * 60 * 1000; // 4 hours
 
 // ── Bi-Weekly refresh cycle tracking ─────────────────────────────────────────
 
@@ -489,6 +522,252 @@ function computeExecutiveReport(allLanes: LaneData[], allUsers: any[], sixWeekKe
   return { topCompanies, repLeaderboard, healthDistribution, equipmentBreakdown, weeklyTrend };
 }
 
+// ── AI Daily Brief generation ─────────────────────────────────────────────────
+
+async function generateAiBrief(
+  userId: string,
+  userName: string,
+  orgId: string,
+  topAccounts: Array<{ name: string; revenue: number }>,
+  topLanes: Array<{ origin: string; destination: string; votri?: number; votriWoW?: number; marketOtri?: number; marketOtriWoW?: number }>,
+  national: NationalMarketSummary,
+): Promise<AiBriefResult> {
+  const cacheKey = `${orgId}:${userId}`;
+  const cached = aiBriefCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < AI_BRIEF_TTL) {
+    return cached.result;
+  }
+
+  const accountNames = topAccounts.slice(0, 10).map(a => `${a.name} ($${Math.round(a.revenue / 1000)}K)`).join(", ");
+  const lanesText = topLanes.slice(0, 15).map(l => {
+    const votriStr = l.votri !== undefined ? ` VOTRI=${l.votri?.toFixed(1)}% (WoW ${l.votriWoW !== undefined ? (l.votriWoW! >= 0 ? "+" : "") + l.votriWoW?.toFixed(1) : "n/a"}pp)` : "";
+    const otriStr = l.marketOtri !== undefined ? `, market OTRI=${l.marketOtri.toFixed(1)}% (WoW ${l.marketOtriWoW !== undefined ? (l.marketOtriWoW >= 0 ? "+" : "") + l.marketOtriWoW.toFixed(1) : "n/a"}pp)` : "";
+    return `${l.origin} → ${l.destination}${votriStr}${otriStr}`;
+  }).join("\n");
+
+  const prompt = `You are a freight intelligence analyst briefing ${userName}, a freight sales rep.
+
+Today's national market conditions:
+- National OTRI: ${national.otri.toFixed(2)}% (WoW: ${national.otriWoWDelta >= 0 ? "+" : ""}${national.otriWoWDelta.toFixed(1)}pp)
+- NTI Spot Rate: $${Math.round(national.ntiPerMove).toLocaleString()}/move (WoW: ${national.ntiWoWDelta >= 0 ? "+" : ""}$${Math.abs(national.ntiWoWDelta).toFixed(0)})
+- Contract Rate: $${national.ntiPerMile.toFixed(2)}/mi
+- Diesel: $${national.dieselPerGal.toFixed(2)}/gal (WoW: ${national.dieselMoMDelta >= 0 ? "+" : ""}$${Math.abs(national.dieselMoMDelta).toFixed(3)})
+
+${userName}'s top accounts (by revenue): ${accountNames || "No account data available"}
+
+${userName}'s active lanes with market signals (VOTRI = van tender rejection rate; market OTRI = overall tender rejection rate for the origin market):
+${lanesText || "No lane data available"}
+
+Write 3-5 concise, plain-English action bullets that ${userName} can act on TODAY. Each bullet should:
+- Be specific to their accounts or lanes (not generic market commentary)
+- Connect a market signal to a concrete sales action
+- Be 1-2 sentences max
+- Start with a verb (e.g. "Call...", "Lock in...", "Flag...", "Consider...")
+
+Format: Return ONLY the bullet list, one bullet per line, starting each with "• ".`;
+
+  try {
+    const completion = await getOpenAI().chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 400,
+      temperature: 0.7,
+    });
+
+    const rawText = completion.choices[0]?.message?.content ?? "";
+    const bullets = rawText
+      .split("\n")
+      .map(line => line.replace(/^[•\-\*]\s*/, "").trim())
+      .filter(line => line.length > 20)
+      .slice(0, 5);
+
+    const result: AiBriefResult = {
+      bullets: bullets.length > 0 ? bullets : ["Market data loaded — no specific insights generated at this time."],
+      generatedAt: new Date().toISOString(),
+      isStale: false,
+    };
+    aiBriefCache.set(cacheKey, { result, fetchedAt: Date.now() });
+    logIntel(`AI brief generated for user ${userId} (${bullets.length} bullets)`);
+    return result;
+  } catch (err: any) {
+    logIntel(`AI brief error for user ${userId}: ${err.message}`);
+    const fallback: AiBriefResult = {
+      bullets: ["Market intelligence brief temporarily unavailable. SONAR data is live — check market pulse below."],
+      generatedAt: new Date().toISOString(),
+      isStale: true,
+    };
+    aiBriefCache.set(cacheKey, { result: fallback, fetchedAt: Date.now() - AI_BRIEF_TTL + 15 * 60 * 1000 }); // retry in 15min
+    return fallback;
+  }
+}
+
+// ── Awarded RFP lane extraction ───────────────────────────────────────────────
+
+/**
+ * Parse an award lane string like "Atlanta, GA → Chicago, IL (500 loads)"
+ * into { origin, destination } using the "→" separator as the split point.
+ * Returns null if unparseable.
+ */
+function parseAwardLane(laneStr: string): { origin: string; destination: string } | null {
+  const sep = "→";
+  const arrowIdx = laneStr.indexOf(sep);
+  if (arrowIdx < 0) return null;
+  let origin = laneStr.slice(0, arrowIdx).trim();
+  let dest = laneStr.slice(arrowIdx + sep.length).trim();
+  // Strip trailing "(NNN loads)" from destination
+  dest = dest.replace(/\s*\(\d+\s+loads?\)\s*$/i, "").trim();
+  // Normalize: take just the city name before the comma (if "City, ST" format)
+  const originCity = origin.split(",")[0].trim().toLowerCase();
+  const destCity = dest.split(",")[0].trim().toLowerCase();
+  if (!originCity || !destCity) return null;
+  return { origin: originCity, destination: destCity };
+}
+
+/**
+ * Returns a deduplicated list of { origin, destination } pairs from awarded RFPs
+ * for the given user (via company salesPersonId ownership).
+ * Awards with empty lanes arrays are skipped.
+ */
+async function getAwardedRfpLanesForUser(
+  orgId: string,
+  userId: string,
+): Promise<Array<{ origin: string; destination: string; companyName: string }>> {
+  try {
+    // Load org companies owned by this user and all org awards
+    const [allCompanies, allAwards] = await Promise.all([
+      storage.getCompanies(orgId),
+      storage.getAwards(),
+    ]);
+    const userCompanyIds = new Set(
+      allCompanies
+        .filter((c: any) => c.salesPersonId === userId)
+        .map((c: any) => c.id),
+    );
+    const companyNameById = new Map<string, string>(allCompanies.map((c: any) => [c.id, c.name]));
+
+    const lanes: Array<{ origin: string; destination: string; companyName: string }> = [];
+    const seen = new Set<string>();
+    for (const award of allAwards) {
+      if (!userCompanyIds.has(award.companyId)) continue;
+      if (!award.lanes || award.lanes.length === 0) continue;
+      const companyName = companyNameById.get(award.companyId) ?? "Unknown";
+      for (const laneStr of award.lanes) {
+        const parsed = parseAwardLane(laneStr);
+        if (!parsed) continue;
+        const key = `${parsed.origin}|${parsed.destination}|${companyName}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          lanes.push({ ...parsed, companyName });
+        }
+      }
+    }
+    return lanes;
+  } catch {
+    return []; // non-blocking
+  }
+}
+
+// ── My Lanes personalized heat panel ─────────────────────────────────────────
+
+export interface MyLanesRow {
+  origin: string;
+  destination: string;
+  qualifier: string;
+  votri: number;
+  votriWoW: number;
+  signal: "hot" | "warm" | "cool";
+  avgCustomerRate: number | null;
+  ntiBaseline: number | null;
+  rateDelta: "above" | "below" | "unknown";
+  rateDeltaPct: number | null;
+  weatherOrigin: WeatherFlag | null;
+  weatherDest: WeatherFlag | null;
+  totalLoads: number;
+  companyName: string;
+}
+
+async function computeMyLanes(
+  lanes: LaneData[],
+  national: NationalMarketSummary,
+): Promise<MyLanesRow[]> {
+  if (lanes.length === 0) return [];
+
+  // Deduplicate by (origin, destination, companyName) to preserve per-account context
+  // while avoiding duplicate entries from multiple weeks of the same load.
+  const dedupedLanes = Array.from(
+    new Map(lanes.map(l => [`${l.origin}|${l.destination}|${l.companyName}`, l])).values()
+  );
+
+  // Fetch VOTRI for unique O→D pairs (avoid hammering SONAR with duplicate queries)
+  const uniqueOdPairs = Array.from(
+    new Map(dedupedLanes.map(l => [`${l.origin}|${l.destination}`, { origin: l.origin, destination: l.destination }])).values()
+  );
+  const votriMap = await getLaneVotrisBatch(uniqueOdPairs);
+
+  // Collect unique city strings for weather lookup
+  // We pass the raw city strings and let getCityCoords normalize them (handles "city" and "city, st")
+  const allCities = Array.from(new Set([
+    ...dedupedLanes.map(l => l.origin),
+    ...dedupedLanes.map(l => l.destination),
+  ])).filter(Boolean);
+
+  // Weather flags — graceful on failure, non-blocking
+  let weatherMap = new Map<string, WeatherFlag>();
+  try {
+    weatherMap = await getWeatherFlagsForCities(allCities);
+  } catch {
+    // weather failure is non-blocking
+  }
+
+  const ntiBaseline = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
+
+  const rows: MyLanesRow[] = dedupedLanes.map(lane => {
+    const qualifier = buildVotriQualifier(lane.origin, lane.destination);
+    const votriData = votriMap.get(qualifier);
+    const votri = votriData?.votri ?? 0;
+    const votriWoW = votriData?.votriWoW ?? 0;
+    const signal = votriData?.signal ?? "cool";
+
+    // Rate benchmark: compare avg customer rate/mile vs NTI baseline
+    // avgPayPerLoad is customer revenue per load, assume 500mi avg distance
+    const avgMiles = 500;
+    const avgCustomerRatePerMile = lane.avgPayPerLoad > 0 ? lane.avgPayPerLoad / avgMiles : null;
+    let rateDelta: "above" | "below" | "unknown" = "unknown";
+    let rateDeltaPct: number | null = null;
+
+    if (avgCustomerRatePerMile !== null && ntiBaseline > 0) {
+      const delta = ((avgCustomerRatePerMile - ntiBaseline) / ntiBaseline) * 100;
+      rateDelta = delta >= 0 ? "above" : "below";
+      rateDeltaPct = Math.round(delta * 10) / 10;
+    }
+
+    // Weather map keys are normalized lowercased versions of what was passed to getWeatherFlagsForCities
+    const weatherOrigin = weatherMap.get(lane.origin.toLowerCase().trim()) ?? null;
+    const weatherDest = weatherMap.get(lane.destination.toLowerCase().trim()) ?? null;
+
+    return {
+      origin: lane.origin,
+      destination: lane.destination,
+      qualifier,
+      votri,
+      votriWoW,
+      signal,
+      avgCustomerRate: avgCustomerRatePerMile !== null ? Math.round(avgCustomerRatePerMile * 100) / 100 : null,
+      ntiBaseline: Math.round(ntiBaseline * 100) / 100,
+      rateDelta,
+      rateDeltaPct,
+      weatherOrigin,
+      weatherDest,
+      totalLoads: lane.totalLoads,
+      companyName: lane.companyName,
+    };
+  });
+
+  // Sort by VOTRI descending (hottest lanes first), then by totalLoads descending
+  rows.sort((a, b) => b.votri !== a.votri ? b.votri - a.votri : b.totalLoads - a.totalLoads);
+  return rows;
+}
+
 // ── Core intel computation (shared between GET and send-now) ──────────────────
 
 export async function computeIntelPayload(orgId: string, filterUserId?: string) {
@@ -517,18 +796,16 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
   // ── Sonar data ────────────────────────────────────────────────────────────
   const national = await getNationalMarketSummary();
 
-  // Collect all unique origin and destination markets across all lanes
+  // Collect all unique origin and destination markets across all lanes (for OTRI lookup used by scorecard/alerts)
   const uniqueOrigins = Array.from(new Set(allLanes.map(l => l.origin))).filter(Boolean);
   const uniqueDestinations = Array.from(new Set(allLanes.map(l => l.destination))).filter(Boolean);
   const allUniqueMarkets = Array.from(new Set([...uniqueOrigins, ...uniqueDestinations]));
 
-  // Fetch OTRI for all markets (origins + destinations) — no cap;
-  // getMarketOtris fetches in parallel per-market with 4-hour per-market cache.
-  const marketOtris = await getMarketOtris(allUniqueMarkets);
+  // Fetch OTRI for all markets — used by computeLaneAlerts, scorecard, buy rate
+  const marketOtris = await getMarketOtris(allUniqueMarkets).catch(() => [] as MarketOtri[]);
   const otriByMarket = new Map(marketOtris.map(m => [m.market.toLowerCase(), m]));
 
-  // ── VOTRI: fetch for ALL lanes owned by the user (not capped at top N) ────
-  // Use getLaneVotrisBatch for parallelism — already respects 4-hour cache per qualifier
+  // VOTRI: fetch for ALL lanes owned by the user (not capped at top N)
   const allLanePairs = lanes.map(l => ({ origin: l.origin, destination: l.destination }));
   let votriByQualifier = new Map<string, LaneVotri>();
   if (allLanePairs.length > 0) {
@@ -536,12 +813,26 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
     logIntel(`VOTRI fetched for ${votriByQualifier.size} lanes`);
   }
 
+  // Market trend table: scope to the active lane set (filtered by rep if applicable).
+  // Rank markets by load count so the rep's highest-volume markets appear first,
+  // then cap at top 10. Also fetch OTVI/HAI extended indices for the trend table.
+  const marketLoadCount = new Map<string, number>();
+  for (const l of lanes) {
+    marketLoadCount.set(l.origin, (marketLoadCount.get(l.origin) ?? 0) + l.totalLoads);
+    marketLoadCount.set(l.destination, (marketLoadCount.get(l.destination) ?? 0) + l.totalLoads);
+  }
+  const top10PersonalizedMarkets = Array.from(marketLoadCount.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([m]) => m)
+    .filter(Boolean)
+    .slice(0, 10);
+
+  const extendedMarkets = await getMarketOtrisExtended(top10PersonalizedMarkets).catch(() => [] as MarketExtended[]);
+
   // ── Sonar Market Trends table ──────────────────────────────────────────────
-  // Sort by OTRI descending; top 20 shown. Every market that appears as a
-  // destination gets ibOtri populated — including markets that are BOTH origin
-  // and destination (mixed-use), so no IB data is silently dropped.
+  // Sorted by OTRI descending. ibOtri populated for any market used as a destination.
   const destinationSet = new Set(uniqueDestinations);
-  const sonarMarketTrends = marketOtris
+  const sonarMarketTrends = extendedMarkets
     .sort((a, b) => b.otri - a.otri)
     .slice(0, 20)
     .map(m => {
@@ -552,6 +843,8 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
         otriWoW:  m.otriWoW,
         votri:    m.votri,
         votriWoW: m.votriWoW,
+        otvi:     m.otvi,
+        hai:      m.hai,
         signal:   m.signal,
         trendDir: trendSource > 0.5 ? "↑" : trendSource < -0.5 ? "↓" : "→",
         // ibOtri: always set for any market that is used as a destination (IB = inbound)
@@ -825,16 +1118,25 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
 
 export function registerIntelRoutes(app: Express): void {
   // ── GET /api/intel ──────────────────────────────────────────────────────────
+  // Admins: full org-wide view, can filter by ?userId
+  // account_manager / national_account_manager: self-scoped view (userId param ignored)
   app.get("/api/intel", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const allowedRoles = ["admin", "account_manager", "national_account_manager"];
+      if (!allowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
 
       const orgId = req.session.organizationId!;
-      const filterUserId = typeof req.query.userId === "string" && req.query.userId.trim()
-        ? req.query.userId.trim()
-        : undefined;
+      // Non-admins are always scoped to their own data
+      let filterUserId: string | undefined;
+      if (user.role === "admin") {
+        filterUserId = typeof req.query.userId === "string" && req.query.userId.trim()
+          ? req.query.userId.trim()
+          : undefined;
+      } else {
+        filterUserId = user.id;
+      }
 
       const payload = await computeIntelPayload(orgId, filterUserId);
       logIntel(`Intel payload generated — ${filterUserId ? `user ${filterUserId}` : "all reps"}`);
@@ -842,6 +1144,196 @@ export function registerIntelRoutes(app: Express): void {
     } catch (err: any) {
       console.error("[intel] Error:", err);
       res.status(500).json({ error: "Failed to generate intel" });
+    }
+  });
+
+  // ── GET /api/intel/brief ────────────────────────────────────────────────────
+  // AI-generated personalized daily brief for the requesting user.
+  // 4-hour cache per user. Can be force-refreshed with ?refresh=true.
+  // Accessible to admin, account_manager, and national_account_manager roles.
+  app.get("/api/intel/brief", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const allowedRoles = ["admin", "account_manager", "national_account_manager"];
+      if (!allowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+
+      const orgId = req.session.organizationId!;
+      const forceRefresh = req.query.refresh === "true";
+      if (forceRefresh) {
+        const cacheKey = `${orgId}:${user.id}`;
+        aiBriefCache.delete(cacheKey);
+      }
+
+      // Build context for AI brief
+      const allUsers = await storage.getUsers(orgId);
+      const uploads = await storage.getFinancialUploadsForOrg(orgId);
+      const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+      let allRows: any[] = [];
+      for (const upload of sorted.slice(0, 3)) {
+        allRows = allRows.concat((upload.rows as any[]) ?? []);
+      }
+
+      const cols = allRows.length > 0 ? resolveColumns(allRows) : resolveColumns([]);
+      const sixWeekKeys = getRecentWeekKeys(6);
+      const threeWeekKeys = getRecentWeekKeys(3);
+      const userLanes = buildLanesFromRows(allRows, cols, sixWeekKeys, threeWeekKeys, allUsers, orgId)
+        .filter(l => l.ownerUserId === user.id);
+
+      // Top accounts by revenue
+      const companyRevMap = new Map<string, number>();
+      for (const l of userLanes) {
+        companyRevMap.set(l.companyName, (companyRevMap.get(l.companyName) ?? 0) + l.totalRevenue);
+      }
+      const topAccounts = Array.from(companyRevMap.entries())
+        .map(([name, revenue]) => ({ name, revenue }))
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 10);
+
+      // Top lanes with VOTRI signals — ranked by load count (frequency) descending before dedup+slice
+      // Aggregate total loads per origin→destination pair for ranking
+      const laneLoadCounts = new Map<string, number>();
+      for (const l of userLanes) {
+        const key = `${l.origin}|${l.destination}`;
+        laneLoadCounts.set(key, (laneLoadCounts.get(key) ?? 0) + (l.totalLoads ?? 1));
+      }
+      const uniqueUserLanes = Array.from(
+        new Map(
+          [...userLanes]
+            .sort((a, b) => {
+              const keyA = `${a.origin}|${a.destination}`;
+              const keyB = `${b.origin}|${b.destination}`;
+              return (laneLoadCounts.get(keyB) ?? 0) - (laneLoadCounts.get(keyA) ?? 0);
+            })
+            .map(l => [`${l.origin}|${l.destination}`, l])
+        ).values()
+      ).slice(0, 10);
+
+      // Also pull RFP lanes and merge into lane context (new lanes only, deduped)
+      const rfpBriefLanes = await getAwardedRfpLanesForUser(orgId, user.id);
+      const existingLaneKeys = new Set(uniqueUserLanes.map(l => `${l.origin}|${l.destination}`));
+      const rfpOnlyBrief = rfpBriefLanes
+        .filter(r => !existingLaneKeys.has(`${r.origin}|${r.destination}`))
+        .slice(0, 5); // limit supplementary RFP lanes so prompt stays concise
+
+      const allBriefLanes = [
+        ...uniqueUserLanes.map(l => ({ origin: l.origin, destination: l.destination })),
+        ...rfpOnlyBrief.map(r => ({ origin: r.origin, destination: r.destination })),
+      ];
+
+      // Fetch VOTRI and per-market OTRI in parallel for all relevant lane corridors
+      const originMarkets = Array.from(new Set(allBriefLanes.map(l => l.origin.toLowerCase().trim())));
+      const [national, votriMap, marketOtriData] = await Promise.all([
+        getNationalMarketSummary(),
+        getLaneVotrisBatch(allBriefLanes),
+        getMarketOtrisExtended(originMarkets.slice(0, 5)).catch(() => [] as MarketExtended[]),
+      ]);
+
+      const topLanes = allBriefLanes.map(l => {
+        const qualifier = buildVotriQualifier(l.origin, l.destination);
+        const votri = votriMap.get(qualifier);
+        return {
+          origin: l.origin,
+          destination: l.destination,
+          votri: votri?.votri,
+          votriWoW: votri?.votriWoW,
+          // Per-market OTRI for origin market context
+          marketOtri: marketOtriData.find(m => m.market.toLowerCase().trim() === l.origin.toLowerCase().trim())?.otri,
+          marketOtriWoW: marketOtriData.find(m => m.market.toLowerCase().trim() === l.origin.toLowerCase().trim())?.otriWoW,
+        };
+      });
+
+      const brief = await generateAiBrief(user.id, user.name, orgId, topAccounts, topLanes, national);
+      res.json(brief);
+    } catch (err: any) {
+      console.error("[intel] Brief error:", err);
+      res.status(500).json({ error: "Failed to generate brief" });
+    }
+  });
+
+  // ── GET /api/intel/my-lanes ─────────────────────────────────────────────────
+  // Personalized lane heat panel for the requesting user.
+  // Accessible to admin, account_manager, and national_account_manager.
+  // Non-admin users are always scoped to their own lanes.
+  app.get("/api/intel/my-lanes", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const allowedRoles = ["admin", "account_manager", "national_account_manager"];
+      if (!allowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+
+      const orgId = req.session.organizationId!;
+      // Non-admins are always scoped to their own lanes; admins can filter by userId param
+      const filterUserId = user.role === "admin" && typeof req.query.userId === "string" && req.query.userId.trim()
+        ? req.query.userId.trim()
+        : user.id;
+
+      const allUsers = await storage.getUsers(orgId);
+      const uploads = await storage.getFinancialUploadsForOrg(orgId);
+      const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+      let allRows: any[] = [];
+      for (const upload of sorted.slice(0, 3)) {
+        allRows = allRows.concat((upload.rows as any[]) ?? []);
+      }
+
+      const cols = allRows.length > 0 ? resolveColumns(allRows) : resolveColumns([]);
+      const sixWeekKeys = getRecentWeekKeys(6);
+      const threeWeekKeys = getRecentWeekKeys(3);
+      const userLanes = buildLanesFromRows(allRows, cols, sixWeekKeys, threeWeekKeys, allUsers, orgId)
+        .filter(l => l.ownerUserId === filterUserId);
+
+      // Merge awarded RFP lanes as supplementary entries (non-blocking)
+      const [rfpLaneItems, national] = await Promise.all([
+        getAwardedRfpLanesForUser(orgId, filterUserId),
+        getNationalMarketSummary(),
+      ]);
+      const myLanes = await computeMyLanes(userLanes, national);
+
+      // Compute VOTRI for RFP lanes not already covered by financial lanes
+      const existingKeys = new Set(myLanes.map(r => `${r.origin}|${r.destination}|${r.companyName}`));
+      const rfpOnly = rfpLaneItems.filter(r => !existingKeys.has(`${r.origin}|${r.destination}|${r.companyName}`));
+
+      let rfpRows: MyLanesRow[] = [];
+      if (rfpOnly.length > 0) {
+        const rfpVotriMap = await getLaneVotrisBatch(rfpOnly.map(r => ({ origin: r.origin, destination: r.destination })));
+        const rfpCities = Array.from(new Set([...rfpOnly.map(r => r.origin), ...rfpOnly.map(r => r.destination)]));
+        let rfpWeatherMap = new Map<string, WeatherFlag>();
+        try { rfpWeatherMap = await getWeatherFlagsForCities(rfpCities); } catch { /* non-blocking */ }
+
+        const ntiBaseline = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
+        rfpRows = rfpOnly.map(lane => {
+          const qualifier = buildVotriQualifier(lane.origin, lane.destination);
+          const votriData = rfpVotriMap.get(qualifier);
+          return {
+            origin: lane.origin,
+            destination: lane.destination,
+            qualifier,
+            votri: votriData?.votri ?? 0,
+            votriWoW: votriData?.votriWoW ?? 0,
+            signal: votriData?.signal ?? "cool",
+            avgCustomerRate: null, // no historical rate data for RFP-only lanes
+            ntiBaseline: Math.round(ntiBaseline * 100) / 100,
+            rateDelta: "unknown" as const,
+            rateDeltaPct: null,
+            weatherOrigin: rfpWeatherMap.get(lane.origin.toLowerCase().trim()) ?? null,
+            weatherDest: rfpWeatherMap.get(lane.destination.toLowerCase().trim()) ?? null,
+            totalLoads: 0,
+            companyName: lane.companyName,
+          };
+        });
+      }
+
+      const allMyLanes = [...myLanes, ...rfpRows];
+      allMyLanes.sort((a, b) => b.votri !== a.votri ? b.votri - a.votri : b.totalLoads - a.totalLoads);
+
+      res.json({
+        lanes: allMyLanes,
+        lastUpdated: new Date().toISOString(),
+        userId: filterUserId,
+      });
+    } catch (err: any) {
+      console.error("[intel] My-lanes error:", err);
+      res.status(500).json({ error: "Failed to load my lanes" });
     }
   });
 
