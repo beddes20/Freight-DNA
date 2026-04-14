@@ -84,6 +84,7 @@ export function registerCarrierHubRoutes(app: Express) {
         outreach_sent: string;
         contact_count: string;
         claimed_lane_count: string;
+        pending_intel_count: string;
       }>(
         `
         SELECT
@@ -96,12 +97,14 @@ export function registerCarrierHubRoutes(app: Express) {
           MAX(lci.updated_at) FILTER (WHERE lci.carrier_id = c.id) AS last_used,
           COUNT(DISTINCT col.id) FILTER (WHERE c.id = ANY(col.carrier_ids)) AS outreach_sent,
           COUNT(DISTINCT cc.id) AS contact_count,
-          COUNT(DISTINCT ccl.id) AS claimed_lane_count
+          COUNT(DISTINCT ccl.id) AS claimed_lane_count,
+          COUNT(DISTINCT cis.id) FILTER (WHERE cis.status = 'pending') AS pending_intel_count
         FROM carriers c
         LEFT JOIN lane_carrier_interest lci ON lci.carrier_id = c.id
         LEFT JOIN carrier_outreach_logs col ON c.id = ANY(col.carrier_ids)
         LEFT JOIN carrier_contacts cc ON cc.carrier_id = c.id AND cc.is_active = true
         LEFT JOIN carrier_claimed_lanes ccl ON ccl.carrier_id = c.id
+        LEFT JOIN carrier_intel_suggestions cis ON cis.carrier_id = c.id
         WHERE c.org_id = $1
           ${q ? `AND (c.name ILIKE $2 OR c.mc_dot ILIKE $2 OR c.dot_number ILIKE $2 OR c.primary_email ILIKE $2 OR c.phone ILIKE $2)` : ""}
           ${statusFilter ? `AND c.status = '${statusFilter.replace(/'/g, "''")}'` : ""}

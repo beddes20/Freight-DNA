@@ -107,6 +107,7 @@ interface CarrierRow {
   outreach_sent: string;
   contact_count: string;
   claimed_lane_count: string;
+  pending_intel_count: string;
 }
 
 interface CarrierContact {
@@ -1479,6 +1480,7 @@ function CarrierCard({ carrier, selected, onClick }: { carrier: CarrierRow; sele
   const provenCount = parseInt(carrier.proven_lane_count) || 0;
   const contactCount = parseInt(carrier.contact_count) || 0;
   const outreachCount = parseInt(carrier.outreach_sent) || 0;
+  const pendingIntelCount = parseInt(carrier.pending_intel_count) || 0;
 
   return (
     <button
@@ -1493,6 +1495,12 @@ function CarrierCard({ carrier, selected, onClick }: { carrier: CarrierRow; sele
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-foreground truncate">{carrier.name}</span>
             <StatusBadge status={carrier.status} />
+            {pendingIntelCount > 0 && (
+              <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-400 text-[10px] py-0 px-1.5 gap-0.5" data-testid={`badge-pending-intel-${carrier.id}`}>
+                <Brain className="w-3 h-3" />
+                {pendingIntelCount} pending
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
             {carrier.mc_dot && <span className="font-mono">{carrier.mc_dot}</span>}
