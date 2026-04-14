@@ -1437,7 +1437,7 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                         data-testid="btn-toggle-suggestion-history"
                       >
                         {showRejectedSuggestions ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                        Decision history ({intelData.suggestions.accepted.length} accepted, {intelData.suggestions.rejected.length} rejected)
+                        Decision history ({intelData.suggestions.accepted.filter((s: any) => s.status === "auto_accepted").length > 0 ? `${intelData.suggestions.accepted.filter((s: any) => s.status !== "auto_accepted").length} accepted, ${intelData.suggestions.accepted.filter((s: any) => s.status === "auto_accepted").length} auto-accepted` : `${intelData.suggestions.accepted.length} accepted`}, {intelData.suggestions.rejected.length} rejected)
                       </button>
 
                       {showRejectedSuggestions && (
@@ -1449,7 +1449,7 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="font-medium text-foreground">{SUGGESTION_TYPE_LABELS[s.suggestionType] ?? s.suggestionType}</span>
                                   <Badge variant="outline" className={`text-[9px] py-0 px-1 ${s.status === "accepted" || s.status === "auto_accepted" ? "border-green-500/30 text-green-400" : "border-muted-foreground/30 text-muted-foreground"}`}>
-                                    {s.status}
+                                    {s.status === "auto_accepted" ? "⚡ auto" : s.status}
                                   </Badge>
                                 </div>
                                 <p className="text-muted-foreground mt-0.5">{formatDate(s.updatedAt)}{s.comment ? ` · ${s.comment}` : ""}</p>

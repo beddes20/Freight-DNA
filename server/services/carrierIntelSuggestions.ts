@@ -16,6 +16,17 @@
  *
  * Dedup: same (carrierId, suggestionType, emailSignalId) = one suggestion.
  * Skip if an accepted suggestion already exists for the same carrier + type + emailSignalId.
+ *
+ * Hybrid Auto-Accept:
+ *   High-confidence signals (≥75) for safe types are auto-accepted immediately:
+ *     - lane_preference with specific origin+destination cities
+ *     - hard_commitment (always specific enough)
+ *     - capacity_unavailable (safe to suppress proactively)
+ *   Lower-confidence or ambiguous signals stay pending for human review:
+ *     - region_preference (too broad without human judgment)
+ *     - price_sensitivity (rate misinterpretation risk)
+ *     - service_risk (reputation impact needs context)
+ *     - lane_preference without specific cities
  */
 
 import type { IStorage } from "../storage";
@@ -34,6 +45,36 @@ interface MappedSuggestion {
   suggestionType: SuggestionType;
   confidenceScore: number;
   payload: Record<string, unknown>;
+}
+
+const AUTO_ACCEPT_THRESHOLD = 75;
+
+const AUTO_ACCEPT_TYPES: Set<SuggestionType> = new Set([
+  "lane_preference",
+  "capacity_available",
+  "capacity_unavailable",
+]);
+
+const ALWAYS_MANUAL_TYPES: Set<SuggestionType> = new Set([
+  "region_preference",
+  "price_sensitivity",
+  "service_risk",
+  "equipment_capability",
+]);
+
+function shouldAutoAccept(mapped: MappedSuggestion): boolean {
+  if (mapped.confidenceScore < AUTO_ACCEPT_THRESHOLD) return false;
+  if (ALWAYS_MANUAL_TYPES.has(mapped.suggestionType)) return false;
+  if (!AUTO_ACCEPT_TYPES.has(mapped.suggestionType)) return false;
+
+  if (mapped.suggestionType === "lane_preference") {
+    const p = mapped.payload;
+    const hasOrigin = typeof p.origin === "string" && p.origin.trim().length > 0;
+    const hasDestination = typeof p.destination === "string" && p.destination.trim().length > 0;
+    if (!hasOrigin || !hasDestination) return false;
+  }
+
+  return true;
 }
 
 function mapSignalToSuggestion(signal: EmailSignal): MappedSuggestion | null {
@@ -171,6 +212,8 @@ export async function processCarrierEmailSignals(
           continue;
         }
 
+        const autoAccept = shouldAutoAccept(mapped);
+
         const insert: InsertCarrierIntelSuggestion = {
           carrierId,
           orgId,
@@ -180,13 +223,22 @@ export async function processCarrierEmailSignals(
           suggestionType: mapped.suggestionType,
           payload: mapped.payload,
           confidenceScore: mapped.confidenceScore,
-          status: "pending",
-          comment: null,
+          status: autoAccept ? "auto_accepted" : "pending",
+          comment: autoAccept ? "Auto-accepted: high-confidence signal" : null,
           acceptedByUserId: null,
           rejectedByUserId: null,
         };
 
-        await storage.insertCarrierIntelSuggestion(insert);
+        const created = await storage.insertCarrierIntelSuggestion(insert);
+
+        if (autoAccept) {
+          await storage.updateSuggestionStatus(created.id, "auto_accepted", {
+            comment: `Auto-accepted (confidence: ${mapped.confidenceScore}%, type: ${mapped.suggestionType})`,
+          });
+          console.log(
+            `[carrierIntelSuggestions] ✅ auto-accepted ${mapped.suggestionType} for carrier ${carrierId} (confidence: ${mapped.confidenceScore}%)`
+          );
+        }
       } catch (signalErr) {
         console.error(
           `[carrierIntelSuggestions] error processing signal ${signal.id} for carrier ${carrierId}:`,
