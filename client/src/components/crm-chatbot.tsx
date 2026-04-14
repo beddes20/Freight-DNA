@@ -244,11 +244,26 @@ export function CrmChatbot() {
   const [scope, setScope] = useState<"my_team" | "everyone">("my_team");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const qc = useQueryClient();
 
   const isAdminOrDirector = user?.role === "admin" || user?.role === "director" || user?.role === "sales_director";
   const showScopeToggle = !isAdminOrDirector && !!user;
   const effectiveScope = user?.role === "admin" ? "everyone" : (isAdminOrDirector ? "my_team" : scope);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: PointerEvent) => {
+      if (
+        panelRef.current?.contains(e.target as Node) ||
+        toggleRef.current?.contains(e.target as Node)
+      ) return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, [open]);
 
   // Load personalized nudges when chatbot opens
   const { data: nudges } = useQuery<NudgesResponse>({
@@ -521,6 +536,7 @@ export function CrmChatbot() {
     <>
       {/* Floating button */}
       <button
+        ref={toggleRef}
         onClick={() => setOpen((v) => !v)}
         className={cn(
           "fixed bottom-6 right-6 z-50 h-14 w-14 rounded-full shadow-lg flex items-center justify-center transition-all duration-200",
@@ -535,7 +551,7 @@ export function CrmChatbot() {
 
       {/* Chat panel */}
       {open && (
-        <div className={cn(
+        <div ref={panelRef} className={cn(
           "fixed bottom-40 right-6 z-50 w-[390px] h-[600px] rounded-2xl shadow-2xl border border-border/50",
           "bg-background flex flex-col overflow-hidden",
           "animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
