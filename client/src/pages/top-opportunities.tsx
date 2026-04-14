@@ -27,10 +27,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Input } from "@/components/ui/input";
 import {
   Truck, MapPin, Flame, Package, TrendingUp, Building2,
   FileText, Zap, Plus, ExternalLink, Trash2, RotateCcw, EyeOff, ChevronDown,
   Users, Briefcase, DollarSign, Calendar, BarChart2, StickyNote, ChevronRight,
+  Archive, Trophy, XCircle, Search,
 } from "lucide-react";
 
 type OpportunityMatch = {
@@ -134,7 +136,13 @@ function getStageLabel(stage: string) {
   return STAGE_LABELS[stage] ?? stage.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 }
 
-type ViewMode = "rfp" | "field";
+type ArchivedOpportunity = FieldCreatedOpportunity;
+
+type ArchivedCompanyGroup = FieldCreatedCompanyGroup;
+
+type OutcomeFilter = "all" | "closed_won" | "closed_lost";
+
+type ViewMode = "rfp" | "field" | "archived";
 
 export default function TopOpportunities() {
   const [, navigate] = useLocation();
@@ -157,11 +165,18 @@ export default function TopOpportunities() {
     queryKey: ["/api/opportunities/field-created"],
   });
 
+  const { data: archivedOpportunities = [], isLoading: isArchivedLoading } = useQuery<ArchivedOpportunity[]>({
+    queryKey: ["/api/opportunities/archived"],
+  });
+
   const [confirmDismiss, setConfirmDismiss] = useState<{ companyId: string; companyName: string } | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskPrefill, setTaskPrefill] = useState<TaskPrefill | null>(null);
   const [expandedCompanies, setExpandedCompanies] = useState<Record<string, boolean>>({});
   const [selectedFieldOpp, setSelectedFieldOpp] = useState<FieldCreatedOpportunity | null>(null);
+  const [selectedArchivedOpp, setSelectedArchivedOpp] = useState<ArchivedOpportunity | null>(null);
+  const [archiveOutcomeFilter, setArchiveOutcomeFilter] = useState<OutcomeFilter>("all");
+  const [archiveSearch, setArchiveSearch] = useState("");
 
   const toggleCollapsed = (companyId: string) => {
     setExpandedCompanies(prev => ({ ...prev, [companyId]: !prev[companyId] }));
@@ -237,6 +252,41 @@ export default function TopOpportunities() {
     return Array.from(map.values()).sort((a, b) => a.companyName.localeCompare(b.companyName));
   }, [fieldOpportunities]);
 
+  const filteredArchived = useMemo(() => {
+    let list = archivedOpportunities;
+    if (archiveOutcomeFilter !== "all") {
+      list = list.filter(o => o.outcome === archiveOutcomeFilter);
+    }
+    if (archiveSearch.trim()) {
+      const q = archiveSearch.trim().toLowerCase();
+      list = list.filter(o => o.name.toLowerCase().includes(q) || o.company_name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [archivedOpportunities, archiveOutcomeFilter, archiveSearch]);
+
+  const archivedByCompany = useMemo<ArchivedCompanyGroup[]>(() => {
+    const map = new Map<string, ArchivedCompanyGroup>();
+    filteredArchived.forEach(opp => {
+      const key = opp.company_id ?? `__no_company__${opp.company_name}`;
+      if (!map.has(key)) {
+        map.set(key, { companyId: opp.company_id, companyName: opp.company_name || "Unknown Company", opportunities: [] });
+      }
+      map.get(key)!.opportunities.push(opp);
+    });
+    return Array.from(map.values()).sort((a, b) => a.companyName.localeCompare(b.companyName));
+  }, [filteredArchived]);
+
+  const archiveSummary = useMemo(() => {
+    const total = archivedOpportunities.length;
+    const won = archivedOpportunities.filter(o => o.outcome === "closed_won");
+    const lost = archivedOpportunities.filter(o => o.outcome === "closed_lost");
+    const wonAmount = won.reduce((sum, o) => {
+      const num = parseFloat((o.amount ?? "").replace(/[^0-9.]/g, ""));
+      return sum + (isNaN(num) ? 0 : num);
+    }, 0);
+    return { total, wonCount: won.length, lostCount: lost.length, wonAmount };
+  }, [archivedOpportunities]);
+
   const openTask = (group: CompanyGroup, match: CompanyGroup["matches"][number]) => {
     setTaskPrefill({
       companyId: group.companyId,
@@ -265,7 +315,9 @@ export default function TopOpportunities() {
         <p className="text-muted-foreground text-sm mt-1">
           {viewMode === "rfp"
             ? "Accounts with RFP lanes that overlap our delivery zones — grouped by customer for easy follow-up."
-            : "Manually entered CRM opportunities from your field sales team."}
+            : viewMode === "field"
+            ? "Manually entered CRM opportunities from your field sales team."
+            : "Closed opportunities — won and lost — for historical reference."}
         </p>
       </div>
 
@@ -299,6 +351,19 @@ export default function TopOpportunities() {
         >
           <Users className="h-3.5 w-3.5" />
           Field-Created Opportunities
+        </button>
+        <button
+          type="button"
+          onClick={() => handleViewChange("archived")}
+          data-testid="btn-toggle-archived"
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+            viewMode === "archived"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Archive className="h-3.5 w-3.5" />
+          Archived
         </button>
       </div>
 
@@ -622,6 +687,294 @@ export default function TopOpportunities() {
           )}
         </>
       )}
+
+      {/* Archived Opportunities View */}
+      {viewMode === "archived" && (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="archive-summary-banner">
+            <Card className="bg-muted/30">
+              <CardContent className="py-3 px-4 flex items-center gap-3">
+                <Archive className="h-5 w-5 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Total Archived</p>
+                  <p className="text-lg font-bold" data-testid="text-archive-total">{archiveSummary.total}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="bg-green-500/5 border-green-500/20">
+              <CardContent className="py-3 px-4 flex items-center gap-3">
+                <Trophy className="h-5 w-5 text-green-600 shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Won</p>
+                  <p className="text-lg font-bold text-green-600" data-testid="text-archive-won">{archiveSummary.wonCount}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="bg-red-500/5 border-red-500/20">
+              <CardContent className="py-3 px-4 flex items-center gap-3">
+                <XCircle className="h-5 w-5 text-red-500 shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Lost</p>
+                  <p className="text-lg font-bold text-red-500" data-testid="text-archive-lost">{archiveSummary.lostCount}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="bg-green-500/5 border-green-500/20">
+              <CardContent className="py-3 px-4 flex items-center gap-3">
+                <DollarSign className="h-5 w-5 text-green-600 shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Won Amount</p>
+                  <p className="text-lg font-bold text-green-600" data-testid="text-archive-won-amount">
+                    ${archiveSummary.wonAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search by name or company..."
+                value={archiveSearch}
+                onChange={(e) => setArchiveSearch(e.target.value)}
+                className="pl-9"
+                data-testid="input-archive-search"
+              />
+            </div>
+            <div className="inline-flex items-center rounded-full border bg-muted p-1 gap-1 shrink-0" data-testid="toggle-archive-outcome">
+              {(["all", "closed_won", "closed_lost"] as OutcomeFilter[]).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setArchiveOutcomeFilter(f)}
+                  data-testid={`btn-archive-filter-${f}`}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                    archiveOutcomeFilter === f
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {f === "all" ? "All" : f === "closed_won" ? "Won" : "Lost"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {isArchivedLoading ? (
+            <div className="space-y-4">
+              {[...Array(3)].map((_, i) => (
+                <Card key={i}>
+                  <CardHeader><Skeleton className="h-5 w-48" /></CardHeader>
+                  <CardContent className="space-y-2">
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : archivedByCompany.length === 0 ? (
+            <Card>
+              <CardContent className="py-20 text-center" data-testid="archive-empty-state">
+                <Archive className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="font-semibold text-lg text-muted-foreground">No archived opportunities</p>
+                <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+                  {archiveSearch || archiveOutcomeFilter !== "all"
+                    ? "No opportunities match your current filters. Try adjusting your search or outcome filter."
+                    : "Opportunities will appear here once they are marked as Closed Won or Closed Lost."}
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4" data-testid="archived-opportunities-list">
+              {archivedByCompany.map((group) => (
+                <Card key={group.companyId ?? group.companyName} data-testid={`card-archived-company-${group.companyId ?? group.companyName}`} className="overflow-hidden">
+                  <CardHeader className="pb-3 bg-gradient-to-r from-primary/5 to-transparent border-b">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-2">
+                        <Building2 className="h-4 w-4 text-primary" />
+                        <span
+                          className={`font-semibold text-base text-primary ${group.companyId ? "hover:underline cursor-pointer" : ""}`}
+                          data-testid={`text-archived-company-name-${group.companyId ?? group.companyName}`}
+                          onClick={() => group.companyId ? navigate(`/companies/${group.companyId}?tab=opportunities`) : undefined}
+                        >
+                          {group.companyName}
+                        </span>
+                        <Badge variant="outline" className="text-xs">
+                          {group.opportunities.length} opportunit{group.opportunities.length !== 1 ? "ies" : "y"}
+                        </Badge>
+                      </div>
+                      {group.companyId && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs gap-1 shrink-0"
+                          onClick={() => navigate(`/companies/${group.companyId}?tab=opportunities`)}
+                          data-testid={`btn-archived-view-account-${group.companyId}`}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          Account
+                        </Button>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="divide-y">
+                      {group.opportunities.map((opp) => (
+                        <div
+                          key={opp.id}
+                          data-testid={`row-archived-opportunity-${opp.id}`}
+                          className="px-4 py-3 hover:bg-muted/40 transition-colors cursor-pointer group"
+                          onClick={() => setSelectedArchivedOpp(opp)}
+                        >
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Briefcase className="h-4 w-4 text-muted-foreground shrink-0" />
+                              <span className="font-medium text-sm" data-testid={`text-archived-opp-name-${opp.id}`}>
+                                {opp.name}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Badge variant="secondary" className="text-xs" data-testid={`badge-archived-record-type-${opp.id}`}>
+                                {getRecordTypeLabel(opp.record_type)}
+                              </Badge>
+                              <Badge
+                                variant={opp.outcome === "closed_won" ? "default" : "destructive"}
+                                className={`text-xs ${opp.outcome === "closed_won" ? "bg-green-600 hover:bg-green-700" : ""}`}
+                                data-testid={`badge-archived-outcome-${opp.id}`}
+                              >
+                                {opp.outcome === "closed_won" ? "Won" : "Lost"}
+                              </Badge>
+                              {opp.amount && (
+                                <Badge variant="outline" className="text-xs font-mono" data-testid={`badge-archived-amount-${opp.id}`}>
+                                  {opp.amount}
+                                </Badge>
+                              )}
+                              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Archived Opportunity Detail Sheet */}
+      <Sheet open={!!selectedArchivedOpp} onOpenChange={(open) => { if (!open) setSelectedArchivedOpp(null); }}>
+        <SheetContent className="w-full sm:max-w-md overflow-y-auto" data-testid="sheet-archived-opp-detail">
+          {selectedArchivedOpp && (
+            <>
+              <SheetHeader className="mb-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Briefcase className="h-5 w-5 text-primary" />
+                  <Badge variant="secondary" className="text-xs">{getRecordTypeLabel(selectedArchivedOpp.record_type)}</Badge>
+                  <Badge
+                    variant={selectedArchivedOpp.outcome === "closed_won" ? "default" : "destructive"}
+                    className={`text-xs ${selectedArchivedOpp.outcome === "closed_won" ? "bg-green-600 hover:bg-green-700" : ""}`}
+                  >
+                    {selectedArchivedOpp.outcome === "closed_won" ? "Won" : "Lost"}
+                  </Badge>
+                </div>
+                <SheetTitle className="text-lg leading-tight" data-testid="text-archived-sheet-opp-name">{selectedArchivedOpp.name}</SheetTitle>
+                {selectedArchivedOpp.company_name && (
+                  <SheetDescription className="flex items-center gap-1 mt-1">
+                    <Building2 className="h-3.5 w-3.5" />
+                    {selectedArchivedOpp.company_name}
+                  </SheetDescription>
+                )}
+              </SheetHeader>
+
+              <Separator className="mb-4" />
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Details</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {selectedArchivedOpp.amount && (
+                      <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                        <DollarSign className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Amount</p>
+                          <p className="text-sm font-semibold" data-testid="text-archived-sheet-amount">{selectedArchivedOpp.amount}</p>
+                        </div>
+                      </div>
+                    )}
+                    {selectedArchivedOpp.close_date && (
+                      <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                        <Calendar className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Close Date</p>
+                          <p className="text-sm font-semibold" data-testid="text-archived-sheet-close-date">{selectedArchivedOpp.close_date}</p>
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                      <BarChart2 className="h-4 w-4 text-purple-500 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs text-muted-foreground">Stage</p>
+                        <p className="text-sm font-semibold" data-testid="text-archived-sheet-stage">{getStageLabel(selectedArchivedOpp.stage)}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                      <Briefcase className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs text-muted-foreground">Record Type</p>
+                        <p className="text-sm font-semibold" data-testid="text-archived-sheet-record-type">{getRecordTypeLabel(selectedArchivedOpp.record_type)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {selectedArchivedOpp.notes && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+                      <StickyNote className="h-3.5 w-3.5" /> Notes
+                    </p>
+                    <p className="text-sm text-foreground/80 bg-muted/30 rounded-md px-3 py-2 whitespace-pre-wrap" data-testid="text-archived-sheet-notes">{selectedArchivedOpp.notes}</p>
+                  </div>
+                )}
+
+                {selectedArchivedOpp.lost_reason && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Lost Reason</p>
+                    <p className="text-sm text-foreground/80 bg-destructive/10 rounded-md px-3 py-2" data-testid="text-archived-sheet-lost-reason">{selectedArchivedOpp.lost_reason}</p>
+                  </div>
+                )}
+
+                {selectedArchivedOpp.created_at && (
+                  <p className="text-xs text-muted-foreground">
+                    Created {new Date(selectedArchivedOpp.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </p>
+                )}
+              </div>
+
+              {selectedArchivedOpp.company_id && (
+                <>
+                  <Separator className="my-4" />
+                  <Button
+                    className="w-full gap-2"
+                    variant="outline"
+                    onClick={() => {
+                      navigate(`/companies/${selectedArchivedOpp.company_id}?tab=opportunities`);
+                      setSelectedArchivedOpp(null);
+                    }}
+                    data-testid="btn-archived-sheet-go-to-account"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    Go to Account Opportunities
+                  </Button>
+                </>
+              )}
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
 
       {/* Field-Created Opportunity Detail Sheet */}
       <Sheet open={!!selectedFieldOpp} onOpenChange={(open) => { if (!open) setSelectedFieldOpp(null); }}>

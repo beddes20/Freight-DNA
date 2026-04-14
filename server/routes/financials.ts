@@ -413,6 +413,45 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
+  app.get("/api/opportunities/archived", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const orgId = req.session.organizationId!;
+
+      const { rows } = await storage.pool.query(
+        `SELECT
+           o.id,
+           o.name,
+           o.record_type,
+           o.stage,
+           o.outcome,
+           o.amount,
+           o.close_date,
+           o.probability,
+           o.notes,
+           o.lost_reason,
+           o.created_at,
+           o.company_id,
+           o.prospect_id,
+           COALESCE(c.name, p.name, '') AS company_name
+         FROM crm_opportunities o
+         LEFT JOIN companies c ON c.id = o.company_id
+         LEFT JOIN prospects p ON p.id = o.prospect_id
+         WHERE o.organization_id = $1
+           AND o.outcome IN ('closed_won', 'closed_lost')
+         ORDER BY o.close_date DESC NULLS LAST, o.created_at DESC`,
+        [orgId]
+      );
+
+      res.json(rows);
+    } catch (err) {
+      console.error("Error fetching archived opportunities:", err);
+      res.status(500).json({ error: "Failed to fetch archived opportunities" });
+    }
+  });
+
   app.get("/api/opportunities/field-created", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
