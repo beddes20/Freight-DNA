@@ -44,7 +44,7 @@ export default function RepReportsRosterPage() {
     <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-reports-title">
-          <FileBarChart2 className="w-6 h-6 text-blue-600" />
+          <FileBarChart2 className="w-6 h-6 text-amber-600" />
           Report Cards
         </h1>
         <p className="text-muted-foreground text-sm mt-1">
@@ -72,10 +72,10 @@ export default function RepReportsRosterPage() {
               <button
                 key={rep.id}
                 onClick={() => navigate(`/report/${rep.id}`)}
-                className="group flex items-center gap-4 p-4 rounded-xl border bg-card hover:border-blue-400 hover:shadow-sm transition-all text-left w-full"
+                className="group flex items-center gap-4 p-4 rounded-xl border bg-card hover:border-amber-400 hover:shadow-sm transition-all text-left w-full"
                 data-testid={`card-rep-${rep.id}`}
               >
-                <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center text-white font-bold text-sm shrink-0">
+                <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 flex items-center justify-center text-white font-bold text-sm shrink-0">
                   {initials}
                 </div>
                 <div className="flex-1 min-w-0">

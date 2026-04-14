@@ -292,22 +292,22 @@ export default function EmailIntelligencePage() {
   return (
     <div className="flex-1 overflow-y-auto bg-background">
       {/* Hero header */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-b border-border px-6 py-5">
+      <div className="bg-black border-b border-border px-6 py-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
-              <BrainCircuit className="w-5 h-5 text-blue-400" />
+            <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <BrainCircuit className="w-5 h-5 text-amber-400" />
             </div>
             <div>
               <h1 className="text-xl font-bold text-white">Email Intelligence</h1>
-              <p className="text-sm text-slate-400">Win/loss patterns, urgency signals, and email-derived insights</p>
+              <p className="text-sm text-zinc-400">Win/loss patterns, urgency signals, and email-derived insights</p>
             </div>
           </div>
           <Button
             variant="outline"
             size="sm"
             onClick={() => refetch()}
-            className="text-slate-300 border-slate-600 hover:bg-slate-700"
+            className="text-zinc-300 border-zinc-600 hover:bg-zinc-700"
             data-testid="refresh-analytics"
           >
             <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
@@ -318,7 +318,7 @@ export default function EmailIntelligencePage() {
         {/* KPI row */}
         {isLoading ? (
           <div className="grid grid-cols-4 gap-3 mt-4">
-            {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-16 rounded-lg bg-slate-700/50" />)}
+            {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-16 rounded-lg bg-zinc-700/50" />)}
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
@@ -327,7 +327,7 @@ export default function EmailIntelligencePage() {
                 label: "Total Signals",
                 value: data?.signal_summary.reduce((s, r) => s + r.total, 0) ?? 0,
                 icon: Activity,
-                color: "text-blue-400",
+                color: "text-amber-400",
               },
               {
                 label: "Urgency Unresponded",
@@ -348,10 +348,10 @@ export default function EmailIntelligencePage() {
                 color: "text-red-400",
               },
             ].map(kpi => (
-              <div key={kpi.label} className="bg-slate-800/60 rounded-lg p-3 border border-slate-700">
+              <div key={kpi.label} className="bg-zinc-800/60 rounded-lg p-3 border border-zinc-700">
                 <div className="flex items-center gap-2 mb-1">
                   <kpi.icon className={`w-4 h-4 ${kpi.color}`} />
-                  <span className="text-xs text-slate-400">{kpi.label}</span>
+                  <span className="text-xs text-zinc-400">{kpi.label}</span>
                 </div>
                 <div className={`text-2xl font-bold ${kpi.color}`}>{kpi.value}</div>
               </div>
@@ -473,7 +473,7 @@ export default function EmailIntelligencePage() {
               <Card className="border-border">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                    <TrendingUp className="w-4 h-4 text-blue-500" />
+                    <TrendingUp className="w-4 h-4 text-amber-500" />
                     Signal Pattern by Outcome
                   </CardTitle>
                   <CardDescription className="text-xs">
@@ -556,7 +556,7 @@ export default function EmailIntelligencePage() {
               <Card className="border-border">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-blue-500" />
+                    <Activity className="w-4 h-4 text-amber-500" />
                     Top Signal Types
                   </CardTitle>
                   <CardDescription className="text-xs">
@@ -650,7 +650,7 @@ export default function EmailIntelligencePage() {
                       >
                         <div className="shrink-0 mt-0.5">
                           {sig.linked_account_id ? (
-                            <Building2 className="w-4 h-4 text-blue-400" />
+                            <Building2 className="w-4 h-4 text-amber-400" />
                           ) : (
                             <Mail className="w-4 h-4 text-amber-400" />
                           )}
@@ -698,7 +698,7 @@ export default function EmailIntelligencePage() {
                 {/* Summary KPIs */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {[
-                    { label: "Contacts Suggested", value: learnedData?.summary.contacts_suggested ?? 0, icon: UserPlus, color: "text-blue-500" },
+                    { label: "Contacts Suggested", value: learnedData?.summary.contacts_suggested ?? 0, icon: UserPlus, color: "text-amber-500" },
                     { label: "Conversation Sparks", value: learnedData?.summary.sparks_generated ?? 0, icon: Sparkles, color: "text-amber-500" },
                     { label: "Enrichments Staged", value: learnedData?.summary.enrichments_staged ?? 0, icon: Wrench, color: "text-purple-500" },
                     { label: "Geographies Inferred", value: learnedData?.summary.geographies_inferred ?? 0, icon: MapPin, color: "text-teal-500" },
@@ -731,7 +731,7 @@ export default function EmailIntelligencePage() {
                   <Card className="border-border">
                     <CardHeader className="pb-3">
                       <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                        <UserPlus className="w-4 h-4 text-blue-500" />
+                        <UserPlus className="w-4 h-4 text-amber-500" />
                         New Contacts Detected
                       </CardTitle>
                       <CardDescription className="text-xs">
@@ -742,7 +742,7 @@ export default function EmailIntelligencePage() {
                       <div className="divide-y divide-border">
                         {(learnedData?.new_contact_suggestions ?? []).map(cs => (
                           <div key={cs.id} className="px-4 py-3 flex items-start gap-3" data-testid={`learned-contact-${cs.id}`}>
-                            <UserPlus className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
+                            <UserPlus className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-sm font-medium text-foreground">{cs.email_address}</span>

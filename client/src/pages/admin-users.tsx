@@ -66,7 +66,7 @@ function CriteriaForm({ fromRole, toRole, label, existing }: { fromRole: string;
   return (
     <div className="rounded-xl border bg-card p-4 space-y-3">
       <div className="flex items-center gap-2 mb-1">
-        <TrendingUp className="w-4 h-4 text-blue-600" />
+        <TrendingUp className="w-4 h-4 text-amber-600" />
         <h3 className="font-semibold text-sm">{label}</h3>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -153,7 +153,7 @@ function CareerProgressionSection() {
   return (
     <div className="border rounded-xl p-5 space-y-4 bg-muted/30" data-testid="section-career-progression">
       <div className="flex items-center gap-2">
-        <TrendingUp className="w-4 h-4 text-blue-600" />
+        <TrendingUp className="w-4 h-4 text-amber-600" />
         <h2 className="font-semibold text-sm">Career Progression Criteria</h2>
       </div>
       <p className="text-xs text-muted-foreground">
@@ -642,7 +642,7 @@ function BulkImportDialog() {
               <p>Admin → Admin &nbsp;|&nbsp; Director → Director</p>
             </div>
             <Button
-              className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
+              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
               disabled={!file || !defaultPassword || loading}
               onClick={handleImport}
               data-testid="button-confirm-bulk-import"
@@ -778,7 +778,7 @@ function BulkImportCompaniesDialog() {
               />
             </div>
             <Button
-              className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
+              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
               disabled={!file || loading}
               onClick={handleImport}
               data-testid="button-confirm-bulk-import-companies"
@@ -902,7 +902,7 @@ function BulkImportContactsDialog() {
               />
             </div>
             <Button
-              className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
+              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
               disabled={!file || loading}
               onClick={handleImport}
               data-testid="button-confirm-bulk-import-contacts"
@@ -1309,7 +1309,7 @@ export default function AdminUsers() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-admin-title">
-            <Users className="w-6 h-6 text-blue-600" />
+            <Users className="w-6 h-6 text-amber-600" />
             User Management
           </h1>
           <p className="text-muted-foreground mt-1">
@@ -1368,7 +1368,7 @@ export default function AdminUsers() {
           )}
           <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
             <DialogTrigger asChild>
-              <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" data-testid="button-add-user">
+              <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="button-add-user">
                 <Plus className="w-4 h-4 mr-2" /> {isNAM ? "Add Account Manager" : "Add User"}
               </Button>
             </DialogTrigger>
@@ -1407,8 +1407,8 @@ export default function AdminUsers() {
               <Card key={u.id} data-testid={`card-user-${u.id}`}>
                 <CardContent className="flex items-center justify-between p-4">
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-100 to-green-100 dark:from-blue-900 dark:to-green-900 flex items-center justify-center">
-                      <RoleIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-100 to-amber-50 dark:from-amber-900 dark:to-amber-950 flex items-center justify-center">
+                      <RoleIcon className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                     </div>
                     <div>
                       <p className="font-medium" data-testid={`text-user-name-${u.id}`}>{u.name}</p>

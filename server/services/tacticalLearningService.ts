@@ -99,10 +99,13 @@ export async function recordTacticOutcome(
     .where(and(eq(provenTactics.id, tacticId), eq(provenTactics.orgId, orgId)));
   if (!existing) return null;
 
+<<<<<<< HEAD
   if (existing.outcome !== "pending") {
     return existing;
   }
 
+=======
+>>>>>>> dfcc757 (Saved your changes before starting work)
   const newSuccessCount = outcome === "won" ? existing.successCount + 1 : existing.successCount;
   const newFailureCount = outcome === "lost" ? existing.failureCount + 1 : existing.failureCount;
   const total = newSuccessCount + newFailureCount;
