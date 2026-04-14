@@ -353,7 +353,7 @@ export function CarrierOutreachPanel({
   const { user: currentUser } = useAuth();
   const isDirectorOrAdmin = ["admin", "director"].includes(currentUser?.role ?? "");
   const isManager = ["admin", "director", "national_account_manager", "logistics_manager"].includes(currentUser?.role ?? "");
-  const canCorrectEmails = ["admin", "sales_director", "director", "logistics_manager"].includes(currentUser?.role ?? "");
+  const canCorrectEmails = ["admin", "sales_director", "director"].includes(currentUser?.role ?? "");
 
   const [correctionLog, setCorrectionLog] = useState<OutreachLog | null>(null);
   const [correctionDraft, setCorrectionDraft] = useState<EmailDraft | null>(null);
