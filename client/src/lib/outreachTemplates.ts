@@ -48,6 +48,12 @@ export const OUTREACH_TEMPLATES: OutreachTemplate[] = [
     subject: "Does {{origin}} to {{destination}} fit your network?",
     body: `{{carrierName}} team, does {{origin}} → {{destination}} on {{equipmentType}} fit your network? If it does, I'll send over the lane details and we can talk through coverage.`,
   },
+  {
+    id: "drop_trailer_project",
+    label: "Drop Trailer Project",
+    subject: "Drop trailer opportunity — {{origin}} to {{destination}}",
+    body: `Hi {{carrierName}} team — Value Truck here. We've got a drop trailer lane kicking off in the next few days running {{origin}} → {{destination}} on {{equipmentType}}. Looking for a consistent partner who can handle it on a recurring basis. If drop trailer work fits your fleet, shoot me a note and I'll get you all the details.`,
+  },
 ];
 
 export const DEFAULT_TEMPLATE_ID = "quick_capacity_check";

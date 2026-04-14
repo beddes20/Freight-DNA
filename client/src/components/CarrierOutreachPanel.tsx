@@ -74,6 +74,8 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
 
 interface TeamMember {
@@ -440,6 +442,12 @@ export function CarrierOutreachPanel({
   const [lastAppliedSubject, setLastAppliedSubject] = useState("");
   // Non-null while waiting for user to confirm a template switch over unsaved edits
   const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(null);
+  // ── Bulk edit & apply to all modal state ──────────────────────────────────
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [bulkEditSubject, setBulkEditSubject] = useState("");
+  const [bulkEditBody, setBulkEditBody] = useState("");
+  const [bulkEditSourceIndex, setBulkEditSourceIndex] = useState<number>(0);
+  const [draftsFromTemplate, setDraftsFromTemplate] = useState(false);
   // Tracks which lane ID we have already applied the initial default template for
   const initialTemplateAppliedRef = useRef<string | null>(null);
   // ── Import tab state ──────────────────────────────────────────────────────
@@ -901,6 +909,40 @@ export function CarrierOutreachPanel({
     }
   }
 
+  function openBulkEditModal(draftIndex: number) {
+    const draft = emailDrafts[draftIndex];
+    if (!draft) return;
+    setBulkEditSubject(draft.subject);
+    setBulkEditBody(draft.body);
+    setBulkEditSourceIndex(draftIndex);
+    setBulkEditOpen(true);
+  }
+
+  function handleBulkApproveAndApply() {
+    const subjectWithPlaceholder = reverseCarrierName(bulkEditSubject, emailDrafts[bulkEditSourceIndex]?.carrierName ?? "");
+    const bodyWithPlaceholder = reverseCarrierName(bulkEditBody, emailDrafts[bulkEditSourceIndex]?.carrierName ?? "");
+
+    setEmailDrafts(prev =>
+      prev.map(draft => {
+        const isAdHoc = draft.carrierName.startsWith("Ad-hoc:");
+        const resolvedName = isAdHoc ? "team" : draft.carrierName;
+        return {
+          ...draft,
+          subject: applyTemplateVars(subjectWithPlaceholder, { carrierName: resolvedName }),
+          body: applyTemplateVars(bodyWithPlaceholder, { carrierName: resolvedName }),
+        };
+      })
+    );
+    setBulkEditOpen(false);
+  }
+
+  function reverseCarrierName(text: string, carrierName: string): string {
+    if (!carrierName) return text;
+    const cleanName = carrierName.replace(/^Ad-hoc:\s*/, "");
+    if (!cleanName || cleanName === "team") return text;
+    return text.split(cleanName).join("{{carrierName}}");
+  }
+
   function handleGenerateOutreach() {
     const selected = filteredCarriers.filter(c => selectedCarriers.has(c.carrierId ?? c.carrierName));
     if (selected.length === 0 && adHocParsed.valid.length === 0) {
@@ -938,6 +980,7 @@ export function CarrierOutreachPanel({
         outreachMode,
       }));
       setEmailDrafts([...carrierDrafts, ...adHocDrafts]);
+      setDraftsFromTemplate(true);
       setShowEmails(true);
       setActiveMainTab("message");
       return;
@@ -954,6 +997,7 @@ export function CarrierOutreachPanel({
         {
           onSuccess: (data: { emails: EmailDraft[] }) => {
             setEmailDrafts([...(data.emails ?? []), ...adHocDrafts]);
+            setDraftsFromTemplate(false);
             setShowEmails(true);
             setActiveMainTab("message");
           },
@@ -962,6 +1006,7 @@ export function CarrierOutreachPanel({
     } else {
       // Only ad-hoc emails — show them directly
       setEmailDrafts(adHocDrafts);
+      setDraftsFromTemplate(false);
       setShowEmails(true);
       setActiveMainTab("message");
     }
@@ -2413,7 +2458,7 @@ export function CarrierOutreachPanel({
                         <Copy className="w-2.5 h-2.5" /> Copy all
                       </button>
                       <button
-                        onClick={() => { setShowEmails(false); setEmailDrafts([]); setSendOverallStatus("idle"); setDraftSendStatus({}); }}
+                        onClick={() => { setShowEmails(false); setEmailDrafts([]); setSendOverallStatus("idle"); setDraftSendStatus({}); setDraftsFromTemplate(false); }}
                         className="text-[10px] text-muted-foreground hover:text-foreground/60"
                       >
                         Discard
@@ -2436,6 +2481,16 @@ export function CarrierOutreachPanel({
                           <div className="flex items-center justify-between mb-2">
                             <p className="text-[10px] font-semibold text-amber-300">{draft.carrierName}</p>
                             <div className="flex items-center gap-1.5">
+                              {sendOverallStatus === "idle" && draftsFromTemplate && emailDrafts.length > 1 && !draft.carrierName.startsWith("Ad-hoc:") && (
+                                <button
+                                  onClick={() => openBulkEditModal(i)}
+                                  className="text-[9px] text-muted-foreground hover:text-foreground/60 flex items-center gap-0.5"
+                                  title="Edit this draft and apply changes to all"
+                                  data-testid={`btn-edit-apply-all-${i}`}
+                                >
+                                  <PenLine className="w-2.5 h-2.5" /> Edit & Apply to All
+                                </button>
+                              )}
                               <button onClick={() => navigator.clipboard.writeText(draft.body)} className="text-[9px] text-muted-foreground hover:text-foreground/60" title="Copy body" data-testid={`btn-copy-draft-${i}`}>
                                 <Copy className="w-2.5 h-2.5" />
                               </button>
@@ -2767,6 +2822,49 @@ export function CarrierOutreachPanel({
               )}
             </div>
           )}
+
+          <Dialog open={bulkEditOpen} onOpenChange={setBulkEditOpen}>
+            <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto" data-testid="bulk-edit-modal">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  <PenLine className="w-5 h-5 text-amber-500" />
+                  Edit & Apply to All
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-foreground mt-1">
+                  Edit the subject and body below. When you approve, all {emailDrafts.length} drafts will be updated with this content, with each carrier's name substituted automatically.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3 mt-2">
+                <div>
+                  <label className="text-[10px] font-medium text-muted-foreground mb-1 block">Subject</label>
+                  <input
+                    type="text"
+                    value={bulkEditSubject}
+                    onChange={e => setBulkEditSubject(e.target.value)}
+                    className="w-full text-[11px] text-foreground/70 bg-muted/20 border border-border rounded px-2 py-1.5 focus:outline-none focus:border-amber-400/40"
+                    data-testid="bulk-edit-subject"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-muted-foreground mb-1 block">Body</label>
+                  <Textarea
+                    value={bulkEditBody}
+                    onChange={e => setBulkEditBody(e.target.value)}
+                    className="text-[11px] text-foreground/70 bg-muted/20 border-border resize-none min-h-[200px]"
+                    data-testid="bulk-edit-body"
+                  />
+                </div>
+              </div>
+              <DialogFooter className="mt-4">
+                <Button variant="outline" size="sm" onClick={() => setBulkEditOpen(false)} data-testid="bulk-edit-cancel">
+                  Cancel
+                </Button>
+                <Button size="sm" onClick={handleBulkApproveAndApply} className="bg-amber-600 hover:bg-amber-700 text-white" data-testid="bulk-edit-approve">
+                  Approve & Apply to All
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           <Dialog open={!!correctionLog && !!correctionDraft} onOpenChange={(o) => { if (!o) { setCorrectionLog(null); setCorrectionDraft(null); } }}>
             <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="carrier-correction-modal">
