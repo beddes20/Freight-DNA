@@ -1,7 +1,7 @@
 # FreightDNA - Transportation Brokerage Sales Tool
 
 ## Overview
-FreightDNA is a specialized mini CRM application designed for transportation brokerage sales teams. Its primary purpose is to streamline sales workflows by managing customer accounts, organizational charts, contacts, and shipping data. It includes RFP and Award management with Excel upload and advanced analytical tools. The system aims to enhance customer relationship management, drive sales efficiency, facilitate strategic account penetration, and increase revenue for transportation brokers through robust role-based access control (RBAC).
+FreightDNA is a specialized mini CRM application for transportation brokerage sales teams. It streamlines sales workflows by managing customer accounts, organizational charts, contacts, and shipping data. The application includes RFP and Award management with Excel upload and advanced analytical tools. Its core purpose is to enhance customer relationship management, boost sales efficiency, facilitate strategic account penetration, and increase revenue for transportation brokers through robust role-based access control (RBAC).
 
 ## User Preferences
 I prefer clear and concise information. I like iterative development with regular updates. Please ask for my approval before implementing any major architectural changes or significant feature modifications. I value clean code and well-documented solutions.
@@ -9,100 +9,51 @@ I prefer clear and concise information. I like iterative development with regula
 ## System Architecture
 
 ### UI/UX Decisions
-The application utilizes React, TypeScript, Tailwind CSS, and `shadcn/ui` to deliver a modern and responsive user interface. Key UI elements include dark/light mode, blue and green accent colors, a gradient hero banner, KPI stat cards, and a responsive sidebar. The theme features a black sidebar/header with amber gold accents, the Value Truck logo, and mantras in the header.
+The application features a modern and responsive user interface built with React, TypeScript, Tailwind CSS, and `shadcn/ui`. It includes dark/light mode, blue and green accent colors, a gradient hero banner, KPI stat cards, and a responsive sidebar. The theme features a black sidebar/header with amber gold accents, the Value Truck logo, and mantras in the header.
 
 ### Technical Implementations
-The system is built with a React frontend, an Express.js backend, and a PostgreSQL database with Drizzle ORM. Authentication is session-based with dynamic RBAC. Core features include comprehensive CRM functionalities, RFP and Award management with AI assistance, and advanced analytics for lane research, facility coverage, and wallet share.
+FreightDNA is built with a React frontend, an Express.js backend, and a PostgreSQL database utilizing Drizzle ORM. Authentication is session-based with dynamic RBAC.
 
-Key functionalities include:
-- **CRM**: CRUD operations for companies and contacts, organizational chart visualization.
-- **RFP & Award Management**: Modules for managing RFPs and awards, with AI-assisted Excel uploads.
-- **Analytics**: Lane research, facility coverage gap analysis, lane pattern analysis, historical data, and wallet share.
+Core features include:
+- **CRM**: Comprehensive CRUD operations for companies and contacts, with organizational chart visualization.
+- **RFP & Award Management**: Modules for managing RFPs and awards, enhanced with AI-assisted Excel uploads.
+- **Advanced Analytics**: Tools for lane research, facility coverage gap analysis, lane pattern analysis, historical data, and wallet share.
 - **User & Team Management**: Administration, hierarchy, and account reassignment with RBAC.
 - **Data Integration**: Global search, OneDrive sync, and file attachments.
 - **Communication & Collaboration**: Task assignment, shared insights, and discussion topics.
-- **Customer Interaction**: Touchpoint logging, recency tracking, and alerts for contacts needing attention.
+- **Customer Interaction**: Touchpoint logging, recency tracking, and alerts.
 - **Account Intelligence**: Detailed operational fields and portal credentials storage.
-- **Customer Scorecard**: Secure document upload/download.
+- **Customer Scorecard**: Secure document management.
 - **Dashboard**: Contextual alerts, goal progress, and role-specific insights.
 - **Momentum Score**: Automated company health/momentum scores (At Risk, Stable, Growth Ready, High Expansion) with AI-powered insights and narratives.
 - **AI-Powered Features**: AI-generated talking points, health score narratives, touchpoint summaries, proactive nudges via chatbot, and AI action execution for logging touchpoints and creating tasks.
-- **AI Email Drafting**: Generates personalized email drafts using GPT-4o-mini, grounded in CRM/freight data, with voice profile analysis.
-- **Next Best Action (NBA)**: Recommendation engine generating persistent cards based on freight data rules.
+- **AI Email Drafting**: Generates personalized email drafts using GPT-4o-mini, grounded in CRM/freight data, with voice profile analysis. Includes a feedback loop for user ratings and an admin-level email correction system.
+- **Next Best Action (NBA)**: Recommendation engine providing persistent cards based on freight data rules.
 - **Lane Work Queue (LWQ)**: Assignable lane workflow with carrier outreach, email sending/tracking.
 - **Stable Coverage System**: Computes per-lane coverage profiles and tracks incumbent carriers.
-- **My Procurement**: Personal unified work surface for reps showing LWQ lane assignments and open award carrier procurement tasks.
-- **Carrier Hub**: Central carrier intelligence layer with contact management, claimed lanes, and activity tracking, including a Carrier Reliability Score.
+- **My Procurement**: Unified work surface for reps showing LWQ lane assignments and open award carrier procurement tasks.
+- **Carrier Hub**: Central carrier intelligence layer with contact management, claimed lanes, activity tracking, and a Carrier Reliability Score.
 - **Rate Intelligence & Rep Coaching Engine**: SONAR-driven lane rate benchmarks, rate positioning computation, and GPT-4o coaching cards per lane.
 - **Customer Contact Capture from Email**: Detects and suggests new contacts from email threads.
-- **Two-Way Carrier Email**: Outbound emails with reply-to addresses routed through Microsoft Graph webhook, matching inbound replies to outreach logs.
-- **Customer Email Intelligence Pipeline**: Processes inbound emails to extract customer intent signals (e.g., pricing_request, urgency_signal), surfaced in the company Intel tab.
+- **Two-Way Carrier Email**: Outbound emails with replies routed through Microsoft Graph webhook, matching inbound replies to outreach logs.
+- **Customer Email Intelligence Pipeline**: Processes inbound emails to extract customer intent signals (e.g., pricing_request, urgency_signal).
 - **Conversations Inbox**: Org-scoped email conversation thread management with ownership, waiting-state, priority, and overdue tracking.
-- **Geographic Lane Patterns**: Defines corridor patterns and tracks contact responsibilities with confidence scoring.
-- **Today's Briefing & Recently Visited**: Dashboard portlets for tasks, at-risk accounts, and recent activity.
-- **Pinned Accounts & Copy-to-Clipboard**: User-specific pinned accounts and quick copy actions.
-- **Quick Touchpoint Logger**: Floating action button and keyboard shortcut for logging touchpoints.
-- **Momentum Score Drop Notifications**: In-app and weekly digest notifications for momentum band changes.
-- **Power User Tools**: Global keyboard shortcuts, saved filter views, and bulk task actions.
-- **Collapsible Sidebar**: Icon-only mode with tooltips.
-- **Win/Loss Pattern Dashboard**: Analytics page (`/email-intelligence`) surfacing org-wide email signal patterns, urgency tracking, and win/loss patterns.
-- **Urgency Response Tracker**: Monitors and tracks unresponded urgency signals from customer emails.
-- **Carrier History & Ranking Contract**: Governs carrier ranking and TMS history display logic.
-- **Contact Geography Ownership Graph** (Task #225): AI-derived geography ownership layer that infers which contacts own which geographies from email threads and load history. New `contact_geography_suggestions` table stores AI-inferred region/lane assignments with confidence scores and source evidence. Email intelligence scheduler runs geography inference after signal extraction. API endpoints: `GET /api/internal/accounts/:id/geography-suggestions`, `POST /api/internal/geography-suggestions/:id/accept|reject|dismiss`. Accepting updates the contact's `regions` and `lanes` arrays. "Geography Ownership" section on People tab shows confirmed assignments, pending AI suggestions as reviewable cards, and prompts for contacts with no data.
-- **Tactical Learning Engine**: Captures which response approaches lead to wins. `proven_tactics` table stores tactics linked to email signals and outcomes with success rates. Only "won" tactics are surfaced during AI email drafting. API endpoints: `GET /api/internal/proven-tactics`, `GET /api/internal/proven-tactics/stats`, `GET /api/internal/proven-tactics/for-signal?signalType=`, `POST /api/internal/proven-tactics`, `POST /api/internal/proven-tactics/:id/outcome`. Frontend page at `/proven-tactics` with KPI cards, filterable tactic list, expandable cards with example responses, and outcome recording (won/lost).
-- **AI Draft Feedback Loop**: Users rate AI-generated drafts (good/bad/needs_work) with optional notes. `draft_feedback` table stores ratings, original+edited text. `gatherFeedbackContext()` injects recent feedback into AI prompts. Feedback UI in DraftEmailModal with thumbs up/down/needs-work buttons.
-- **Sent Email Corrections**: Admins/directors can review sent emails and write "what should have been said." `sent_email_corrections` table stores original vs corrected text with coaching notes. Works on both customer-side (Conversations thread detail) and carrier-side (CarrierOutreachPanel history tab). Pencil icon on sent messages (admin/director only). Carrier corrections support multi-carrier outreach with tab selector per draft. Corrections heavily weighted in AI draft context via `gatherFeedbackContext()`. Role-gated API: `POST /api/email-corrections` (admin/director), `GET /api/email-corrections` (IDs only for reps, full data for leadership; supports `hasOutreachLog=1` filter), `GET /api/email-corrections/stats` (admin/director).
-- **AI Intelligence Hub** (`/ai-intelligence`): Unified AI-powered intelligence dashboard with 11 features across 10 tabs. Service layer in `server/services/aiIntelligenceService.ts`, routes in `server/routes/aiIntelligence.ts`.
-  1. **Meeting Prep Briefs**: AI generates pre-meeting one-pagers with talking points, risk alerts, opportunities, and suggested agenda. Stored in `meeting_prep_briefs` table.
-  2. **Sentiment Tracking**: Per-contact sentiment scoring (1-100) with trend detection (warming/stable/cooling/disengaged). Analyzes email response patterns and touchpoint frequency. Stored in `contact_sentiment_tracking`.
-  3. **Smart Follow-Up Timing**: AI learns optimal follow-up cadence per contact — best day, time of day, cadence interval, max silence days. Stored in `follow_up_recommendations`.
-  4. **Relationship Health Coaching**: Per-account coaching insights combining sentiment, touchpoints, and org coverage. Gap/risk/opportunity/strength classifications with specific suggested actions. Stored in `relationship_coaching_insights`.
-  5. **Org Chart Gap Analysis**: Maps touchpoints vs org chart to find missing roles, untouched contacts, single-threaded relationships, and missing executive sponsors. CC pattern analysis from emails. Stored in `org_chart_gaps`.
-  6. **Warm Introduction Paths**: Suggests warm intro paths through existing contacts to reach new targets. Connection strength scoring with specific approach suggestions. Stored in `warm_intro_suggestions`.
-  7. **Look-Alike Prospecting**: Finds CRM accounts most similar to top customers based on industry, freight spend, shipping modes, and lane patterns. Stored in `account_look_alikes`.
-  8. **Cross-Sell / Lane Gap Intelligence**: Compares customer lanes vs peer patterns to identify reverse lanes, new corridors, mode expansion, and volume growth. Stored in `cross_sell_opportunities`.
-  9. **Wallet Share Expansion Playbook**: AI generates per-account growth plans with target lanes, contacts, pricing strategy, estimated revenue, and week-by-week execution steps. Stored in `wallet_share_plays`.
-  10. **Win/Loss Pattern Engine**: Analyzes won/lost RFPs across the org to surface pricing, relationship, timing, geography patterns. Leadership-only generation. Stored in `win_loss_patterns`.
-  11. **Competitive Signal Detection**: Detects competitor mentions, rate shopping, switching risk from email analysis. Severity-rated with suggested responses. Stored in `competitive_signals`.
+- **Geographic Lane Patterns**: Defines corridor patterns and tracks contact responsibilities with confidence scoring, including AI-derived geography ownership suggestions.
+- **AI Intelligence Hub**: A unified dashboard offering Meeting Prep Briefs, Sentiment Tracking, Smart Follow-Up Timing, Relationship Health Coaching, Org Chart Gap Analysis, Warm Introduction Paths, Look-Alike Prospecting, Cross-Sell / Lane Gap Intelligence, Wallet Share Expansion Playbook, Win/Loss Pattern Engine, and Competitive Signal Detection.
+- **Auto-Sync Customer Emails**: Monitors individual Outlook mailboxes for NAMs & AMs via Microsoft Graph webhooks, automatically pulling and processing customer email threads for AI signal extraction.
+- **Tactical Learning Engine**: Captures and surfaces successful response approaches for various email signals.
 
-- **Auto-Sync Customer Emails for NAMs & AMs** (Task #230): Monitors individual NAM/AM Outlook mailboxes via Microsoft Graph webhooks. Automatically pulls email threads involving known customer contacts, links them to accounts, and runs AI signal extraction. Admin UI at `/admin/monitored-mailboxes` for managing monitored mailboxes. Delta sync catches missed emails every 15 minutes. New table: `monitored_mailboxes`. Services: `graphSubscriptionService` (per-user subscriptions), `mailboxDeltaSyncService` (catch-up sync). API: `GET/POST/PATCH/DELETE /api/internal/admin/monitored-mailboxes`, `POST .../sync`.
-
-### DB Tables Added in Tasks #200–203, #225, #230, Tactical Learning
-| Table | Purpose |
-|---|---|
-| `lane_summary_cache` | Pre-computed flat LeanItem rows for the LWQ work-queue (cache-first path). Populated by `scoreAllEligibleLanes` on startup (20s delay) and nightly at 3:00 AM CT. |
-| `account_contact_suggestions` | Pending/accepted/ignored contact suggestions detected from email threads. |
-| `geographic_lane_patterns` | Named corridor patterns (20 baseline rows seeded on startup). |
-| `account_contact_lane_pattern_responsibilities` | Confidence-scored mappings of contact → corridor, with evidence keys and source types. |
-| `email_conversation_threads` | Org-scoped carrier/account email conversation management (Task #202). |
-| `contact_geography_suggestions` | AI-inferred geography (region/lane) ownership per contact, with confidence scores, source evidence, and approval workflow (Task #225). |
-| `proven_tactics` | Response approaches linked to email signals/outcomes with success rates. Seeded with 8 demo tactics. Surfaced during AI email drafting. |
-| `draft_feedback` | AI draft ratings (good/bad/needs_work) with notes and edited text. Fed back into AI prompts via gatherFeedbackContext(). |
-| `sent_email_corrections` | Leadership corrections of sent emails — original vs corrected text with coaching notes. Heavily weighted in AI context. |
-| `meeting_prep_briefs` | AI-generated pre-meeting briefs with talking points, risk alerts, opportunities. |
-| `contact_sentiment_tracking` | Per-contact sentiment scores and trend tracking (warming/stable/cooling). |
-| `follow_up_recommendations` | AI-learned optimal follow-up cadence per contact. |
-| `relationship_coaching_insights` | Per-account coaching insights from AI analysis. |
-| `org_chart_gaps` | Identified gaps in org chart coverage at customer accounts. |
-| `warm_intro_suggestions` | AI-suggested warm introduction paths through existing contacts. |
-| `account_look_alikes` | Similar account pairings with match factors and similarity scores. |
-| `cross_sell_opportunities` | Lane/service gaps identified by comparing customer to peers. |
-| `wallet_share_plays` | AI-generated per-account growth playbooks with execution steps. |
-| `win_loss_patterns` | AI-analyzed patterns from won/lost RFPs across the org. |
-| `competitive_signals` | Competitor mentions and switching risk detected from emails. |
-| `monitored_mailboxes` | Per-user Outlook mailbox monitoring config for auto-syncing customer emails (Task #230). Stores subscription ID, delta sync token, sync status. |
-
-### DB Tables
-Key database tables support core functionalities, including `lane_summary_cache` for pre-computed lane data, `account_contact_suggestions` for email-derived contact suggestions, `geographic_lane_patterns` for defined corridors, `account_contact_lane_pattern_responsibilities` for contact-to-corridor mapping, and `email_conversation_threads` for managing email conversations.
+### System Design Choices
+Key database tables support core functionalities, including pre-computed lane data (`lane_summary_cache`), email-derived contact suggestions (`account_contact_suggestions`), defined corridor patterns (`geographic_lane_patterns`), contact-to-corridor mapping (`account_contact_lane_pattern_responsibilities`), email conversation management (`email_conversation_threads`), AI-inferred geography ownership (`contact_geography_suggestions`), proven tactical responses (`proven_tactics`), AI draft feedback (`draft_feedback`), email correction records (`sent_email_corrections`), and numerous tables for the AI Intelligence Hub features (e.g., `meeting_prep_briefs`, `contact_sentiment_tracking`, `monitored_mailboxes`).
 
 ## External Dependencies
-- **PostgreSQL**: Primary database and session store.
+- **PostgreSQL**: Primary database.
 - **xlsx (SheetJS)**: For Excel and CSV parsing.
 - **multer**: For file uploads.
 - **Leaflet**: For interactive mapping.
 - **OneDrive API (Microsoft Graph API)**: For financial data synchronization and reply webhook routing.
 - **node-cron**: For scheduling recurring jobs.
 - **Resend / GoDaddy SMTP**: For sending transactional and report emails.
-- **OpenAI (GPT-4o / GPT-4o-mini)**: For AI-assisted features (RFP column mapping, lane gap insights, email drafting, lane coaching cards).
-- **Microsoft Graph API (Outlook)**: Two-way carrier email via webhook subscription.
+- **OpenAI (GPT-4o / GPT-4o-mini)**: For AI-assisted features (RFP column mapping, lane gap insights, email drafting, lane coaching cards, and all AI Intelligence Hub features).
+- **Microsoft Graph API (Outlook)**: Two-way carrier email via webhook subscription and auto-sync of customer emails.
 - **FreightWaves SONAR**: For market rate benchmarking and lane rate intelligence.
