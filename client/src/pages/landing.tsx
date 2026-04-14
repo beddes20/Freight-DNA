@@ -8,11 +8,12 @@ import {
   LayoutGrid, MessagesSquare, ListTodo, Trophy, Wrench, GraduationCap,
   UserCog, LineChart, Loader2, Kanban, RefreshCw, Send, X,
   ChevronDown, ChevronUp, AlertCircle, Truck, Route,
+  Radio, Brain, Warehouse, Briefcase, Activity, Rocket,
 } from "lucide-react";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
 
 const stats = [
-  { value: "20+", label: "Platform Modules" },
+  { value: "25+", label: "Platform Modules" },
   { value: "360°", label: "Account Visibility" },
   { value: "AI-Powered", label: "Sales Intelligence" },
   { value: "~1 Week", label: "Avg. Onboarding Time" },
@@ -49,6 +50,16 @@ const features = [
     title: "Goals & Accountability",
     description: "Set quarterly targets for load count, margin, touchpoints, and new contacts — then watch progress auto-track against live data.",
   },
+  {
+    icon: Radio,
+    title: "Market Intelligence & SONAR Integration",
+    description: "Tap into real-time freight market data and rate benchmarks via SONAR. Spot capacity shifts, validate lane pricing, and arm your team with live market context before every negotiation.",
+  },
+  {
+    icon: Brain,
+    title: "AI Intelligence Hub",
+    description: "Sentiment analysis on customer interactions, AI-driven coaching recommendations, and competitive intelligence — all synthesized in one hub so leadership and reps stay a step ahead.",
+  },
 ];
 
 const modules = [
@@ -64,6 +75,13 @@ const modules = [
   { icon: Route, name: "RFP Lane Search", desc: "Search across all uploaded RFPs by corridor to find which customers have freight on specific lanes, grouped by mode. Know who to call before an RFP drops." },
   { icon: Target, name: "Goals & Accountability", desc: "Set and auto-track targets for loads, margin, touchpoints, and new contacts against live platform data." },
   { icon: BarChart3, name: "Team Performance", desc: "Period-over-period activity and revenue tracking with rep rankings — turn coaching from opinions into evidence." },
+  { icon: ListTodo, name: "Lane Work Queue", desc: "Prioritized carrier procurement workflow — see which lanes need coverage, rank by urgency, and work through sourcing tasks systematically." },
+  { icon: Radio, name: "Market Intelligence / SONAR", desc: "Real-time market data and rate benchmarks powered by SONAR integration — spot trends, validate pricing, and negotiate with confidence." },
+  { icon: Brain, name: "AI Intelligence Hub", desc: "Sentiment analysis, rep coaching insights, and competitive intel — all driven by AI so your team sells smarter every day." },
+  { icon: Warehouse, name: "Carrier Hub", desc: "Centralized carrier relationship management and sourcing — track capacity, performance, and preferred lanes across your entire network." },
+  { icon: Briefcase, name: "My Procurement", desc: "Personalized logistics manager view — your lanes, your carriers, your priorities, all in one dashboard built for daily execution." },
+  { icon: Activity, name: "Market Signal Engine", desc: "Proactive alerts on market shifts, capacity changes, and rate movements — know what's happening before it hits your margins." },
+  { icon: Rocket, name: "Momentum Scores & NBA", desc: "Momentum Scores quantify deal velocity while Next Best Action cards tell each rep exactly what to do next to keep opportunities moving." },
 ];
 
 
@@ -75,7 +93,7 @@ const personas = [
       "Full account org charts with contact ownership and decision-maker mapping",
       "One-click touchpoint logging from anywhere — calls, emails, texts, site visits",
       "AI-flagged cold contacts so no relationship slips through the cracks",
-      "Ask DNA Guru \"what carriers run TX-CA for dry vans?\" and get a live carrier call list from your own freight data",
+      "Momentum Scores show deal velocity at a glance; Next Best Action cards tell you exactly what to do next",
       "AI Sales Intel Briefs with wallet share scoring, RFP history, network overlap, and conversation starters — before every pitch",
     ],
   },
@@ -84,19 +102,31 @@ const personas = [
     tagline: "Coach with data, not opinions.",
     bullets: [
       "Real-time team performance dashboards with period-over-period comparisons",
-      "Rep scorecards covering loads, margin, touchpoints, and goal progress",
+      "Market Intelligence dashboards with SONAR-powered rate benchmarks and trend data",
+      "AI Intelligence Hub surfaces sentiment analysis, coaching insights, and competitive intel",
       "1:1 tooling with threaded follow-ups and structured agendas",
-      "Carrier Lane Search and RFP Lane Search give ops and sales leaders corridor-level intel before any bid or sourcing call",
+      "Rep scorecards covering loads, margin, touchpoints, and goal progress",
     ],
   },
   {
-    role: "Admins & Operations",
+    role: "Ops & Logistics Managers",
+    tagline: "Execute faster, source smarter.",
+    bullets: [
+      "Lane Work Queue prioritizes carrier procurement tasks by urgency so nothing falls through",
+      "My Procurement dashboard — your lanes, carriers, and sourcing priorities in one view",
+      "Carrier Hub for centralized carrier relationship management and capacity tracking",
+      "Market Signal Engine alerts you to capacity shifts and rate changes before they impact margins",
+      "Financial data powers Carrier Lane Search, RFP Lane Search, and wallet share — all from a single upload",
+    ],
+  },
+  {
+    role: "Admins & Platform Owners",
     tagline: "Keep the platform running clean.",
     bullets: [
       "Multi-team and multi-org support with role-based access control",
       "Centralized portal credentials management via Coordinator's Corner",
       "PTO passoff workflows so accounts never slip during coverage gaps",
-      "Financial data powers Carrier Lane Search, RFP Lane Search, and wallet share — all from a single upload",
+      "25+ modules configured and ready — onboard new teams in days, not months",
     ],
   },
 ];
@@ -139,7 +169,7 @@ function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
       savingsNote: null as string | null,
       description: "One month of full platform access with complete hands-on setup included. If you continue, the $1,000 applies toward your first year.",
       features: [
-        "Full platform access — all 20+ modules",
+        "Full platform access — all 25+ modules",
         "Complete setup and data import",
         "Team configuration and training",
         "All AI features enabled",
@@ -156,7 +186,7 @@ function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
       savingsNote: annual ? "You save $3,600/year" : "Save 20% — pay annually",
       description: "Full platform access for teams up to 50 members. Everything you need to run a best-in-class freight sales org.",
       features: [
-        "All 20+ platform modules",
+        "All 25+ platform modules",
         "Up to 50 team members",
         "AI Sales Intel Briefs and DNA Guru",
         "Goals, 1:1s, and performance dashboards",
