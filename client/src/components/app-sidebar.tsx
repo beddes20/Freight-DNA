@@ -196,12 +196,27 @@ function useConversationsWaitingCount() {
   return data?.count ?? 0;
 }
 
+const INTEL_REVIEW_ROLES = ["admin", "director"];
+
+function usePendingIntelCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/carrier-hub/pending-intel-count"],
+    enabled: !!user && INTEL_REVIEW_ROLES.includes(user.role),
+    refetchInterval: 60_000,
+    staleTime: 50_000,
+    retry: false,
+  });
+  return data?.count ?? 0;
+}
+
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const { taskCount, suggestionCount } = useNotificationCounts();
   const unactionedReplyCount = useUnactionedReplyCount();
   const conversationsWaitingCount = useConversationsWaitingCount();
+  const pendingIntelCount = usePendingIntelCount();
   const { toast } = useToast();
   const [profileOpen, setProfileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -368,9 +383,11 @@ export function AppSidebar() {
                       ? unactionedReplyCount
                       : item.title === "Conversations"
                         ? conversationsWaitingCount
-                        : undefined
+                        : item.title === "Carrier Hub"
+                          ? pendingIntelCount
+                          : undefined
                   }
-                  badgeColor={item.title === "Conversations" ? "red" : "green"}
+                  badgeColor={item.title === "Conversations" ? "red" : item.title === "Carrier Hub" ? "red" : "green"}
                 />
               ))}
             </CollapsibleGroup>

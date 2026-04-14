@@ -37,6 +37,21 @@ function orgId(req: Express.Request): string {
 // ── register routes ─────────────────────────────────────────────────────────
 
 export function registerCarrierHubRoutes(app: Express) {
+  // ── PENDING INTEL COUNT (sidebar badge) ───────────────────────────────────
+  app.get("/api/carrier-hub/pending-intel-count", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const result = await storage.pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM carrier_intel_suggestions WHERE org_id = $1 AND status = 'pending'`,
+        [org]
+      );
+      res.json({ count: parseInt(result.rows[0]?.count ?? "0") });
+    } catch (err) {
+      console.error("[carrier-hub] pending-intel-count error:", err);
+      res.status(500).json({ error: "Failed to fetch pending intel count" });
+    }
+  });
+
   // ── LIST ──────────────────────────────────────────────────────────────────
   app.get("/api/carrier-hub", requireAuth, async (req, res) => {
     try {
