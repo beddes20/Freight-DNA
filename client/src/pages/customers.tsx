@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
+import { QueryError } from "@/components/query-error";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -259,11 +260,11 @@ export default function Customers() {
     onError: () => toast({ title: "Failed to add contact", variant: "destructive" }),
   });
 
-  const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
+  const { data: companies, isLoading: companiesLoading, isError: companiesError, refetch: refetchCompanies } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
   });
 
-  const { data: archivedCompanies, isLoading: archivedLoading } = useQuery<Company[]>({
+  const { data: archivedCompanies, isLoading: archivedLoading, isError: archivedError, refetch: refetchArchived } = useQuery<Company[]>({
     queryKey: ["/api/companies", { includeArchived: true }],
     queryFn: async () => {
       const res = await fetch("/api/companies?includeArchived=true", { credentials: "include" });
@@ -418,6 +419,8 @@ export default function Customers() {
 
   const displayList = applyFilters(showArchived ? archivedCompanies : companies);
   const isLoading = showArchived ? archivedLoading : companiesLoading;
+  const isError = showArchived ? archivedError : companiesError;
+  const refetchData = showArchived ? refetchArchived : refetchCompanies;
 
   function clearFilters() {
     setRepFilter("all");
@@ -630,7 +633,9 @@ export default function Customers() {
         </div>
       )}
 
-      {isLoading ? (
+      {isError ? (
+        <QueryError message="We couldn't load your accounts. This is usually temporary." onRetry={() => refetchData()} />
+      ) : isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <Card key={i}>
@@ -848,10 +853,17 @@ export default function Customers() {
           <p className="font-medium">
             {activeFiltersCount > 0 || searchQuery ? "No accounts match your filters" : (showArchived ? "No archived accounts" : "No customers yet")}
           </p>
-          {(activeFiltersCount > 0 || searchQuery) && (
+          {(activeFiltersCount > 0 || searchQuery) ? (
             <Button variant="ghost" size="sm" className="mt-3" onClick={() => { clearFilters(); setSearchQuery(""); }}>
               Clear all filters
             </Button>
+          ) : !showArchived && (
+            <div className="mt-3 space-y-2">
+              <p className="text-sm">Add your first customer account to get started.</p>
+              <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-amber-500 hover:bg-amber-600 text-black" data-testid="btn-empty-add-customer">
+                <Plus className="h-4 w-4 mr-1" /> Add Customer
+              </Button>
+            </div>
           )}
         </div>
       )}

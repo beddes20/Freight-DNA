@@ -269,15 +269,21 @@ async function initStripe() {
       initPtoReturnScheduler();
       initWeeklyGoalRecapScheduler();
       initLmCheckinScheduler();
-      initNbaPhase1Scheduler();
-      initMarketSignalScheduler();
-      initMomentumDropScheduler();
-      startIntelEmailScheduler();
-      startEmailIntelligenceScheduler();
-      initGraphSubscriptionService().catch(err => {
-        console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));
-      });
-      initDeltaSyncScheduler();
+
+      setTimeout(() => {
+        initNbaPhase1Scheduler();
+        initMarketSignalScheduler();
+        initMomentumDropScheduler();
+      }, 2000);
+
+      setTimeout(() => {
+        startIntelEmailScheduler();
+        startEmailIntelligenceScheduler();
+        initGraphSubscriptionService().catch(err => {
+          console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));
+        });
+        initDeltaSyncScheduler();
+      }, 4000);
       // Pre-warm the financial uploads cache so the first carrier-suggestions
       // request doesn't trigger a cold full-table JSONB scan in production.
       setTimeout(() => {

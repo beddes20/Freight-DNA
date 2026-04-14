@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+import { QueryError } from "@/components/query-error";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -583,7 +584,7 @@ export default function ConversationsPage() {
     return p.toString();
   }
 
-  const { data, isLoading } = useQuery<ThreadsResponse>({
+  const { data, isLoading, isError, refetch } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", activeTab, filterState, filterPriority, filterOverdue],
     queryFn: async () => {
       const res = await fetch(`/api/internal/conversations?${buildParams()}`);
@@ -727,7 +728,9 @@ export default function ConversationsPage() {
         )}
 
         <div className="border rounded-lg overflow-hidden">
-          {isLoading ? (
+          {isError ? (
+            <QueryError message="Couldn't load conversations. This is usually temporary." onRetry={() => refetch()} />
+          ) : isLoading ? (
             <div className="divide-y">
               {[...Array(5)].map((_, i) => (
                 <div key={i} className="flex items-center gap-4 px-4 py-3">

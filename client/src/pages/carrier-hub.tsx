@@ -9,6 +9,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { QueryError } from "@/components/query-error";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1564,7 +1565,7 @@ export default function CarrierHub() {
     page: String(page),
   });
 
-  const { data: pageData, isLoading, isFetching } = useQuery<{ carriers: CarrierRow[]; total: number; page: number; pages: number }>({
+  const { data: pageData, isLoading, isFetching, isError, refetch } = useQuery<{ carriers: CarrierRow[]; total: number; page: number; pages: number }>({
     queryKey: ["/api/carrier-hub", queryParams.toString()],
     queryFn: () => fetch(`/api/carrier-hub?${queryParams}`).then(r => r.json()),
   });
@@ -1707,7 +1708,9 @@ export default function CarrierHub() {
             </div>
           </div>
           <div className="flex-1 overflow-y-auto px-6 py-3 flex flex-col gap-2">
-            {isLoading ? (
+            {isError ? (
+              <QueryError message="Couldn't load carriers. This is usually temporary." onRetry={() => refetch()} />
+            ) : isLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
               </div>

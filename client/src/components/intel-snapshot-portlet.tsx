@@ -81,7 +81,15 @@ export function IntelSnapshotPortlet() {
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <Radio className="h-4 w-4 text-blue-500" /> Intel Snapshot
-            {sonarIsStale && <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">Stale</Badge>}
+            {sonarIsStale && (
+              <Badge
+                variant="outline"
+                className="text-[10px] text-amber-600 border-amber-300 cursor-help"
+                title="Market data is temporarily cached. SONAR refreshes automatically every few hours — this is normal."
+              >
+                Cached
+              </Badge>
+            )}
           </CardTitle>
           <Link href="/intel" data-testid="link-view-full-intel">
             <span className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5 cursor-pointer">

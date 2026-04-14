@@ -420,7 +420,7 @@ export default function AIIntelligencePage() {
                       )}
                     </Card>
                   ))}
-                  {!briefsData?.briefs?.length && <EmptyState message="No briefs yet. Generate one before your next meeting." />}
+                  {!briefsData?.briefs?.length && <EmptyState message="No briefs yet. Select an account above and click 'Generate Brief' to create a pre-meeting one-pager with talking points, risk alerts, and opportunities." />}
                 </div>
               )}
             </TabsContent>
@@ -459,12 +459,17 @@ export default function AIIntelligencePage() {
                                 {sig.type === "positive" ? "+" : sig.type === "negative" ? "-" : "~"} {sig.detail}
                               </p>
                             ))}
+                            {s.createdAt && (
+                              <p className="text-[10px] text-muted-foreground/50 mt-2" data-testid="text-sentiment-timestamp">
+                                Analyzed {new Date(s.createdAt).toLocaleDateString()} at {new Date(s.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                              </p>
+                            )}
                           </CardContent>
                         </Card>
                       ))}
                     </div>
                   ) : (
-                    <EmptyState message="No sentiment data yet. Sentiment is analyzed per-contact when you run analysis." />
+                    <EmptyState message="No sentiment data yet. Click 'Analyze All Contacts' above to scan engagement patterns and detect cooling relationships before they become problems." />
                   )}
                 </div>
               )}
@@ -502,12 +507,17 @@ export default function AIIntelligencePage() {
                           </div>
                         )}
                         {rec.reasoning && <p className="text-xs text-muted-foreground">{rec.reasoning}</p>}
+                        {rec.createdAt && (
+                          <p className="text-[10px] text-muted-foreground/50 mt-1" data-testid="text-followup-timestamp">
+                            Analyzed {new Date(rec.createdAt).toLocaleDateString()} at {new Date(rec.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </p>
+                        )}
                       </CardContent>
                     </Card>
                   ))}
                 </div>
               ) : (
-                <EmptyState message="No follow-up data yet. Select an account and analyze contacts to build timing intelligence." />
+                <EmptyState message="No follow-up timing data yet. Select an account above and click 'Analyze Timing' to learn the best day, time, and cadence for each contact." />
               )}
             </TabsContent>
 

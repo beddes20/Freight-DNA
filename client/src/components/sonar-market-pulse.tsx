@@ -342,8 +342,12 @@ export function SonarMarketPulsePortlet({ role }: SonarMarketPulsePortletProps =
           </CardTitle>
           <div className="flex items-center gap-1.5">
             {pulse.isStale && (
-              <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300 py-0">
-                Stale
+              <Badge
+                variant="outline"
+                className="text-[10px] text-amber-600 border-amber-300 py-0 cursor-help"
+                title="Market data is temporarily cached. SONAR refreshes automatically every few hours."
+              >
+                Cached
               </Badge>
             )}
             <Badge
@@ -455,7 +459,7 @@ export function SonarMarketPulseStrip() {
       <span className="text-white/70">
         NTI {pulse.ntiPerMove > 100 ? `$${Math.round(pulse.ntiPerMove).toLocaleString()}/move` : `$${pulse.ntiPerMove.toFixed(2)}/mi`}
       </span>
-      {pulse.isStale && <span className="text-amber-400 text-[10px]">⚠ Stale</span>}
+      {pulse.isStale && <span className="text-amber-400 text-[10px]" title="Market data is temporarily cached">⚠ Cached</span>}
     </div>
   );
 }

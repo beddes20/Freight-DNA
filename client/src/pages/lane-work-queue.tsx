@@ -15,6 +15,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryError } from "@/components/query-error";
 import { formatLaneDisplay, formatWeeklyLoadRange } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1780,7 +1781,7 @@ export default function LaneWorkQueuePage() {
     onError: () => toast({ title: "Engine run failed", variant: "destructive" }),
   });
 
-  const { data: queue, isLoading, refetch } = useQuery<WorkQueue>({
+  const { data: queue, isLoading, isError, refetch } = useQuery<WorkQueue>({
     queryKey: ["/api/recurring-lanes/work-queue"],
     queryFn: () => fetch("/api/recurring-lanes/work-queue").then(r => r.json()),
   });
@@ -2043,7 +2044,9 @@ export default function LaneWorkQueuePage() {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        {isLoading ? (
+        {isError ? (
+          <QueryError message="Couldn't load the lane work queue. This is usually temporary." onRetry={() => refetch()} />
+        ) : isLoading ? (
           <div className="space-y-4" data-testid="lwq-skeleton">
             {/* Summary stat chips skeleton */}
             <div className="flex gap-3 flex-wrap mb-6">
