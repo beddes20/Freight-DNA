@@ -30,6 +30,7 @@ interface OverviewTabProps {
   onNbaViewRfp?: () => void;
   onOpenContact?: (contactId: string) => void;
   isLeadership?: boolean;
+  onPrepForCall?: () => void;
 }
 
 export function OverviewTab({
@@ -48,6 +49,7 @@ export function OverviewTab({
   onNbaViewRfp,
   onOpenContact,
   isLeadership,
+  onPrepForCall,
 }: OverviewTabProps) {
   const [ffDialogOpen, setFfDialogOpen] = useState(false);
 
@@ -139,7 +141,7 @@ export function OverviewTab({
       )}
 
       {/* Phase 1 persistent NBA card — takes precedence; falls back to legacy when absent */}
-      <NbaCompanyCard companyId={companyId} onHasCard={setHasPhase1Card} />
+      <NbaCompanyCard companyId={companyId} onHasCard={setHasPhase1Card} onPrepForCall={onPrepForCall} />
 
       {!hasPhase1Card && (
         <NextBestActionCard

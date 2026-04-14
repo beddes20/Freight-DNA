@@ -60,6 +60,7 @@ export interface NbaCardProps {
   hideCompanyLink?: boolean;
   onDismissed?: (id: string) => void;
   onActioned?: (id: string) => void;
+  onPrepForCall?: (companyId: string, nbaCardId: string) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -107,7 +108,7 @@ const DISMISS_OPTIONS: { value: string; label: string }[] = [
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned }: NbaCardProps) {
+export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned, onPrepForCall }: NbaCardProps) {
   const [showDismiss, setShowDismiss] = useState(false);
   const [dismissValue, setDismissValue] = useState("");
   const [showLogTouch, setShowLogTouch] = useState(false);
@@ -396,6 +397,17 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             >
               <CheckCircle2 className="w-3 h-3 mr-0.5" />
               Done
+            </Button>
+          )}
+          {onPrepForCall && card.companyId && (
+            <Button
+              size="sm"
+              onClick={() => onPrepForCall(card.companyId!, card.id)}
+              className="h-6 text-[10px] px-2 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30"
+              data-testid={`nba-card-prep-call-${card.id}`}
+            >
+              <BookOpen className="w-3 h-3 mr-0.5" />
+              Prep
             </Button>
           )}
           {card.companyId && !isLaneCapacityCard && (

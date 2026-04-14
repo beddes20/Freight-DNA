@@ -67,6 +67,7 @@ interface PreCallPlannerProps {
   rfps: Rfp[];
   awards: Award[];
   financialSummary: FinancialSummary;
+  onPostCallCapture?: () => void;
   healthScore: HealthScore | null | undefined;
 }
 
@@ -213,6 +214,7 @@ export function PreCallPlanner({
   awards,
   financialSummary,
   healthScore,
+  onPostCallCapture,
 }: PreCallPlannerProps) {
   const printRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
@@ -967,6 +969,17 @@ export function PreCallPlanner({
             >
               <ClipboardList className="h-3.5 w-3.5" /> Create Task
             </Button>
+            {onPostCallCapture && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { onClose(); onPostCallCapture(); }}
+                data-testid="button-footer-post-call"
+                className="flex items-center gap-1.5"
+              >
+                <Sparkles className="h-3.5 w-3.5" /> Log & Summarize
+              </Button>
+            )}
             <div className="flex-1" />
             <Button
               variant="ghost"

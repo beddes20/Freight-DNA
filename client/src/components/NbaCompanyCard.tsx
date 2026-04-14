@@ -17,9 +17,10 @@ import { Brain } from "lucide-react";
 interface NbaCompanyCardProps {
   companyId: string;
   onHasCard?: (hasCard: boolean) => void;
+  onPrepForCall?: () => void;
 }
 
-export function NbaCompanyCard({ companyId, onHasCard }: NbaCompanyCardProps) {
+export function NbaCompanyCard({ companyId, onHasCard, onPrepForCall }: NbaCompanyCardProps) {
   const { data: card, isLoading } = useQuery<NbaCardData | null>({
     queryKey: ["/api/nba/company", companyId, "card"],
     staleTime: 60_000,
@@ -52,6 +53,7 @@ export function NbaCompanyCard({ companyId, onHasCard }: NbaCompanyCardProps) {
       <NbaCard
         card={card}
         hideCompanyLink={true}
+        onPrepForCall={onPrepForCall ? () => onPrepForCall() : undefined}
       />
     </div>
   );

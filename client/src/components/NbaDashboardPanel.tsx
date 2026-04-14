@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { NbaCard } from "./NbaCard";
@@ -19,6 +20,7 @@ interface NbaDashboardPanelProps {
 
 export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   // Local sets for instant optimistic removal — avoids waiting for query refetch
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [actioned, setActioned] = useState<Set<string>>(new Set());
@@ -111,6 +113,7 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
             card={card}
             onDismissed={(id) => setDismissed(prev => new Set([...prev, id]))}
             onActioned={(id) => setActioned(prev => new Set([...prev, id]))}
+            onPrepForCall={(companyId) => navigate(`/companies/${companyId}?precall=1`)}
           />
         ))}
       </div>

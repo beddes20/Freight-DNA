@@ -21,6 +21,7 @@ import { registerConversationsRoutes } from "./routes/conversations";
 import { registerEmailAnalyticsRoutes } from "./routes/emailAnalytics";
 import { registerGeographicResponsibilitiesRoutes } from "./routes/geographicResponsibilities";
 import { registerSonarRoutes } from "./routes/sonar";
+import { registerCallIntelligenceRoutes } from "./routes/callIntelligence";
 import { getPlayForRuleType } from "./playsRegistry";
 import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
 import { readFileSync } from "fs";
@@ -3149,6 +3150,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerConversationsRoutes(app);
   registerEmailAnalyticsRoutes(app);
   registerSonarRoutes(app);
+  registerCallIntelligenceRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
   registerEmailDraftingRoutes(app);

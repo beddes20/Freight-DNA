@@ -167,6 +167,7 @@ interface PeopleTabProps {
   setTaskDialogOpen: (v: boolean) => void;
   setOrgEmailContact: (v: Contact | null) => void;
   currentUser: Omit<User, "password"> | null | undefined;
+  onPrepForCall?: () => void;
 }
 
 export function PeopleTab({
@@ -185,6 +186,7 @@ export function PeopleTab({
   setForceLanePrefill,
   setTaskDialogOpen,
   setOrgEmailContact,
+  onPrepForCall,
 }: PeopleTabProps) {
   const TYPE_LABELS: Record<string, string> = { call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" };
   const TYPE_COLORS: Record<string, string> = {
@@ -338,6 +340,7 @@ export function PeopleTab({
                 setTaskDialogOpen(true);
               }}
               onSendEmail={(c) => setOrgEmailContact(c)}
+              onPrepForCall={onPrepForCall ? () => onPrepForCall() : undefined}
             />
           ) : (
             <div className="flex flex-col items-center justify-center py-8">

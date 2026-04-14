@@ -32,6 +32,7 @@ import {
   Activity,
   MoreHorizontal,
   Mail,
+  Sparkles,
 } from "lucide-react";
 import { PinButton } from "@/components/pin-button";
 import * as XLSX from "xlsx";
@@ -59,6 +60,7 @@ import { RfpDialog } from "@/components/rfp-dialog";
 import { AwardDialog } from "@/components/award-dialog";
 import { ConvertToAwardDialog } from "@/components/convert-to-award-dialog";
 import { PreCallPlanner } from "@/components/pre-call-planner";
+import { PostCallCaptureDialog } from "@/components/post-call-capture-dialog";
 import { ContactIntelModal } from "@/components/contact-intel-modal";
 import { ZoomInfoSuggestionsDialog } from "@/components/zoominfo-suggestions";
 import { OpportunityLogDialog } from "@/components/opportunity-log-dialog";
@@ -115,6 +117,7 @@ export default function CompanyDetail() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [zoomInfoOpen, setZoomInfoOpen] = useState(false);
   const [preCallOpen, setPreCallOpen] = useState(false);
+  const [postCallOpen, setPostCallOpen] = useState(false);
   const [oppLogOpen, setOppLogOpen] = useState(false);
   const [touchLogCollapsed, setTouchLogCollapsed] = useState(false);
   const [momentumDrawerOpen, setMomentumDrawerOpen] = useState(false);
@@ -135,6 +138,10 @@ export default function CompanyDetail() {
       setContactDefaults({ lane, region });
       setEditingContact(undefined);
       setContactDialogOpen(true);
+      navigate(`/companies/${companyId}`, { replace: true });
+    }
+    if (urlParams.get("precall") === "1") {
+      setPreCallOpen(true);
       navigate(`/companies/${companyId}`, { replace: true });
     }
   }, [searchString, companyId, navigate]);
@@ -737,6 +744,13 @@ export default function CompanyDetail() {
             </Button>
           )}
 
+          {!company.archivedAt && (
+            <Button variant="outline" onClick={() => setPostCallOpen(true)} data-testid="button-postcall-capture">
+              <Sparkles className="h-4 w-4 mr-2" />
+              Log & Summarize
+            </Button>
+          )}
+
           <div className="relative inline-flex">
             <Button variant="outline" onClick={() => { setDetailTab("rfp"); localStorage.setItem("cd_tab", "rfp"); setTimeout(() => { document.querySelector('[data-testid="tab-detail-rfp"]')?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, 50); }} data-testid="button-rfp-awards">
               <Trophy className="h-4 w-4 mr-2" />
@@ -856,6 +870,7 @@ export default function CompanyDetail() {
               const contact = contacts?.find(c => c.id === contactId);
               if (contact) setViewContact(contact);
             }}
+            onPrepForCall={() => setPreCallOpen(true)}
           />
         </TabsContent>
 
@@ -921,6 +936,7 @@ export default function CompanyDetail() {
             setTaskDialogOpen={setTaskDialogOpen}
             setOrgEmailContact={setOrgEmailContact}
             currentUser={currentUser}
+            onPrepForCall={() => setPreCallOpen(true)}
           />
         </TabsContent>
 
@@ -1139,6 +1155,16 @@ export default function CompanyDetail() {
           awards={allAwards}
           financialSummary={matchedPerf?.ytd ?? null}
           healthScore={healthScore}
+          onPostCallCapture={() => setPostCallOpen(true)}
+        />
+      )}
+
+      {company && (
+        <PostCallCaptureDialog
+          open={postCallOpen}
+          onClose={() => setPostCallOpen(false)}
+          companyId={company.id}
+          companyName={company.name}
         />
       )}
 
