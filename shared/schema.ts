@@ -2545,3 +2545,20 @@ export const insertMonitoredMailboxSchema = createInsertSchema(monitoredMailboxe
 });
 export type InsertMonitoredMailbox = z.infer<typeof insertMonitoredMailboxSchema>;
 export type MonitoredMailbox = typeof monitoredMailboxes.$inferSelect;
+
+export const apiResponseCache = pgTable(
+  "api_response_cache",
+  {
+    cacheKey: text("cache_key").primaryKey(),
+    response: jsonb("response").notNull(),
+    fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+    ttlSeconds: integer("ttl_seconds").notNull(),
+    source: text("source").notNull().default("sonar"),
+  },
+  (table) => [
+    index("arc_source_idx").on(table.source),
+    index("arc_fetched_idx").on(table.fetchedAt),
+  ],
+);
+
+export type ApiResponseCache = typeof apiResponseCache.$inferSelect;

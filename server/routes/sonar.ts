@@ -17,6 +17,7 @@ import {
   getMarketOtris,
   getLaneVotrisBatch,
   buildVotriQualifier,
+  getSonarCircuitBreakerStatus,
   type LaneVotri,
 } from "../sonarClient";
 
@@ -90,13 +91,18 @@ export function registerSonarRoutes(app: Express): void {
     try {
       const role = (req.query.role as string | undefined)?.trim();
       const national = await getNationalMarketSummary();
+      const cbStatus = getSonarCircuitBreakerStatus();
+      const nationalWithStatus = {
+        ...national,
+        ...(cbStatus.isOpen ? { marketDataLimited: true, marketDataResumesAt: cbStatus.resumesAt } : {}),
+      };
 
       if (!role) {
-        return res.json(national);
+        return res.json(nationalWithStatus);
       }
 
       const user = await getCurrentUser(req);
-      if (!user) return res.json(national);
+      if (!user) return res.json(nationalWithStatus);
 
       // Map canonical DB roles to payload keys; never trust the query-param role for non-admin/director users.
       const DB_ROLE_TO_PAYLOAD: Record<string, string> = {
@@ -139,7 +145,7 @@ export function registerSonarRoutes(app: Express): void {
           .sort((a, b) => Math.abs(b.otriWoW ?? 0) - Math.abs(a.otriWoW ?? 0))
           .slice(0, 3);
 
-        return res.json({ ...national, rolePayload: { role: "am", markets, myAccountCount: myCompanies.length } });
+        return res.json({ ...nationalWithStatus, rolePayload: { role: "am", markets, myAccountCount: myCompanies.length } });
       }
 
       // ── NAM: org-wide city exposure ─────────────────────────────────────────
@@ -162,7 +168,7 @@ export function registerSonarRoutes(app: Express): void {
         }).filter(m => m.otri !== null)
           .sort((a, b) => Math.abs(b.otriWoW ?? 0) - Math.abs(a.otriWoW ?? 0));
 
-        return res.json({ ...national, rolePayload: { role: "nam", markets } });
+        return res.json({ ...nationalWithStatus, rolePayload: { role: "nam", markets } });
       }
 
       // ── Director: portfolio heat summary ────────────────────────────────────
@@ -193,7 +199,7 @@ export function registerSonarRoutes(app: Express): void {
         const spread = national.ratesSpread;
 
         return res.json({
-          ...national,
+          ...nationalWithStatus,
           rolePayload: {
             role: "director",
             heatSummary: { hot, warm, cool, total: validLanes.length },
@@ -248,7 +254,7 @@ export function registerSonarRoutes(app: Express): void {
         }
 
         return res.json({
-          ...national,
+          ...nationalWithStatus,
           rolePayload: {
             role: "logistics_manager",
             urgencyLanes: urgencyLanes.slice(0, 10),
@@ -256,8 +262,7 @@ export function registerSonarRoutes(app: Express): void {
         });
       }
 
-      // Fallback: just return national
-      res.json(national);
+      res.json(nationalWithStatus);
     } catch (err: any) {
       console.error("[sonar] market-pulse error:", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch market pulse" });

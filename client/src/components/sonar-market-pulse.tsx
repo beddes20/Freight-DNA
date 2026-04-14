@@ -70,6 +70,8 @@ interface MarketPulse {
   dieselMoMDelta: number;
   timestamp: string;
   isStale: boolean;
+  marketDataLimited?: boolean;
+  marketDataResumesAt?: string;
   rolePayload?: AmRolePayload | NamRolePayload | DirectorRolePayload | LmRolePayload;
 }
 
@@ -358,6 +360,12 @@ export function SonarMarketPulsePortlet({ role }: SonarMarketPulsePortletProps =
         </p>
       </CardHeader>
       <CardContent className="pt-0">
+        {pulse.marketDataLimited && (
+          <div className="flex items-center gap-1.5 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 px-2.5 py-1.5 mb-2" data-testid="banner-market-data-limited">
+            <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+            <span className="text-[11px] text-amber-700 dark:text-amber-300">Market data temporarily limited — showing cached values</span>
+          </div>
+        )}
         {/* National metrics bar */}
         <div className="rounded-lg overflow-hidden" style={{ background: "#0a1628" }}>
           <div className="grid grid-cols-3 divide-x divide-white/10 py-3 px-1">

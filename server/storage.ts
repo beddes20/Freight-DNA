@@ -184,6 +184,8 @@ import {
   monitoredMailboxes,
   type MonitoredMailbox,
   type InsertMonitoredMailbox,
+  apiResponseCache,
+  type ApiResponseCache,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -959,6 +961,12 @@ export interface IStorage {
   getUserByEmailAddress(email: string, orgId: string): Promise<User | undefined>;
   getMonitoredMailboxBySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
   getMonitoredMailboxByAnySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
+
+  // API cache methods (Task #231)
+  getCachedApiResponse(key: string): Promise<ApiResponseCache | undefined>;
+  setCachedApiResponse(key: string, response: unknown, ttlSeconds: number, source: string): Promise<void>;
+  getValidCachedApiResponses(source: string): Promise<ApiResponseCache[]>;
+  cleanExpiredApiCache(): Promise<number>;
 }
 
 const pool = new Pool({
@@ -6478,6 +6486,49 @@ export class DatabaseStorage implements IStorage {
       ))
       .limit(1);
     return row;
+  }
+
+  // ── API Response Cache (Task #231) ──────────────────────────────────────────
+
+  async getCachedApiResponse(key: string): Promise<ApiResponseCache | undefined> {
+    const rows = await db.select().from(apiResponseCache).where(eq(apiResponseCache.cacheKey, key));
+    if (rows.length === 0) return undefined;
+    const row = rows[0];
+    const ageSeconds = (Date.now() - new Date(row.fetchedAt).getTime()) / 1000;
+    if (ageSeconds > row.ttlSeconds) return undefined;
+    return row;
+  }
+
+  async setCachedApiResponse(key: string, response: unknown, ttlSeconds: number, source: string): Promise<void> {
+    await db.insert(apiResponseCache)
+      .values({ cacheKey: key, response, ttlSeconds, source, fetchedAt: new Date() })
+      .onConflictDoUpdate({
+        target: apiResponseCache.cacheKey,
+        set: { response, ttlSeconds, source, fetchedAt: new Date() },
+      });
+  }
+
+  async getValidCachedApiResponses(source: string): Promise<ApiResponseCache[]> {
+    const rows = await db.select().from(apiResponseCache)
+      .where(eq(apiResponseCache.source, source));
+    const now = Date.now();
+    return rows.filter(r => {
+      const ageSeconds = (now - new Date(r.fetchedAt).getTime()) / 1000;
+      return ageSeconds <= r.ttlSeconds;
+    });
+  }
+
+  async cleanExpiredApiCache(): Promise<number> {
+    const allRows = await db.select().from(apiResponseCache);
+    const now = Date.now();
+    const expiredKeys = allRows
+      .filter(r => (now - new Date(r.fetchedAt).getTime()) / 1000 > r.ttlSeconds)
+      .map(r => r.cacheKey);
+    if (expiredKeys.length === 0) return 0;
+    for (const key of expiredKeys) {
+      await db.delete(apiResponseCache).where(eq(apiResponseCache.cacheKey, key));
+    }
+    return expiredKeys.length;
   }
 }
 

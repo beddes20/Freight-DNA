@@ -18,9 +18,16 @@
  *   VOTRI / OTRI        4-hour TTL  (lane & market rejection indices)
  *   NTI / VCRPM1        1-hour TTL  (national rate indices)
  *
+ * Reliability:
+ *   - Circuit breaker: on HTTP 451, enters 30-min cooldown (returns cached/fallback)
+ *   - Request coalescing: duplicate in-flight requests share the same promise
+ *   - DB-backed cache: survives restarts, no cold-start API stampede
+ *
  * When credentials are absent or Sonar is unreachable all methods fall back
  * to the last-known cached value, or to seeded defaults with isStale = true.
  */
+
+import { storage } from "./storage";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -116,6 +123,54 @@ const NTI_TTL     = 1 * 60 * 60 * 1000;
 const EIA_TTL     = 24 * 60 * 60 * 1000;  // EIA diesel — 24-hour TTL
 const TRAC_MARKET_RATE_TTL = 4 * 60 * 60 * 1000; // 4-hour TTL for lane market rates
 
+// ── Circuit Breaker (451 rate-limit protection) ───────────────────────────────
+
+const CIRCUIT_BREAKER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+let circuitBreakerTrippedAt: number | null = null;
+let circuitBreakerLoggedOnce = false;
+
+function isCircuitBreakerOpen(): boolean {
+  if (circuitBreakerTrippedAt === null) return false;
+  if (Date.now() - circuitBreakerTrippedAt > CIRCUIT_BREAKER_COOLDOWN_MS) {
+    log("Circuit breaker reset — resuming SONAR API calls");
+    circuitBreakerTrippedAt = null;
+    circuitBreakerLoggedOnce = false;
+    return false;
+  }
+  return true;
+}
+
+function tripCircuitBreaker() {
+  circuitBreakerTrippedAt = Date.now();
+  const cooldownMinutes = Math.round(CIRCUIT_BREAKER_COOLDOWN_MS / 60000);
+  log(`⚡ Circuit breaker TRIPPED — SONAR returned HTTP 451 (record limit exceeded). All SONAR calls will return cached/fallback data for ${cooldownMinutes} minutes.`);
+}
+
+export function getSonarCircuitBreakerStatus(): { isOpen: boolean; trippedAt: string | null; resumesAt: string | null } {
+  if (circuitBreakerTrippedAt === null) return { isOpen: false, trippedAt: null, resumesAt: null };
+  const resumesAt = new Date(circuitBreakerTrippedAt + CIRCUIT_BREAKER_COOLDOWN_MS);
+  return {
+    isOpen: Date.now() - circuitBreakerTrippedAt < CIRCUIT_BREAKER_COOLDOWN_MS,
+    trippedAt: new Date(circuitBreakerTrippedAt).toISOString(),
+    resumesAt: resumesAt.toISOString(),
+  };
+}
+
+// ── Request Coalescing ────────────────────────────────────────────────────────
+
+const inflightRequests = new Map<string, Promise<any>>();
+
+async function coalescedSonarGet(path: string): Promise<any | null> {
+  if (inflightRequests.has(path)) {
+    return inflightRequests.get(path)!;
+  }
+  const promise = rawSonarGet(path).finally(() => {
+    inflightRequests.delete(path);
+  });
+  inflightRequests.set(path, promise);
+  return promise;
+}
+
 // ── EIA diesel cache ──────────────────────────────────────────────────────────
 
 interface EiaDieselResult {
@@ -132,6 +187,47 @@ let cachedToken: SonarToken | null = null;
 let nationalCache: CacheEntry<NationalMarketSummary> | null = null;
 const otriCache  = new Map<string, CacheEntry<MarketOtri>>();
 const votriCache = new Map<string, CacheEntry<LaneVotri>>();
+
+// ── DB Cache Warm-up (runs once on first use) ──────────────────────────────────
+
+let _dbCacheWarmupPromise: Promise<void> | null = null;
+
+async function warmMemoryCacheFromDb(): Promise<void> {
+  if (_dbCacheWarmupPromise) return _dbCacheWarmupPromise;
+  _dbCacheWarmupPromise = doWarmMemoryCacheFromDb();
+  return _dbCacheWarmupPromise;
+}
+
+async function doWarmMemoryCacheFromDb(): Promise<void> {
+  try {
+    const sonarRows = await storage.getValidCachedApiResponses("sonar");
+    let loaded = 0;
+    for (const row of sonarRows) {
+      const key = row.cacheKey;
+      const ttlMs = row.ttlSeconds * 1000;
+      const fetchedAt = new Date(row.fetchedAt).getTime();
+
+      if (key === "national_summary" && row.response) {
+        nationalCache = { value: row.response as unknown as NationalMarketSummary, fetchedAt, ttlMs };
+        lastKnownNational = row.response as unknown as NationalMarketSummary;
+        loaded++;
+      } else if (key.startsWith("otri:") && row.response) {
+        const marketKey = key.replace("otri:", "");
+        otriCache.set(marketKey, { value: row.response as unknown as MarketOtri, fetchedAt, ttlMs });
+        loaded++;
+      } else if (key.startsWith("votri:") && row.response) {
+        const qualifier = key.replace("votri:", "");
+        votriCache.set(qualifier, { value: row.response as unknown as LaneVotri, fetchedAt, ttlMs });
+        loaded++;
+      }
+    }
+    if (loaded > 0) {
+      log(`DB cache warm-up: loaded ${loaded} entries into memory (no cold-start API stampede)`);
+    }
+  } catch (err: any) {
+    log(`DB cache warm-up failed (non-fatal): ${err.message}`);
+  }
+}
 
 // ── Auth mode health-check (logged once on first use) ─────────────────────────
 
@@ -215,9 +311,24 @@ async function getSonarToken(): Promise<string | null> {
   }
 }
 
-// ── HTTP helper ───────────────────────────────────────────────────────────────
+// ── HTTP helper (with circuit breaker + 451 handling) ─────────────────────────
 
 async function sonarGet(path: string): Promise<any | null> {
+  await warmMemoryCacheFromDb();
+
+  if (isCircuitBreakerOpen()) {
+    if (!circuitBreakerLoggedOnce) {
+      circuitBreakerLoggedOnce = true;
+      const status = getSonarCircuitBreakerStatus();
+      log(`Circuit breaker OPEN — returning cached/fallback data for all SONAR calls until ${status.resumesAt}`);
+    }
+    return null;
+  }
+
+  return coalescedSonarGet(path);
+}
+
+async function rawSonarGet(path: string): Promise<any | null> {
   const token = await getSonarToken();
   if (!token) return null;
   try {
@@ -225,8 +336,13 @@ async function sonarGet(path: string): Promise<any | null> {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(12_000),
     });
+
+    if (resp.status === 451) {
+      tripCircuitBreaker();
+      return null;
+    }
+
     if (resp.status === 401) {
-      // Token may have been revoked — clear cache and retry once
       cachedToken = null;
       const newToken = await getSonarToken();
       if (!newToken) return null;
@@ -234,6 +350,10 @@ async function sonarGet(path: string): Promise<any | null> {
         headers: { Authorization: `Bearer ${newToken}` },
         signal: AbortSignal.timeout(12_000),
       });
+      if (resp2.status === 451) {
+        tripCircuitBreaker();
+        return null;
+      }
       if (!resp2.ok) { log(`GET ${path} → ${resp2.status}`); return null; }
       return await resp2.json();
     }
@@ -247,34 +367,22 @@ async function sonarGet(path: string): Promise<any | null> {
 
 // ── Value extraction ──────────────────────────────────────────────────────────
 
-/**
- * Sonar /data/{INDEX}/{QUALIFIER} returns something like:
- *   { data: [{ timestamp: "...", value: 12.34 }] }
- * or
- *   { value: 12.34 }
- */
 function extractValue(data: any): number | null {
   if (data == null) return null;
-  // Array response
   if (Array.isArray(data)) {
     const latest = data[data.length - 1];
     return typeof latest?.value === "number" ? latest.value : null;
   }
-  // data.data array
   if (Array.isArray(data?.data)) {
     const arr = data.data as Array<{ value?: number; timestamp?: string }>;
     if (arr.length === 0) return null;
     const latest = arr[arr.length - 1];
     return typeof latest?.value === "number" ? latest.value : null;
   }
-  // Flat object
   if (typeof data?.value === "number") return data.value;
   return null;
 }
 
-/**
- * Extract the prior-period value (second-to-last data point) for WoW delta.
- */
 function extractPriorValue(data: any): number | null {
   const arr: any[] = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []);
   if (arr.length < 2) return null;
@@ -283,13 +391,8 @@ function extractPriorValue(data: any): number | null {
 }
 
 // ── City → Sonar market code lookup table ────────────────────────────────────
-//
-// Sonar VOTRI qualifiers are 3-letter market codes, NOT simple first-3 of city name.
-// e.g. Los Angeles → LAX, Chicago → CHI, Dallas → DAL, etc.
-// Unknown cities fall back to first-3-letters heuristic (will return no data from Sonar).
 
 const CITY_TO_SONAR_CODE: Record<string, string> = {
-  // Major US freight markets
   "atlanta":       "ATL",
   "dallas":        "DAL",
   "dfw":           "DAL",
@@ -376,12 +479,11 @@ const CITY_TO_SONAR_CODE: Record<string, string> = {
 };
 
 function cityToMarketCode(city: string): string {
-  // Strip state suffix (", TX" / ", CA" / " TX" / " CA"), trailing punctuation, and normalize
   const normalized = city
     .toLowerCase()
     .trim()
-    .replace(/,?\s+[a-z]{2}$/, "")   // remove trailing state abbreviation e.g. "Atlanta, GA"
-    .replace(/[^a-z ]/g, "")         // remove punctuation
+    .replace(/,?\s+[a-z]{2}$/, "")
+    .replace(/[^a-z ]/g, "")
     .trim();
   return CITY_TO_SONAR_CODE[normalized]
     ?? CITY_TO_SONAR_CODE[city.toLowerCase().trim()]
@@ -390,15 +492,10 @@ function cityToMarketCode(city: string): string {
 
 // ── VOTRI qualifier builder ───────────────────────────────────────────────────
 
-/** Build a VOTRI ticker qualifier from two city/market names.
- *  e.g. ("Atlanta", "Dallas") → "ATLDAL"
- *  Uses the city→Sonar market code lookup table; falls back to first-3 letters. */
 export function buildVotriQualifier(origin: string, destination: string): string {
   return `${cityToMarketCode(origin)}${cityToMarketCode(destination)}`;
 }
 
-/** Build an OTRI market ticker from a city name.
- *  e.g. "Atlanta" → "ATL" for the OTRI.ATL ticker. */
 export function cityToOtriMarket(city: string): string {
   return cityToMarketCode(city);
 }
@@ -417,12 +514,15 @@ function otriSignal(otri: number): "hot" | "warm" | "cool" {
   return "cool";
 }
 
+// ── DB cache write-through helpers ──────────────────────────────────────────────
+
+function persistToDbCache(key: string, value: unknown, ttlMs: number) {
+  storage.setCachedApiResponse(key, value, Math.round(ttlMs / 1000), "sonar").catch(() => {});
+}
+
 // ── EIA Diesel Price Fetch ────────────────────────────────────────────────────
-// U.S. Energy Information Administration — on-highway diesel (series EMD_EPD2D_PTE_NUS_DPG)
-// Public API, no key required.
 
 async function fetchEiaDieselPrice(): Promise<EiaDieselResult | null> {
-  // Check cache
   if (eiaDieselCache && Date.now() - eiaDieselCache.fetchedAt < EIA_TTL) {
     return eiaDieselCache;
   }
@@ -464,14 +564,11 @@ async function fetchEiaDieselPrice(): Promise<EiaDieselResult | null> {
   }
 }
 
-// Export for external access
 export async function getEiaDieselPrice(): Promise<EiaDieselResult | null> {
   return fetchEiaDieselPrice();
 }
 
 // ── OTVI + HAI fetch for a market ─────────────────────────────────────────────
-// OTVI.{MARKET} — Outbound Tender Volume Index
-// HAI.{MARKET}  — Headhaul/Backhaul Imbalance Index
 
 async function fetchOtviHai(marketCode: string): Promise<{ otvi: number | null; hai: number | null }> {
   const today = new Date().toISOString().slice(0, 10);
@@ -488,20 +585,15 @@ async function fetchOtviHai(marketCode: string): Promise<{ otvi: number | null; 
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/**
- * National market summary — NTI.USA + OTRI.USA + VCRPM1.USA.
- * Falls back to last known or seeded defaults on failure.
- */
 export async function getNationalMarketSummary(): Promise<NationalMarketSummary> {
+  await warmMemoryCacheFromDb();
+
   if (nationalCache && isFresh(nationalCache)) {
     return nationalCache.value;
   }
 
   const fallback = buildFallbackNational();
 
-  // Include today's date for explicit snapshot reads.
-  // Using a 2-day window (yesterday → today) ensures we always get at least one data point
-  // even if today's data hasn't been published yet.
   const today = new Date().toISOString().slice(0, 10);
   const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 
@@ -532,7 +624,6 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
   const resolvedVcrp = vcrpm ?? fallback.ntiPerMile;
   const ratesSpread  = rates !== null ? Math.round(rates * 100) / 100 : null;
 
-  // Try to fetch EIA diesel price (24-hour cache, non-blocking)
   const eiaDiesel = await fetchEiaDieselPrice();
 
   const summary: NationalMarketSummary = {
@@ -557,6 +648,7 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
 
   nationalCache = { value: summary, fetchedAt: Date.now(), ttlMs: NTI_TTL };
   lastKnownNational = summary;
+  persistToDbCache("national_summary", summary, NTI_TTL);
   log(`National: OTRI=${summary.otri}% NTI=$${summary.ntiPerMove}`);
   return summary;
 }
@@ -581,12 +673,9 @@ function buildFallbackNational(): NationalMarketSummary {
   };
 }
 
-/**
- * Fetch OTRI for a list of markets (city names → market codes resolved heuristically).
- * Uses 4-hour TTL per-market cache.
- */
 export async function getMarketOtris(markets: string[]): Promise<MarketOtri[]> {
   if (markets.length === 0) return [];
+  await warmMemoryCacheFromDb();
   const results: MarketOtri[] = [];
 
   await Promise.all(markets.map(async (market) => {
@@ -598,40 +687,32 @@ export async function getMarketOtris(markets: string[]): Promise<MarketOtri[]> {
     }
 
     const code = cityToMarketCode(market);
-    // 2-day window for snapshot reads so we always get at least one data point
     const todayM = new Date().toISOString().slice(0, 10);
     const ydayM  = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    const [otriData, otriWData, votriData, votriWData] = await Promise.all([
+
+    const [otriData, otriWData] = await Promise.all([
       sonarGet(`/data/OTRI/${code}/${ydayM}/${todayM}`),
       sonarGet(`/data/OTRIW/${code}/${ydayM}/${todayM}`),
-      sonarGet(`/data/VOTRI/${code}/${ydayM}/${todayM}`),
-      sonarGet(`/data/VOTRIW/${code}/${ydayM}/${todayM}`),
     ]);
     const otri = extractValue(otriData) ?? 15;
     const otriWoW = extractValue(otriWData) ?? 0;
-    const votri = extractValue(votriData);
-    const votriW = extractValue(votriWData);
 
     const entry: MarketOtri = {
       market,
       otri,
       otriWoW:  Math.round(otriWoW * 100) / 100,
-      votri:    votri  !== null ? Math.round(votri  * 100) / 100 : null,
-      votriWoW: votriW !== null ? Math.round(votriW * 100) / 100 : null,
+      votri:    null,
+      votriWoW: null,
       signal: otriSignal(otri),
     };
     otriCache.set(key, { value: entry, fetchedAt: Date.now(), ttlMs: OTRI_TTL });
+    persistToDbCache(`otri:${key}`, entry, OTRI_TTL);
     results.push(entry);
   }));
 
   return results;
 }
 
-/**
- * Fetch OTRI + OTVI + HAI for a list of markets.
- * Extends getMarketOtris with two additional Sonar indices.
- * Uses same 4-hour TTL logic per market.
- */
 export async function getMarketOtrisExtended(markets: string[]): Promise<MarketExtended[]> {
   if (markets.length === 0) return [];
   const baseResults = await getMarketOtris(markets);
@@ -655,18 +736,11 @@ export async function getMarketOtrisExtended(markets: string[]): Promise<MarketE
   return extended;
 }
 
-/**
- * Fetch OTRI for a single market (city name → market code via lookup table).
- * Singular convenience wrapper around getMarketOtris.
- */
 export async function getMarketOtri(market: string): Promise<MarketOtri> {
   const results = await getMarketOtris([market]);
   return results[0] ?? { market, otri: 15, otriWoW: 0, votri: null, votriWoW: null, signal: "warm" };
 }
 
-/**
- * Fetch national rates (NTI $/move, VCRPM1 $/mile) — named alias for clarity.
- */
 export async function getNationalRates(): Promise<{ ntiPerMove: number; ntiPerMile: number; isStale: boolean }> {
   const summary = await getNationalMarketSummary();
   return {
@@ -676,10 +750,6 @@ export async function getNationalRates(): Promise<{ ntiPerMove: number; ntiPerMi
   };
 }
 
-/**
- * Fetch OTRI history for a market using Sonar date-range endpoint.
- * Returns array of { timestamp, value } sorted oldest→newest.
- */
 export async function getMarketOtriHistory(
   market: string,
   days: number = 7,
@@ -696,10 +766,6 @@ export async function getMarketOtriHistory(
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
-/**
- * Fetch VOTRI history for a single lane using Sonar date-range endpoint.
- * Returns array of { timestamp, value } sorted oldest→newest.
- */
 export async function getLaneVotriHistory(
   origin: string,
   destination: string,
@@ -717,19 +783,13 @@ export async function getLaneVotriHistory(
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
-/**
- * Fetch VOTRI for a single lane.
- * Uses 4-hour TTL per-qualifier cache.
- */
 export async function getLaneVotri(origin: string, destination: string): Promise<LaneVotri> {
+  await warmMemoryCacheFromDb();
+
   const qualifier = buildVotriQualifier(origin, destination);
   const cached = votriCache.get(qualifier);
   if (cached && isFresh(cached)) return cached.value;
 
-  // Fetch VOTRI (current rejection rate) and VOTRIW (true weekly WoW delta) in parallel.
-  // VOTRIW.{QUALIFIER} returns the week-over-week change in van tender rejection rate.
-  // Falling back to prior-datapoint diff only if VOTRIW is unavailable.
-  // 2-day window ensures we always get at least one data point even if today's not yet published.
   const todayL = new Date().toISOString().slice(0, 10);
   const ydayL  = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
   const [data, votriWData] = await Promise.all([
@@ -739,8 +799,6 @@ export async function getLaneVotri(origin: string, destination: string): Promise
   const rawVotri = extractValue(data);
   const rawVotriW = extractValue(votriWData);
 
-  // isStale = true when the API returned nothing (network failure) or returned no data point
-  // for this qualifier (unknown lane). Both cases should not be presented as "cool" market data.
   const isStale = rawVotri === null;
   const votri    = rawVotri ?? 0;
   const votriWoW = rawVotriW !== null
@@ -761,16 +819,15 @@ export async function getLaneVotri(origin: string, destination: string): Promise
   };
 
   votriCache.set(qualifier, { value: entry, fetchedAt: Date.now(), ttlMs: VOTRI_TTL });
+  if (!isStale) {
+    persistToDbCache(`votri:${qualifier}`, entry, VOTRI_TTL);
+  }
 
-  // Log first successful live lane result for end-to-end verification
   if (!entry.isStale) logFirstLiveLane(entry);
 
   return entry;
 }
 
-/**
- * Fetch VOTRI for multiple lanes in parallel (batch, respects cache).
- */
 export async function getLaneVotrisBatch(
   lanes: Array<{ origin: string; destination: string }>,
 ): Promise<Map<string, LaneVotri>> {
@@ -784,21 +841,12 @@ export async function getLaneVotrisBatch(
   return results;
 }
 
-/**
- * Fetch VOTRI bypassing the in-memory cache, then store the fresh result.
- * Use this for time-sensitive alert jobs that need up-to-date data.
- */
 export async function getLaneVotriFresh(origin: string, destination: string): Promise<LaneVotri> {
   const qualifier = buildVotriQualifier(origin, destination);
-  // Force evict any stale cache entry before fetching
   votriCache.delete(qualifier);
   return getLaneVotri(origin, destination);
 }
 
-/**
- * Batch fresh VOTRI fetch — bypasses cache for all lanes.
- * Use for alert jobs where recency is critical.
- */
 export async function getLaneVotrisBatchFresh(
   lanes: Array<{ origin: string; destination: string }>,
 ): Promise<Map<string, LaneVotri>> {
@@ -812,11 +860,6 @@ export async function getLaneVotrisBatchFresh(
   return results;
 }
 
-/**
- * Fetch lane-level spot rate proxy.
- * Since Sonar doesn't expose per-lane $/mile in the public endpoint,
- * we synthesize from VOTRI + NTI national baseline.
- */
 export async function getLaneSpotRate(origin: string, destination: string): Promise<LaneSpotRate | null> {
   const [votri, national] = await Promise.all([
     getLaneVotri(origin, destination),
@@ -824,7 +867,6 @@ export async function getLaneSpotRate(origin: string, destination: string): Prom
   ]);
 
   const baseRate = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
-  // Tight market premium: +8% if hot, +3% if warm
   const premium = votri.signal === "hot" ? 0.08 : votri.signal === "warm" ? 0.03 : 0;
   const ratePerMile = Math.round(baseRate * (1 + premium) * 100) / 100;
 
@@ -837,10 +879,6 @@ export async function getLaneSpotRate(origin: string, destination: string): Prom
   };
 }
 
-/**
- * Convenience: compute average VOTRI WoW delta across a set of lanes.
- * Used by the NBA engine to detect market tightening / loosening.
- */
 export async function getAvgVotriWoW(
   lanes: Array<{ origin: string; destination: string }>,
 ): Promise<number | null> {
@@ -852,16 +890,9 @@ export async function getAvgVotriWoW(
 }
 
 // ── Lane Market Rate (TRAC benchmark + 3-week forecast) ───────────────────────
-// Caches per-lane with 4-hour TTL. Falls back to national VCRPM1 average.
 
 const laneMarketRateCache = new Map<string, CacheEntry<LaneMarketRate>>();
 
-/**
- * Get SONAR TRAC contract rate benchmark and 3-week forward forecast for a lane.
- * Uses VCRPM1 lane-level data when available; falls back to national VCRPM1 average.
- * Generates a synthetic 3-week forecast by projecting the WoW VOTRI trend onto rates.
- * Cache TTL: 4 hours.
- */
 export async function getLaneMarketRate(origin: string, destination: string): Promise<LaneMarketRate> {
   const qualifier = buildVotriQualifier(origin, destination);
   const cacheKey = `lmr:${qualifier}`;
@@ -871,9 +902,6 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
   const today = new Date().toISOString().slice(0, 10);
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
-  // Fetch national VCRPM1, lane VOTRI, and attempt lane-level VCRPM1 ticker in parallel.
-  // Lane-level TRAC benchmark uses VCRPM1.{QUALIFIER} — supported on some FreightWaves plans.
-  // Falls back to national VCRPM1 + VOTRI demand premium when unavailable.
   const [national, laneVotri, laneTRAC] = await Promise.all([
     getNationalMarketSummary(),
     getLaneVotri(origin, destination),
@@ -882,22 +910,16 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
 
   const nationalRate = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
 
-  // Determine market rate: prefer lane-level TRAC benchmark if available, else use VOTRI-adjusted national rate
   let marketRatePerMile: number;
   let source: "lane" | "national_fallback";
 
   const laneTRACRate = laneTRAC !== null ? extractValue(laneTRAC) : null;
 
   if (laneTRACRate !== null && laneTRACRate > 0) {
-    // Lane-level VCRPM1 TRAC benchmark is available — use it directly
     marketRatePerMile = Math.round(laneTRACRate * 100) / 100;
     source = "lane";
     log(`Lane TRAC benchmark found for ${qualifier}: $${marketRatePerMile.toFixed(2)}/mi`);
   } else {
-    // Lane-level TRAC not available — synthesize from national VCRPM1 + VOTRI demand signal:
-    // - hot lane (VOTRI >= 20): +5% above national contract rate
-    // - warm lane (VOTRI >= 8): +2% above national contract rate
-    // - cool lane: national contract rate (no premium)
     source = "national_fallback";
     marketRatePerMile = nationalRate;
     if (!laneVotri.isStale) {
@@ -906,41 +928,30 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
     }
   }
 
-  // 3-week forward forecast: derive trajectory from SONAR rate data when available.
-  // Strategy:
-  //  1. Fetch VCRPM1.{QUALIFIER} historical series (4 weeks) for lane-level rate trend if available.
-  //  2. Fallback: fetch national VCRPM1 prior-week (NTIL.USA) to compute WoW contract rate velocity.
-  //  3. Fallback: use VOTRI WoW delta as demand proxy (VOTRI velocity is the best forward signal
-  //     available via SONAR public API when rate series unavailable).
   const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
 
-  // Attempt to fetch SONAR prior-week VCRPM1 for WoW rate velocity (national fallback path)
   const [priorVCRPM1Data] = await Promise.all([
     sonarGet(`/data/VCRPM1/USA/${twoWeeksAgo}/${yesterday}`).catch(() => null),
   ]);
 
   const priorNationalRate = priorVCRPM1Data !== null ? extractValue(priorVCRPM1Data) : null;
 
-  // Compute WoW rate change rate if prior rate is available
   let weeklyRateChange = 0;
   let forecastDirection: "TIGHTENING" | "EASING" | "STABLE";
 
   if (priorNationalRate && priorNationalRate > 0 && nationalRate > 0) {
-    // Use actual SONAR rate data to derive WoW contract rate velocity
-    const rateWoW = (nationalRate - priorNationalRate) / priorNationalRate; // fractional WoW change
+    const rateWoW = (nationalRate - priorNationalRate) / priorNationalRate;
     if (rateWoW > 0.005) {
       forecastDirection = "TIGHTENING";
-      weeklyRateChange = Math.min(rateWoW, 0.03); // cap at 3%/week
+      weeklyRateChange = Math.min(rateWoW, 0.03);
     } else if (rateWoW < -0.005) {
       forecastDirection = "EASING";
-      weeklyRateChange = Math.max(rateWoW, -0.025); // cap at -2.5%/week
+      weeklyRateChange = Math.max(rateWoW, -0.025);
     } else {
       forecastDirection = "STABLE";
       weeklyRateChange = 0;
     }
   } else {
-    // SONAR rate history unavailable — use VOTRI WoW delta as demand-signal proxy
-    // (VOTRI velocity is the best leading indicator for rate direction from SONAR public API)
     const votriWoW = laneVotri.votriWoW;
     if (votriWoW > 1.5) {
       forecastDirection = "TIGHTENING";
@@ -954,7 +965,6 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
     }
   }
 
-  // Project 3-week forward rate series from the derived weekly velocity
   const forecastWeeklyRates = [1, 2, 3].map(week => ({
     week,
     ratePerMile: Math.round(marketRatePerMile * Math.pow(1 + weeklyRateChange, week) * 100) / 100,
@@ -977,9 +987,6 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
   return result;
 }
 
-/**
- * Batch fetch lane market rates for multiple lanes in parallel.
- */
 export async function getLaneMarketRatesBatch(
   lanes: Array<{ origin: string; destination: string }>,
 ): Promise<Map<string, LaneMarketRate>> {

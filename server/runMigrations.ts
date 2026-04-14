@@ -2589,4 +2589,24 @@ export async function runMigrations() {
   } finally {
     clientMmb.release();
   }
+
+  const clientApiCache = await pool.connect();
+  try {
+    await clientApiCache.query(`
+      CREATE TABLE IF NOT EXISTS api_response_cache (
+        cache_key  text PRIMARY KEY,
+        response   jsonb NOT NULL,
+        fetched_at timestamp NOT NULL DEFAULT now(),
+        ttl_seconds integer NOT NULL,
+        source     text NOT NULL DEFAULT 'sonar'
+      )
+    `);
+    await clientApiCache.query(`CREATE INDEX IF NOT EXISTS arc_source_idx ON api_response_cache (source)`);
+    await clientApiCache.query(`CREATE INDEX IF NOT EXISTS arc_fetched_idx ON api_response_cache (fetched_at)`);
+    console.log("[migrations] api_response_cache table ensured (Task #231)");
+  } catch (err) {
+    console.error("[migrations] api_response_cache migration error:", err);
+  } finally {
+    clientApiCache.release();
+  }
 }
