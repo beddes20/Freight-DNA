@@ -2558,4 +2558,35 @@ export async function runMigrations() {
   } finally {
     clientAI.release();
   }
+
+  // ── monitored_mailboxes (Task #230) ──
+  const clientMmb = await pool.connect();
+  try {
+    await clientMmb.query(`
+      CREATE TABLE IF NOT EXISTS monitored_mailboxes (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        email TEXT NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        subscription_id TEXT,
+        sent_items_subscription_id TEXT,
+        subscription_expires_at TIMESTAMP,
+        last_sync_at TIMESTAMP,
+        delta_sync_token TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        sync_error TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientMmb.query(`CREATE UNIQUE INDEX IF NOT EXISTS monitored_mailboxes_org_email_idx ON monitored_mailboxes(org_id, email)`);
+    await clientMmb.query(`CREATE INDEX IF NOT EXISTS monitored_mailboxes_org_enabled_idx ON monitored_mailboxes(org_id, enabled)`);
+    await clientMmb.query(`ALTER TABLE monitored_mailboxes ADD COLUMN IF NOT EXISTS sent_items_subscription_id TEXT`);
+    console.log("[migrations] monitored_mailboxes table ensured (Task #230)");
+  } catch (err) {
+    console.error("[migrations] monitored_mailboxes error:", err);
+  } finally {
+    clientMmb.release();
+  }
 }

@@ -69,6 +69,7 @@ import ContactSuggestionsPage from "@/pages/contact-suggestions";
 import EmailIntelligencePage from "@/pages/email-intelligence";
 import ProvenTacticsPage from "@/pages/proven-tactics";
 import AIIntelligencePage from "@/pages/ai-intelligence";
+import AdminMonitoredMailboxesPage from "@/pages/admin-monitored-mailboxes";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -128,6 +129,7 @@ function Router() {
       <Route path="/research-tasks" component={ResearchTasks} />
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/carriers" component={AdminCarriers} />
+      <Route path="/admin/monitored-mailboxes" component={AdminMonitoredMailboxesPage} />
       <Route path="/reps/:userId" component={RepCustomers} />
       <Route path="/financials" component={Financials} />
       <Route path="/historical-data" component={HistoricalData} />

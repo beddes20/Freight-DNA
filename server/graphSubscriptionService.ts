@@ -1,24 +1,18 @@
 /**
- * Microsoft Graph Change Notification Subscription Service — Task #182
+ * Microsoft Graph Change Notification Subscription Service — Task #182 / #230
  *
- * Registers and renews a Graph change-notification subscription on the
- * OUTLOOK_REPLY_EMAIL mailbox so the platform receives webhooks when a
- * carrier replies to an outreach email.
+ * Registers and renews Graph change-notification subscriptions on:
+ *   1. The shared OUTLOOK_REPLY_EMAIL mailbox (carrier reply tracking)
+ *   2. Individual NAM/AM mailboxes from the monitored_mailboxes table (customer email sync)
  *
  * Prerequisites (all must be true before the service does anything):
  *   - OUTLOOK_TENANT_ID / OUTLOOK_CLIENT_ID / OUTLOOK_CLIENT_SECRET set
- *   - OUTLOOK_REPLY_EMAIL set (the shared mailbox to watch)
  *   - APP_BASE_URL set (public HTTPS URL the webhook endpoint is reachable at)
  *   - Mail.Read application permission granted by IT in Azure AD
- *
- * The service gracefully no-ops if any prerequisite is missing.  It logs a
- * single warning at startup so admins know what to configure.
- *
- * Subscriptions expire after ~3 days; this service renews them automatically
- * every 2 days via a setInterval background job.
  */
 
 import { azureCredentialsConfigured, getGraphAccessToken } from "./graphService";
+import { storage } from "./storage";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -33,7 +27,6 @@ export interface ReplyEmailConfig {
 let _subscriptionId: string | null = null;
 let _renewalTimer: ReturnType<typeof setInterval> | null = null;
 
-// Set to true when Mail.Read is confirmed active; false means gracefully dormant
 let _mailReadGranted = false;
 
 export function replyTrackingEnabled(): boolean {
@@ -90,10 +83,6 @@ export function getReplyEmailConfig(): ReplyEmailConfig | null {
   };
 }
 
-/**
- * Checks whether the Graph token includes Mail.Read by attempting a
- * lightweight call that requires it.  Returns true if OK, false otherwise.
- */
 async function checkMailReadPermission(mailbox: string): Promise<boolean> {
   try {
     const token = await getGraphAccessToken();
@@ -131,28 +120,19 @@ async function findExistingSubscription(token: string, webhookUrl: string): Prom
 async function registerSubscription(config: ReplyEmailConfig): Promise<string | null> {
   try {
     const token = await getGraphAccessToken();
-    // Graph enforces a max of ~4230 minutes for Outlook message subscriptions.
-    // We use 4200 minutes (~2d 22h) to stay safely under the limit.
     const SUB_TTL_MS = 4200 * 60 * 1000;
 
-    // Reuse an existing subscription if one already matches our webhook URL.
-    // This avoids creating duplicates when the server restarts before the old
-    // subscription expires (Graph subscriptions survive server restarts).
     const existing = await findExistingSubscription(token, config.webhookUrl);
     if (existing) {
       const expiresAt = new Date(existing.expirationDateTime);
       const timeLeft = expiresAt.getTime() - Date.now();
       if (timeLeft > 24 * 60 * 60 * 1000) {
-        // Plenty of time remaining — reuse as-is to avoid creating duplicates
         log(`Reusing existing subscription id=${existing.id} (expires=${existing.expirationDateTime})`);
         return existing.id;
       }
-      // Less than 24h remaining — renew in place rather than creating a new subscription.
-      // This avoids a brief window of duplicate subscriptions between old expiry and new creation.
       log(`Existing subscription id=${existing.id} expires soon — renewing in place`);
       const renewed = await renewSubscription(existing.id);
       if (renewed) return existing.id;
-      // Renewal failed — fall through to register a fresh subscription
     }
 
     const expiresAt = new Date(Date.now() + SUB_TTL_MS).toISOString();
@@ -192,7 +172,6 @@ async function registerSubscription(config: ReplyEmailConfig): Promise<string | 
 async function renewSubscription(subscriptionId: string): Promise<boolean> {
   try {
     const token = await getGraphAccessToken();
-    // Same 4200-minute TTL as registration — stays under Graph's ~4230 min cap
     const SUB_TTL_MS = 4200 * 60 * 1000;
     const expiresAt = new Date(Date.now() + SUB_TTL_MS).toISOString();
 
@@ -219,14 +198,10 @@ async function renewSubscription(subscriptionId: string): Promise<boolean> {
   }
 }
 
-/**
- * Initialize the Graph subscription service.
- * Call once at app startup.  Safe to call even when unconfigured.
- */
 let _activationTimer: ReturnType<typeof setInterval> | null = null;
 
 async function tryActivate(config: { mailbox: string; webhookUrl: string }): Promise<boolean> {
-  if (_subscriptionId) return true; // already active
+  if (_subscriptionId) return true;
 
   const hasPermission = await checkMailReadPermission(config.mailbox);
   if (!hasPermission) return false;
@@ -242,7 +217,6 @@ async function tryActivate(config: { mailbox: string; webhookUrl: string }): Pro
 
   _subscriptionId = subId;
 
-  // Renew every 2 days (subscription expires after 3)
   const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
   _renewalTimer = setInterval(async () => {
     if (!_subscriptionId) return;
@@ -253,7 +227,6 @@ async function tryActivate(config: { mailbox: string; webhookUrl: string }): Pro
     }
   }, TWO_DAYS_MS);
 
-  // Stop the activation poller — we're live
   if (_activationTimer) {
     clearInterval(_activationTimer);
     _activationTimer = null;
@@ -270,21 +243,20 @@ export async function initGraphSubscriptionService(): Promise<void> {
   }
 
   const config = getReplyEmailConfig();
-  if (!config) {
-    log("OUTLOOK_REPLY_EMAIL or APP_BASE_URL not set — reply tracking disabled");
-    return;
+  if (config) {
+    log(`Checking Mail.Read permission for mailbox: ${config.mailbox}`);
+    const activated = await tryActivate(config);
+
+    if (!activated) {
+      log("Mail.Read not yet granted — reply tracking dormant. Will retry every hour until granted.");
+      const ONE_HOUR_MS = 60 * 60 * 1000;
+      _activationTimer = setInterval(() => tryActivate(config), ONE_HOUR_MS);
+    }
+  } else {
+    log("OUTLOOK_REPLY_EMAIL or APP_BASE_URL not set — shared mailbox reply tracking disabled");
   }
 
-  log(`Checking Mail.Read permission for mailbox: ${config.mailbox}`);
-  const activated = await tryActivate(config);
-
-  if (!activated) {
-    log("Mail.Read not yet granted — reply tracking dormant. Will retry every hour until granted.");
-    // Poll hourly so that activation happens automatically when IT grants the permission,
-    // without needing a server restart.
-    const ONE_HOUR_MS = 60 * 60 * 1000;
-    _activationTimer = setInterval(() => tryActivate(config), ONE_HOUR_MS);
-  }
+  await initUserMailboxSubscriptions();
 }
 
 export function stopGraphSubscriptionService(): void {
@@ -295,5 +267,184 @@ export function stopGraphSubscriptionService(): void {
   if (_activationTimer) {
     clearInterval(_activationTimer);
     _activationTimer = null;
+  }
+  if (_userMailboxRenewalTimer) {
+    clearInterval(_userMailboxRenewalTimer);
+    _userMailboxRenewalTimer = null;
+  }
+}
+
+let _userMailboxRenewalTimer: ReturnType<typeof setInterval> | null = null;
+
+export async function registerMailboxSubscription(mailboxEmail: string, mailboxId: string): Promise<string | null> {
+  if (!azureCredentialsConfigured()) return null;
+  const baseUrl = process.env.APP_BASE_URL?.trim();
+  if (!baseUrl) return null;
+
+  const webhookUrl = `${baseUrl.replace(/\/$/, "")}/api/webhooks/graph/email`;
+
+  try {
+    const token = await getGraphAccessToken();
+    const SUB_TTL_MS = 4200 * 60 * 1000;
+    const expiresAt = new Date(Date.now() + SUB_TTL_MS).toISOString();
+
+    const inboxResource = `/users/${mailboxEmail}/mailFolders/inbox/messages`;
+    const sentResource = `/users/${mailboxEmail}/mailFolders/sentitems/messages`;
+
+    let inboxSubId: string | null = null;
+    let sentSubId: string | null = null;
+
+    for (const [resource, label] of [[inboxResource, "inbox"], [sentResource, "sentitems"]] as const) {
+      const body = {
+        changeType: "created",
+        notificationUrl: webhookUrl,
+        resource,
+        expirationDateTime: expiresAt,
+        clientState: process.env.OUTLOOK_WEBHOOK_SECRET ?? "freight-dna-reply-tracker",
+      };
+
+      const res = await fetch("https://graph.microsoft.com/v1.0/subscriptions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (res.status === 201) {
+        const data = await res.json() as { id: string; expirationDateTime: string };
+        log(`[user-mailbox] Subscription registered for ${mailboxEmail} ${label} (id=${data.id})`);
+        if (label === "inbox") inboxSubId = data.id;
+        else sentSubId = data.id;
+      } else {
+        const errorText = await res.text();
+        log(`[user-mailbox] Failed to register ${label} subscription for ${mailboxEmail} (${res.status}): ${errorText.slice(0, 400)}`);
+      }
+    }
+
+    if (inboxSubId || sentSubId) {
+      await storage.updateMonitoredMailbox(mailboxId, {
+        subscriptionId: inboxSubId,
+        sentItemsSubscriptionId: sentSubId,
+        subscriptionExpiresAt: new Date(expiresAt),
+        syncStatus: "active",
+        syncError: null,
+      });
+      return inboxSubId ?? sentSubId;
+    }
+
+    await storage.updateMonitoredMailbox(mailboxId, {
+      syncStatus: "error",
+      syncError: "Failed to register Graph subscriptions",
+    });
+    return null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`[user-mailbox] Exception registering subscription for ${mailboxEmail}: ${msg}`);
+    await storage.updateMonitoredMailbox(mailboxId, {
+      syncStatus: "error",
+      syncError: msg.slice(0, 200),
+    });
+    return null;
+  }
+}
+
+export async function removeMailboxSubscription(subscriptionId: string, mailboxId: string): Promise<void> {
+  if (!azureCredentialsConfigured()) return;
+
+  const mailbox = await storage.getMonitoredMailbox(mailboxId);
+  const subIds = [subscriptionId];
+  if (mailbox?.sentItemsSubscriptionId && mailbox.sentItemsSubscriptionId !== subscriptionId) {
+    subIds.push(mailbox.sentItemsSubscriptionId);
+  }
+
+  try {
+    const token = await getGraphAccessToken();
+    for (const sid of subIds) {
+      const res = await fetch(`https://graph.microsoft.com/v1.0/subscriptions/${sid}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok || res.status === 404) {
+        log(`[user-mailbox] Subscription ${sid} removed`);
+      } else {
+        log(`[user-mailbox] Failed to remove subscription ${sid}: ${res.status}`);
+      }
+    }
+  } catch (err) {
+    log(`[user-mailbox] Exception removing subscriptions: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  await storage.updateMonitoredMailbox(mailboxId, {
+    subscriptionId: null,
+    sentItemsSubscriptionId: null,
+    subscriptionExpiresAt: null,
+    syncStatus: "disabled",
+  });
+}
+
+async function renewUserMailboxSubscriptions(): Promise<void> {
+  if (!azureCredentialsConfigured()) return;
+
+  try {
+    const mailboxes = await storage.getEnabledMonitoredMailboxes();
+    for (const mb of mailboxes) {
+      if (!mb.subscriptionId && !mb.sentItemsSubscriptionId) {
+        await registerMailboxSubscription(mb.email, mb.id);
+        continue;
+      }
+
+      let allRenewed = true;
+      for (const sid of [mb.subscriptionId, mb.sentItemsSubscriptionId]) {
+        if (sid) {
+          const renewed = await renewSubscription(sid);
+          if (!renewed) allRenewed = false;
+        }
+      }
+
+      if (allRenewed) {
+        const SUB_TTL_MS = 4200 * 60 * 1000;
+        await storage.updateMonitoredMailbox(mb.id, {
+          subscriptionExpiresAt: new Date(Date.now() + SUB_TTL_MS),
+          syncStatus: "active",
+        });
+      } else {
+        log(`[user-mailbox] Renewal failed for ${mb.email} — re-registering`);
+        await registerMailboxSubscription(mb.email, mb.id);
+      }
+    }
+  } catch (err) {
+    log(`[user-mailbox] Error renewing subscriptions: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function initUserMailboxSubscriptions(): Promise<void> {
+  if (!azureCredentialsConfigured()) return;
+
+  try {
+    const mailboxes = await storage.getEnabledMonitoredMailboxes();
+    if (mailboxes.length === 0) {
+      log("[user-mailbox] No monitored mailboxes configured");
+      return;
+    }
+
+    log(`[user-mailbox] Initializing subscriptions for ${mailboxes.length} monitored mailbox(es)`);
+
+    for (const mb of mailboxes) {
+      if (mb.subscriptionId) {
+        const expired = mb.subscriptionExpiresAt && mb.subscriptionExpiresAt.getTime() < Date.now();
+        if (!expired) {
+          log(`[user-mailbox] ${mb.email}: existing subscription still valid`);
+          continue;
+        }
+      }
+      await registerMailboxSubscription(mb.email, mb.id);
+    }
+
+    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+    _userMailboxRenewalTimer = setInterval(renewUserMailboxSubscriptions, TWO_DAYS_MS);
+  } catch (err) {
+    log(`[user-mailbox] Init error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }

@@ -2513,3 +2513,35 @@ export const competitiveSignals = pgTable(
 export const insertCompetitiveSignalSchema = createInsertSchema(competitiveSignals).omit({ id: true, createdAt: true });
 export type InsertCompetitiveSignal = z.infer<typeof insertCompetitiveSignalSchema>;
 export type CompetitiveSignal = typeof competitiveSignals.$inferSelect;
+
+export const monitoredMailboxes = pgTable(
+  "monitored_mailboxes",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    subscriptionId: text("subscription_id"),
+    sentItemsSubscriptionId: text("sent_items_subscription_id"),
+    subscriptionExpiresAt: timestamp("subscription_expires_at"),
+    lastSyncAt: timestamp("last_sync_at"),
+    deltaSyncToken: text("delta_sync_token"),
+    syncStatus: text("sync_status").notNull().default("pending"),
+    syncError: text("sync_error"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("monitored_mailboxes_org_email_idx").on(table.orgId, table.email),
+    index("monitored_mailboxes_org_enabled_idx").on(table.orgId, table.enabled),
+  ],
+);
+
+export const insertMonitoredMailboxSchema = createInsertSchema(monitoredMailboxes).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertMonitoredMailbox = z.infer<typeof insertMonitoredMailboxSchema>;
+export type MonitoredMailbox = typeof monitoredMailboxes.$inferSelect;

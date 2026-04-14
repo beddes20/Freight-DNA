@@ -65,7 +65,9 @@ Key functionalities include:
   10. **Win/Loss Pattern Engine**: Analyzes won/lost RFPs across the org to surface pricing, relationship, timing, geography patterns. Leadership-only generation. Stored in `win_loss_patterns`.
   11. **Competitive Signal Detection**: Detects competitor mentions, rate shopping, switching risk from email analysis. Severity-rated with suggested responses. Stored in `competitive_signals`.
 
-### DB Tables Added in Tasks #200–203, #225, Tactical Learning
+- **Auto-Sync Customer Emails for NAMs & AMs** (Task #230): Monitors individual NAM/AM Outlook mailboxes via Microsoft Graph webhooks. Automatically pulls email threads involving known customer contacts, links them to accounts, and runs AI signal extraction. Admin UI at `/admin/monitored-mailboxes` for managing monitored mailboxes. Delta sync catches missed emails every 15 minutes. New table: `monitored_mailboxes`. Services: `graphSubscriptionService` (per-user subscriptions), `mailboxDeltaSyncService` (catch-up sync). API: `GET/POST/PATCH/DELETE /api/internal/admin/monitored-mailboxes`, `POST .../sync`.
+
+### DB Tables Added in Tasks #200–203, #225, #230, Tactical Learning
 | Table | Purpose |
 |---|---|
 | `lane_summary_cache` | Pre-computed flat LeanItem rows for the LWQ work-queue (cache-first path). Populated by `scoreAllEligibleLanes` on startup (20s delay) and nightly at 3:00 AM CT. |
@@ -88,6 +90,7 @@ Key functionalities include:
 | `wallet_share_plays` | AI-generated per-account growth playbooks with execution steps. |
 | `win_loss_patterns` | AI-analyzed patterns from won/lost RFPs across the org. |
 | `competitive_signals` | Competitor mentions and switching risk detected from emails. |
+| `monitored_mailboxes` | Per-user Outlook mailbox monitoring config for auto-syncing customer emails (Task #230). Stores subscription ID, delta sync token, sync status. |
 
 ### DB Tables
 Key database tables support core functionalities, including `lane_summary_cache` for pre-computed lane data, `account_contact_suggestions` for email-derived contact suggestions, `geographic_lane_patterns` for defined corridors, `account_contact_lane_pattern_responsibilities` for contact-to-corridor mapping, and `email_conversation_threads` for managing email conversations.

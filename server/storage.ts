@@ -181,6 +181,9 @@ import {
   contactGeographySuggestions,
   type ContactGeographySuggestion,
   type InsertContactGeographySuggestion,
+  monitoredMailboxes,
+  type MonitoredMailbox,
+  type InsertMonitoredMailbox,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -944,6 +947,18 @@ export interface IStorage {
   pinCompany(userId: string, companyId: string): Promise<import('@shared/schema').PinnedCompany>;
   unpinCompany(userId: string, companyId: string): Promise<boolean>;
   isPinnedCompany(userId: string, companyId: string): Promise<boolean>;
+
+  // Monitored Mailboxes (Task #230)
+  getMonitoredMailboxes(orgId: string): Promise<MonitoredMailbox[]>;
+  getMonitoredMailbox(id: string): Promise<MonitoredMailbox | undefined>;
+  getMonitoredMailboxByEmail(orgId: string, email: string): Promise<MonitoredMailbox | undefined>;
+  getEnabledMonitoredMailboxes(): Promise<MonitoredMailbox[]>;
+  createMonitoredMailbox(data: InsertMonitoredMailbox): Promise<MonitoredMailbox>;
+  updateMonitoredMailbox(id: string, data: Partial<InsertMonitoredMailbox>): Promise<MonitoredMailbox | undefined>;
+  deleteMonitoredMailbox(id: string): Promise<boolean>;
+  getUserByEmailAddress(email: string, orgId: string): Promise<User | undefined>;
+  getMonitoredMailboxBySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
+  getMonitoredMailboxByAnySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
 }
 
 const pool = new Pool({
@@ -6385,6 +6400,84 @@ export class DatabaseStorage implements IStorage {
   async isPinnedCompany(userId: string, companyId: string): Promise<boolean> {
     const rows = await db.select().from(pinnedCompanies).where(and(eq(pinnedCompanies.userId, userId), eq(pinnedCompanies.companyId, companyId)));
     return rows.length > 0;
+  }
+
+  // ── Monitored Mailboxes (Task #230) ─────────────────────────────────────────
+
+  async getMonitoredMailboxes(orgId: string): Promise<MonitoredMailbox[]> {
+    return db.select().from(monitoredMailboxes)
+      .where(eq(monitoredMailboxes.orgId, orgId))
+      .orderBy(asc(monitoredMailboxes.createdAt));
+  }
+
+  async getMonitoredMailbox(id: string): Promise<MonitoredMailbox | undefined> {
+    const [row] = await db.select().from(monitoredMailboxes)
+      .where(eq(monitoredMailboxes.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getMonitoredMailboxByEmail(orgId: string, email: string): Promise<MonitoredMailbox | undefined> {
+    const [row] = await db.select().from(monitoredMailboxes)
+      .where(and(
+        eq(monitoredMailboxes.orgId, orgId),
+        eq(monitoredMailboxes.email, email.toLowerCase()),
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async getEnabledMonitoredMailboxes(): Promise<MonitoredMailbox[]> {
+    return db.select().from(monitoredMailboxes)
+      .where(eq(monitoredMailboxes.enabled, true));
+  }
+
+  async createMonitoredMailbox(data: InsertMonitoredMailbox): Promise<MonitoredMailbox> {
+    const [row] = await db.insert(monitoredMailboxes).values({
+      ...data,
+      email: data.email.toLowerCase(),
+    }).returning();
+    return row;
+  }
+
+  async updateMonitoredMailbox(id: string, data: Partial<InsertMonitoredMailbox>): Promise<MonitoredMailbox | undefined> {
+    const [row] = await db.update(monitoredMailboxes)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(monitoredMailboxes.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteMonitoredMailbox(id: string): Promise<boolean> {
+    const result = await db.delete(monitoredMailboxes).where(eq(monitoredMailboxes.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getUserByEmailAddress(email: string, orgId: string): Promise<User | undefined> {
+    const [row] = await db.select().from(users)
+      .where(and(
+        eq(users.organizationId, orgId),
+        eq(users.username, email.toLowerCase()),
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async getMonitoredMailboxBySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined> {
+    const [row] = await db.select().from(monitoredMailboxes)
+      .where(eq(monitoredMailboxes.subscriptionId, subscriptionId))
+      .limit(1);
+    return row;
+  }
+
+  async getMonitoredMailboxByAnySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined> {
+    const [row] = await db.select().from(monitoredMailboxes)
+      .where(or(
+        eq(monitoredMailboxes.subscriptionId, subscriptionId),
+        eq(monitoredMailboxes.sentItemsSubscriptionId, subscriptionId),
+      ))
+      .limit(1);
+    return row;
   }
 }
 

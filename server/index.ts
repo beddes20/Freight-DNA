@@ -21,6 +21,7 @@ import { scoreAllEligibleLanes } from "./laneScoringService";
 import { startIntelEmailScheduler } from "./intelEmailScheduler";
 import { startEmailIntelligenceScheduler } from "./emailIntelligenceScheduler";
 import { initGraphSubscriptionService } from "./graphSubscriptionService";
+import { initDeltaSyncScheduler } from "./services/mailboxDeltaSyncService";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
@@ -276,6 +277,7 @@ async function initStripe() {
       initGraphSubscriptionService().catch(err => {
         console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));
       });
+      initDeltaSyncScheduler();
       // Pre-warm the financial uploads cache so the first carrier-suggestions
       // request doesn't trigger a cold full-table JSONB scan in production.
       setTimeout(() => {
