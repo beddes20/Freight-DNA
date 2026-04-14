@@ -20,6 +20,7 @@ const PLAY_TYPES: Record<string, { label: string; intent: string }> = {
   "carrier_capacity": { label: "Carrier Capacity Outreach", intent: "Check carrier capacity for a specific lane or corridor" },
   "carrier_rate_discussion": { label: "Carrier Rate Discussion", intent: "Discuss rate positioning or negotiate carrier pricing" },
   "general": { label: "General Outreach", intent: "General-purpose professional email" },
+  "thread_reply": { label: "Thread Reply", intent: "Continue the conversation naturally — read the thread, understand what was said, and craft a relevant freight-related response" },
 };
 
 const draftRequestSchema = z.object({
@@ -184,7 +185,25 @@ async function generateDraft(params: {
 - Based on ${voiceProfile.sampleCount} recent emails`
     : `VOICE PROFILE: No email history available. Use a professional, friendly, and direct tone.`;
 
-  const systemPrompt = `You are an AI assistant for a freight brokerage CRM. Your job is to draft a short, personalized email (2-4 sentences) that sounds like the rep wrote it.
+  const isThreadReply = playType === "thread_reply";
+
+  const systemPrompt = isThreadReply
+    ? `You are an AI assistant for a freight brokerage CRM. Your job is to draft a reply to an ongoing email thread. Read the conversation history carefully, understand what the other party said or asked, and craft a relevant freight-related response.
+
+${voiceInstructions}
+
+RULES:
+1. Keep it to 2-4 sentences max. Freight brokers are brief.
+2. Directly address what the other person said or asked — don't ignore their points
+3. Reference specific freight details from the thread (lanes, rates, loads, service issues, etc.)
+4. Match the rep's greeting and sign-off style
+5. Match the rep's sentence length and tone
+6. Do NOT include a subject line — just the email body
+7. Do NOT include the rep's name/signature — just the message content
+8. Sound natural and human — like a real reply, not a template
+9. If the last message raised a concern, address it. If they asked a question, answer it. If they shared good news, acknowledge it.
+10. If the contact's name is known, use their first name`
+    : `You are an AI assistant for a freight brokerage CRM. Your job is to draft a short, personalized email (2-4 sentences) that sounds like the rep wrote it.
 
 ${voiceInstructions}
 
@@ -200,7 +219,16 @@ RULES:
 7. Sound natural and human — not like a template
 8. If the contact's name is known, use their first name in the greeting`;
 
-  const userPrompt = `Draft a "${play.label}" email.
+  const userPrompt = isThreadReply
+    ? `Draft a reply to this ongoing conversation thread.
+
+${dataContext || "No specific data available"}
+
+${contactName ? `Recipient name: ${contactName}` : ""}
+${additionalContext ? `Additional direction from the rep: ${additionalContext}` : ""}
+
+Write a natural reply (2-4 sentences) that directly responds to what was said:`
+    : `Draft a "${play.label}" email.
 
 CONTEXT DATA:
 ${dataContext || "No specific data available"}
@@ -383,11 +411,13 @@ export function registerEmailDraftingRoutes(app: Express): void {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-    const plays = Object.entries(PLAY_TYPES).map(([key, val]) => ({
-      value: key,
-      label: val.label,
-      intent: val.intent,
-    }));
+    const plays = Object.entries(PLAY_TYPES)
+      .filter(([key]) => key !== "thread_reply")
+      .map(([key, val]) => ({
+        value: key,
+        label: val.label,
+        intent: val.intent,
+      }));
     res.json(plays);
   });
 }
