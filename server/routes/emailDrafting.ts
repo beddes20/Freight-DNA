@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getCurrentUser } from "../auth";
 import { storage, db } from "../storage";
 import { getVoiceProfile, refreshVoiceProfile } from "../voiceProfileService";
-import { eq, and, desc, gte, inArray } from "drizzle-orm";
+import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
 import {
   companies, contacts, touchpoints, emailMessages, draftFeedback, sentEmailCorrections,
 } from "@shared/schema";
@@ -628,13 +628,16 @@ export function registerEmailDraftingRoutes(app: Express): void {
 
       const isLeadership = ["admin", "sales_director", "director"].includes(user.role);
 
-      const { emailMessageId, threadId, limit: limitStr } = req.query;
+      const { emailMessageId, threadId, hasOutreachLog, limit: limitStr } = req.query;
       const conditions = [eq(sentEmailCorrections.orgId, user.organizationId)];
       if (emailMessageId && typeof emailMessageId === "string") {
         conditions.push(eq(sentEmailCorrections.emailMessageId, emailMessageId));
       }
       if (threadId && typeof threadId === "string") {
         conditions.push(eq(sentEmailCorrections.threadId, threadId));
+      }
+      if (hasOutreachLog === "1") {
+        conditions.push(sql`${sentEmailCorrections.outreachLogId} IS NOT NULL`);
       }
 
       if (isLeadership) {
@@ -645,7 +648,10 @@ export function registerEmailDraftingRoutes(app: Express): void {
           .limit(Number(limitStr) || 50);
         res.json({ corrections: rows });
       } else {
-        const rows = await db.select({ emailMessageId: sentEmailCorrections.emailMessageId })
+        const rows = await db.select({
+          emailMessageId: sentEmailCorrections.emailMessageId,
+          outreachLogId: sentEmailCorrections.outreachLogId,
+        })
           .from(sentEmailCorrections)
           .where(and(...conditions))
           .orderBy(desc(sentEmailCorrections.createdAt))

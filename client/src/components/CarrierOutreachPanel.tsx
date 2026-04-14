@@ -66,7 +66,15 @@ import {
   Star,
   Clock,
   MailOpen,
+  PenLine,
+  Check,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface TeamMember {
   id: string;
@@ -345,6 +353,37 @@ export function CarrierOutreachPanel({
   const { user: currentUser } = useAuth();
   const isDirectorOrAdmin = ["admin", "director"].includes(currentUser?.role ?? "");
   const isManager = ["admin", "director", "national_account_manager", "logistics_manager"].includes(currentUser?.role ?? "");
+  const canCorrectEmails = ["admin", "sales_director", "director"].includes(currentUser?.role ?? "");
+
+  const [correctionLog, setCorrectionLog] = useState<OutreachLog | null>(null);
+  const [correctionDraft, setCorrectionDraft] = useState<EmailDraft | null>(null);
+  const [correctedText, setCorrectedText] = useState("");
+  const [correctionNotes, setCorrectionNotes] = useState("");
+
+  const outreachCorrectionMutation = useMutation({
+    mutationFn: async (params: { outreachLogId: string; originalText: string; correctedText: string; correctionNotes?: string; subject?: string; carrierId?: string }) => {
+      const res = await apiRequest("POST", "/api/email-corrections", {
+        outreachLogId: params.outreachLogId,
+        originalText: params.originalText,
+        correctedText: params.correctedText,
+        correctionNotes: params.correctionNotes || undefined,
+        carrierId: params.carrierId || undefined,
+        subject: params.subject || undefined,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Correction saved", description: "AI will learn from this in future carrier outreach." });
+      setCorrectionLog(null);
+      setCorrectionDraft(null);
+      setCorrectedText("");
+      setCorrectionNotes("");
+      queryClient.invalidateQueries({ queryKey: ["/api/email-corrections"] });
+    },
+    onError: () => {
+      toast({ title: "Failed to save correction", variant: "destructive" });
+    },
+  });
 
   const [selectedCarriers, setSelectedCarriers] = useState<Set<string>>(new Set());
   const [outreachMode, setOutreachMode] = useState<"lane_building" | "immediate_plus_lane">("lane_building");
@@ -373,6 +412,18 @@ export function CarrierOutreachPanel({
   const [sendConfirmOverride, setSendConfirmOverride] = useState(false);
   // ── Redesign: step-based navigation ────────────────────────────────────────
   const [activeMainTab, setActiveMainTab] = useState<"carriers" | "message" | "followup" | "history">("carriers");
+
+  const { data: outreachCorrections } = useQuery<{ corrections: { outreachLogId: string }[] }>({
+    queryKey: ["/api/email-corrections", { forHistory: true }],
+    queryFn: async () => {
+      const res = await fetch(`/api/email-corrections?hasOutreachLog=1`);
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: open && activeMainTab === "history",
+  });
+  const correctedOutreachIds = new Set((outreachCorrections?.corrections ?? []).map(c => c.outreachLogId).filter(Boolean));
+
   const [activeCarriersSubTab, setActiveCarriersSubTab] = useState<"ranked" | "bench" | "import">("ranked");
   const [showRefineFilters, setShowRefineFilters] = useState(false);
   // Inline email notes per carrier (keyed by carrierId ?? carrierName)
@@ -2657,7 +2708,30 @@ export function CarrierOutreachPanel({
                             )}
                           </div>
                           {!isInbound && (
-                            <span className="text-[9px] text-muted-foreground shrink-0">{log.carrierNames.length} carrier{log.carrierNames.length !== 1 ? "s" : ""}</span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {correctedOutreachIds.has(log.id) && (
+                                <span className="flex items-center gap-0.5 text-[9px] text-emerald-400" data-testid={`badge-corrected-outreach-${log.id}`}>
+                                  <Check className="w-2.5 h-2.5" /> Corrected
+                                </span>
+                              )}
+                              {canCorrectEmails && !correctedOutreachIds.has(log.id) && status === "sent" && log.emailDrafts && log.emailDrafts.length > 0 && (
+                                <button
+                                  className="p-0.5 rounded hover:bg-amber-500/20 text-muted-foreground hover:text-amber-400 transition-colors"
+                                  title="Correct this outreach — teach AI what should have been said"
+                                  onClick={() => {
+                                    const firstDraft = log.emailDrafts![0];
+                                    setCorrectionLog(log);
+                                    setCorrectionDraft(firstDraft);
+                                    setCorrectedText(firstDraft.body);
+                                    setCorrectionNotes("");
+                                  }}
+                                  data-testid={`button-correct-outreach-${log.id}`}
+                                >
+                                  <PenLine className="w-3 h-3" />
+                                </button>
+                              )}
+                              <span className="text-[9px] text-muted-foreground">{log.carrierNames.length} carrier{log.carrierNames.length !== 1 ? "s" : ""}</span>
+                            </div>
                           )}
                         </div>
                         {!isInbound && log.recipients && log.recipients.length > 0 && (
@@ -2693,6 +2767,117 @@ export function CarrierOutreachPanel({
               )}
             </div>
           )}
+
+          <Dialog open={!!correctionLog && !!correctionDraft} onOpenChange={(o) => { if (!o) { setCorrectionLog(null); setCorrectionDraft(null); } }}>
+            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="carrier-correction-modal">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  <PenLine className="w-5 h-5 text-amber-500" />
+                  Correct Carrier Outreach
+                </DialogTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Edit what we should have said. AI will learn from this correction for future carrier outreach.
+                </p>
+              </DialogHeader>
+
+              {correctionLog && correctionDraft && (
+                <div className="space-y-4 mt-2">
+                  {correctionLog.emailDrafts && correctionLog.emailDrafts.length > 1 && (
+                    <div className="flex flex-wrap gap-1">
+                      {correctionLog.emailDrafts.map((d, di) => (
+                        <button
+                          key={di}
+                          onClick={() => {
+                            setCorrectionDraft(d);
+                            setCorrectedText(d.body);
+                          }}
+                          className={`px-2 py-1 rounded text-[10px] border transition-colors ${
+                            correctionDraft.carrierName === d.carrierName
+                              ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
+                              : "bg-muted/20 border-border text-muted-foreground hover:border-foreground/30"
+                          }`}
+                          data-testid={`tab-draft-${di}`}
+                        >
+                          {d.carrierName}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-medium text-muted-foreground">Original (what was sent)</label>
+                      <span className="text-[10px] text-muted-foreground">To: {correctionDraft.carrierName}</span>
+                    </div>
+                    <div className="rounded-lg border bg-muted/30 p-3 text-xs whitespace-pre-wrap max-h-40 overflow-y-auto" data-testid="text-original-outreach">
+                      <p className="text-muted-foreground/60 mb-1">Subject: {correctionDraft.subject}</p>
+                      {correctionDraft.body}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                      Corrected version (what we should have said)
+                    </label>
+                    <Textarea
+                      value={correctedText}
+                      onChange={(e) => setCorrectedText(e.target.value)}
+                      className="min-h-[140px] text-sm"
+                      placeholder="Rewrite the email the way it should have been sent..."
+                      data-testid="textarea-corrected-outreach"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                      Coaching notes (optional)
+                    </label>
+                    <Textarea
+                      value={correctionNotes}
+                      onChange={(e) => setCorrectionNotes(e.target.value)}
+                      className="h-16 text-sm resize-none"
+                      placeholder="Why is this better? (e.g., 'too generic, should mention their equipment type', 'rate was wrong')"
+                      data-testid="textarea-correction-notes-outreach"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { setCorrectionLog(null); setCorrectionDraft(null); }}
+                      data-testid="button-cancel-carrier-correction"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="gap-1"
+                      disabled={outreachCorrectionMutation.isPending || correctedText.trim() === correctionDraft.body.trim()}
+                      onClick={() => {
+                        outreachCorrectionMutation.mutate({
+                          outreachLogId: correctionLog.id,
+                          originalText: correctionDraft.body,
+                          correctedText: correctedText.trim(),
+                          correctionNotes: correctionNotes.trim() || undefined,
+                          subject: correctionDraft.subject,
+                          carrierId: correctionDraft.carrierId ?? undefined,
+                        });
+                      }}
+                      data-testid="button-submit-carrier-correction"
+                    >
+                      {outreachCorrectionMutation.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Check className="w-3.5 h-3.5" />
+                      )}
+                      Save Correction
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
         </div>
 
         {/* ── CONTEXT-AWARE STICKY FOOTER ──────────────────────────────── */}
