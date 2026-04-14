@@ -188,6 +188,7 @@ export async function syncMarketSignalNbas(orgId: string, storage: IStorage): Pr
         urgencyScore: computeUrgencyScore(signal),
         status: "generated",
         marketSignalId: signal.id,
+        playLabel: "Market Signal Outreach",
         createdAt: new Date().toISOString(),
       });
 

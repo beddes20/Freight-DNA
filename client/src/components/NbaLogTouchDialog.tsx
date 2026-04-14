@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PhoneCall, Mail, MessageSquare, Building2 } from "lucide-react";
+import { PhoneCall, Mail, MessageSquare, Building2, BookOpen } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -48,6 +48,22 @@ const TOUCH_TYPES = [
   { value: "site_visit", label: "Site Visit", icon: Building2 },
 ] as const;
 
+const PLAY_OPTIONS = [
+  "Stabilize At-Risk Account",
+  "Expand Contact Coverage",
+  "Re-Engage Stale Account",
+  "Clear Overdue Commitment",
+  "Consolidate Spot → Mini-Bid",
+  "RFP Defense / Expansion",
+  "Activate Stalled Awards",
+  "Carrier Bench Strengthen",
+  "Market Tightening Outreach",
+  "Market Loosening Opportunity",
+  "Geography Expansion",
+  "Wallet Share Capture",
+  "Market Signal Outreach",
+];
+
 const VIBES = [
   { value: "positive", label: "😊 Positive", cls: "border-green-500 bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-300" },
   { value: "neutral",  label: "😐 Neutral",  cls: "border-yellow-500 bg-yellow-50 dark:bg-yellow-950/40 text-yellow-700 dark:text-yellow-300" },
@@ -71,6 +87,7 @@ export function NbaLogTouchDialog({
   const [vibe, setVibe]             = useState("");
   const [note, setNote]             = useState("");
   const [meaningful, setMeaningful] = useState(false);
+  const [playLabel, setPlayLabel]   = useState("");
 
   // Fetch company contacts so the rep can choose when no contactId is pre-set
   const { data: contacts = [], isLoading: contactsLoading } = useQuery<Contact[]>({
@@ -93,6 +110,7 @@ export function NbaLogTouchDialog({
         isMeaningful: meaningful,
         sentiment:   vibe || null,
         notes:       note.trim() || null,
+        playLabel:   playLabel && playLabel !== "__none__" ? playLabel : null,
       });
       await apiRequest("PATCH", `/api/nba/cards/${cardId}/resolve`, { action: "actioned" });
     },
@@ -115,6 +133,7 @@ export function NbaLogTouchDialog({
     setVibe("");
     setNote("");
     setMeaningful(false);
+    setPlayLabel("");
     onClose();
   }
 
@@ -201,6 +220,24 @@ export function NbaLogTouchDialog({
               />
             </button>
             <span className="text-sm">Meaningful conversation?</span>
+          </div>
+
+          {/* Play executed */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium">
+              Play Executed <span className="text-muted-foreground font-normal">(optional)</span>
+            </label>
+            <Select value={playLabel} onValueChange={setPlayLabel}>
+              <SelectTrigger data-testid="select-nba-touch-play">
+                <SelectValue placeholder="Tag a play…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">No play</SelectItem>
+                {PLAY_OPTIONS.map(p => (
+                  <SelectItem key={p} value={p}>{p}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Vibe */}

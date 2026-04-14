@@ -269,6 +269,7 @@ export async function maybeFireResponsibilityNba(params: {
       growthLever: "Geographic responsibility mapping",
       accountTier: null,
       urgencyScore: Math.round(confidenceScore * 0.7),
+      playLabel: "Geography Expansion",
       status: "generated",
       marketSignalId: null,
       createdAt: new Date().toISOString(),

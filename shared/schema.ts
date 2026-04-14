@@ -431,6 +431,7 @@ export const touchpoints = pgTable("touchpoints", {
   sentiment: text("sentiment"),
   isMeaningful: boolean("is_meaningful").default(false),
   loggedById: varchar("logged_by_id").notNull().references(() => users.id),
+  playLabel: text("play_label"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -1132,6 +1133,7 @@ export const nbaCards = pgTable("nba_cards", {
   linkedTaskId: varchar("linked_task_id"),
   linkedLaneId: varchar("linked_lane_id"),
   marketSignalId: varchar("market_signal_id"),
+  playLabel: text("play_label"),
   outcomeLinkedAt: text("outcome_linked_at"),
   outcomeTypeLinked: text("outcome_type_linked"),
   createdAt: text("created_at").notNull(),

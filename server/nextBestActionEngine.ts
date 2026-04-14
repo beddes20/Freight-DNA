@@ -1,3 +1,5 @@
+import { getPlayForRuleType } from "./playsRegistry";
+
 /**
  * Next Best Action (NBA) Engine
  *
@@ -718,6 +720,7 @@ export async function generateNbasFromEmailSignals(
       suggestedAction: buildNbaBodyFromSignal(signal, message),
       expectedOutcome: "Engage promptly to maintain the relationship and resolve the issue.",
       urgencyScore,
+      playLabel: getPlayForRuleType(mapping.ruleType)?.name ?? null,
       status: "generated",
       linkedLaneId: message.linkedLaneId ?? null,
       createdAt: now,
@@ -863,6 +866,7 @@ export async function generateAccountEmailNbas(
       suggestedAction: rule.body(signal, message),
       expectedOutcome: "Engage promptly to maintain the relationship and capture the opportunity.",
       urgencyScore,
+      playLabel: getPlayForRuleType(rule.ruleType)?.name ?? null,
       status: "generated",
       linkedLaneId: message.linkedLaneId ?? null,
       createdAt: now,
@@ -936,6 +940,7 @@ export async function generateConversationOwnershipNbas(
           suggestedAction: `A high-priority thread (${thread.threadId}) has been waiting on us past the 4-hour SLA. Reply now.`,
           expectedOutcome: "Reply sent within SLA — thread moves to waiting_on_them.",
           urgencyScore: 85,
+          playLabel: "Clear Overdue Commitment",
           status: "generated",
           linkedLaneId: null,
           createdAt: nowStr,
@@ -964,6 +969,7 @@ export async function generateConversationOwnershipNbas(
           suggestedAction: `Thread ${thread.threadId} has no owner and is waiting on a reply. Assign ownership and respond.`,
           expectedOutcome: "Thread is claimed and reply is sent.",
           urgencyScore: 65,
+          playLabel: "Clear Overdue Commitment",
           status: "generated",
           linkedLaneId: null,
           createdAt: nowStr,
@@ -1001,6 +1007,7 @@ export async function generateConversationOwnershipNbas(
       suggestedAction: "Open the Conversations inbox to review and reply to threads waiting on you.",
       expectedOutcome: "All waiting threads receive a timely reply.",
       urgencyScore: stats.overdue > 0 ? 80 : 55,
+      playLabel: "Clear Overdue Commitment",
       status: "generated",
       linkedLaneId: null,
       createdAt: nowStr,

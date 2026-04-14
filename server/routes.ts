@@ -21,6 +21,7 @@ import { registerConversationsRoutes } from "./routes/conversations";
 import { registerEmailAnalyticsRoutes } from "./routes/emailAnalytics";
 import { registerGeographicResponsibilitiesRoutes } from "./routes/geographicResponsibilities";
 import { registerSonarRoutes } from "./routes/sonar";
+import { getPlayForRuleType } from "./playsRegistry";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -5031,6 +5032,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         sentiment: req.body.sentiment || null,
         isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true" ? true : false,
         loggedById: user.id,
+        playLabel: typeof req.body.playLabel === "string" ? req.body.playLabel || null : null,
         createdAt: now.toISOString(),
       });
       const company = contact.companyId ? await storage.getCompanyInOrg(contact.companyId, user.organizationId) : null;
@@ -6778,7 +6780,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { companyId, contactId, type, isMeaningful, sentiment, notes } = req.body;
+      const { companyId, contactId, type, isMeaningful, sentiment, notes, playLabel } = req.body;
       if (!companyId) return res.status(400).json({ error: "companyId is required" });
       const validTypes = ["call", "email", "text", "site_visit"];
       const validVibes = ["great", "neutral", "cold"];
@@ -6799,6 +6801,7 @@ Respond with valid JSON only:
         sentiment: sentiment || null,
         isMeaningful: isMeaningful === true || isMeaningful === "true" ? true : false,
         loggedById: user.id,
+        playLabel: typeof playLabel === "string" ? playLabel || null : null,
         createdAt: now.toISOString(),
       });
       const aiInsights = await analyzeTouchpointNote(cleanNotes || "", contact?.name, company.name).catch(() => null);
@@ -9111,6 +9114,103 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     }
   });
 
+  app.get("/api/plays-activity", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role ?? "")) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const orgId = user.organizationId;
+      const allUsers = await storage.getUsers(orgId);
+      const repRoles = ["account_manager", "national_account_manager"];
+      const reps = allUsers.filter(u => repRoles.includes(u.role ?? ""));
+
+      const now = new Date();
+      const range = (req.query.range as string) || "last_week";
+
+      let rangeStart: Date;
+      let rangeEnd: Date = new Date(now);
+      rangeEnd.setHours(23, 59, 59, 999);
+
+      if (range === "mtd") {
+        rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      } else if (range === "last_month") {
+        rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        rangeEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        rangeEnd.setHours(23, 59, 59, 999);
+      } else if (range === "ytd") {
+        rangeStart = new Date(now.getFullYear(), 0, 1);
+      } else {
+        const day = now.getDay();
+        const daysToLastMonday = (day === 0 ? 6 : day - 1) + 7;
+        rangeStart = new Date(now);
+        rangeStart.setDate(rangeStart.getDate() - daysToLastMonday);
+        rangeEnd = new Date(rangeStart);
+        rangeEnd.setDate(rangeEnd.getDate() + 6);
+        rangeEnd.setHours(23, 59, 59, 999);
+      }
+      rangeStart.setHours(0, 0, 0, 0);
+
+      const rangeStartStr = rangeStart.toISOString().split("T")[0];
+      const rangeEndStr = rangeEnd.toISOString().split("T")[0];
+
+      const allTps = await storage.getTouchpointsSince(rangeStartStr);
+      const rangeTps = allTps.filter((t: any) => !t.date || t.date <= rangeEndStr);
+
+      const taggedTps = rangeTps.filter((t: any) => t.playLabel);
+
+      const playCountMap = new Map<string, { total: number; byRep: Map<string, number> }>();
+      for (const tp of taggedTps) {
+        const label = (tp as any).playLabel as string;
+        if (!playCountMap.has(label)) {
+          playCountMap.set(label, { total: 0, byRep: new Map() });
+        }
+        const entry = playCountMap.get(label)!;
+        entry.total++;
+        const repId = (tp as any).loggedById as string;
+        entry.byRep.set(repId, (entry.byRep.get(repId) ?? 0) + 1);
+      }
+
+      const plays = Array.from(playCountMap.entries())
+        .map(([label, data]) => {
+          const topReps = Array.from(data.byRep.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([repId, count]) => {
+              const rep = reps.find(r => r.id === repId);
+              return { userId: repId, name: rep?.name ?? "Unknown", count };
+            });
+          return { playLabel: label, totalUsed: data.total, topReps };
+        })
+        .sort((a, b) => b.totalUsed - a.totalUsed);
+
+      const repPlayStats = reps.map(rep => {
+        const repTagged = taggedTps.filter((t: any) => t.loggedById === rep.id);
+        const repPlays = new Map<string, number>();
+        for (const tp of repTagged) {
+          const label = (tp as any).playLabel as string;
+          repPlays.set(label, (repPlays.get(label) ?? 0) + 1);
+        }
+        return {
+          userId: rep.id,
+          name: rep.name,
+          role: rep.role,
+          totalPlaysExecuted: repTagged.length,
+          plays: Array.from(repPlays.entries())
+            .map(([label, count]) => ({ playLabel: label, count }))
+            .sort((a, b) => b.count - a.count),
+        };
+      }).filter(r => r.totalPlaysExecuted > 0).sort((a, b) => b.totalPlaysExecuted - a.totalPlaysExecuted);
+
+      res.json({ plays, repPlayStats });
+    } catch (err: any) {
+      console.error("[plays-activity]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to load plays activity" });
+    }
+  });
+
   // ── Weekly Coaching Commitments ──────────────────────────────────────────
 
   function getWeekStart(date = new Date()): string {
@@ -9430,6 +9530,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
           relationshipMove: result.winner.relationshipMove,
           accountTier: result.winner.accountTier,
           urgencyScore: result.winner.urgencyScore,
+          playLabel: getPlayForRuleType(result.winner.ruleType)?.name ?? null,
           status: "visible",
           createdAt: now,
           contactId: result.winner.contactId,
@@ -9463,6 +9564,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
           relationshipMove: spec.candidate.relationshipMove,
           accountTier: spec.candidate.accountTier,
           urgencyScore: spec.candidate.urgencyScore,
+          playLabel: getPlayForRuleType(spec.candidate.ruleType)?.name ?? null,
           status: "visible",
           createdAt: now,
           linkedLaneId: spec.laneId,

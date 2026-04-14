@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   BarChart3, PhoneCall, Mail, MessageSquare, Building2, Star, UserPlus, Trophy,
-  TrendingUp, ChevronUp, ChevronDown,
+  TrendingUp, ChevronUp, ChevronDown, BookOpen,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -37,6 +37,25 @@ interface RepResult {
 interface ScorecardData {
   weekStart: string;
   results: RepResult[];
+}
+
+interface PlayActivityItem {
+  playLabel: string;
+  totalUsed: number;
+  topReps: Array<{ userId: string; name: string; count: number }>;
+}
+
+interface RepPlayStat {
+  userId: string;
+  name: string;
+  role: string;
+  totalPlaysExecuted: number;
+  plays: Array<{ playLabel: string; count: number }>;
+}
+
+interface PlaysActivityData {
+  plays: PlayActivityItem[];
+  repPlayStats: RepPlayStat[];
 }
 
 type SortKey = "weeklyTotal" | "weeklyMeaningful" | "contactsAdded" | "weeklyCalls" | "relationshipsMoved";
@@ -278,6 +297,15 @@ export default function RepScorecardPage() {
     },
   });
 
+  const { data: playsData } = useQuery<PlaysActivityData>({
+    queryKey: ["/api/plays-activity", timeRange],
+    queryFn: async () => {
+      const res = await fetch(`/api/plays-activity?range=${timeRange}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch plays activity");
+      return res.json();
+    },
+  });
+
   if (!["admin", "director", "national_account_manager", "sales_director"].includes(user?.role ?? "")) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -375,6 +403,88 @@ export default function RepScorecardPage() {
               reps={ams}
               currentUserId={user?.id}
             />
+
+            {/* Plays Activity */}
+            {playsData && (playsData.plays.length > 0 || playsData.repPlayStats.length > 0) && (
+              <div className="space-y-4" data-testid="plays-activity-section">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <BookOpen className="h-5 w-5 text-indigo-500" />
+                  Plays Activity
+                  <Badge variant="secondary" className="text-xs font-normal">
+                    {playsData.plays.reduce((s, p) => s + p.totalUsed, 0)} plays executed
+                  </Badge>
+                </h2>
+
+                {playsData.plays.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {playsData.plays.map(play => (
+                      <Card key={play.playLabel} data-testid={`play-card-${play.playLabel.replace(/\s+/g, "-").toLowerCase()}`}>
+                        <CardContent className="p-4 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-semibold flex items-center gap-1.5">
+                              <BookOpen className="h-3.5 w-3.5 text-indigo-500" />
+                              {play.playLabel}
+                            </span>
+                            <Badge className="bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+                              {play.totalUsed}x
+                            </Badge>
+                          </div>
+                          {play.topReps.length > 0 && (
+                            <div className="space-y-0.5">
+                              {play.topReps.map(rep => (
+                                <div key={rep.userId} className="flex items-center justify-between text-xs text-muted-foreground">
+                                  <span>{rep.name}</span>
+                                  <span className="font-medium">{rep.count}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+
+                {playsData.repPlayStats.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-semibold">Plays by Rep</CardTitle>
+                    </CardHeader>
+                    <CardContent className="overflow-x-auto">
+                      <table className="w-full text-sm" data-testid="table-plays-by-rep">
+                        <thead>
+                          <tr className="text-xs text-muted-foreground border-b border-border">
+                            <th className="text-left pb-2 pr-4 font-medium">Rep</th>
+                            <th className="text-right pb-2 px-3 font-medium">Total Plays</th>
+                            <th className="text-left pb-2 pl-3 font-medium">Most Used</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {playsData.repPlayStats.map(rep => (
+                            <tr key={rep.userId} className="hover:bg-muted/40 transition-colors" data-testid={`row-plays-rep-${rep.userId}`}>
+                              <td className="py-2.5 pr-4">
+                                <p className="font-medium">{rep.name}</p>
+                                <p className="text-xs text-muted-foreground">{ROLE_LABELS[rep.role] ?? rep.role}</p>
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-semibold">{rep.totalPlaysExecuted}</td>
+                              <td className="py-2.5 pl-3">
+                                <div className="flex flex-wrap gap-1">
+                                  {rep.plays.slice(0, 3).map(p => (
+                                    <Badge key={p.playLabel} variant="outline" className="text-[10px] font-normal">
+                                      {p.playLabel} ({p.count})
+                                    </Badge>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>

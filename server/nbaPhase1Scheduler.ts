@@ -22,6 +22,7 @@ import { generateConversationOwnershipNbas } from "./nextBestActionEngine";
 import { getAvgVotriWoW, getLaneVotrisBatch, getLaneVotrisBatchFresh, buildVotriQualifier } from "./sonarClient";
 import { resolveColumns, getRepFromRow } from "./colResolver";
 import { isExcludedRow } from "./financialHelpers";
+import { getPlayForRuleType } from "./playsRegistry";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -80,6 +81,7 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
 
           await storage.supersedePreviousNbaCards(result.companyId, result.winner.ruleType);
 
+          const play = getPlayForRuleType(result.winner.ruleType);
           await storage.createNbaCard({
             orgId: org.id,
             userId,
@@ -101,6 +103,7 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
             createdAt: now,
             contactId: result.winner.contactId,
             linkedTaskId: result.winner.linkedTaskId,
+            playLabel: play?.name ?? null,
           });
           companiesWithCardsThisRun.add(result.companyId);
           totalGenerated++;
@@ -112,6 +115,7 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
           const existingLane = await storage.getRecentNbaCardByLane(spec.laneId, spec.userId, 30);
           if (existingLane) { totalSkipped++; continue; }
 
+          const lanePlay = getPlayForRuleType(spec.candidate.ruleType);
           await storage.createNbaCard({
             orgId: org.id,
             userId: spec.userId,
@@ -132,6 +136,7 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
             status: "visible",
             createdAt: now,
             linkedLaneId: spec.laneId,
+            playLabel: lanePlay?.name ?? null,
           });
           totalGenerated++;
         }
@@ -253,6 +258,7 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
               if (existing) continue;
 
               await storage.supersedePreviousNbaCards(company.id, ruleKey);
+              const mktPlay = getPlayForRuleType(ruleKey);
               await storage.createNbaCard({
                 orgId: org.id,
                 userId: company.assignedTo,
@@ -272,6 +278,7 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
                 urgencyScore: marketCard.urgencyScore,
                 status: "visible",
                 createdAt: now,
+                playLabel: mktPlay?.name ?? null,
               });
               companiesWithCardsThisRun.add(company.id);
               totalGenerated++;

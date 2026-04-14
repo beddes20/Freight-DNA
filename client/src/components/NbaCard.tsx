@@ -21,6 +21,7 @@ import {
   Truck,
   UserCircle,
   UserCog,
+  BookOpen,
 } from "lucide-react";
 
 interface TeamMember { id: string; name: string; role: string; }
@@ -48,6 +49,7 @@ export interface NbaCardData {
   linkedLaneId?: string | null;
   laneOwnerName?: string | null;
   laneOverseerName?: string | null;
+  playLabel?: string | null;
 }
 
 export interface NbaCardProps {
@@ -238,6 +240,15 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             <span className="flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/25">
               <Truck className="w-2.5 h-2.5" />
               Lane {card.urgencyScore}
+            </span>
+          )}
+          {card.playLabel && (
+            <span
+              className="flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/25"
+              data-testid={`nba-card-play-label-${card.id}`}
+            >
+              <BookOpen className="w-2.5 h-2.5" />
+              {card.playLabel}
             </span>
           )}
         </div>

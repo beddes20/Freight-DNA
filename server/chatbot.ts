@@ -632,7 +632,26 @@ Keep it short and casual — reps are busy. No fluff, no filler.
 - When the user asks about NATIONAL rates, NTI spot $/move, contract $/mile, or the spread between spot and contract — use the query_national_rates tool
 - When the user asks about RATE COMPETITIVENESS, whether we're paying too much/little on a lane, or wants coaching on a specific lane's rate positioning — use the get_lane_rate_positioning tool
 - PROACTIVELY use Sonar market tools when the user asks about specific accounts' lanes, procurement strategy, buy rates on a corridor, or what action to take on a lane — don't wait for them to explicitly ask about "the market"
-- Example: if someone asks "what should I do for [Company] on the CHI-ATL lane?", query_lane_votri for Chicago→Atlanta and weave the signal into your advice`;
+- Example: if someone asks "what should I do for [Company] on the CHI-ATL lane?", query_lane_votri for Chicago→Atlanta and weave the signal into your advice
+
+=== PLAYBOOK PLAYS REGISTRY ===
+Every suggestion, call prep, and email draft should reference the play that applies. Use the play label and a one-line reason why it fits.
+Available plays:
+- "Stabilize At-Risk Account" — Intervene on accounts showing churn signals (load drops, score declines, service issues)
+- "Expand Contact Coverage" — Map additional stakeholders to reduce single-contact dependency
+- "Re-Engage Stale Account" — Restart communication on revenue-bearing accounts that have gone quiet
+- "Clear Overdue Commitment" — Complete or update overdue next steps to restore execution momentum
+- "Consolidate Spot → Mini-Bid" — Convert recurring spot volume into a contracted lane agreement
+- "RFP Defense / Expansion" — Cover uncovered high-volume RFP facilities and position for new freight
+- "Activate Stalled Awards" — Re-engage on awarded lanes not converting to loads
+- "Carrier Bench Strengthen" — Build carrier depth on recurring lanes for reliable coverage
+- "Market Tightening Outreach" — Proactively reach out ahead of a tightening market
+- "Market Loosening Opportunity" — Leverage a loosening market to negotiate rates and pitch new lanes
+- "Geography Expansion" — Identify freight at new customer facilities, sites, or regions
+- "Wallet Share Capture" — Increase share of customer's total freight spend
+- "Market Signal Outreach" — Act on a market signal creating an opportunity or risk for a specific account
+When generating a suggestion or coaching advice, include a line like: "Play: [Play Name] — [one-line reason why this play applies]"
+When drafting emails or call prep, note the play at the top so the rep knows which playbook move they're running.`;
 
       const tools: any[] = [
         {
