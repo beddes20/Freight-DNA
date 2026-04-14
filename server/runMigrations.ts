@@ -2186,4 +2186,46 @@ export async function runMigrations() {
   } finally {
     clientCrmOppCompany.release();
   }
+
+  // Task #222 — Add play_label column to nba_cards and touchpoints
+  const clientPlayLabel = await pool.connect();
+  try {
+    await clientPlayLabel.query(`ALTER TABLE nba_cards ADD COLUMN IF NOT EXISTS play_label text`);
+    await clientPlayLabel.query(`ALTER TABLE touchpoints ADD COLUMN IF NOT EXISTS play_label text`);
+    console.log("[migrations] play_label column added to nba_cards and touchpoints (Task #222)");
+  } catch (err) {
+    console.error("[migrations] play_label Task #222 error:", err);
+  } finally {
+    clientPlayLabel.release();
+  }
+
+  // Task #225 — Create contact_geography_suggestions table
+  const clientGeoSugg = await pool.connect();
+  try {
+    await clientGeoSugg.query(`
+      CREATE TABLE IF NOT EXISTS contact_geography_suggestions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        account_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        contact_id varchar NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+        suggested_region text,
+        suggested_lane text,
+        confidence_score integer NOT NULL DEFAULT 50,
+        status text NOT NULL DEFAULT 'pending',
+        source_evidence jsonb DEFAULT '{}',
+        suggestion_source text NOT NULL DEFAULT 'email_inference',
+        acted_by_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientGeoSugg.query(`CREATE INDEX IF NOT EXISTS cgs_account_contact_idx ON contact_geography_suggestions (account_id, contact_id)`);
+    await clientGeoSugg.query(`CREATE INDEX IF NOT EXISTS cgs_contact_status_idx ON contact_geography_suggestions (contact_id, status)`);
+    await clientGeoSugg.query(`CREATE INDEX IF NOT EXISTS cgs_account_status_idx ON contact_geography_suggestions (account_id, status)`);
+    console.log("[migrations] contact_geography_suggestions table ensured (Task #225)");
+  } catch (err) {
+    console.error("[migrations] contact_geography_suggestions Task #225 error:", err);
+  } finally {
+    clientGeoSugg.release();
+  }
 }
