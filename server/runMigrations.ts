@@ -2273,4 +2273,38 @@ export async function runMigrations() {
   } finally {
     clientTactics.release();
   }
+
+  // Draft Feedback — AI training loop table
+  const clientFeedback = await pool.connect();
+  try {
+    await clientFeedback.query(`
+      CREATE TABLE IF NOT EXISTS draft_feedback (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_name text,
+        rating text NOT NULL,
+        notes text,
+        draft_text text NOT NULL,
+        edited_text text,
+        play_type text NOT NULL,
+        play_label text,
+        thread_id text,
+        account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        account_name text,
+        contact_id varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        contact_name text,
+        voice_profile_used boolean NOT NULL DEFAULT false,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientFeedback.query(`CREATE INDEX IF NOT EXISTS df_org_idx ON draft_feedback (org_id)`);
+    await clientFeedback.query(`CREATE INDEX IF NOT EXISTS df_user_idx ON draft_feedback (user_id)`);
+    await clientFeedback.query(`CREATE INDEX IF NOT EXISTS df_rating_idx ON draft_feedback (org_id, rating)`);
+    console.log("[migrations] draft_feedback table ensured (AI Training Loop)");
+  } catch (err) {
+    console.error("[migrations] draft_feedback error:", err);
+  } finally {
+    clientFeedback.release();
+  }
 }

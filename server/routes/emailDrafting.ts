@@ -5,7 +5,7 @@ import { storage, db } from "../storage";
 import { getVoiceProfile, refreshVoiceProfile } from "../voiceProfileService";
 import { eq, and, desc, gte, inArray } from "drizzle-orm";
 import {
-  companies, contacts, touchpoints, emailMessages,
+  companies, contacts, touchpoints, emailMessages, draftFeedback,
 } from "@shared/schema";
 
 const PLAY_TYPES: Record<string, { label: string; intent: string }> = {
@@ -163,6 +163,63 @@ async function gatherDataAnchors(
   }
 
   return { context: parts.join("\n"), anchors };
+}
+
+async function gatherFeedbackContext(orgId: string, playType: string): Promise<string> {
+  try {
+    const recent = await db.select({
+      rating: draftFeedback.rating,
+      notes: draftFeedback.notes,
+      draftText: draftFeedback.draftText,
+      editedText: draftFeedback.editedText,
+      playType: draftFeedback.playType,
+    })
+      .from(draftFeedback)
+      .where(and(
+        eq(draftFeedback.orgId, orgId),
+        inArray(draftFeedback.rating, ["good", "bad", "needs_work"]),
+      ))
+      .orderBy(desc(draftFeedback.createdAt))
+      .limit(10);
+
+    if (recent.length === 0) return "";
+
+    const lines: string[] = [];
+    const good = recent.filter(f => f.rating === "good");
+    const bad = recent.filter(f => f.rating === "bad");
+    const needsWork = recent.filter(f => f.rating === "needs_work");
+
+    if (good.length > 0) {
+      lines.push("EXAMPLES THE USER LIKED:");
+      for (const f of good.slice(0, 3)) {
+        lines.push(`- "${(f.editedText || f.draftText).slice(0, 200)}"`);
+        if (f.notes) lines.push(`  (Why they liked it: ${f.notes})`);
+      }
+    }
+
+    if (bad.length > 0) {
+      lines.push("THINGS TO AVOID (user disliked these):");
+      for (const f of bad.slice(0, 3)) {
+        lines.push(`- "${f.draftText.slice(0, 200)}"`);
+        if (f.notes) lines.push(`  (Issue: ${f.notes})`);
+      }
+    }
+
+    if (needsWork.length > 0) {
+      lines.push("DIRECTION FROM USER FEEDBACK:");
+      for (const f of needsWork.slice(0, 3)) {
+        if (f.notes) lines.push(`- ${f.notes}`);
+        if (f.editedText && f.editedText !== f.draftText) {
+          lines.push(`  Preferred version: "${f.editedText.slice(0, 200)}"`);
+        }
+      }
+    }
+
+    return lines.length > 0 ? "\n\nUSER TRAINING FEEDBACK (learn from this):\n" + lines.join("\n") : "";
+  } catch (err) {
+    console.warn("[emailDrafting] Failed to load feedback context:", err);
+    return "";
+  }
 }
 
 async function generateDraft(params: {
@@ -356,7 +413,8 @@ export function registerEmailDraftingRoutes(app: Express): void {
         console.warn("[emailDrafting] Failed to load proven tactics for draft context:", tacticsErr);
       }
 
-      const fullContext = dataResult.context + threadContext + tacticsContext;
+      const feedbackContext = await gatherFeedbackContext(orgId, playType);
+      const fullContext = dataResult.context + threadContext + tacticsContext + feedbackContext;
 
       const draft = await generateDraft({
         voiceProfile,
@@ -419,5 +477,104 @@ export function registerEmailDraftingRoutes(app: Express): void {
         intent: val.intent,
       }));
     res.json(plays);
+  });
+
+  app.post("/api/email-drafts/feedback", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const schema = z.object({
+        rating: z.enum(["good", "bad", "needs_work"]),
+        notes: z.string().max(1000).optional(),
+        draftText: z.string(),
+        editedText: z.string().optional(),
+        playType: z.string(),
+        playLabel: z.string().optional(),
+        threadId: z.string().optional(),
+        accountId: z.string().optional(),
+        accountName: z.string().optional(),
+        contactId: z.string().optional(),
+        contactName: z.string().optional(),
+        voiceProfileUsed: z.boolean().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+
+      const [inserted] = await db.insert(draftFeedback)
+        .values({
+          orgId: user.organizationId,
+          userId: user.id,
+          userName: user.name,
+          rating: parsed.data.rating,
+          notes: parsed.data.notes ?? null,
+          draftText: parsed.data.draftText,
+          editedText: parsed.data.editedText ?? null,
+          playType: parsed.data.playType,
+          playLabel: parsed.data.playLabel ?? null,
+          threadId: parsed.data.threadId ?? null,
+          accountId: parsed.data.accountId ?? null,
+          accountName: parsed.data.accountName ?? null,
+          contactId: parsed.data.contactId ?? null,
+          contactName: parsed.data.contactName ?? null,
+          voiceProfileUsed: parsed.data.voiceProfileUsed ?? false,
+        })
+        .returning();
+
+      console.log(`[draft-feedback] ${user.name} rated draft as "${parsed.data.rating}" (play: ${parsed.data.playType})`);
+      res.json({ feedback: inserted });
+    } catch (err) {
+      console.error("[draft-feedback] create error:", err);
+      res.status(500).json({ error: "Failed to save feedback" });
+    }
+  });
+
+  app.get("/api/email-drafts/feedback", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const { rating, limit: limitStr } = req.query;
+      const conditions = [eq(draftFeedback.orgId, user.organizationId)];
+      if (rating && typeof rating === "string") {
+        conditions.push(eq(draftFeedback.rating, rating));
+      }
+
+      const rows = await db.select()
+        .from(draftFeedback)
+        .where(and(...conditions))
+        .orderBy(desc(draftFeedback.createdAt))
+        .limit(Number(limitStr) || 50);
+
+      res.json({ feedback: rows });
+    } catch (err) {
+      console.error("[draft-feedback] list error:", err);
+      res.status(500).json({ error: "Failed to fetch feedback" });
+    }
+  });
+
+  app.get("/api/email-drafts/feedback/stats", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const all = await db.select({
+        rating: draftFeedback.rating,
+        playType: draftFeedback.playType,
+      })
+        .from(draftFeedback)
+        .where(eq(draftFeedback.orgId, user.organizationId));
+
+      const total = all.length;
+      const good = all.filter(f => f.rating === "good").length;
+      const bad = all.filter(f => f.rating === "bad").length;
+      const needsWork = all.filter(f => f.rating === "needs_work").length;
+      const approvalRate = total > 0 ? Math.round((good / total) * 100) : 0;
+
+      res.json({ total, good, bad, needsWork, approvalRate });
+    } catch (err) {
+      console.error("[draft-feedback] stats error:", err);
+      res.status(500).json({ error: "Failed to fetch feedback stats" });
+    }
   });
 }

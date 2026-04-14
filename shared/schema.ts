@@ -2159,3 +2159,39 @@ export const provenTactics = pgTable(
 export const insertProvenTacticSchema = createInsertSchema(provenTactics).omit({ id: true, createdAt: true });
 export type InsertProvenTactic = z.infer<typeof insertProvenTacticSchema>;
 export type ProvenTactic = typeof provenTactics.$inferSelect;
+
+// ─── Draft Feedback (AI Training Loop) ──────────────────────────────────────
+// Captures user ratings and notes on AI-generated email drafts.
+// Used to learn what works and shape future draft quality.
+
+export const draftFeedback = pgTable(
+  "draft_feedback",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    userName: text("user_name"),
+    rating: text("rating").notNull(),
+    notes: text("notes"),
+    draftText: text("draft_text").notNull(),
+    editedText: text("edited_text"),
+    playType: text("play_type").notNull(),
+    playLabel: text("play_label"),
+    threadId: text("thread_id"),
+    accountId: varchar("account_id").references(() => companies.id, { onDelete: "set null" }),
+    accountName: text("account_name"),
+    contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    contactName: text("contact_name"),
+    voiceProfileUsed: boolean("voice_profile_used").notNull().default(false),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("df_org_idx").on(table.orgId),
+    index("df_user_idx").on(table.userId),
+    index("df_rating_idx").on(table.orgId, table.rating),
+  ],
+);
+
+export const insertDraftFeedbackSchema = createInsertSchema(draftFeedback).omit({ id: true, createdAt: true });
+export type InsertDraftFeedback = z.infer<typeof insertDraftFeedbackSchema>;
+export type DraftFeedback = typeof draftFeedback.$inferSelect;
