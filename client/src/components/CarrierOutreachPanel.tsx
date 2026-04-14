@@ -102,6 +102,8 @@ interface RecurringLane {
   hasPreferredCarrierProgram: boolean;
   ownerUserId: string | null;
   overseerUserId: string | null;
+  dropTrailerShipper: boolean;
+  dropTrailerReceiver: boolean;
 }
 
 interface WhyThisCarrier {
@@ -1106,6 +1108,12 @@ export function CarrierOutreachPanel({
               {lane && (
                 <SheetDescription className="text-[10px] text-muted-foreground mt-0 leading-tight">
                   {lane.equipmentType ?? "Any Equipment"}
+                  {lane.dropTrailerShipper && (
+                    <span className="ml-2 inline-flex items-center rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-medium text-blue-400" data-testid="badge-drop-shipper">Drop @ Shipper</span>
+                  )}
+                  {lane.dropTrailerReceiver && (
+                    <span className="ml-1 inline-flex items-center rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-medium text-blue-400" data-testid="badge-drop-receiver">Drop @ Receiver</span>
+                  )}
                   {lane.eligibilityConfidence && (
                     <span className={`ml-2 capitalize ${
                       lane.eligibilityConfidence === "high" ? "text-emerald-400" :

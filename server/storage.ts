@@ -274,6 +274,8 @@ export interface LeanLaneQueueItem {
   totalBenchCount: number;
   historicalCount: number;
   missingContactCount: number;
+  dropTrailerShipper: boolean;
+  dropTrailerReceiver: boolean;
 }
 
 export interface LeanLaneWorkQueueResult {
@@ -4688,6 +4690,8 @@ export class DatabaseStorage implements IStorage {
       historical_count: number;
       missing_contact_count: number;
       snoozed_until: string | null;
+      drop_trailer_shipper: boolean;
+      drop_trailer_receiver: boolean;
     }>(
       `SELECT
          c.lane_id,
@@ -4707,7 +4711,9 @@ export class DatabaseStorage implements IStorage {
          COALESCE(c.total_bench_count, 0)         AS total_bench_count,
          COALESCE(c.historical_count, 0)          AS historical_count,
          COALESCE(c.missing_contact_count, 0)     AS missing_contact_count,
-         c.snoozed_until
+         c.snoozed_until,
+         COALESCE(c.drop_trailer_shipper, false)  AS drop_trailer_shipper,
+         COALESCE(c.drop_trailer_receiver, false)  AS drop_trailer_receiver
        FROM lane_summary_cache c
        LEFT JOIN users u ON u.id = c.owner_user_id
        WHERE c.org_id = $1
@@ -4751,6 +4757,8 @@ export class DatabaseStorage implements IStorage {
         totalBenchCount: r.total_bench_count,
         historicalCount: r.historical_count,
         missingContactCount: r.missing_contact_count,
+        dropTrailerShipper: r.drop_trailer_shipper ?? false,
+        dropTrailerReceiver: r.drop_trailer_receiver ?? false,
       };
 
       const contacted = r.carriers_contacted_count ?? 0;
@@ -4796,6 +4804,8 @@ export class DatabaseStorage implements IStorage {
           hasPreferredCarrierProgram: data.hasPreferredCarrierProgram ?? false,
           snoozedUntil: data.snoozedUntil ?? null,
           resolvedAt: data.resolvedAt,
+          dropTrailerShipper: data.dropTrailerShipper ?? false,
+          dropTrailerReceiver: data.dropTrailerReceiver ?? false,
           updatedAt: new Date(),
         },
       })

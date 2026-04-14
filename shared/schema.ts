@@ -1308,6 +1308,8 @@ export const recurringLanes = pgTable("recurring_lanes", {
   carriersContactedCount: integer("carriers_contacted_count").default(0),
   resolvedAt: text("resolved_at"),
   isManual: boolean("is_manual").default(false).notNull(),
+  dropTrailerShipper: boolean("drop_trailer_shipper").default(false).notNull(),
+  dropTrailerReceiver: boolean("drop_trailer_receiver").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -1928,6 +1930,8 @@ export const laneSummaryCache = pgTable("lane_summary_cache", {
   hasPreferredCarrierProgram: boolean("has_preferred_carrier_program").default(false),
   snoozedUntil: text("snoozed_until"),
   resolvedAt: text("resolved_at"),
+  dropTrailerShipper: boolean("drop_trailer_shipper").default(false).notNull(),
+  dropTrailerReceiver: boolean("drop_trailer_receiver").default(false).notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("lane_summary_cache_owner_resolved_score").on(table.ownerUserId, table.resolvedAt, table.laneScore),

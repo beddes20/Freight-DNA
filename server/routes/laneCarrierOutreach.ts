@@ -927,12 +927,14 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       avgLoadsPerWeek: z.coerce.number().positive("Must be a positive number").optional(),
       companyName: z.string().optional().or(z.literal("")),
       notes: z.string().optional().or(z.literal("")),
+      dropTrailerShipper: z.boolean().optional().default(false),
+      dropTrailerReceiver: z.boolean().optional().default(false),
     });
 
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const { origin, originState, destination, destinationState, equipmentType, avgLoadsPerWeek, companyName } = parsed.data;
+    const { origin, originState, destination, destinationState, equipmentType, avgLoadsPerWeek, companyName, dropTrailerShipper, dropTrailerReceiver } = parsed.data;
 
     try {
       const lane = await storage.createRecurringLane({
@@ -951,6 +953,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         lookbackWeeks: 4,
         hasPreferredCarrierProgram: false,
         carriersContactedCount: 0,
+        dropTrailerShipper: dropTrailerShipper ?? false,
+        dropTrailerReceiver: dropTrailerReceiver ?? false,
       });
       res.status(201).json(lane);
     } catch (err) {

@@ -348,6 +348,8 @@ export async function scoreAllEligibleLanes(
         hasPreferredCarrierProgram: lane.hasPreferredCarrierProgram ?? false,
         snoozedUntil: lane.snoozedUntil ?? null,
         resolvedAt: lane.resolvedAt ?? null,
+        dropTrailerShipper: lane.dropTrailerShipper ?? false,
+        dropTrailerReceiver: lane.dropTrailerReceiver ?? false,
       });
     } catch (err) {
       console.error(`[laneScoringService] Error scoring lane ${lane.id}:`, err);

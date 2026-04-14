@@ -1262,9 +1262,11 @@ interface BuildLaneForm {
   avgLoadsPerWeek: string;
   companyName: string;
   notes: string;
+  dropTrailerShipper: boolean;
+  dropTrailerReceiver: boolean;
 }
 
-const EQUIPMENT_TYPES = ["Dry Van", "Reefer", "Flatbed", "Step Deck", "RGN", "Tanker", "Box Truck", "Other"];
+const EQUIPMENT_TYPES = ["Dry Van", "Reefer", "Flatbed", "Step Deck", "RGN", "Tanker", "Box Truck", "Conestoga", "Other"];
 
 interface FieldNormState {
   result: NormalizationResult | null;
@@ -1390,6 +1392,8 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
     avgLoadsPerWeek: "",
     companyName: "",
     notes: "",
+    dropTrailerShipper: false,
+    dropTrailerReceiver: false,
   });
 
   const [originNorm, setOriginNorm] = useState<FieldNormState>(EMPTY_NORM_STATE);
@@ -1521,6 +1525,8 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
         avgLoadsPerWeek: form.avgLoadsPerWeek ? parseFloat(form.avgLoadsPerWeek) : undefined,
         companyName: form.companyName.trim() || undefined,
         notes: form.notes.trim() || undefined,
+        dropTrailerShipper: form.dropTrailerShipper,
+        dropTrailerReceiver: form.dropTrailerReceiver,
       }).then(r => r.json());
     },
     onSuccess: () => {
@@ -1528,7 +1534,7 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
       toast({ title: "Lane created", description: "Manual lane added to the work queue." });
       onCreated();
       onClose();
-      setForm({ origin: "", originState: "", destination: "", destinationState: "", equipmentType: "", avgLoadsPerWeek: "", companyName: "", notes: "" });
+      setForm({ origin: "", originState: "", destination: "", destinationState: "", equipmentType: "", avgLoadsPerWeek: "", companyName: "", notes: "", dropTrailerShipper: false, dropTrailerReceiver: false });
       setOriginNorm(EMPTY_NORM_STATE);
       setDestNorm(EMPTY_NORM_STATE);
     },
@@ -1659,6 +1665,30 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
                 data-testid="input-build-loads"
               />
             </div>
+          </div>
+
+          {/* Drop Trailer Options */}
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.dropTrailerShipper}
+                onChange={e => setForm(f => ({ ...f, dropTrailerShipper: e.target.checked }))}
+                className="rounded border-border"
+                data-testid="checkbox-drop-trailer-shipper"
+              />
+              Drop trailer at shipper
+            </label>
+            <label className="flex items-center gap-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.dropTrailerReceiver}
+                onChange={e => setForm(f => ({ ...f, dropTrailerReceiver: e.target.checked }))}
+                className="rounded border-border"
+                data-testid="checkbox-drop-trailer-receiver"
+              />
+              Drop trailer at receiver
+            </label>
           </div>
 
           {/* Customer name */}

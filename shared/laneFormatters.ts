@@ -22,6 +22,8 @@ const EQUIPMENT_CODE_MAP: Record<string, string> = {
   ltl: "LTL",
   ftl: "dry van",
   po: "dry van",
+  cn: "conestoga",
+  conestoga: "conestoga",
 };
 
 export function normalizeEquipmentType(raw: string | null | undefined): string {

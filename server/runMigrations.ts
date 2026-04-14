@@ -2609,4 +2609,17 @@ export async function runMigrations() {
   } finally {
     clientApiCache.release();
   }
+
+  const clientDropTrailer = await pool.connect();
+  try {
+    await clientDropTrailer.query(`ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS drop_trailer_shipper BOOLEAN NOT NULL DEFAULT false`);
+    await clientDropTrailer.query(`ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS drop_trailer_receiver BOOLEAN NOT NULL DEFAULT false`);
+    await clientDropTrailer.query(`ALTER TABLE lane_summary_cache ADD COLUMN IF NOT EXISTS drop_trailer_shipper BOOLEAN NOT NULL DEFAULT false`);
+    await clientDropTrailer.query(`ALTER TABLE lane_summary_cache ADD COLUMN IF NOT EXISTS drop_trailer_receiver BOOLEAN NOT NULL DEFAULT false`);
+    console.log("[migrations] drop trailer columns added to recurring_lanes and lane_summary_cache (Task #236)");
+  } catch (err) {
+    console.error("[migrations] drop trailer migration error:", err);
+  } finally {
+    clientDropTrailer.release();
+  }
 }
