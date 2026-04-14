@@ -2195,3 +2195,32 @@ export const draftFeedback = pgTable(
 export const insertDraftFeedbackSchema = createInsertSchema(draftFeedback).omit({ id: true, createdAt: true });
 export type InsertDraftFeedback = z.infer<typeof insertDraftFeedbackSchema>;
 export type DraftFeedback = typeof draftFeedback.$inferSelect;
+
+export const sentEmailCorrections = pgTable(
+  "sent_email_corrections",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    correctedByUserId: varchar("corrected_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    correctedByName: text("corrected_by_name"),
+    emailMessageId: varchar("email_message_id"),
+    outreachLogId: varchar("outreach_log_id"),
+    originalText: text("original_text").notNull(),
+    correctedText: text("corrected_text").notNull(),
+    correctionNotes: text("correction_notes"),
+    threadId: text("thread_id"),
+    accountId: varchar("account_id").references(() => companies.id, { onDelete: "set null" }),
+    carrierId: varchar("carrier_id"),
+    subject: text("subject"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("sec_org_idx").on(table.orgId),
+    index("sec_email_msg_idx").on(table.emailMessageId),
+    index("sec_outreach_idx").on(table.outreachLogId),
+  ],
+);
+
+export const insertSentEmailCorrectionSchema = createInsertSchema(sentEmailCorrections).omit({ id: true, createdAt: true });
+export type InsertSentEmailCorrection = z.infer<typeof insertSentEmailCorrectionSchema>;
+export type SentEmailCorrection = typeof sentEmailCorrections.$inferSelect;

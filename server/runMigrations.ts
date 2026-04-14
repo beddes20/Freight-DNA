@@ -2307,4 +2307,34 @@ export async function runMigrations() {
   } finally {
     clientFeedback.release();
   }
+
+  const clientCorr = await pool.connect();
+  try {
+    await clientCorr.query(`
+      CREATE TABLE IF NOT EXISTS sent_email_corrections (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        corrected_by_user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        corrected_by_name text,
+        email_message_id varchar,
+        outreach_log_id varchar,
+        original_text text NOT NULL,
+        corrected_text text NOT NULL,
+        correction_notes text,
+        thread_id text,
+        account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        carrier_id varchar,
+        subject text,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientCorr.query(`CREATE INDEX IF NOT EXISTS sec_org_idx ON sent_email_corrections (org_id)`);
+    await clientCorr.query(`CREATE INDEX IF NOT EXISTS sec_email_msg_idx ON sent_email_corrections (email_message_id)`);
+    await clientCorr.query(`CREATE INDEX IF NOT EXISTS sec_outreach_idx ON sent_email_corrections (outreach_log_id)`);
+    console.log("[migrations] sent_email_corrections table ensured");
+  } catch (err) {
+    console.error("[migrations] sent_email_corrections error:", err);
+  } finally {
+    clientCorr.release();
+  }
 }

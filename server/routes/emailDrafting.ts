@@ -5,7 +5,7 @@ import { storage, db } from "../storage";
 import { getVoiceProfile, refreshVoiceProfile } from "../voiceProfileService";
 import { eq, and, desc, gte, inArray } from "drizzle-orm";
 import {
-  companies, contacts, touchpoints, emailMessages, draftFeedback,
+  companies, contacts, touchpoints, emailMessages, draftFeedback, sentEmailCorrections,
 } from "@shared/schema";
 
 const PLAY_TYPES: Record<string, { label: string; intent: string }> = {
@@ -182,8 +182,6 @@ async function gatherFeedbackContext(orgId: string, playType: string): Promise<s
       .orderBy(desc(draftFeedback.createdAt))
       .limit(10);
 
-    if (recent.length === 0) return "";
-
     const lines: string[] = [];
     const good = recent.filter(f => f.rating === "good");
     const bad = recent.filter(f => f.rating === "bad");
@@ -212,6 +210,28 @@ async function gatherFeedbackContext(orgId: string, playType: string): Promise<s
         if (f.editedText && f.editedText !== f.draftText) {
           lines.push(`  Preferred version: "${f.editedText.slice(0, 200)}"`);
         }
+      }
+    }
+
+    const corrections = await db.select({
+      originalText: sentEmailCorrections.originalText,
+      correctedText: sentEmailCorrections.correctedText,
+      correctionNotes: sentEmailCorrections.correctionNotes,
+      subject: sentEmailCorrections.subject,
+    })
+      .from(sentEmailCorrections)
+      .where(eq(sentEmailCorrections.orgId, orgId))
+      .orderBy(desc(sentEmailCorrections.createdAt))
+      .limit(5);
+
+    if (corrections.length > 0) {
+      lines.push("REAL EMAIL CORRECTIONS (leadership reviewed sent emails and wrote what SHOULD have been said — learn from these heavily):");
+      for (const c of corrections) {
+        if (c.subject) lines.push(`  Subject: ${c.subject}`);
+        lines.push(`  Original (what was sent): "${c.originalText.slice(0, 300)}"`);
+        lines.push(`  Corrected (what should have been said): "${c.correctedText.slice(0, 300)}"`);
+        if (c.correctionNotes) lines.push(`  Coach notes: ${c.correctionNotes}`);
+        lines.push("");
       }
     }
 
@@ -550,6 +570,111 @@ export function registerEmailDraftingRoutes(app: Express): void {
     } catch (err) {
       console.error("[draft-feedback] list error:", err);
       res.status(500).json({ error: "Failed to fetch feedback" });
+    }
+  });
+
+  app.post("/api/email-corrections", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      if (!["admin", "sales_director", "director"].includes(user.role)) {
+        return res.status(403).json({ error: "Only admins and directors can submit corrections" });
+      }
+
+      const schema = z.object({
+        emailMessageId: z.string().optional(),
+        outreachLogId: z.string().optional(),
+        originalText: z.string().min(1),
+        correctedText: z.string().min(1),
+        correctionNotes: z.string().max(1000).optional(),
+        threadId: z.string().optional(),
+        accountId: z.string().optional(),
+        carrierId: z.string().optional(),
+        subject: z.string().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+
+      const [inserted] = await db.insert(sentEmailCorrections)
+        .values({
+          orgId: user.organizationId,
+          correctedByUserId: user.id,
+          correctedByName: user.name,
+          emailMessageId: parsed.data.emailMessageId ?? null,
+          outreachLogId: parsed.data.outreachLogId ?? null,
+          originalText: parsed.data.originalText,
+          correctedText: parsed.data.correctedText,
+          correctionNotes: parsed.data.correctionNotes ?? null,
+          threadId: parsed.data.threadId ?? null,
+          accountId: parsed.data.accountId ?? null,
+          carrierId: parsed.data.carrierId ?? null,
+          subject: parsed.data.subject ?? null,
+        })
+        .returning();
+
+      console.log(`[email-corrections] ${user.name} submitted correction for message ${parsed.data.emailMessageId || parsed.data.outreachLogId || "manual"}`);
+      res.json({ correction: inserted });
+    } catch (err) {
+      console.error("[email-corrections] create error:", err);
+      res.status(500).json({ error: "Failed to save correction" });
+    }
+  });
+
+  app.get("/api/email-corrections", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const isLeadership = ["admin", "sales_director", "director"].includes(user.role);
+
+      const { emailMessageId, threadId, limit: limitStr } = req.query;
+      const conditions = [eq(sentEmailCorrections.orgId, user.organizationId)];
+      if (emailMessageId && typeof emailMessageId === "string") {
+        conditions.push(eq(sentEmailCorrections.emailMessageId, emailMessageId));
+      }
+      if (threadId && typeof threadId === "string") {
+        conditions.push(eq(sentEmailCorrections.threadId, threadId));
+      }
+
+      if (isLeadership) {
+        const rows = await db.select()
+          .from(sentEmailCorrections)
+          .where(and(...conditions))
+          .orderBy(desc(sentEmailCorrections.createdAt))
+          .limit(Number(limitStr) || 50);
+        res.json({ corrections: rows });
+      } else {
+        const rows = await db.select({ emailMessageId: sentEmailCorrections.emailMessageId })
+          .from(sentEmailCorrections)
+          .where(and(...conditions))
+          .orderBy(desc(sentEmailCorrections.createdAt))
+          .limit(Number(limitStr) || 50);
+        res.json({ corrections: rows });
+      }
+    } catch (err) {
+      console.error("[email-corrections] list error:", err);
+      res.status(500).json({ error: "Failed to fetch corrections" });
+    }
+  });
+
+  app.get("/api/email-corrections/stats", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      if (!["admin", "sales_director", "director"].includes(user.role)) {
+        return res.status(403).json({ error: "Only admins and directors can view correction stats" });
+      }
+
+      const all = await db.select({ id: sentEmailCorrections.id })
+        .from(sentEmailCorrections)
+        .where(eq(sentEmailCorrections.orgId, user.organizationId));
+
+      res.json({ total: all.length });
+    } catch (err) {
+      console.error("[email-corrections] stats error:", err);
+      res.status(500).json({ error: "Failed to fetch correction stats" });
     }
   });
 

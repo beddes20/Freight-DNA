@@ -8,7 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight, PenLine, Check, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 
@@ -119,6 +121,49 @@ function ThreadDetailPanel({
   onClose: () => void;
 }) {
   const [showDraftEmail, setShowDraftEmail] = useState(false);
+  const [correctionMsg, setCorrectionMsg] = useState<EmailMessage | null>(null);
+  const [correctedText, setCorrectedText] = useState("");
+  const [correctionNotes, setCorrectionNotes] = useState("");
+  const { toast } = useToast();
+  const { user } = useAuth();
+
+  const canCorrect = user && ["admin", "sales_director", "director"].includes(user.role);
+
+  const { data: correctionsData } = useQuery<{ corrections: { emailMessageId: string }[] }>({
+    queryKey: ["/api/email-corrections", { threadId: thread.threadId }],
+    queryFn: async () => {
+      const res = await fetch(`/api/email-corrections?threadId=${encodeURIComponent(thread.threadId)}`);
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+  const correctedMessageIds = new Set((correctionsData?.corrections ?? []).map(c => c.emailMessageId));
+
+  const correctionMutation = useMutation({
+    mutationFn: async (params: { emailMessageId: string; originalText: string; correctedText: string; correctionNotes?: string; subject?: string }) => {
+      const res = await apiRequest("POST", "/api/email-corrections", {
+        emailMessageId: params.emailMessageId,
+        originalText: params.originalText,
+        correctedText: params.correctedText,
+        correctionNotes: params.correctionNotes || undefined,
+        threadId: thread.threadId,
+        accountId: thread.linkedAccountId || undefined,
+        carrierId: thread.linkedCarrierId || undefined,
+        subject: params.subject || undefined,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Correction saved", description: "AI will learn from this in future drafts." });
+      setCorrectionMsg(null);
+      setCorrectedText("");
+      setCorrectionNotes("");
+      queryClient.invalidateQueries({ queryKey: ["/api/email-corrections"] });
+    },
+    onError: () => {
+      toast({ title: "Failed to save correction", variant: "destructive" });
+    },
+  });
 
   const { data, isLoading } = useQuery<{ messages: EmailMessage[] }>({
     queryKey: ["/api/internal/conversations", thread.id, "messages"],
@@ -211,10 +256,34 @@ function ThreadDetailPanel({
                       <span className="text-xs text-muted-foreground font-medium" data-testid={`text-from-${msg.id}`}>
                         {msg.fromEmail}
                       </span>
+                      {isOutbound && correctedMessageIds.has(msg.id) && (
+                        <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400" data-testid={`badge-corrected-${msg.id}`}>
+                          <Check className="w-3 h-3" />
+                          Corrected
+                        </span>
+                      )}
                     </div>
-                    <span className="text-xs text-muted-foreground" data-testid={`text-date-${msg.id}`}>
-                      {formatDate(msg.createdAt)}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {isOutbound && canCorrect && !correctedMessageIds.has(msg.id) && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-600"
+                          title="Correct this email — teach AI what should have been said"
+                          onClick={() => {
+                            setCorrectionMsg(msg);
+                            setCorrectedText(msg.body || "");
+                            setCorrectionNotes("");
+                          }}
+                          data-testid={`button-correct-${msg.id}`}
+                        >
+                          <PenLine className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                      <span className="text-xs text-muted-foreground" data-testid={`text-date-${msg.id}`}>
+                        {formatDate(msg.createdAt)}
+                      </span>
+                    </div>
                   </div>
                   {msg.toEmail && (
                     <div className="text-xs text-muted-foreground mb-2">
@@ -239,6 +308,92 @@ function ThreadDetailPanel({
             defaultPlayType={thread.linkedCarrierId ? "carrier_capacity" : "check_in"}
           />
         )}
+
+        <Dialog open={!!correctionMsg} onOpenChange={(open) => { if (!open) setCorrectionMsg(null); }}>
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="correction-modal">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <PenLine className="w-5 h-5 text-amber-600" />
+                Correct Sent Email
+              </DialogTitle>
+              <p className="text-sm text-muted-foreground mt-1">
+                Edit what we should have said. AI will learn from this correction for future drafts.
+              </p>
+            </DialogHeader>
+
+            {correctionMsg && (
+              <div className="space-y-4 mt-2">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                    Original (what was sent)
+                  </label>
+                  <div className="rounded-lg border bg-muted/40 p-3 text-sm whitespace-pre-wrap max-h-40 overflow-y-auto" data-testid="text-original-email">
+                    {correctionMsg.body}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                    Corrected version (what we should have said)
+                  </label>
+                  <Textarea
+                    value={correctedText}
+                    onChange={(e) => setCorrectedText(e.target.value)}
+                    className="min-h-[140px] text-sm"
+                    placeholder="Rewrite the email the way it should have been sent..."
+                    data-testid="textarea-corrected"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                    Coaching notes (optional)
+                  </label>
+                  <Textarea
+                    value={correctionNotes}
+                    onChange={(e) => setCorrectionNotes(e.target.value)}
+                    className="h-16 text-sm resize-none"
+                    placeholder="Why is this better? (e.g., 'too aggressive on pricing', 'should have referenced the service issue first')"
+                    data-testid="textarea-correction-notes"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCorrectionMsg(null)}
+                    data-testid="button-cancel-correction"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="gap-1"
+                    disabled={correctionMutation.isPending || correctedText.trim() === (correctionMsg.body || "").trim()}
+                    onClick={() => {
+                      correctionMutation.mutate({
+                        emailMessageId: correctionMsg.id,
+                        originalText: correctionMsg.body || "",
+                        correctedText: correctedText.trim(),
+                        correctionNotes: correctionNotes.trim() || undefined,
+                        subject: correctionMsg.subject || undefined,
+                      });
+                    }}
+                    data-testid="button-submit-correction"
+                  >
+                    {correctionMutation.isPending ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Check className="w-3.5 h-3.5" />
+                    )}
+                    Save Correction
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
