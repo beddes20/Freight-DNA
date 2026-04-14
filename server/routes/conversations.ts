@@ -1,9 +1,13 @@
 /**
- * Conversations Routes (Task #202)
+ * Conversations Routes (Task #202, #223)
  *
  * Org-scoped CRUD for email_conversation_threads — ownership, waiting state, priority.
  *
  * GET  /api/internal/conversations
+ * GET  /api/internal/conversations/my-count
+ * GET  /api/internal/conversations/my-waiting
+ * GET  /api/internal/conversations/team-overdue
+ * GET  /api/internal/conversations/account-summary
  * POST /api/internal/conversations/:id/owner
  * POST /api/internal/conversations/:id/waiting-state
  * POST /api/internal/conversations/:id/priority
@@ -11,7 +15,9 @@
 
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
-import { storage } from "../storage";
+import { inArray } from "drizzle-orm";
+import { storage, db } from "../storage";
+import { emailMessages } from "@shared/schema";
 import { requireAuth, getCurrentUser } from "../auth";
 import { setWaitingState, setPriority } from "../services/conversationWaitingStateService";
 import { assignOwner } from "../services/conversationOwnershipService";
@@ -19,9 +25,6 @@ import { assignOwner } from "../services/conversationOwnershipService";
 export function registerConversationsRoutes(app: Express): void {
 
   // ── GET /api/internal/conversations/my-count ─────────────────────────────────
-  // Returns the number of threads currently "waiting on me" (owned by the
-  // requesting user with waitingState = 'waiting_on_us'). Used for the sidebar
-  // badge so reps see how many conversations need their attention at a glance.
   app.get("/api/internal/conversations/my-count", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
@@ -36,6 +39,169 @@ export function registerConversationsRoutes(app: Express): void {
     } catch (err) {
       console.error("[conversations] GET /conversations/my-count error:", err);
       res.status(500).json({ error: "Failed to fetch count" });
+    }
+  });
+
+  // ── GET /api/internal/conversations/my-waiting (Task #223) ─────────────────
+  // Returns threads owned by the current user with waiting_state = waiting_on_us,
+  // sorted by overdue first then wait duration. Used by the dashboard portlet.
+  app.get("/api/internal/conversations/my-waiting", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const threads = await storage.listEmailConversationThreads(user.organizationId, {
+        ownerUserId: user.id,
+        waitingState: "waiting_on_us",
+        limit: 50,
+      });
+
+      const companyIds = [...new Set(threads.map(t => t.linkedAccountId).filter(Boolean) as string[])];
+      const carrierIds = [...new Set(threads.map(t => t.linkedCarrierId).filter(Boolean) as string[])];
+      const companyMap = new Map<string, string>();
+      const carrierMap = new Map<string, string>();
+      if (companyIds.length > 0) {
+        const companies = await storage.getCompaniesByIds(companyIds, user.organizationId);
+        for (const c of companies) companyMap.set(c.id, c.name);
+      }
+      if (carrierIds.length > 0) {
+        const carriers = await storage.getCarriersByIds(carrierIds, user.organizationId);
+        for (const c of carriers) carrierMap.set(c.id, c.name);
+      }
+
+      const messageIds = threads.map(t => t.lastMessageId).filter(Boolean) as string[];
+      const subjectMap = new Map<string, string>();
+      if (messageIds.length > 0) {
+        const msgs = await db.select({ id: emailMessages.id, subject: emailMessages.subject })
+          .from(emailMessages)
+          .where(inArray(emailMessages.id, messageIds));
+        for (const m of msgs) {
+          if (m.subject) subjectMap.set(m.id, m.subject);
+        }
+      }
+
+      const enriched = threads.map(t => ({
+        id: t.id,
+        threadId: t.threadId,
+        linkedAccountId: t.linkedAccountId,
+        linkedCarrierId: t.linkedCarrierId,
+        accountName: t.linkedAccountId ? (companyMap.get(t.linkedAccountId) ?? null) : (t.linkedCarrierId ? (carrierMap.get(t.linkedCarrierId) ?? null) : null),
+        subject: t.lastMessageId ? (subjectMap.get(t.lastMessageId) ?? null) : null,
+        responsePriority: t.responsePriority,
+        waitingSinceAt: t.waitingSinceAt,
+        overdueAt: t.overdueAt,
+        updatedAt: t.updatedAt,
+      }));
+
+      const now = new Date();
+      enriched.sort((a, b) => {
+        const aOverdue = !!(a.overdueAt && a.overdueAt <= now);
+        const bOverdue = !!(b.overdueAt && b.overdueAt <= now);
+        if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+        if (a.waitingSinceAt && b.waitingSinceAt) {
+          return new Date(a.waitingSinceAt).getTime() - new Date(b.waitingSinceAt).getTime();
+        }
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      });
+
+      res.json({ count: enriched.length, threads: enriched });
+    } catch (err) {
+      console.error("[conversations] GET /conversations/my-waiting error:", err);
+      res.status(500).json({ error: "Failed to fetch waiting threads" });
+    }
+  });
+
+  // ── GET /api/internal/conversations/team-overdue (Task #223) ───────────────
+  // Returns a summary of overdue conversations grouped by owner for the
+  // requesting user's team. Used by Director and NAM dashboard portlets.
+  app.get("/api/internal/conversations/team-overdue", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const teamMemberIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+
+      const overdueThreads = await storage.listEmailConversationThreads(user.organizationId, {
+        waitingState: "waiting_on_us",
+        overdue: true,
+        limit: 200,
+      });
+
+      const teamThreads = overdueThreads.filter(t => t.ownerUserId && teamMemberIds.includes(t.ownerUserId));
+
+      const ownerIds = [...new Set(teamThreads.map(t => t.ownerUserId).filter(Boolean) as string[])];
+      const ownerMap = new Map<string, string>();
+      await Promise.all(ownerIds.map(async id => {
+        const u = await storage.getUser(id);
+        if (u) ownerMap.set(id, u.name);
+      }));
+
+      const companyIds = [...new Set(teamThreads.map(t => t.linkedAccountId).filter(Boolean) as string[])];
+      const companyMap = new Map<string, string>();
+      if (companyIds.length > 0) {
+        const companies = await storage.getCompaniesByIds(companyIds, user.organizationId);
+        for (const c of companies) companyMap.set(c.id, c.name);
+      }
+
+      const byOwner: Record<string, { ownerName: string; threads: Array<{ id: string; threadId: string; accountName: string | null; responsePriority: string; overdueAt: string | null; waitingSinceAt: string | null }> }> = {};
+      for (const t of teamThreads) {
+        const ownerId = t.ownerUserId!;
+        if (!byOwner[ownerId]) {
+          byOwner[ownerId] = { ownerName: ownerMap.get(ownerId) ?? "Unknown", threads: [] };
+        }
+        byOwner[ownerId].threads.push({
+          id: t.id,
+          threadId: t.threadId,
+          accountName: t.linkedAccountId ? (companyMap.get(t.linkedAccountId) ?? null) : null,
+          responsePriority: t.responsePriority,
+          overdueAt: t.overdueAt?.toISOString() ?? null,
+          waitingSinceAt: t.waitingSinceAt?.toISOString() ?? null,
+        });
+      }
+
+      res.json({ totalOverdue: teamThreads.length, byOwner });
+    } catch (err) {
+      console.error("[conversations] GET /conversations/team-overdue error:", err);
+      res.status(500).json({ error: "Failed to fetch team overdue conversations" });
+    }
+  });
+
+  // ── GET /api/internal/conversations/account-summary (Task #223) ────────────
+  // Returns thread counts by waiting state for a specific account.
+  // Query param: accountId (required)
+  app.get("/api/internal/conversations/account-summary", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const { accountId } = req.query;
+      if (!accountId) return res.status(400).json({ error: "accountId is required" });
+
+      const threads = await storage.listEmailConversationThreads(user.organizationId, {
+        linkedAccountId: accountId as string,
+        limit: 200,
+      });
+
+      let waitingOnUs = 0;
+      let waitingOnThem = 0;
+      let resolved = 0;
+      let overdue = 0;
+
+      for (const t of threads) {
+        if (t.waitingState === "waiting_on_us") {
+          waitingOnUs++;
+          if (t.overdueAt && t.overdueAt <= new Date()) overdue++;
+        } else if (t.waitingState === "waiting_on_them") {
+          waitingOnThem++;
+        } else {
+          resolved++;
+        }
+      }
+
+      res.json({ total: threads.length, waitingOnUs, waitingOnThem, resolved, overdue });
+    } catch (err) {
+      console.error("[conversations] GET /conversations/account-summary error:", err);
+      res.status(500).json({ error: "Failed to fetch account summary" });
     }
   });
 

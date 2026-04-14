@@ -6073,6 +6073,7 @@ export class DatabaseStorage implements IStorage {
 
     if (filters.overdue === true) {
       conditions.push(isNotNull(emailConversationThreads.overdueAt));
+      conditions.push(lte(emailConversationThreads.overdueAt, new Date()));
     }
 
     if (filters.linkedAccountId) {

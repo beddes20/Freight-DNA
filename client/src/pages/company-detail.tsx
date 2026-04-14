@@ -31,6 +31,7 @@ import {
   FileText,
   Activity,
   MoreHorizontal,
+  Mail,
 } from "lucide-react";
 import { PinButton } from "@/components/pin-button";
 import * as XLSX from "xlsx";
@@ -234,6 +235,17 @@ export default function CompanyDetail() {
   const { data: claimsConfig } = useQuery<{ url: string | null }>({
     queryKey: ["/api/config/claims-url"],
     staleTime: 300_000,
+  });
+
+  const { data: threadSummary } = useQuery<{ total: number; waitingOnUs: number; waitingOnThem: number; resolved: number; overdue: number }>({
+    queryKey: ["/api/internal/conversations", "account-summary", companyId],
+    queryFn: async () => {
+      const res = await fetch(`/api/internal/conversations/account-summary?accountId=${companyId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    staleTime: 60_000,
+    enabled: !!companyId,
   });
 
   const matchedPerf = (() => {
@@ -669,6 +681,20 @@ export default function CompanyDetail() {
                   (company as any).shippingModes.map((mode: string) => (
                     <Badge key={mode} variant="outline" className="text-[11px] border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400">{mode}</Badge>
                   ))
+                )}
+                {threadSummary && threadSummary.total > 0 && (
+                  <Badge
+                    variant="outline"
+                    className={`text-[11px] cursor-pointer ${threadSummary.overdue > 0 ? "border-red-300 text-red-700 dark:border-red-700 dark:text-red-400" : threadSummary.waitingOnUs > 0 ? "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400" : "border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400"}`}
+                    onClick={() => navigate(`/conversations?accountId=${companyId}`)}
+                    data-testid="badge-open-threads"
+                  >
+                    <Mail className="h-3 w-3 mr-1" />
+                    {threadSummary.waitingOnUs > 0 && `${threadSummary.waitingOnUs} on us`}
+                    {threadSummary.waitingOnUs > 0 && threadSummary.waitingOnThem > 0 && " · "}
+                    {threadSummary.waitingOnThem > 0 && `${threadSummary.waitingOnThem} on them`}
+                    {threadSummary.overdue > 0 && ` (${threadSummary.overdue} overdue)`}
+                  </Badge>
                 )}
                 {company.website && (
                   <a

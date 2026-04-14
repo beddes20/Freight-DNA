@@ -127,6 +127,8 @@ export default function Dashboard() {
   const [teamCommitmentsCollapsed, setTeamCommitmentsCollapsed] = useState(() => localStorage.getItem("dash_team_commitments_collapsed") === "true");
   const [commitPayload, setCommitPayload] = useState<CommitPayload | null>(null);
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
+  const [waitingOnMeCollapsed, setWaitingOnMeCollapsed] = useState(() => localStorage.getItem("dash_waiting_on_me_collapsed") === "true");
+  const [teamOverdueCollapsed, setTeamOverdueCollapsed] = useState(() => localStorage.getItem("dash_team_overdue_collapsed") === "true");
   const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") !== "false");
   const [lmCheckInsGroupCollapsed, setLmCheckInsGroupCollapsed] = useState(() => localStorage.getItem("dash_lm_checkins_group_collapsed") === "true");
   const toggleLmCheckInsGroup = () => {
@@ -1228,6 +1230,8 @@ export default function Dashboard() {
           setActivePortlet={setActivePortlet}
           togglePortlet={togglePortlet}
           setLocation={setLocation}
+          teamOverdueCollapsed={teamOverdueCollapsed}
+          setTeamOverdueCollapsed={(v) => { setTeamOverdueCollapsed(v); localStorage.setItem("dash_team_overdue_collapsed", String(v)); }}
         />
       )}
       </PortletErrorBoundary>
@@ -1262,6 +1266,10 @@ export default function Dashboard() {
           personalMetricsLoading={personalMetricsLoading}
           myGoals={myGoals}
           todayStr={todayStr}
+          waitingOnMeCollapsed={waitingOnMeCollapsed}
+          setWaitingOnMeCollapsed={(v) => { setWaitingOnMeCollapsed(v); localStorage.setItem("dash_waiting_on_me_collapsed", String(v)); }}
+          teamOverdueCollapsed={teamOverdueCollapsed}
+          setTeamOverdueCollapsed={(v) => { setTeamOverdueCollapsed(v); localStorage.setItem("dash_team_overdue_collapsed", String(v)); }}
         />
         </PortletErrorBoundary>
       )}
@@ -1380,6 +1388,8 @@ export default function Dashboard() {
             myGoals={myGoals}
             todayStr={todayStr}
             setActivePortlet={setActivePortlet}
+            waitingOnMeCollapsed={waitingOnMeCollapsed}
+            setWaitingOnMeCollapsed={(v) => { setWaitingOnMeCollapsed(v); localStorage.setItem("dash_waiting_on_me_collapsed", String(v)); }}
           />
         </PortletErrorBoundary>
       )}

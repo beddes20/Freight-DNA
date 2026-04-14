@@ -915,31 +915,29 @@ export async function generateConversationOwnershipNbas(
   for (const thread of threads) {
     if (thread.waitingState !== "waiting_on_us") continue;
 
-    // Rule (b): high-priority past SLA — one card per thread
-    if (
-      thread.responsePriority === "high" &&
-      thread.overdueAt &&
-      thread.overdueAt <= now
-    ) {
+    // Rule (b): overdue past SLA — one card per owned thread (any priority; high=4h, normal=24h)
+    if (thread.ownerUserId && thread.overdueAt && thread.overdueAt <= now) {
       const companyId = thread.linkedAccountId ?? thread.linkedCarrierId;
       if (!companyId) continue;
 
-      const dedupKey = `conv_high_priority_overdue_${thread.id}`;
+      const isHighPriority = thread.responsePriority === "high";
+      const dedupKey = `conv_overdue_sla_${thread.id}`;
       const existing = await storageInstance.getRecentNbaCardByType(companyId, dedupKey, 7);
       if (!existing) {
+        const slaLabel = isHighPriority ? "4-hour" : "24-hour";
         await storageInstance.createNbaCard({
           companyId,
-          userId: thread.ownerUserId ?? null,
+          userId: thread.ownerUserId,
           orgId,
           ruleType: dedupKey,
           outcomeType: "protect",
-          confidence: "high",
+          confidence: isHighPriority ? "high" : "medium",
           signalCount: 1,
           signalSummary: [{ threadId: thread.threadId, waitingState: thread.waitingState, priority: thread.responsePriority }],
-          whyThisNow: "High-priority conversation is past SLA",
-          suggestedAction: `A high-priority thread (${thread.threadId}) has been waiting on us past the 4-hour SLA. Reply now.`,
+          whyThisNow: `${isHighPriority ? "High" : "Normal"}-priority conversation is past ${slaLabel} SLA`,
+          suggestedAction: `Thread (${thread.threadId}) has been waiting on us past the ${slaLabel} SLA. Reply now.`,
           expectedOutcome: "Reply sent within SLA — thread moves to waiting_on_them.",
-          urgencyScore: 85,
+          urgencyScore: isHighPriority ? 85 : 70,
           playLabel: "Clear Overdue Commitment",
           status: "generated",
           linkedLaneId: null,

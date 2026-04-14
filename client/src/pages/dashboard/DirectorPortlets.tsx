@@ -13,6 +13,7 @@ import { MarginGoalEditButton } from "./MarginGoalEditButton";
 import type { SafeUser, TeamActivity, RelationshipsMovedData, TrendingResponse, MarginMetrics, MarginUserMetric, OpportunityLog } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
+import { TeamOverdueConversationsPortlet } from "@/components/team-overdue-conversations-portlet";
 
 // ── Rate Exposure Portlet ──────────────────────────────────────────────────────
 
@@ -208,6 +209,8 @@ interface DirectorPortletsProps {
   setActivePortlet: (v: { type: PortletType; personal: boolean; title: string }) => void;
   togglePortlet: (key: string, val: boolean, setter: (v: boolean) => void) => void;
   setLocation: (path: string) => void;
+  teamOverdueCollapsed: boolean;
+  setTeamOverdueCollapsed: (v: boolean) => void;
 }
 
 export function DirectorPortlets({
@@ -224,11 +227,19 @@ export function DirectorPortlets({
   recentWins, teamMembers,
   recentWinsCollapsed, setRecentWinsCollapsed,
   isVisible, getOrder, setActivePortlet, togglePortlet, setLocation,
+  teamOverdueCollapsed, setTeamOverdueCollapsed,
 }: DirectorPortletsProps) {
   return (
     <>
       {/* ── Market Pulse ────────────────────────────────────────────────────── */}
       <SonarMarketPulsePortlet role="director" />
+
+      {/* ── Team Overdue Conversations (Task #223) ────────────────────────────── */}
+      <TeamOverdueConversationsPortlet
+        collapsed={teamOverdueCollapsed}
+        onToggle={() => setTeamOverdueCollapsed(!teamOverdueCollapsed)}
+        setLocation={setLocation}
+      />
 
       {/* ── Rate Exposure Summary ──────────────────────────────────────────── */}
       <RateExposurePortlet />

@@ -8,6 +8,7 @@ import {
 import type { TrendingResponse, PersonalMetrics } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
+import { WaitingOnMePortlet } from "@/components/waiting-on-me-portlet";
 
 interface AmPortletsProps {
   setLocation: (path: string) => void;
@@ -24,6 +25,8 @@ interface AmPortletsProps {
   myGoals: any[];
   todayStr: string;
   setActivePortlet: (v: { type: PortletType; personal: boolean; title: string }) => void;
+  waitingOnMeCollapsed: boolean;
+  setWaitingOnMeCollapsed: (v: boolean) => void;
 }
 
 export function AmPortlets({
@@ -34,11 +37,19 @@ export function AmPortlets({
   personalMetrics, personalMetricsLoading,
   personalMetricsCollapsed, onTogglePersonalMetrics,
   myGoals, todayStr, setActivePortlet,
+  waitingOnMeCollapsed, setWaitingOnMeCollapsed,
 }: AmPortletsProps) {
   return (
     <>
       {/* ── Market Pulse ────────────────────────────────────────────────────── */}
       <SonarMarketPulsePortlet role="am" />
+
+      {/* ── Waiting on Me (Task #223) ────────────────────────────────────────── */}
+      <WaitingOnMePortlet
+        collapsed={waitingOnMeCollapsed}
+        onToggle={() => setWaitingOnMeCollapsed(!waitingOnMeCollapsed)}
+        setLocation={setLocation}
+      />
 
       {/* ── Trending accounts ───────────────────────────────────────────────── */}
       <div className="grid gap-4 md:grid-cols-2" data-testid="am-trending-row">

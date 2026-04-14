@@ -10,6 +10,8 @@ import { MarginGoalEditButton } from "./MarginGoalEditButton";
 import type { SafeUser, TeamActivity, RelationshipsMovedData, TrendingResponse, MarginMetrics, OpportunityLog, AmRow, StaleAccount, PersonalMetrics } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
+import { WaitingOnMePortlet } from "@/components/waiting-on-me-portlet";
+import { TeamOverdueConversationsPortlet } from "@/components/team-overdue-conversations-portlet";
 
 interface NamPortletsProps {
   namRelationshipsMoved: RelationshipsMovedData | undefined;
@@ -38,6 +40,10 @@ interface NamPortletsProps {
   personalMetricsLoading: boolean;
   myGoals: any[];
   todayStr: string;
+  waitingOnMeCollapsed: boolean;
+  setWaitingOnMeCollapsed: (v: boolean) => void;
+  teamOverdueCollapsed: boolean;
+  setTeamOverdueCollapsed: (v: boolean) => void;
 }
 
 export function NamPortlets({
@@ -56,11 +62,27 @@ export function NamPortlets({
   staleAccounts,
   personalMetrics, personalMetricsLoading,
   myGoals, todayStr,
+  waitingOnMeCollapsed, setWaitingOnMeCollapsed,
+  teamOverdueCollapsed, setTeamOverdueCollapsed,
 }: NamPortletsProps) {
   return (
     <>
       {/* ── Market Pulse ────────────────────────────────────────────────────── */}
       <SonarMarketPulsePortlet role="nam" />
+
+      {/* ── Waiting on Me (Task #223) ────────────────────────────────────────── */}
+      <WaitingOnMePortlet
+        collapsed={waitingOnMeCollapsed}
+        onToggle={() => setWaitingOnMeCollapsed(!waitingOnMeCollapsed)}
+        setLocation={setLocation}
+      />
+
+      {/* ── Team Overdue Conversations (Task #223) ────────────────────────────── */}
+      <TeamOverdueConversationsPortlet
+        collapsed={teamOverdueCollapsed}
+        onToggle={() => setTeamOverdueCollapsed(!teamOverdueCollapsed)}
+        setLocation={setLocation}
+      />
 
       {/* Row 1: Team activity metrics */}
       <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-activity-row" data-tour="tour-kpi-tiles">
