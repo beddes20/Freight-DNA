@@ -13,7 +13,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { formatLaneDisplay, formatWeeklyLoadRange } from "@shared/laneFormatters";
+import { formatLaneDisplay, formatLaneLocation, formatWeeklyLoadRange } from "@shared/laneFormatters";
 import {
   OUTREACH_TEMPLATES,
   DEFAULT_TEMPLATE_ID,
@@ -526,8 +526,8 @@ export function CarrierOutreachPanel({
     initialTemplateAppliedRef.current = lane.id;
     const tpl = OUTREACH_TEMPLATES.find(t => t.id === selectedTemplateId) ?? OUTREACH_TEMPLATES[0];
     const laneVars = {
-      origin: `${lane.origin}, ${lane.originState}`,
-      destination: `${lane.destination}, ${lane.destinationState}`,
+      origin: formatLaneLocation(lane.origin, lane.originState),
+      destination: formatLaneLocation(lane.destination, lane.destinationState),
       equipmentType: lane.equipmentType ?? "dry van",
     };
     const body = applyLaneVars(tpl.body, laneVars);
@@ -864,8 +864,8 @@ export function CarrierOutreachPanel({
     const tpl = OUTREACH_TEMPLATES.find(t => t.id === templateId);
     if (!tpl) return;
     const laneVars = {
-      origin: lane ? `${lane.origin}, ${lane.originState}` : "",
-      destination: lane ? `${lane.destination}, ${lane.destinationState}` : "",
+      origin: lane ? formatLaneLocation(lane.origin, lane.originState) : "",
+      destination: lane ? formatLaneLocation(lane.destination, lane.destinationState) : "",
       equipmentType: lane?.equipmentType ?? "dry van",
     };
     const body = applyLaneVars(tpl.body, laneVars);

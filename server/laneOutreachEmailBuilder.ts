@@ -27,16 +27,13 @@ export function buildFallbackEmail(
   loadRange: string,
   mode: string,
 ): string {
-  const greeting = hasVerifiedHistory ? `Hey ${name} —` : `Hey ${name} team —`;
-  const intro = hasVerifiedHistory
-    ? ``
-    : ` I'm with Value Truck, a freight brokerage.`;
+  const greeting = hasVerifiedHistory ? `${name} team,` : `${name} team,`;
 
   const modeNote = mode === "immediate_plus_lane"
-    ? ` We also have an immediate load coming up on this lane that needs coverage now.`
+    ? ` Also have an immediate load on this lane that needs a truck now.`
     : "";
 
   const bareRange = loadRange.replace(/^(usually|around|about)\s+/i, "");
 
-  return `${greeting}${intro} Checking to see if you've got capacity for ${laneDisplay} (${equipment}). We usually have ${bareRange} on this lane and are looking to line up steady coverage.${modeNote} Does that fit your network? If so, I'd be glad to talk through it.`;
+  return `${greeting} I've got ${laneDisplay} (${equipment}) running ${bareRange} a week and I'm looking for steady coverage.${modeNote} Does that fit your network? If so, let's talk through it.`;
 }

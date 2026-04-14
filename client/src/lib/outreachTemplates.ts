@@ -22,31 +22,31 @@ export const OUTREACH_TEMPLATES: OutreachTemplate[] = [
     id: "quick_capacity_check",
     label: "Quick Capacity Check",
     subject: "Capacity for {{origin}} to {{destination}}",
-    body: `Hi {{carrierName}} team — Value Truck here. Do you have capacity for {{origin}} → {{destination}} on {{equipmentType}}? If it fits your network, send over availability and I can share the details.`,
+    body: `{{carrierName}} team, I've got {{equipmentType}} freight running {{origin}} → {{destination}}. You have capacity on that lane? If so, shoot me your availability and I'll get you the details.`,
   },
   {
     id: "steady_lane_ask",
     label: "Steady Lane Ask",
     subject: "Steady {{origin}} to {{destination}} freight",
-    body: `Hi {{carrierName}} team — we're looking to build steady coverage on {{origin}} → {{destination}} for {{equipmentType}}. If this is a lane you like, let me know and I can send over the details and timing.`,
+    body: `{{carrierName}} team, I've got a consistent lane on {{origin}} → {{destination}} for {{equipmentType}} and I'm looking for steady coverage. If that fits your network, let me know and I'll send over the details.`,
   },
   {
     id: "spot_quote_request",
     label: "Spot Quote Request",
     subject: "Quote request: {{origin}} to {{destination}}",
-    body: `Hi {{carrierName}} team — do you have coverage for {{origin}} → {{destination}} on {{equipmentType}}? If yes, send me your best rate and availability and I'll get you the load details right away.`,
+    body: `{{carrierName}} team, need a quote on {{origin}} → {{destination}}, {{equipmentType}}. Can you cover it? Send me your best rate and availability and I'll get you the load details right away.`,
   },
   {
     id: "re_engage_prior",
     label: "Re-engage Prior Carrier",
     subject: "Checking capacity on a lane we've run together",
-    body: `Hi {{carrierName}} team — reaching out from Value Truck on {{origin}} → {{destination}} for {{equipmentType}}. Since this looks like a lane we may have overlap on, I wanted to see if you have capacity and interest in covering it again.`,
+    body: `{{carrierName}} team, checking on {{origin}} → {{destination}} for {{equipmentType}} — looks like a lane we may have overlap on. Got capacity to cover it again? Let me know and I'll send the details.`,
   },
   {
     id: "network_fit_check",
     label: "Network Fit Check",
     subject: "Does {{origin}} to {{destination}} fit your network?",
-    body: `Hi {{carrierName}} team — wanted to check whether {{origin}} → {{destination}} on {{equipmentType}} fits your network. If it does, I'd be happy to send over the lane details and talk through coverage.`,
+    body: `{{carrierName}} team, does {{origin}} → {{destination}} on {{equipmentType}} fit your network? If it does, I'll send over the lane details and we can talk through coverage.`,
   },
 ];
 

@@ -1616,7 +1616,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
           const relationshipNote = hasVerifiedHistory
             ? `You have hauled freight for us before — acknowledge the prior relationship briefly in one clause. Do NOT say "we've run freight together before" verbatim.`
-            : `This is a new prospect — introduce Value Truck as a freight brokerage in a single short phrase. Do NOT imply any prior business relationship.`;
+            : `This is a new prospect — do NOT imply any prior business relationship. No need to introduce yourself or the company.`;
 
           const prompt = `You are a freight broker writing a short outreach email to a carrier about a recurring lane.
 
