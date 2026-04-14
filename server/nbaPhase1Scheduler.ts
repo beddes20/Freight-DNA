@@ -154,13 +154,13 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
 
         // ── Conversation Ownership NBAs (Task #202) ────────────────────────────
         try {
-          const convThreads = await storage.listEmailConversationThreads(org.id, {
+          const convResult = await storage.listEmailConversationThreads(org.id, {
             waitingState: "waiting_on_us",
             limit: 500,
           });
-          if (convThreads.length > 0) {
-            await generateConversationOwnershipNbas(org.id, convThreads as any, storage as any);
-            log(`Org ${org.id}: conversation ownership NBAs processed (${convThreads.length} threads)`);
+          if (convResult.threads.length > 0) {
+            await generateConversationOwnershipNbas(org.id, convResult.threads as any, storage as any);
+            log(`Org ${org.id}: conversation ownership NBAs processed (${convResult.threads.length} threads)`);
           }
         } catch (convErr: any) {
           log(`Org ${org.id}: conversation NBA sync warning (non-fatal): ${convErr?.message ?? convErr}`);

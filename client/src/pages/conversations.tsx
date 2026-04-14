@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -11,7 +11,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight, PenLine, Check, Loader2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight, PenLine, Check, Loader2, Archive, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 
@@ -23,13 +24,14 @@ interface ConversationThread {
   linkedCarrierId: string | null;
   ownerUserId: string | null;
   ownerName: string | null;
-  waitingState: "waiting_on_us" | "waiting_on_them" | "resolved";
+  waitingState: "waiting_on_us" | "waiting_on_them" | "resolved" | "archived";
   responsePriority: "high" | "normal" | "low" | "urgent";
   lastMessageId: string | null;
   lastIncomingAt: string | null;
   lastOutgoingAt: string | null;
   waitingSinceAt: string | null;
   overdueAt: string | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -37,6 +39,7 @@ interface ConversationThread {
 interface ThreadsResponse {
   count: number;
   threads: ConversationThread[];
+  nextCursor: string | null;
 }
 
 interface EmailMessage {
@@ -87,6 +90,14 @@ function WaitingStateBadge({ state, overdue }: { state: ConversationThread["wait
     return (
       <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200 border-blue-300 dark:border-blue-800 text-xs" data-testid="badge-waiting-state">
         Waiting on them
+      </Badge>
+    );
+  }
+  if (state === "archived") {
+    return (
+      <Badge className="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 border-gray-300 dark:border-gray-700 text-xs" data-testid="badge-waiting-state">
+        <Archive className="w-3 h-3 mr-1" />
+        Archived
       </Badge>
     );
   }
@@ -404,12 +415,14 @@ function ThreadRow({
   thread,
   onAssignToMe,
   onChangeState,
+  onArchive,
   onSelect,
   isSelected,
 }: {
   thread: ConversationThread;
   onAssignToMe: (id: string) => void;
   onChangeState: (id: string, state: ConversationThread["waitingState"]) => void;
+  onArchive?: (id: string) => void;
   onSelect: (thread: ConversationThread) => void;
   isSelected: boolean;
 }) {
@@ -528,6 +541,18 @@ function ThreadRow({
               Reopen
             </Button>
           )}
+          {thread.waitingState === "resolved" && onArchive && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs gap-1"
+              onClick={() => onArchive(thread.id)}
+              data-testid={`button-archive-${thread.id}`}
+            >
+              <Archive className="w-3 h-3" />
+              Archive
+            </Button>
+          )}
           <Button
             size="sm"
             variant="ghost"
@@ -559,14 +584,27 @@ export default function ConversationsPage() {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  const [activeTab, setActiveTab] = useState<"mine" | "unowned" | "high_priority" | "all">("mine");
+  const [activeTab, setActiveTab] = useState<"mine" | "unowned" | "high_priority" | "all" | "archived">("mine");
   const [filterState, setFilterState] = useState<string>("all");
   const [filterPriority, setFilterPriority] = useState<string>("all");
   const [filterOverdue, setFilterOverdue] = useState(false);
   const [selectedThread, setSelectedThread] = useState<ConversationThread | null>(null);
+  const [allThreads, setAllThreads] = useState<ConversationThread[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
 
-  function buildParams(): string {
+  const [archiveSearch, setArchiveSearch] = useState("");
+  const [archiveDateFrom, setArchiveDateFrom] = useState("");
+  const [archiveDateTo, setArchiveDateTo] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(archiveSearch), 400);
+    return () => clearTimeout(timer);
+  }, [archiveSearch]);
+
+  function buildParams(cursorParam?: string): string {
     const p = new URLSearchParams();
+    p.set("limit", "50");
     if (activeTab === "mine" && user?.id) {
       p.set("ownerUserId", user.id);
       p.set("waitingState", "waiting_on_us");
@@ -576,27 +614,52 @@ export default function ConversationsPage() {
     } else if (activeTab === "high_priority") {
       p.set("responsePriority", "high");
       p.set("waitingState", "waiting_on_us");
+    } else if (activeTab === "archived") {
+      p.set("archived", "true");
+      if (debouncedSearch) p.set("search", debouncedSearch);
+      if (archiveDateFrom) p.set("dateFrom", archiveDateFrom);
+      if (archiveDateTo) p.set("dateTo", archiveDateTo);
     } else {
       if (filterState !== "all") p.set("waitingState", filterState);
       if (filterPriority !== "all") p.set("responsePriority", filterPriority);
       if (filterOverdue) p.set("overdue", "true");
     }
+    if (cursorParam) p.set("cursor", cursorParam);
     return p.toString();
   }
 
   const { data, isLoading, isError, refetch } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", activeTab, filterState, filterPriority, filterOverdue],
+    queryKey: ["/api/internal/conversations", activeTab, filterState, filterPriority, filterOverdue, debouncedSearch, archiveDateFrom, archiveDateTo],
     queryFn: async () => {
       const res = await fetch(`/api/internal/conversations?${buildParams()}`);
       if (!res.ok) throw new Error("Failed to fetch conversations");
-      return res.json();
+      const json = await res.json();
+      setAllThreads(json.threads);
+      setNextCursor(json.nextCursor);
+      return json;
     },
+  });
+
+  const loadMoreMutation = useMutation({
+    mutationFn: async () => {
+      if (!nextCursor) return null;
+      const res = await fetch(`/api/internal/conversations?${buildParams(nextCursor)}`);
+      if (!res.ok) throw new Error("Failed to load more");
+      return res.json() as Promise<ThreadsResponse>;
+    },
+    onSuccess: (result) => {
+      if (result) {
+        setAllThreads(prev => [...prev, ...result.threads]);
+        setNextCursor(result.nextCursor);
+      }
+    },
+    onError: () => toast({ title: "Failed to load more conversations", variant: "destructive" }),
   });
 
   const { data: mineData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "mine-count", user?.id],
     queryFn: async () => {
-      const p = new URLSearchParams({ waitingState: "waiting_on_us" });
+      const p = new URLSearchParams({ waitingState: "waiting_on_us", limit: "1" });
       if (user?.id) p.set("ownerUserId", user.id);
       const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
@@ -608,7 +671,7 @@ export default function ConversationsPage() {
   const { data: unownedData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "unowned-count"],
     queryFn: async () => {
-      const res = await fetch("/api/internal/conversations?unowned=true&waitingState=waiting_on_us");
+      const res = await fetch("/api/internal/conversations?unowned=true&waitingState=waiting_on_us&limit=1");
       if (!res.ok) throw new Error("");
       return res.json();
     },
@@ -617,7 +680,7 @@ export default function ConversationsPage() {
   const { data: highPriData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "high-priority-count"],
     queryFn: async () => {
-      const res = await fetch("/api/internal/conversations?responsePriority=high&waitingState=waiting_on_us");
+      const res = await fetch("/api/internal/conversations?responsePriority=high&waitingState=waiting_on_us&limit=1");
       if (!res.ok) throw new Error("");
       return res.json();
     },
@@ -646,9 +709,25 @@ export default function ConversationsPage() {
     onError: () => toast({ title: "Failed to update conversation", variant: "destructive" }),
   });
 
-  const threads = data?.threads ?? [];
+  const archiveMutation = useMutation({
+    mutationFn: async (threadId: string) => {
+      return apiRequest("POST", `/api/internal/conversations/${threadId}/archive`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+      toast({ title: "Conversation archived" });
+    },
+    onError: () => toast({ title: "Failed to archive conversation", variant: "destructive" }),
+  });
+
+  const threads = allThreads;
 
   const sorted = [...threads].sort((a, b) => {
+    if (activeTab === "archived") {
+      const aDate = a.archivedAt ? new Date(a.archivedAt).getTime() : 0;
+      const bDate = b.archivedAt ? new Date(b.archivedAt).getTime() : 0;
+      return bDate - aDate;
+    }
     const aOverdue = !!a.overdueAt;
     const bOverdue = !!b.overdueAt;
     if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
@@ -666,7 +745,11 @@ export default function ConversationsPage() {
         <Badge className="text-xs" data-testid="badge-total-count">{data?.count ?? "—"}</Badge>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
+      <Tabs value={activeTab} onValueChange={(v) => {
+        setActiveTab(v as typeof activeTab);
+        setAllThreads([]);
+        setNextCursor(null);
+      }}>
         <TabsList className="mb-4" data-testid="tabs-quick-views">
           <TabsTrigger value="mine" data-testid="tab-waiting-on-me">
             Waiting on me
@@ -687,6 +770,10 @@ export default function ConversationsPage() {
             )}
           </TabsTrigger>
           <TabsTrigger value="all" data-testid="tab-all">All</TabsTrigger>
+          <TabsTrigger value="archived" data-testid="tab-archived">
+            <Archive className="w-3.5 h-3.5 mr-1" />
+            Archived
+          </TabsTrigger>
         </TabsList>
 
         {activeTab === "all" && (
@@ -727,6 +814,53 @@ export default function ConversationsPage() {
           </div>
         )}
 
+        {activeTab === "archived" && (
+          <div className="flex items-center gap-3 mb-4" data-testid="archive-filters-container">
+            <div className="relative flex-1 max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Search account, carrier, or subject..."
+                value={archiveSearch}
+                onChange={(e) => setArchiveSearch(e.target.value)}
+                className="pl-9"
+                data-testid="input-archive-search"
+              />
+            </div>
+            <Input
+              type="date"
+              value={archiveDateFrom}
+              onChange={(e) => setArchiveDateFrom(e.target.value)}
+              className="w-40"
+              placeholder="From date"
+              data-testid="input-archive-date-from"
+            />
+            <Input
+              type="date"
+              value={archiveDateTo}
+              onChange={(e) => setArchiveDateTo(e.target.value)}
+              className="w-40"
+              placeholder="To date"
+              data-testid="input-archive-date-to"
+            />
+            {(archiveSearch || archiveDateFrom || archiveDateTo) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setArchiveSearch("");
+                  setDebouncedSearch("");
+                  setArchiveDateFrom("");
+                  setArchiveDateTo("");
+                }}
+                data-testid="button-clear-archive-filters"
+              >
+                <X className="w-3.5 h-3.5 mr-1" />
+                Clear
+              </Button>
+            )}
+          </div>
+        )}
+
         <div className="border rounded-lg overflow-hidden">
           {isError ? (
             <QueryError message="Couldn't load conversations. This is usually temporary." onRetry={() => refetch()} />
@@ -745,13 +879,15 @@ export default function ConversationsPage() {
             </div>
           ) : sorted.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2" data-testid="empty-state">
-              <CheckCircle2 className="w-8 h-8" />
+              {activeTab === "archived" ? <Archive className="w-8 h-8" /> : <CheckCircle2 className="w-8 h-8" />}
               <p className="font-medium">No conversations found</p>
               <p className="text-sm">
                 {activeTab === "mine"
                   ? "You have no conversations waiting on you."
                   : activeTab === "unowned"
                   ? "All conversations have an assigned owner."
+                  : activeTab === "archived"
+                  ? "No archived conversations match the selected filters."
                   : "No conversations match the selected filters."}
               </p>
             </div>
@@ -763,6 +899,7 @@ export default function ConversationsPage() {
                   thread={thread}
                   onAssignToMe={(id) => assignToMeMutation.mutate(id)}
                   onChangeState={(id, state) => changeStateMutation.mutate({ id, state })}
+                  onArchive={(id) => archiveMutation.mutate(id)}
                   onSelect={(t) => setSelectedThread(t)}
                   isSelected={selectedThread?.id === thread.id}
                 />
@@ -770,6 +907,22 @@ export default function ConversationsPage() {
             </div>
           )}
         </div>
+
+        {nextCursor && (
+          <div className="flex justify-center mt-4">
+            <Button
+              variant="outline"
+              onClick={() => loadMoreMutation.mutate()}
+              disabled={loadMoreMutation.isPending}
+              data-testid="button-load-more"
+            >
+              {loadMoreMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : null}
+              Load more
+            </Button>
+          </div>
+        )}
       </Tabs>
 
       {selectedThread && (

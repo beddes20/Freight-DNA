@@ -887,7 +887,13 @@ export interface IStorage {
     linkedCarrierId?: string;
     threadId?: string;
     limit?: number;
-  }): Promise<EmailConversationThread[]>;
+    cursor?: string;
+    excludeArchived?: boolean;
+    archivedOnly?: boolean;
+    search?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }): Promise<{ threads: EmailConversationThread[]; nextCursor: string | null; totalCount: number }>;
   updateEmailConversationThread(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined>;
 
   // Carrier Intel Suggestions — accepted preference helpers (Task #195)
@@ -6096,8 +6102,20 @@ export class DatabaseStorage implements IStorage {
     linkedCarrierId?: string;
     threadId?: string;
     limit?: number;
-  }): Promise<EmailConversationThread[]> {
+    cursor?: string;
+    excludeArchived?: boolean;
+    archivedOnly?: boolean;
+    search?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }): Promise<{ threads: EmailConversationThread[]; nextCursor: string | null; totalCount: number }> {
     const conditions: SQL[] = [eq(emailConversationThreads.orgId, orgId)];
+
+    if (filters.archivedOnly) {
+      conditions.push(isNotNull(emailConversationThreads.archivedAt));
+    } else if (filters.excludeArchived !== false) {
+      conditions.push(isNull(emailConversationThreads.archivedAt));
+    }
 
     if (filters.unowned === true) {
       conditions.push(isNull(emailConversationThreads.ownerUserId));
@@ -6130,14 +6148,150 @@ export class DatabaseStorage implements IStorage {
       conditions.push(eq(emailConversationThreads.threadId, filters.threadId));
     }
 
-    return db.select().from(emailConversationThreads)
+    if (filters.dateFrom) {
+      const dateCol = filters.archivedOnly ? emailConversationThreads.archivedAt : emailConversationThreads.updatedAt;
+      conditions.push(gte(dateCol, new Date(filters.dateFrom)));
+    }
+    if (filters.dateTo) {
+      const dateCol = filters.archivedOnly ? emailConversationThreads.archivedAt : emailConversationThreads.updatedAt;
+      const endOfDay = new Date(filters.dateTo);
+      endOfDay.setUTCHours(23, 59, 59, 999);
+      conditions.push(lte(dateCol, endOfDay));
+    }
+
+    if (filters.search) {
+      const searchPattern = `%${filters.search}%`;
+      const accountIds = await db.select({ id: companies.id }).from(companies)
+        .where(and(eq(companies.organizationId, orgId), ilike(companies.name, searchPattern)));
+      const carrierIds = await db.select({ id: carriers.id }).from(carriers)
+        .where(and(eq(carriers.orgId, orgId), ilike(carriers.name, searchPattern)));
+      const matchingMsgThreadIds = await db.select({ threadId: emailMessages.threadId }).from(emailMessages)
+        .where(and(eq(emailMessages.orgId, orgId), ilike(emailMessages.subject, searchPattern)));
+
+      const searchConditions: SQL[] = [];
+      if (accountIds.length > 0) {
+        searchConditions.push(inArray(emailConversationThreads.linkedAccountId, accountIds.map(a => a.id)));
+      }
+      if (carrierIds.length > 0) {
+        searchConditions.push(inArray(emailConversationThreads.linkedCarrierId, carrierIds.map(c => c.id)));
+      }
+      if (matchingMsgThreadIds.length > 0) {
+        const uniqueThreadIds = [...new Set(matchingMsgThreadIds.map(m => m.threadId))];
+        searchConditions.push(inArray(emailConversationThreads.threadId, uniqueThreadIds));
+      }
+
+      if (searchConditions.length > 0) {
+        conditions.push(or(...searchConditions)!);
+      } else {
+        conditions.push(sql`false`);
+      }
+    }
+
+    const [countResult] = await db.select({ count: sql<number>`count(*)` })
+      .from(emailConversationThreads)
+      .where(and(...conditions));
+    const totalCount = Number(countResult?.count ?? 0);
+
+    const pageLimit = filters.limit ?? 50;
+
+    if (filters.archivedOnly) {
+      if (filters.cursor) {
+        const [cursorTime, cursorId] = filters.cursor.split('|');
+        if (cursorTime && cursorId) {
+          conditions.push(
+            or(
+              sql`${emailConversationThreads.archivedAt} < ${new Date(cursorTime)}`,
+              and(
+                sql`${emailConversationThreads.archivedAt} = ${new Date(cursorTime)}`,
+                sql`${emailConversationThreads.id} < ${cursorId}`,
+              ),
+            )!,
+          );
+        }
+      }
+
+      const rows = await db.select().from(emailConversationThreads)
+        .where(and(...conditions))
+        .orderBy(desc(emailConversationThreads.archivedAt), desc(emailConversationThreads.id))
+        .limit(pageLimit + 1);
+
+      const hasMore = rows.length > pageLimit;
+      const threads = hasMore ? rows.slice(0, pageLimit) : rows;
+      let nextCursor: string | null = null;
+      if (hasMore && threads.length > 0) {
+        const last = threads[threads.length - 1];
+        nextCursor = `${(last.archivedAt ?? last.updatedAt).toISOString()}|${last.id}`;
+      }
+      return { threads, nextCursor, totalCount };
+    }
+
+    if (filters.cursor) {
+      const parts = filters.cursor.split('|');
+      if (parts.length === 4) {
+        const [cursorOverdueFlag, cursorWaiting, cursorUpdated, cursorId] = parts;
+        const cursorOvRank = parseInt(cursorOverdueFlag, 10);
+        const cursorUpd = new Date(cursorUpdated);
+
+        if (cursorWaiting === "null") {
+          conditions.push(
+            sql`(
+              (CASE WHEN ${emailConversationThreads.overdueAt} IS NOT NULL THEN 0 ELSE 1 END) > ${cursorOvRank}
+              OR (
+                (CASE WHEN ${emailConversationThreads.overdueAt} IS NOT NULL THEN 0 ELSE 1 END) = ${cursorOvRank}
+                AND ${emailConversationThreads.waitingSinceAt} IS NULL
+                AND (
+                  ${emailConversationThreads.updatedAt} < ${cursorUpd}
+                  OR (${emailConversationThreads.updatedAt} = ${cursorUpd} AND ${emailConversationThreads.id} < ${cursorId})
+                )
+              )
+            )`,
+          );
+        } else {
+          const cursorWs = new Date(cursorWaiting);
+          conditions.push(
+            sql`(
+              (CASE WHEN ${emailConversationThreads.overdueAt} IS NOT NULL THEN 0 ELSE 1 END) > ${cursorOvRank}
+              OR (
+                (CASE WHEN ${emailConversationThreads.overdueAt} IS NOT NULL THEN 0 ELSE 1 END) = ${cursorOvRank}
+                AND (
+                  (${emailConversationThreads.waitingSinceAt} IS NOT NULL AND ${emailConversationThreads.waitingSinceAt} > ${cursorWs})
+                  OR (
+                    ${emailConversationThreads.waitingSinceAt} = ${cursorWs}
+                    AND (
+                      ${emailConversationThreads.updatedAt} < ${cursorUpd}
+                      OR (${emailConversationThreads.updatedAt} = ${cursorUpd} AND ${emailConversationThreads.id} < ${cursorId})
+                    )
+                  )
+                  OR ${emailConversationThreads.waitingSinceAt} IS NULL
+                )
+              )
+            )`,
+          );
+        }
+      }
+    }
+
+    const rows = await db.select().from(emailConversationThreads)
       .where(and(...conditions))
       .orderBy(
-        asc(emailConversationThreads.overdueAt),
-        asc(emailConversationThreads.waitingSinceAt),
+        sql`CASE WHEN ${emailConversationThreads.overdueAt} IS NOT NULL THEN 0 ELSE 1 END ASC`,
+        sql`${emailConversationThreads.waitingSinceAt} ASC NULLS LAST`,
         desc(emailConversationThreads.updatedAt),
+        desc(emailConversationThreads.id),
       )
-      .limit(filters.limit ?? 200);
+      .limit(pageLimit + 1);
+
+    const hasMore = rows.length > pageLimit;
+    const threads = hasMore ? rows.slice(0, pageLimit) : rows;
+    let nextCursor: string | null = null;
+    if (hasMore && threads.length > 0) {
+      const last = threads[threads.length - 1];
+      const ovRank = last.overdueAt ? 0 : 1;
+      const ws = last.waitingSinceAt ? last.waitingSinceAt.toISOString() : "null";
+      nextCursor = `${ovRank}|${ws}|${last.updatedAt.toISOString()}|${last.id}`;
+    }
+
+    return { threads, nextCursor, totalCount };
   }
 
   async updateEmailConversationThread(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined> {

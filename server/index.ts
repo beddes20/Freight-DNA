@@ -17,6 +17,7 @@ import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
 import { initMomentumDropScheduler } from "./momentumDropScheduler";
+import { initConversationArchiveScheduler } from "./conversationArchiveScheduler";
 import { scoreAllEligibleLanes } from "./laneScoringService";
 import { startIntelEmailScheduler } from "./intelEmailScheduler";
 import { startEmailIntelligenceScheduler } from "./emailIntelligenceScheduler";
@@ -274,6 +275,7 @@ async function initStripe() {
         initNbaPhase1Scheduler();
         initMarketSignalScheduler();
         initMomentumDropScheduler();
+        initConversationArchiveScheduler();
       }, 2000);
 
       setTimeout(() => {

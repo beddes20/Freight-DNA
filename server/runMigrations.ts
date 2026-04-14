@@ -2622,4 +2622,16 @@ export async function runMigrations() {
   } finally {
     clientDropTrailer.release();
   }
+
+  const clientArchive = await pool.connect();
+  try {
+    await clientArchive.query(`ALTER TABLE email_conversation_threads ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`);
+    await clientArchive.query(`CREATE INDEX IF NOT EXISTS idx_ect_archived_at ON email_conversation_threads(archived_at)`);
+    await clientArchive.query(`CREATE INDEX IF NOT EXISTS idx_ect_waiting_state ON email_conversation_threads(waiting_state)`);
+    console.log("[migrations] archived_at column and indexes added to email_conversation_threads (Task #237)");
+  } catch (err) {
+    console.error("[migrations] archived_at migration error:", err);
+  } finally {
+    clientArchive.release();
+  }
 }

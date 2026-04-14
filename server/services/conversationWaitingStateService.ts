@@ -51,6 +51,7 @@ export function applyMessageToThread(
   now: Date = new Date(),
 ): Partial<EmailConversationThread> {
   const newState = computeWaitingState(message.direction);
+  const wasArchived = thread.waitingState === "archived";
   const wasWaitingOnUs = thread.waitingState === "waiting_on_us";
   const isNowWaitingOnUs = newState === "waiting_on_us";
 
@@ -58,6 +59,10 @@ export function applyMessageToThread(
     lastMessageId: message.id,
     waitingState: newState,
   };
+
+  if (wasArchived && message.direction === "inbound") {
+    update.archivedAt = null;
+  }
 
   // Update timestamps
   if (message.direction === "inbound") {
@@ -107,7 +112,7 @@ export function computeOverdueAt(thread: EmailConversationThread, now: Date = ne
 
 export async function setWaitingState(
   threadRecordId: string,
-  state: "waiting_on_us" | "waiting_on_them" | "resolved",
+  state: "waiting_on_us" | "waiting_on_them" | "resolved" | "archived",
   orgId: string,
   storageInstance: Pick<IStorage, "updateEmailConversationThread" | "getEmailConversationThreadById">,
   now: Date = new Date(),
@@ -117,7 +122,12 @@ export async function setWaitingState(
 
   const update: Partial<EmailConversationThread> = { waitingState: state };
 
-  if (state === "waiting_on_us") {
+  if (state === "archived") {
+    update.archivedAt = now;
+    update.waitingSinceAt = null;
+    update.overdueAt = null;
+  } else if (state === "waiting_on_us") {
+    update.archivedAt = null;
     if (thread.waitingState !== "waiting_on_us") {
       update.waitingSinceAt = now;
     }
@@ -128,6 +138,7 @@ export async function setWaitingState(
       update.overdueAt = breach <= now ? breach : null;
     }
   } else {
+    update.archivedAt = null;
     update.waitingSinceAt = null;
     update.overdueAt = null;
   }

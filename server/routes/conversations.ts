@@ -18,7 +18,7 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { inArray, and, eq, asc } from "drizzle-orm";
 import { storage, db } from "../storage";
-import { emailMessages } from "@shared/schema";
+import { emailMessages, InsertEmailConversationThread } from "@shared/schema";
 import { requireAuth, getCurrentUser } from "../auth";
 import { setWaitingState, setPriority } from "../services/conversationWaitingStateService";
 import { assignOwner } from "../services/conversationOwnershipService";
@@ -31,12 +31,12 @@ export function registerConversationsRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const threads = await storage.listEmailConversationThreads(user.organizationId, {
+      const result = await storage.listEmailConversationThreads(user.organizationId, {
         ownerUserId: user.id,
         waitingState: "waiting_on_us",
-        limit: 200,
+        limit: 1,
       });
-      res.json({ count: threads.length });
+      res.json({ count: result.totalCount });
     } catch (err) {
       console.error("[conversations] GET /conversations/my-count error:", err);
       res.status(500).json({ error: "Failed to fetch count" });
@@ -51,11 +51,12 @@ export function registerConversationsRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const threads = await storage.listEmailConversationThreads(user.organizationId, {
+      const result = await storage.listEmailConversationThreads(user.organizationId, {
         ownerUserId: user.id,
         waitingState: "waiting_on_us",
         limit: 50,
       });
+      const threads = result.threads;
 
       const companyIds = [...new Set(threads.map(t => t.linkedAccountId).filter(Boolean) as string[])];
       const carrierIds = [...new Set(threads.map(t => t.linkedCarrierId).filter(Boolean) as string[])];
@@ -122,13 +123,13 @@ export function registerConversationsRoutes(app: Express): void {
 
       const teamMemberIds = await storage.getTeamMemberIds(user.id, user.organizationId);
 
-      const overdueThreads = await storage.listEmailConversationThreads(user.organizationId, {
+      const overdueResult = await storage.listEmailConversationThreads(user.organizationId, {
         waitingState: "waiting_on_us",
         overdue: true,
         limit: 200,
       });
 
-      const teamThreads = overdueThreads.filter(t => t.ownerUserId && teamMemberIds.includes(t.ownerUserId));
+      const teamThreads = overdueResult.threads.filter(t => t.ownerUserId && teamMemberIds.includes(t.ownerUserId));
 
       const ownerIds = [...new Set(teamThreads.map(t => t.ownerUserId).filter(Boolean) as string[])];
       const ownerMap = new Map<string, string>();
@@ -178,15 +179,19 @@ export function registerConversationsRoutes(app: Express): void {
       const { accountId } = req.query;
       if (!accountId) return res.status(400).json({ error: "accountId is required" });
 
-      const threads = await storage.listEmailConversationThreads(user.organizationId, {
+      const result = await storage.listEmailConversationThreads(user.organizationId, {
         linkedAccountId: accountId as string,
         limit: 200,
+        excludeArchived: false,
       });
+      const threads = result.threads;
 
       let waitingOnUs = 0;
       let waitingOnThem = 0;
       let resolved = 0;
       let overdue = 0;
+
+      let archived = 0;
 
       for (const t of threads) {
         if (t.waitingState === "waiting_on_us") {
@@ -194,12 +199,14 @@ export function registerConversationsRoutes(app: Express): void {
           if (t.overdueAt && t.overdueAt <= new Date()) overdue++;
         } else if (t.waitingState === "waiting_on_them") {
           waitingOnThem++;
+        } else if (t.waitingState === "archived") {
+          archived++;
         } else {
           resolved++;
         }
       }
 
-      res.json({ total: threads.length, waitingOnUs, waitingOnThem, resolved, overdue });
+      res.json({ total: threads.length, waitingOnUs, waitingOnThem, resolved, overdue, archived });
     } catch (err) {
       console.error("[conversations] GET /conversations/account-summary error:", err);
       res.status(500).json({ error: "Failed to fetch account summary" });
@@ -208,14 +215,15 @@ export function registerConversationsRoutes(app: Express): void {
 
   // ── GET /api/internal/conversations ─────────────────────────────────────────
   // Query filters: accountId, carrierId, ownerUserId, waitingState,
-  // responsePriority, overdue=true|false, unowned=true
+  // responsePriority, overdue=true|false, unowned=true, archived=true,
+  // cursor, limit, search, dateFrom, dateTo
   app.get("/api/internal/conversations", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
       const orgId = user.organizationId;
-      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId } = req.query;
+      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, cursor, limit, search, dateFrom, dateTo } = req.query;
 
       const filters: Parameters<typeof storage.listEmailConversationThreads>[1] = {};
 
@@ -231,9 +239,19 @@ export function registerConversationsRoutes(app: Express): void {
       if (responsePriority) filters.responsePriority = responsePriority as string;
       if (overdue === "true") filters.overdue = true;
 
-      const threads = await storage.listEmailConversationThreads(orgId, filters);
+      if (archived === "true") {
+        filters.archivedOnly = true;
+      }
 
-      // Enrich with owner name
+      if (cursor) filters.cursor = cursor as string;
+      if (limit) filters.limit = Math.min(parseInt(limit as string, 10) || 50, 100);
+      if (search) filters.search = search as string;
+      if (dateFrom) filters.dateFrom = dateFrom as string;
+      if (dateTo) filters.dateTo = dateTo as string;
+
+      const result = await storage.listEmailConversationThreads(orgId, filters);
+      const threads = result.threads;
+
       const ownerIds = [...new Set(threads.map(t => t.ownerUserId).filter(Boolean) as string[])];
       const ownerMap = new Map<string, string>();
       await Promise.all(ownerIds.map(async id => {
@@ -246,10 +264,40 @@ export function registerConversationsRoutes(app: Express): void {
         ownerName: t.ownerUserId ? (ownerMap.get(t.ownerUserId) ?? null) : null,
       }));
 
-      res.json({ count: enriched.length, threads: enriched });
+      res.json({ count: result.totalCount, threads: enriched, nextCursor: result.nextCursor });
     } catch (err) {
       console.error("[conversations] GET /conversations error:", err);
       res.status(500).json({ error: "Failed to fetch conversations" });
+    }
+  });
+
+  // ── POST /api/internal/conversations/:id/archive ──────────────────────────
+  app.post("/api/internal/conversations/:id/archive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      if (!thread || thread.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+
+      if (thread.waitingState !== "resolved") {
+        return res.status(400).json({ error: "Only resolved conversations can be archived" });
+      }
+
+      const archiveUpdate: Partial<InsertEmailConversationThread> = {
+        waitingState: "archived",
+        archivedAt: new Date(),
+        waitingSinceAt: null,
+        overdueAt: null,
+      };
+      const updated = await storage.updateEmailConversationThread(req.params.id, user.organizationId, archiveUpdate);
+
+      res.json({ thread: updated });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/:id/archive error:", err);
+      res.status(500).json({ error: "Failed to archive conversation" });
     }
   });
 
@@ -281,7 +329,7 @@ export function registerConversationsRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const schema = z.object({ waitingState: z.enum(["waiting_on_us", "waiting_on_them", "resolved"]) });
+      const schema = z.object({ waitingState: z.enum(["waiting_on_us", "waiting_on_them", "resolved", "archived"]) });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
 

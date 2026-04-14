@@ -37,7 +37,7 @@ Core features include:
 - **Customer Contact Capture from Email**: Detects and suggests new contacts from email threads.
 - **Two-Way Carrier Email**: Outbound emails with replies routed through Microsoft Graph webhook, matching inbound replies to outreach logs.
 - **Customer Email Intelligence Pipeline**: Processes inbound emails to extract customer intent signals (e.g., pricing_request, urgency_signal).
-- **Conversations Inbox**: Org-scoped email conversation thread management with ownership, waiting-state, priority, and overdue tracking.
+- **Conversations Inbox**: Org-scoped email conversation thread management with ownership, waiting-state, priority, overdue tracking, archival (manual + auto-archive after 7 days resolved), cursor-based pagination, and search/date filtering for archived threads.
 - **Geographic Lane Patterns**: Defines corridor patterns and tracks contact responsibilities with confidence scoring, including AI-derived geography ownership suggestions.
 - **AI Intelligence Hub**: A unified dashboard offering Meeting Prep Briefs, Sentiment Tracking, Smart Follow-Up Timing, Relationship Health Coaching, Org Chart Gap Analysis, Warm Introduction Paths, Look-Alike Prospecting, Cross-Sell / Lane Gap Intelligence, Wallet Share Expansion Playbook, Win/Loss Pattern Engine, and Competitive Signal Detection.
 - **Auto-Sync Customer Emails**: Monitors individual Outlook mailboxes for NAMs & AMs via Microsoft Graph webhooks, automatically pulling and processing customer email threads for AI signal extraction.

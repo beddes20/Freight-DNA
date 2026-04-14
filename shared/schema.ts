@@ -1780,6 +1780,7 @@ export const emailConversationThreads = pgTable("email_conversation_threads", {
   lastOutgoingAt: timestamp("last_outgoing_at"),
   waitingSinceAt: timestamp("waiting_since_at"),
   overdueAt: timestamp("overdue_at"),
+  archivedAt: timestamp("archived_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
