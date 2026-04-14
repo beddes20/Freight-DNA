@@ -6,13 +6,11 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, ArrowRight, Sparkles } from "lucide-react";
+import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ConversationThread {
   id: string;
@@ -23,7 +21,7 @@ interface ConversationThread {
   ownerUserId: string | null;
   ownerName: string | null;
   waitingState: "waiting_on_us" | "waiting_on_them" | "resolved";
-  responsePriority: "high" | "normal" | "low";
+  responsePriority: "high" | "normal" | "low" | "urgent";
   lastMessageId: string | null;
   lastIncomingAt: string | null;
   lastOutgoingAt: string | null;
@@ -38,7 +36,17 @@ interface ThreadsResponse {
   threads: ConversationThread[];
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+interface EmailMessage {
+  id: string;
+  threadId: string;
+  direction: string;
+  fromEmail: string | null;
+  toEmail: string | null;
+  ccEmail: string | null;
+  subject: string | null;
+  body: string | null;
+  createdAt: string;
+}
 
 function formatAgo(iso: string | null): string {
   if (!iso) return "—";
@@ -48,6 +56,11 @@ function formatAgo(iso: string | null): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function WaitingStateBadge({ state, overdue }: { state: ConversationThread["waitingState"]; overdue: boolean }) {
@@ -83,149 +96,308 @@ function WaitingStateBadge({ state, overdue }: { state: ConversationThread["wait
 }
 
 function PriorityDot({ priority }: { priority: ConversationThread["responsePriority"] }) {
-  const colors = {
+  const colors: Record<string, string> = {
+    urgent: "bg-red-600",
     high: "bg-red-500",
     normal: "bg-gray-400",
     low: "bg-blue-300",
   };
-  const labels = { high: "High", normal: "Normal", low: "Low" };
+  const labels: Record<string, string> = { urgent: "Urgent", high: "High", normal: "Normal", low: "Low" };
   return (
     <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="text-priority">
-      <span className={cn("inline-block w-2 h-2 rounded-full", colors[priority])} />
-      {labels[priority]}
+      <span className={cn("inline-block w-2 h-2 rounded-full", colors[priority] ?? "bg-gray-400")} />
+      {labels[priority] ?? priority}
     </span>
   );
 }
 
-// ── Thread Row ────────────────────────────────────────────────────────────────
+function ThreadDetailPanel({
+  thread,
+  onClose,
+}: {
+  thread: ConversationThread;
+  onClose: () => void;
+}) {
+  const [showDraftEmail, setShowDraftEmail] = useState(false);
+
+  const { data, isLoading } = useQuery<{ messages: EmailMessage[] }>({
+    queryKey: ["/api/internal/conversations", thread.id, "messages"],
+    queryFn: async () => {
+      const res = await fetch(`/api/internal/conversations/${thread.id}/messages`);
+      if (!res.ok) throw new Error("Failed to fetch messages");
+      return res.json();
+    },
+  });
+
+  const messages = data?.messages ?? [];
+  const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
+  const subject = messages[0]?.subject ?? thread.threadId;
+
+  return (
+    <div className="fixed inset-0 z-50 flex" data-testid="thread-detail-panel">
+      <div className="flex-1 bg-black/40" onClick={onClose} />
+      <div className="w-full max-w-2xl bg-background border-l shadow-2xl flex flex-col animate-in slide-in-from-right-full duration-200">
+        <div className="flex items-center justify-between px-5 py-4 border-b bg-muted/30">
+          <div className="flex-1 min-w-0 mr-4">
+            <h2 className="text-base font-semibold truncate" data-testid="text-thread-subject">{subject}</h2>
+            <div className="flex items-center gap-2 mt-1">
+              <WaitingStateBadge state={thread.waitingState} overdue={isOverdue} />
+              <PriorityDot priority={thread.responsePriority} />
+              {thread.ownerName && (
+                <span className="text-xs text-muted-foreground">
+                  <User className="w-3 h-3 inline mr-1" />{thread.ownerName}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="default"
+              className="gap-1"
+              onClick={() => setShowDraftEmail(true)}
+              data-testid="button-draft-reply"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Draft Reply
+            </Button>
+            <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-detail">
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4" data-testid="messages-container">
+          {isLoading ? (
+            <div className="space-y-4">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="space-y-2">
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="h-24 w-full" />
+                </div>
+              ))}
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+              <Mail className="w-8 h-8" />
+              <p className="font-medium">No messages found</p>
+              <p className="text-sm">This thread has no associated email messages yet.</p>
+            </div>
+          ) : (
+            messages.map((msg, idx) => {
+              const isOutbound = msg.direction === "outbound";
+              return (
+                <div
+                  key={msg.id}
+                  className={cn(
+                    "rounded-lg border p-4",
+                    isOutbound
+                      ? "bg-indigo-50/60 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-900/50 ml-6"
+                      : "bg-white dark:bg-muted/30 border-border mr-6"
+                  )}
+                  data-testid={`message-${msg.id}`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={cn(
+                        "flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full",
+                        isOutbound
+                          ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300"
+                          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+                      )}>
+                        {isOutbound ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownLeft className="w-3 h-3" />}
+                        {isOutbound ? "Sent" : "Received"}
+                      </span>
+                      <span className="text-xs text-muted-foreground font-medium" data-testid={`text-from-${msg.id}`}>
+                        {msg.fromEmail}
+                      </span>
+                    </div>
+                    <span className="text-xs text-muted-foreground" data-testid={`text-date-${msg.id}`}>
+                      {formatDate(msg.createdAt)}
+                    </span>
+                  </div>
+                  {msg.toEmail && (
+                    <div className="text-xs text-muted-foreground mb-2">
+                      To: {msg.toEmail}
+                    </div>
+                  )}
+                  <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed" data-testid={`text-body-${msg.id}`}>
+                    {msg.body}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {showDraftEmail && (
+          <DraftEmailModal
+            open={showDraftEmail}
+            onClose={() => setShowDraftEmail(false)}
+            accountId={thread.linkedAccountId}
+            threadId={thread.threadId}
+            defaultPlayType={thread.linkedCarrierId ? "carrier_capacity" : "check_in"}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
 
 function ThreadRow({
   thread,
   onAssignToMe,
   onChangeState,
+  onSelect,
+  isSelected,
 }: {
   thread: ConversationThread;
   onAssignToMe: (id: string) => void;
   onChangeState: (id: string, state: ConversationThread["waitingState"]) => void;
+  onSelect: (thread: ConversationThread) => void;
+  isSelected: boolean;
 }) {
   const [showDraftEmail, setShowDraftEmail] = useState(false);
   const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
 
+  const { data: msgData } = useQuery<{ messages: EmailMessage[] }>({
+    queryKey: ["/api/internal/conversations", thread.id, "messages"],
+    queryFn: async () => {
+      const res = await fetch(`/api/internal/conversations/${thread.id}/messages`);
+      if (!res.ok) throw new Error("");
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  const firstMsg = msgData?.messages?.[0];
+  const msgCount = msgData?.messages?.length ?? 0;
+  const displaySubject = firstMsg?.subject ?? thread.threadId.slice(0, 24) + "…";
+  const lastMsg = msgData?.messages?.[msgData.messages.length - 1];
+  const previewBody = lastMsg?.body?.slice(0, 120) ?? "";
+
   return (
-    <div
-      className={cn(
-        "flex items-center gap-4 px-4 py-3 border-b last:border-0 hover:bg-muted/40 transition-colors",
-        isOverdue && "bg-red-50/50 dark:bg-red-950/20"
-      )}
-      data-testid={`row-conversation-${thread.id}`}
-    >
-      {/* Priority indicator */}
-      <PriorityDot priority={thread.responsePriority} />
+    <>
+      <div
+        className={cn(
+          "flex items-center gap-4 px-4 py-3 border-b last:border-0 hover:bg-muted/40 transition-colors cursor-pointer",
+          isOverdue && "bg-red-50/50 dark:bg-red-950/20",
+          isSelected && "bg-muted/60 dark:bg-muted/40"
+        )}
+        onClick={() => onSelect(thread)}
+        data-testid={`row-conversation-${thread.id}`}
+      >
+        <PriorityDot priority={thread.responsePriority} />
 
-      {/* Thread info */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-0.5">
-          <span className="text-sm font-medium text-foreground truncate" data-testid={`text-thread-id-${thread.id}`}>
-            {thread.threadId.slice(0, 24)}…
-          </span>
-          <WaitingStateBadge state={thread.waitingState} overdue={isOverdue} />
-          {isOverdue && (
-            <Badge className="text-xs bg-red-600 text-white" data-testid={`badge-overdue-${thread.id}`}>
-              Overdue
-            </Badge>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="text-sm font-medium text-foreground truncate" data-testid={`text-thread-id-${thread.id}`}>
+              {displaySubject}
+            </span>
+            <WaitingStateBadge state={thread.waitingState} overdue={isOverdue} />
+            {isOverdue && (
+              <Badge className="text-xs bg-red-600 text-white" data-testid={`badge-overdue-${thread.id}`}>
+                Overdue
+              </Badge>
+            )}
+            {msgCount > 0 && (
+              <Badge variant="outline" className="text-xs">{msgCount} msg{msgCount !== 1 ? "s" : ""}</Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            {thread.linkedAccountId && (
+              <span className="flex items-center gap-1">
+                <User className="w-3 h-3" /> Account
+              </span>
+            )}
+            {thread.linkedCarrierId && (
+              <span className="flex items-center gap-1">
+                <Users className="w-3 h-3" /> Carrier
+              </span>
+            )}
+            {thread.waitingSinceAt && thread.waitingState === "waiting_on_us" && (
+              <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                <Clock className="w-3 h-3" />
+                Since {formatAgo(thread.waitingSinceAt)}
+              </span>
+            )}
+            <span>Updated {formatAgo(thread.updatedAt)}</span>
+          </div>
+          {previewBody && (
+            <p className="text-xs text-muted-foreground mt-1 truncate max-w-xl italic">
+              {previewBody}{previewBody.length >= 120 ? "…" : ""}
+            </p>
           )}
         </div>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          {thread.linkedAccountId && (
-            <span className="flex items-center gap-1">
-              <User className="w-3 h-3" /> Account
-            </span>
+
+        <div className="text-sm text-muted-foreground min-w-24 text-right" data-testid={`text-owner-${thread.id}`}>
+          {thread.ownerName ? (
+            <span className="font-medium text-foreground">{thread.ownerName}</span>
+          ) : (
+            <span className="italic text-muted-foreground">Unowned</span>
           )}
-          {thread.linkedCarrierId && (
-            <span className="flex items-center gap-1">
-              <Users className="w-3 h-3" /> Carrier
-            </span>
-          )}
-          {thread.waitingSinceAt && thread.waitingState === "waiting_on_us" && (
-            <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
-              <Clock className="w-3 h-3" />
-              Since {formatAgo(thread.waitingSinceAt)}
-            </span>
-          )}
-          <span>Updated {formatAgo(thread.updatedAt)}</span>
         </div>
-      </div>
 
-      {/* Owner */}
-      <div className="text-sm text-muted-foreground min-w-24 text-right" data-testid={`text-owner-${thread.id}`}>
-        {thread.ownerName ? (
-          <span className="font-medium text-foreground">{thread.ownerName}</span>
-        ) : (
-          <span className="italic text-muted-foreground">Unowned</span>
-        )}
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center gap-2">
-        {!thread.ownerName && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs"
-            onClick={() => onAssignToMe(thread.id)}
-            data-testid={`button-assign-me-${thread.id}`}
-          >
-            Assign to me
-          </Button>
-        )}
-        {thread.waitingState !== "resolved" && (
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          {!thread.ownerName && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => onAssignToMe(thread.id)}
+              data-testid={`button-assign-me-${thread.id}`}
+            >
+              Assign to me
+            </Button>
+          )}
+          {thread.waitingState !== "resolved" && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              onClick={() => onChangeState(thread.id, "resolved")}
+              data-testid={`button-resolve-${thread.id}`}
+            >
+              Resolve
+            </Button>
+          )}
+          {thread.waitingState === "resolved" && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              onClick={() => onChangeState(thread.id, "waiting_on_us")}
+              data-testid={`button-reopen-${thread.id}`}
+            >
+              Reopen
+            </Button>
+          )}
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 text-xs"
-            onClick={() => onChangeState(thread.id, "resolved")}
-            data-testid={`button-resolve-${thread.id}`}
+            className="h-7 text-xs gap-1 text-indigo-600 dark:text-indigo-400"
+            onClick={() => setShowDraftEmail(true)}
+            data-testid={`button-draft-email-thread-${thread.id}`}
           >
-            Resolve
+            <Sparkles className="w-3 h-3" />
+            Draft
           </Button>
-        )}
-        {thread.waitingState === "resolved" && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-xs"
-            onClick={() => onChangeState(thread.id, "waiting_on_us")}
-            data-testid={`button-reopen-${thread.id}`}
-          >
-            Reopen
-          </Button>
-        )}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 text-xs gap-1 text-indigo-600 dark:text-indigo-400"
-          onClick={() => setShowDraftEmail(true)}
-          data-testid={`button-draft-email-thread-${thread.id}`}
-        >
-          <Sparkles className="w-3 h-3" />
-          Draft
-        </Button>
-      </div>
+          <ChevronRight className="w-4 h-4 text-muted-foreground" />
+        </div>
 
-      {showDraftEmail && (
-        <DraftEmailModal
-          open={showDraftEmail}
-          onClose={() => setShowDraftEmail(false)}
-          accountId={thread.linkedAccountId}
-          threadId={thread.threadId}
-          defaultPlayType={thread.linkedCarrierId ? "carrier_capacity" : "check_in"}
-        />
-      )}
-    </div>
+        {showDraftEmail && (
+          <DraftEmailModal
+            open={showDraftEmail}
+            onClose={() => setShowDraftEmail(false)}
+            accountId={thread.linkedAccountId}
+            threadId={thread.threadId}
+            defaultPlayType={thread.linkedCarrierId ? "carrier_capacity" : "check_in"}
+          />
+        )}
+      </div>
+    </>
   );
 }
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ConversationsPage() {
   const { user } = useAuth();
@@ -235,8 +407,8 @@ export default function ConversationsPage() {
   const [filterState, setFilterState] = useState<string>("all");
   const [filterPriority, setFilterPriority] = useState<string>("all");
   const [filterOverdue, setFilterOverdue] = useState(false);
+  const [selectedThread, setSelectedThread] = useState<ConversationThread | null>(null);
 
-  // Build query params for custom "all" tab
   function buildParams(): string {
     const p = new URLSearchParams();
     if (activeTab === "mine" && user?.id) {
@@ -249,7 +421,6 @@ export default function ConversationsPage() {
       p.set("responsePriority", "high");
       p.set("waitingState", "waiting_on_us");
     } else {
-      // "all" tab
       if (filterState !== "all") p.set("waitingState", filterState);
       if (filterPriority !== "all") p.set("responsePriority", filterPriority);
       if (filterOverdue) p.set("overdue", "true");
@@ -266,7 +437,6 @@ export default function ConversationsPage() {
     },
   });
 
-  // Quick-view counts (always fetched for badge display)
   const { data: mineData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "mine-count", user?.id],
     queryFn: async () => {
@@ -322,7 +492,6 @@ export default function ConversationsPage() {
 
   const threads = data?.threads ?? [];
 
-  // Sort: overdue first, then by waitingSinceAt asc, then by updatedAt desc
   const sorted = [...threads].sort((a, b) => {
     const aOverdue = !!a.overdueAt;
     const bOverdue = !!b.overdueAt;
@@ -335,14 +504,12 @@ export default function ConversationsPage() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <MessageSquare className="w-6 h-6 text-primary" />
         <h1 className="text-2xl font-semibold">Conversations</h1>
         <Badge className="text-xs" data-testid="badge-total-count">{data?.count ?? "—"}</Badge>
       </div>
 
-      {/* Tabs */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
         <TabsList className="mb-4" data-testid="tabs-quick-views">
           <TabsTrigger value="mine" data-testid="tab-waiting-on-me">
@@ -366,7 +533,6 @@ export default function ConversationsPage() {
           <TabsTrigger value="all" data-testid="tab-all">All</TabsTrigger>
         </TabsList>
 
-        {/* Filter controls (only on "all" tab) */}
         {activeTab === "all" && (
           <div className="flex items-center gap-3 mb-4" data-testid="filters-container">
             <Select value={filterState} onValueChange={setFilterState}>
@@ -405,7 +571,6 @@ export default function ConversationsPage() {
           </div>
         )}
 
-        {/* Thread list */}
         <div className="border rounded-lg overflow-hidden">
           {isLoading ? (
             <div className="divide-y">
@@ -440,12 +605,21 @@ export default function ConversationsPage() {
                   thread={thread}
                   onAssignToMe={(id) => assignToMeMutation.mutate(id)}
                   onChangeState={(id, state) => changeStateMutation.mutate({ id, state })}
+                  onSelect={(t) => setSelectedThread(t)}
+                  isSelected={selectedThread?.id === thread.id}
                 />
               ))}
             </div>
           )}
         </div>
       </Tabs>
+
+      {selectedThread && (
+        <ThreadDetailPanel
+          thread={selectedThread}
+          onClose={() => setSelectedThread(null)}
+        />
+      )}
     </div>
   );
 }

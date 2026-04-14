@@ -10,12 +10,13 @@
  * GET  /api/internal/conversations/account-summary
  * POST /api/internal/conversations/:id/owner
  * POST /api/internal/conversations/:id/waiting-state
+ * GET  /api/internal/conversations/:id/messages
  * POST /api/internal/conversations/:id/priority
  */
 
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
-import { inArray } from "drizzle-orm";
+import { inArray, and, eq, asc } from "drizzle-orm";
 import { storage, db } from "../storage";
 import { emailMessages } from "@shared/schema";
 import { requireAuth, getCurrentUser } from "../auth";
@@ -293,6 +294,34 @@ export function registerConversationsRoutes(app: Express): void {
     } catch (err) {
       console.error("[conversations] POST /conversations/:id/waiting-state error:", err);
       res.status(500).json({ error: "Failed to update waiting state" });
+    }
+  });
+
+  // ── GET /api/internal/conversations/:id/messages ────────────────────────────
+  app.get("/api/internal/conversations/:id/messages", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      if (!thread || thread.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+
+      const messages = await db.select()
+        .from(emailMessages)
+        .where(
+          and(
+            eq(emailMessages.threadId, thread.threadId),
+            eq(emailMessages.orgId, user.organizationId),
+          )
+        )
+        .orderBy(asc(emailMessages.createdAt));
+
+      res.json({ messages });
+    } catch (err) {
+      console.error("[conversations] GET /conversations/:id/messages error:", err);
+      res.status(500).json({ error: "Failed to fetch messages" });
     }
   });
 
