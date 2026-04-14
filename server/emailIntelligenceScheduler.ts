@@ -26,6 +26,7 @@ import { applyMessageToThread } from "./services/conversationWaitingStateService
 import { determineInitialOwner } from "./services/conversationOwnershipService";
 import { ingestPatternEvidence, maybeFireResponsibilityNba } from "./accountContactLanePatternResponsibilityService";
 import { mapLaneToPatternIds, extractStateFromLocation } from "./geographicLanePatternUtils";
+import { inferContactGeography } from "./contactGeographyInferenceService";
 import { createHash } from "crypto";
 import type { InsertEmailSignal } from "@shared/schema";
 
@@ -128,6 +129,13 @@ async function runEmailIntelligenceBatch(): Promise<void> {
         } catch (convErr) {
           console.error(`[emailIntelligenceScheduler] conversation thread upsert error for ${msg.id}:`, convErr);
         }
+      }
+
+      // ── Consumer area 7: Contact geography inference (Task #225) ──────────────
+      if (msg.linkedAccountId && msg.orgId) {
+        inferContactGeography(msg, storage).catch(err => {
+          console.error(`[emailIntelligenceScheduler] geography inference error for ${msg.id}:`, err);
+        });
       }
 
       // ── Consumer area 6: Geographic lane pattern responsibility (Task #203) ──

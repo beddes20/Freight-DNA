@@ -20,6 +20,7 @@ import { registerEmailIntelligenceRoutes } from "./routes/emailIntelligence";
 import { registerConversationsRoutes } from "./routes/conversations";
 import { registerEmailAnalyticsRoutes } from "./routes/emailAnalytics";
 import { registerGeographicResponsibilitiesRoutes } from "./routes/geographicResponsibilities";
+import { registerContactGeographySuggestionRoutes } from "./routes/contactGeographySuggestions";
 import { registerSonarRoutes } from "./routes/sonar";
 import { registerCallIntelligenceRoutes } from "./routes/callIntelligence";
 import { getPlayForRuleType } from "./playsRegistry";
@@ -9758,6 +9759,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
   });
 
   registerGeographicResponsibilitiesRoutes(app);
+  registerContactGeographySuggestionRoutes(app);
 
   return httpServer;
 }

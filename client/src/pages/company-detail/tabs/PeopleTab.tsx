@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PhoneCall, Network, Users, Plus, Upload, Search, Clock, Globe } from "lucide-react";
+import { PhoneCall, Network, Users, Plus, Upload, Search, Clock, Globe, MapPin, Check, X, EyeOff } from "lucide-react";
 import { OrgChart } from "@/components/org-chart";
 import type { Contact, Company, Touchpoint, User } from "@shared/schema";
 import type { TaskWithCount } from "../types";
@@ -137,6 +137,193 @@ function GeoLaneOwnershipPanel({ companyId, contacts }: { companyId: string; con
             </div>
           );
         })}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Geography Suggestions Panel (Task #225) ──────────────────────────────────
+
+interface GeoSuggestion {
+  id: string;
+  contactId: string;
+  suggestedRegion: string | null;
+  suggestedLane: string | null;
+  confidenceScore: number;
+  status: string;
+  sourceEvidence: {
+    emailThreadIds?: string[];
+    loadReferences?: string[];
+    rfpIds?: string[];
+    evidenceSummary?: string;
+  } | null;
+  suggestionSource: string;
+  contactName: string | null;
+  contactTitle: string | null;
+  contactEmail: string | null;
+}
+
+function GeographyOwnershipPanel({ companyId, contacts }: { companyId: string; contacts: Contact[] }) {
+  const { toast } = useToast();
+
+  const { data: suggestions = [], isLoading } = useQuery<GeoSuggestion[]>({
+    queryKey: ["/api/internal/accounts", companyId, "geography-suggestions"],
+    queryFn: () => fetch(`/api/internal/accounts/${companyId}/geography-suggestions`, { credentials: "include" }).then(r => r.json()),
+  });
+
+  const acceptMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/internal/geography-suggestions/${id}/accept`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/accounts", companyId, "geography-suggestions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
+      toast({ title: "Geography accepted — contact updated" });
+    },
+    onError: () => toast({ title: "Failed to accept", variant: "destructive" }),
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/internal/geography-suggestions/${id}/dismiss`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/accounts", companyId, "geography-suggestions"] });
+      toast({ title: "Suggestion dismissed" });
+    },
+    onError: () => toast({ title: "Failed to dismiss", variant: "destructive" }),
+  });
+
+  const pending = suggestions.filter(s => s.status === "pending");
+  const accepted = suggestions.filter(s => s.status === "accepted");
+
+  const contactGeoMap = new Map<string, { regions: string[]; lanes: string[] }>();
+  for (const c of contacts) {
+    contactGeoMap.set(c.id, { regions: c.regions ?? [], lanes: c.lanes ?? [] });
+  }
+
+  const contactsWithGeo = contacts.filter(c => {
+    const geo = contactGeoMap.get(c.id);
+    return (geo && (geo.regions.length > 0 || geo.lanes.length > 0));
+  });
+
+  const contactsWithoutGeo = contacts.filter(c => {
+    const geo = contactGeoMap.get(c.id);
+    const hasPending = pending.some(s => s.contactId === c.id);
+    return (!geo || (geo.regions.length === 0 && geo.lanes.length === 0)) && !hasPending;
+  });
+
+  if (!isLoading && pending.length === 0 && contactsWithGeo.length === 0 && contacts.length === 0) return null;
+
+  const groupedPending = pending.reduce<Record<string, GeoSuggestion[]>>((acc, s) => {
+    const name = s.contactName ?? "Unknown";
+    if (!acc[name]) acc[name] = [];
+    acc[name].push(s);
+    return acc;
+  }, {});
+
+  return (
+    <Card data-testid="card-geography-ownership">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <MapPin className="h-4 w-4 text-teal-500" />
+          Geography Ownership
+          {!isLoading && pending.length > 0 && (
+            <Badge variant="secondary" className="ml-1 font-normal">{pending.length} suggestion{pending.length !== 1 ? "s" : ""}</Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-4">
+        {isLoading && (
+          <div className="space-y-2">
+            {[1, 2, 3].map(i => <div key={i} className="h-10 rounded-md bg-muted animate-pulse" />)}
+          </div>
+        )}
+
+        {contactsWithGeo.length > 0 && (
+          <div className="space-y-2">
+            {contactsWithGeo.map(c => {
+              const geo = contactGeoMap.get(c.id)!;
+              return (
+                <div key={c.id} className="rounded-md border p-3 space-y-1" data-testid={`geo-contact-confirmed-${c.id}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{c.name}</span>
+                    {c.title && <span className="text-xs text-muted-foreground">· {c.title}</span>}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {geo.regions.map(r => (
+                      <Badge key={r} className="text-xs bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300">{r}</Badge>
+                    ))}
+                    {geo.lanes.map(l => (
+                      <Badge key={l} className="text-xs bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">{l}</Badge>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {Object.entries(groupedPending).map(([contactName, items]) => {
+          const first = items[0];
+          return (
+            <div key={contactName} className="rounded-md border border-dashed border-violet-300 dark:border-violet-700 bg-violet-50/50 dark:bg-violet-950/20 p-3 space-y-2" data-testid={`geo-suggestion-group-${first.contactId}`}>
+              <div className="flex items-center gap-2">
+                <Badge className="text-xs bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">AI Suggested</Badge>
+                <span className="text-sm font-medium">{contactName}</span>
+                {first.contactTitle && <span className="text-xs text-muted-foreground">· {first.contactTitle}</span>}
+              </div>
+              <div className="space-y-1.5">
+                {items.map(s => {
+                  const label = s.suggestedLane ?? s.suggestedRegion ?? "Unknown";
+                  const evidence = s.sourceEvidence as any;
+                  return (
+                    <div key={s.id} className="flex items-center gap-2 py-1" data-testid={`geo-suggestion-${s.id}`}>
+                      <span className="text-sm flex-1 min-w-0 truncate">{label}</span>
+                      {s.confidenceScore >= 70
+                        ? <Badge className="text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 shrink-0">High</Badge>
+                        : s.confidenceScore >= 40
+                        ? <Badge className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 shrink-0">Med</Badge>
+                        : <Badge className="text-xs bg-muted text-muted-foreground shrink-0">Low</Badge>
+                      }
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-xs text-green-600 border-green-200 hover:bg-green-50 dark:text-green-400 dark:border-green-800 shrink-0"
+                        onClick={() => acceptMutation.mutate(s.id)}
+                        disabled={acceptMutation.isPending}
+                        data-testid={`button-accept-geo-${s.id}`}
+                      >
+                        <Check className="h-3 w-3 mr-0.5" />
+                        Accept
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-1.5 text-xs text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={() => dismissMutation.mutate(s.id)}
+                        disabled={dismissMutation.isPending}
+                        data-testid={`button-dismiss-geo-${s.id}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+              {items[0].sourceEvidence && (items[0].sourceEvidence as any).evidenceSummary && (
+                <p className="text-xs text-muted-foreground mt-1">{(items[0].sourceEvidence as any).evidenceSummary}</p>
+              )}
+            </div>
+          );
+        })}
+
+        {contactsWithoutGeo.length > 0 && pending.length === 0 && contactsWithGeo.length === 0 && (
+          <div className="text-center py-4">
+            <p className="text-sm text-muted-foreground">
+              No geography data yet for {contactsWithoutGeo.length} contact{contactsWithoutGeo.length !== 1 ? "s" : ""}.
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              AI suggestions will appear as email and freight activity is analyzed.
+            </p>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -297,6 +484,8 @@ export function PeopleTab({
           </CardContent>
         </Card>
       )}
+
+      <GeographyOwnershipPanel companyId={company.id} contacts={contacts ?? []} />
 
       <GeoLaneOwnershipPanel companyId={company.id} contacts={contacts ?? []} />
 

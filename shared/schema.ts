@@ -2013,6 +2013,45 @@ export const insertAccountContactLanePatternResponsibilitySchema = createInsertS
 export type InsertAccountContactLanePatternResponsibility = z.infer<typeof insertAccountContactLanePatternResponsibilitySchema>;
 export type AccountContactLanePatternResponsibility = typeof accountContactLanePatternResponsibilities.$inferSelect;
 
+// ─── Contact Geography Suggestions (Task #225) ────────────────────────────────
+// AI-inferred geography ownership assignments per contact.
+// Follows account_contact_suggestions pattern with confidence, evidence, and approval.
+
+export const contactGeographySuggestionStatuses = ["pending", "accepted", "rejected", "dismissed"] as const;
+export type ContactGeographySuggestionStatus = typeof contactGeographySuggestionStatuses[number];
+
+export const contactGeographySuggestions = pgTable(
+  "contact_geography_suggestions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    accountId: varchar("account_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    contactId: varchar("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    suggestedRegion: text("suggested_region"),
+    suggestedLane: text("suggested_lane"),
+    confidenceScore: integer("confidence_score").notNull().default(50),
+    status: text("status").notNull().default("pending"),
+    sourceEvidence: jsonb("source_evidence").default({}),
+    suggestionSource: text("suggestion_source").notNull().default("email_inference"),
+    actedByUserId: varchar("acted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("cgs_account_contact_idx").on(table.accountId, table.contactId),
+    index("cgs_contact_status_idx").on(table.contactId, table.status),
+    index("cgs_account_status_idx").on(table.accountId, table.status),
+  ],
+);
+
+export const insertContactGeographySuggestionSchema = createInsertSchema(contactGeographySuggestions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertContactGeographySuggestion = z.infer<typeof insertContactGeographySuggestionSchema>;
+export type ContactGeographySuggestion = typeof contactGeographySuggestions.$inferSelect;
+
 export const pinnedCompanies = pgTable("pinned_companies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),

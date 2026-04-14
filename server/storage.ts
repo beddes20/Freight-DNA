@@ -178,6 +178,9 @@ import {
   type InsertAccountContactLanePatternResponsibility,
   pinnedCompanies,
   type PinnedCompany,
+  contactGeographySuggestions,
+  type ContactGeographySuggestion,
+  type InsertContactGeographySuggestion,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -929,6 +932,12 @@ export interface IStorage {
   getResponsibility(id: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
   confirmResponsibility(id: string, userId: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
   dismissResponsibility(id: string, userId: string): Promise<import('@shared/schema').AccountContactLanePatternResponsibility | undefined>;
+
+  // Contact Geography Suggestions (Task #225)
+  upsertContactGeographySuggestion(data: InsertContactGeographySuggestion): Promise<ContactGeographySuggestion>;
+  getContactGeographySuggestions(accountId: string, filters?: { contactId?: string; status?: string }): Promise<ContactGeographySuggestion[]>;
+  getContactGeographySuggestion(id: string): Promise<ContactGeographySuggestion | undefined>;
+  updateContactGeographySuggestionStatus(id: string, status: string, opts: { userId?: string }): Promise<ContactGeographySuggestion | undefined>;
 
   // Pinned Companies (Task #206)
   getPinnedCompanies(userId: string): Promise<import('@shared/schema').PinnedCompany[]>;
@@ -6272,6 +6281,88 @@ export class DatabaseStorage implements IStorage {
       .where(eq(accountContactLanePatternResponsibilities.id, id))
       .returning();
     return row;
+  }
+
+  // ── Contact Geography Suggestions (Task #225) ──────────────────────────────
+
+  async upsertContactGeographySuggestion(data: InsertContactGeographySuggestion): Promise<ContactGeographySuggestion> {
+    const now = new Date();
+    const conditions: SQL[] = [
+      eq(contactGeographySuggestions.accountId, data.accountId),
+      eq(contactGeographySuggestions.contactId, data.contactId),
+    ];
+    if (data.suggestedRegion) {
+      conditions.push(eq(contactGeographySuggestions.suggestedRegion, data.suggestedRegion));
+    } else {
+      conditions.push(isNull(contactGeographySuggestions.suggestedRegion));
+    }
+    if (data.suggestedLane) {
+      conditions.push(eq(contactGeographySuggestions.suggestedLane, data.suggestedLane));
+    } else {
+      conditions.push(isNull(contactGeographySuggestions.suggestedLane));
+    }
+
+    const [existing] = await db.select()
+      .from(contactGeographySuggestions)
+      .where(and(...conditions))
+      .limit(1);
+
+    if (existing) {
+      if (existing.status === "dismissed" || existing.status === "rejected") {
+        return existing;
+      }
+      const [updated] = await db.update(contactGeographySuggestions)
+        .set({
+          confidenceScore: Math.max(existing.confidenceScore, data.confidenceScore ?? 50),
+          sourceEvidence: data.sourceEvidence ?? existing.sourceEvidence,
+          updatedAt: now,
+        })
+        .where(eq(contactGeographySuggestions.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [inserted] = await db.insert(contactGeographySuggestions)
+      .values({ ...data, createdAt: now, updatedAt: now })
+      .returning();
+    return inserted;
+  }
+
+  async getContactGeographySuggestions(
+    accountId: string,
+    filters?: { contactId?: string; status?: string },
+  ): Promise<ContactGeographySuggestion[]> {
+    const conditions: SQL[] = [eq(contactGeographySuggestions.accountId, accountId)];
+    if (filters?.contactId) conditions.push(eq(contactGeographySuggestions.contactId, filters.contactId));
+    if (filters?.status) conditions.push(eq(contactGeographySuggestions.status, filters.status));
+    return db.select()
+      .from(contactGeographySuggestions)
+      .where(and(...conditions))
+      .orderBy(desc(contactGeographySuggestions.confidenceScore), desc(contactGeographySuggestions.createdAt));
+  }
+
+  async getContactGeographySuggestion(id: string): Promise<ContactGeographySuggestion | undefined> {
+    const [row] = await db.select()
+      .from(contactGeographySuggestions)
+      .where(eq(contactGeographySuggestions.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async updateContactGeographySuggestionStatus(
+    id: string,
+    status: string,
+    opts: { userId?: string },
+  ): Promise<ContactGeographySuggestion | undefined> {
+    const [updated] = await db.update(contactGeographySuggestions)
+      .set({
+        status,
+        actedByUserId: opts.userId ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(contactGeographySuggestions.id, id))
+      .returning();
+    return updated;
   }
 
   // ── Pinned Companies (Task #206) ──────────────────────────────────────────
