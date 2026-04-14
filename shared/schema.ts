@@ -2119,3 +2119,43 @@ export const intelLaneRates = pgTable("intel_lane_rates", {
 export const insertIntelLaneRateSchema = createInsertSchema(intelLaneRates).omit({ id: true, refreshedAt: true });
 export type InsertIntelLaneRate = z.infer<typeof insertIntelLaneRateSchema>;
 export type IntelLaneRate = typeof intelLaneRates.$inferSelect;
+
+// ─── Proven Tactics (Tactical Learning Engine) ──────────────────────────────
+// Captures response patterns linked to email signals and outcomes.
+// Learns which approaches work for specific signal types (objection, pricing, etc.)
+
+export const provenTactics = pgTable(
+  "proven_tactics",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    signalType: text("signal_type").notNull(),
+    signalSubtype: text("signal_subtype"),
+    tacticLabel: text("tactic_label").notNull(),
+    tacticSummary: text("tactic_summary").notNull(),
+    exampleResponse: text("example_response"),
+    sourceMessageId: varchar("source_message_id").references(() => emailMessages.id, { onDelete: "set null" }),
+    sourceSignalId: varchar("source_signal_id").references(() => emailSignals.id, { onDelete: "set null" }),
+    linkedAccountId: varchar("linked_account_id").references(() => companies.id, { onDelete: "set null" }),
+    accountName: text("account_name"),
+    repUserId: varchar("rep_user_id").references(() => users.id, { onDelete: "set null" }),
+    repName: text("rep_name"),
+    outcome: text("outcome").notNull().default("pending"),
+    outcomeConfidence: integer("outcome_confidence").default(0),
+    timesUsed: integer("times_used").notNull().default(1),
+    successCount: integer("success_count").notNull().default(0),
+    failureCount: integer("failure_count").notNull().default(0),
+    successRate: integer("success_rate").default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    resolvedAt: timestamp("resolved_at"),
+  },
+  (table) => [
+    index("pt_org_signal_idx").on(table.orgId, table.signalType),
+    index("pt_outcome_idx").on(table.outcome),
+    index("pt_signal_outcome_idx").on(table.signalType, table.outcome),
+  ],
+);
+
+export const insertProvenTacticSchema = createInsertSchema(provenTactics).omit({ id: true, createdAt: true });
+export type InsertProvenTactic = z.infer<typeof insertProvenTacticSchema>;
+export type ProvenTactic = typeof provenTactics.$inferSelect;

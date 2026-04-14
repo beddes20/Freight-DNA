@@ -2228,4 +2228,49 @@ export async function runMigrations() {
   } finally {
     clientGeoSugg.release();
   }
+
+  // Tactical Learning Engine — Create proven_tactics table
+  const clientTactics = await pool.connect();
+  try {
+    await clientTactics.query(`
+      CREATE TABLE IF NOT EXISTS proven_tactics (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        signal_type text NOT NULL,
+        signal_subtype text,
+        tactic_label text NOT NULL,
+        tactic_summary text NOT NULL,
+        example_response text,
+        source_message_id varchar REFERENCES email_messages(id) ON DELETE SET NULL,
+        source_signal_id varchar REFERENCES email_signals(id) ON DELETE SET NULL,
+        linked_account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        account_name text,
+        rep_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        rep_name text,
+        outcome text NOT NULL DEFAULT 'pending',
+        outcome_confidence integer DEFAULT 0,
+        times_used integer NOT NULL DEFAULT 1,
+        success_count integer NOT NULL DEFAULT 0,
+        failure_count integer NOT NULL DEFAULT 0,
+        success_rate integer DEFAULT 0,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        resolved_at timestamptz
+      )
+    `);
+    await clientTactics.query(`CREATE INDEX IF NOT EXISTS pt_org_signal_idx ON proven_tactics (org_id, signal_type)`);
+    await clientTactics.query(`CREATE INDEX IF NOT EXISTS pt_outcome_idx ON proven_tactics (outcome)`);
+    await clientTactics.query(`CREATE INDEX IF NOT EXISTS pt_signal_outcome_idx ON proven_tactics (signal_type, outcome)`);
+    console.log("[migrations] proven_tactics table ensured (Tactical Learning Engine)");
+
+    try {
+      const { seedDemoTactics } = await import("./services/tacticalLearningService");
+      await seedDemoTactics("da3ed822-8846-4435-bb13-3cc4bf26f71d");
+    } catch (seedErr) {
+      console.error("[migrations] proven_tactics seed error:", seedErr);
+    }
+  } catch (err) {
+    console.error("[migrations] proven_tactics error:", err);
+  } finally {
+    clientTactics.release();
+  }
 }

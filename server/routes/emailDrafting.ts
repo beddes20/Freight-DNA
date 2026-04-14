@@ -298,7 +298,37 @@ export function registerEmailDraftingRoutes(app: Express): void {
         }
       }
 
-      const fullContext = dataResult.context + threadContext;
+      let tacticsContext = "";
+      let suggestedTactics: { label: string; summary: string; successRate: number; outcome: string }[] = [];
+      try {
+        const { getProvenTacticsForSignal } = await import("../services/tacticalLearningService");
+        const signalMap: Record<string, string> = {
+          check_in: "positive_feedback",
+          stale_reactivation: "stalled_thread",
+          lane_expansion: "new_opportunity",
+          service_recovery: "service_complaint",
+          competitive_displacement: "objection",
+          carrier_rate_discussion: "pricing_request",
+        };
+        const mappedSignal = signalMap[playType];
+        if (mappedSignal) {
+          const tactics = await getProvenTacticsForSignal(orgId, mappedSignal, 3);
+          if (tactics.length > 0) {
+            suggestedTactics = tactics.map(t => ({
+              label: t.tacticLabel,
+              summary: t.tacticSummary,
+              successRate: t.successRate ?? 0,
+              outcome: t.outcome,
+            }));
+            tacticsContext = "\n\nPROVEN TACTICS (approaches that have worked before for this type of situation):\n" +
+              tactics.map((t, i) => `${i + 1}. "${t.tacticLabel}" — ${t.tacticSummary} (success rate: ${t.successRate ?? 0}%)`).join("\n");
+          }
+        }
+      } catch (tacticsErr) {
+        console.warn("[emailDrafting] Failed to load proven tactics for draft context:", tacticsErr);
+      }
+
+      const fullContext = dataResult.context + threadContext + tacticsContext;
 
       const draft = await generateDraft({
         voiceProfile,
@@ -315,6 +345,7 @@ export function registerEmailDraftingRoutes(app: Express): void {
         dataAnchors: dataResult.anchors,
         voiceProfileAvailable: !!voiceProfile,
         voiceProfileSampleCount: voiceProfile?.sampleCount ?? 0,
+        suggestedTactics,
       });
     } catch (err) {
       console.error("[emailDrafting] generate error:", err);

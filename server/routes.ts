@@ -18,6 +18,7 @@ import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
 import { registerMarketSignalRoutes } from "./routes/marketSignals";
 import { registerEmailIntelligenceRoutes } from "./routes/emailIntelligence";
 import { registerConversationsRoutes } from "./routes/conversations";
+import { registerProvenTacticsRoutes } from "./routes/provenTactics";
 import { registerEmailAnalyticsRoutes } from "./routes/emailAnalytics";
 import { registerGeographicResponsibilitiesRoutes } from "./routes/geographicResponsibilities";
 import { registerContactGeographySuggestionRoutes } from "./routes/contactGeographySuggestions";
@@ -3149,6 +3150,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerMarketSignalRoutes(app);
   registerEmailIntelligenceRoutes(app);
   registerConversationsRoutes(app);
+  registerProvenTacticsRoutes(app);
   registerEmailAnalyticsRoutes(app);
   registerSonarRoutes(app);
   registerCallIntelligenceRoutes(app);

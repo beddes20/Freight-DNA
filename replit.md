@@ -49,8 +49,9 @@ Key functionalities include:
 - **Urgency Response Tracker**: Monitors and tracks unresponded urgency signals from customer emails.
 - **Carrier History & Ranking Contract**: Governs carrier ranking and TMS history display logic.
 - **Contact Geography Ownership Graph** (Task #225): AI-derived geography ownership layer that infers which contacts own which geographies from email threads and load history. New `contact_geography_suggestions` table stores AI-inferred region/lane assignments with confidence scores and source evidence. Email intelligence scheduler runs geography inference after signal extraction. API endpoints: `GET /api/internal/accounts/:id/geography-suggestions`, `POST /api/internal/geography-suggestions/:id/accept|reject|dismiss`. Accepting updates the contact's `regions` and `lanes` arrays. "Geography Ownership" section on People tab shows confirmed assignments, pending AI suggestions as reviewable cards, and prompts for contacts with no data.
+- **Tactical Learning Engine**: Captures which response approaches lead to wins. `proven_tactics` table stores tactics linked to email signals and outcomes with success rates. Only "won" tactics are surfaced during AI email drafting. API endpoints: `GET /api/internal/proven-tactics`, `GET /api/internal/proven-tactics/stats`, `GET /api/internal/proven-tactics/for-signal?signalType=`, `POST /api/internal/proven-tactics`, `POST /api/internal/proven-tactics/:id/outcome`. Frontend page at `/proven-tactics` with KPI cards, filterable tactic list, expandable cards with example responses, and outcome recording (won/lost).
 
-### DB Tables Added in Tasks #200–203, #225
+### DB Tables Added in Tasks #200–203, #225, Tactical Learning
 | Table | Purpose |
 |---|---|
 | `lane_summary_cache` | Pre-computed flat LeanItem rows for the LWQ work-queue (cache-first path). Populated by `scoreAllEligibleLanes` on startup (20s delay) and nightly at 3:00 AM CT. |
@@ -59,6 +60,7 @@ Key functionalities include:
 | `account_contact_lane_pattern_responsibilities` | Confidence-scored mappings of contact → corridor, with evidence keys and source types. |
 | `email_conversation_threads` | Org-scoped carrier/account email conversation management (Task #202). |
 | `contact_geography_suggestions` | AI-inferred geography (region/lane) ownership per contact, with confidence scores, source evidence, and approval workflow (Task #225). |
+| `proven_tactics` | Response approaches linked to email signals/outcomes with success rates. Seeded with 8 demo tactics. Surfaced during AI email drafting. |
 
 ### DB Tables
 Key database tables support core functionalities, including `lane_summary_cache` for pre-computed lane data, `account_contact_suggestions` for email-derived contact suggestions, `geographic_lane_patterns` for defined corridors, `account_contact_lane_pattern_responsibilities` for contact-to-corridor mapping, and `email_conversation_threads` for managing email conversations.
