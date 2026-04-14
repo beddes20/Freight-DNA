@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { NbaLogTouchDialog } from "./NbaLogTouchDialog";
 import { CarrierOutreachPanel } from "./CarrierOutreachPanel";
+import { DraftEmailModal } from "./DraftEmailModal";
 import {
   AlertTriangle,
   Zap,
@@ -22,6 +23,7 @@ import {
   UserCircle,
   UserCog,
   BookOpen,
+  Sparkles,
 } from "lucide-react";
 
 interface TeamMember { id: string; name: string; role: string; }
@@ -86,6 +88,16 @@ const CONFIDENCE_DOT: Record<string, string> = {
 };
 
 // Canonical dismiss values — value is sent to server; label is shown in UI
+const RULE_TO_PLAY: Record<string, string> = {
+  stale_account: "stale_reactivation",
+  single_thread_risk: "check_in",
+  overdue_next_action: "check_in",
+  spot_to_contract: "spot_to_contract",
+  load_decline: "service_recovery",
+  rfp_coverage_gap: "lane_expansion",
+  stalled_award_lanes: "competitive_displacement",
+};
+
 const DISMISS_OPTIONS: { value: string; label: string }[] = [
   { value: "already_handled",    label: "Already handled" },
   { value: "situation_changed",  label: "Situation changed" },
@@ -100,6 +112,7 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
   const [dismissValue, setDismissValue] = useState("");
   const [showLogTouch, setShowLogTouch] = useState(false);
   const [showCarrierOutreach, setShowCarrierOutreach] = useState(false);
+  const [showDraftEmail, setShowDraftEmail] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { user: currentUser } = useAuth();
@@ -385,6 +398,18 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
               Done
             </Button>
           )}
+          {card.companyId && !isLaneCapacityCard && (
+            <Button
+              size="sm"
+              onClick={() => setShowDraftEmail(true)}
+              disabled={resolveMutation.isPending}
+              className="h-6 text-[10px] px-2 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30"
+              data-testid={`nba-card-draft-email-${card.id}`}
+            >
+              <Sparkles className="w-3 h-3 mr-0.5" />
+              Draft Email
+            </Button>
+          )}
           {isLaneCapacityCard && card.companyId ? (
             <Button
               size="sm"
@@ -450,6 +475,18 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
           onCarriersContacted={() => {
             onActioned?.(card.id);
           }}
+        />
+      )}
+
+      {/* Draft Email Modal — for non-lane-capacity cards with a company */}
+      {card.companyId && showDraftEmail && (
+        <DraftEmailModal
+          open={showDraftEmail}
+          onClose={() => setShowDraftEmail(false)}
+          accountId={card.companyId}
+          contactId={card.contactId}
+          defaultPlayType={RULE_TO_PLAY[card.ruleType] || "general"}
+          companyName={card.companyName ?? undefined}
         />
       )}
     </div>

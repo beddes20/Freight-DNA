@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, ArrowRight } from "lucide-react";
+import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, ArrowRight, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DraftEmailModal } from "@/components/DraftEmailModal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -107,6 +108,7 @@ function ThreadRow({
   onAssignToMe: (id: string) => void;
   onChangeState: (id: string, state: ConversationThread["waitingState"]) => void;
 }) {
+  const [showDraftEmail, setShowDraftEmail] = useState(false);
   const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
 
   return (
@@ -198,7 +200,27 @@ function ThreadRow({
             Reopen
           </Button>
         )}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs gap-1 text-indigo-600 dark:text-indigo-400"
+          onClick={() => setShowDraftEmail(true)}
+          data-testid={`button-draft-email-thread-${thread.id}`}
+        >
+          <Sparkles className="w-3 h-3" />
+          Draft
+        </Button>
       </div>
+
+      {showDraftEmail && (
+        <DraftEmailModal
+          open={showDraftEmail}
+          onClose={() => setShowDraftEmail(false)}
+          accountId={thread.linkedAccountId}
+          threadId={thread.threadId}
+          defaultPlayType={thread.linkedCarrierId ? "carrier_capacity" : "check_in"}
+        />
+      )}
     </div>
   );
 }

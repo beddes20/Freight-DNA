@@ -22,6 +22,7 @@ import { registerEmailAnalyticsRoutes } from "./routes/emailAnalytics";
 import { registerGeographicResponsibilitiesRoutes } from "./routes/geographicResponsibilities";
 import { registerSonarRoutes } from "./routes/sonar";
 import { getPlayForRuleType } from "./playsRegistry";
+import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -3150,6 +3151,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerSonarRoutes(app);
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
+  registerEmailDraftingRoutes(app);
 
   registerFinancialRoutes(app);
   // ── Company Historical Trends ─────────────────────────────────────────────

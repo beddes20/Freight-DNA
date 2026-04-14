@@ -35,6 +35,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Contact, Touchpoint } from "@shared/schema";
 import { CopyButton } from "@/components/copy-button";
 import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
+import { DraftEmailModal } from "@/components/DraftEmailModal";
+import { Sparkles } from "lucide-react";
 
 function countThisWeek(tps: Touchpoint[]) {
   const start = new Date();
@@ -78,6 +80,7 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
   const [searchQuery, setSearchQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
   const [composeTarget, setComposeTarget] = useState<Contact | null>(null);
+  const [draftTarget, setDraftTarget] = useState<Contact | null>(null);
 
   const deleteMutation = useMutation({
     mutationFn: async (contactId: string) => {
@@ -251,16 +254,28 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                             )}
                           </div>
                           {contact.email && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="w-full gap-2 h-7 text-xs text-blue-600 border-blue-200 hover:bg-blue-50 hover:border-blue-400 dark:text-blue-400 dark:border-blue-800 dark:hover:bg-blue-950/40"
-                              onClick={(e) => { e.stopPropagation(); setComposeTarget(contact); }}
-                              data-testid={`button-send-email-card-${contact.id}`}
-                            >
-                              <Send className="h-3 w-3" />
-                              Send Email
-                            </Button>
+                            <div className="flex gap-1.5">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="flex-1 gap-2 h-7 text-xs text-blue-600 border-blue-200 hover:bg-blue-50 hover:border-blue-400 dark:text-blue-400 dark:border-blue-800 dark:hover:bg-blue-950/40"
+                                onClick={(e) => { e.stopPropagation(); setComposeTarget(contact); }}
+                                data-testid={`button-send-email-card-${contact.id}`}
+                              >
+                                <Send className="h-3 w-3" />
+                                Send Email
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="gap-1.5 h-7 text-xs text-indigo-600 border-indigo-200 hover:bg-indigo-50 hover:border-indigo-400 dark:text-indigo-400 dark:border-indigo-800 dark:hover:bg-indigo-950/40"
+                                onClick={(e) => { e.stopPropagation(); setDraftTarget(contact); }}
+                                data-testid={`button-draft-email-card-${contact.id}`}
+                              >
+                                <Sparkles className="h-3 w-3" />
+                                Draft
+                              </Button>
+                            </div>
                           )}
                         </div>
                       )}
@@ -383,6 +398,16 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
         contactId={composeTarget?.id}
         companyId={composeTarget?.companyId ?? undefined}
       />
+
+      {draftTarget && (
+        <DraftEmailModal
+          open={!!draftTarget}
+          onClose={() => setDraftTarget(null)}
+          accountId={companyId}
+          contactId={draftTarget.id}
+          contactName={draftTarget.name}
+        />
+      )}
     </div>
   );
 }

@@ -42,7 +42,7 @@ The application uses React, TypeScript, Tailwind CSS, and `shadcn/ui` for a mode
     - **Company Activity Timeline**: Unified chronological feed of events.
     - **Calendar**: RFP deadlines and task due dates.
     - **Rep Scorecard / Director Leaderboard**: Admin-only page for ranking reps.
-    - **AI Email Drafting**: Generates personalized email drafts using GPT-4o-mini.
+    - **AI Email Drafting** (Task #226): Generates personalized 2-4 sentence email drafts using GPT-4o-mini, grounded in CRM/freight data. Voice profile service analyzes rep's last 50 outbound emails for style markers (greetings, sign-offs, tone, common phrases) with 7-day cached profiles. 11 play types mapped from NBA rules. Draft Email buttons on NBA cards, company contact cards, and conversation thread rows. Modal with play type selector, editable draft, data anchors, copy-to-clipboard. Files: `server/voiceProfileService.ts`, `server/routes/emailDrafting.ts`, `client/src/components/DraftEmailModal.tsx`.
     - **NBA (Next Best Action) Phase 1**: Recommendation engine generating persistent cards based on freight data rules.
     - **Lane Carrier Outreach Workflow**: Assignable lane workflow with work queues, carrier contactability, and email sending/tracking.
     - **Stable Coverage System**: Computes per-lane coverage profiles from TMS history, tracks incumbent carriers, and broadens search modes.
