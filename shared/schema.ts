@@ -2224,3 +2224,292 @@ export const sentEmailCorrections = pgTable(
 export const insertSentEmailCorrectionSchema = createInsertSchema(sentEmailCorrections).omit({ id: true, createdAt: true });
 export type InsertSentEmailCorrection = z.infer<typeof insertSentEmailCorrectionSchema>;
 export type SentEmailCorrection = typeof sentEmailCorrections.$inferSelect;
+
+export const meetingPrepBriefs = pgTable(
+  "meeting_prep_briefs",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    generatedByUserId: varchar("generated_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    briefContent: jsonb("brief_content").notNull(),
+    recentActivity: jsonb("recent_activity"),
+    laneHighlights: jsonb("lane_highlights"),
+    talkingPoints: jsonb("talking_points"),
+    riskAlerts: jsonb("risk_alerts"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("mpb_org_company_idx").on(table.orgId, table.companyId),
+    index("mpb_user_idx").on(table.generatedByUserId),
+  ],
+);
+
+export const insertMeetingPrepBriefSchema = createInsertSchema(meetingPrepBriefs).omit({ id: true, createdAt: true });
+export type InsertMeetingPrepBrief = z.infer<typeof insertMeetingPrepBriefSchema>;
+export type MeetingPrepBrief = typeof meetingPrepBriefs.$inferSelect;
+
+export const contactSentimentTracking = pgTable(
+  "contact_sentiment_tracking",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    contactId: varchar("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    sentimentScore: integer("sentiment_score").notNull(),
+    sentimentTrend: text("sentiment_trend").notNull().default("stable"),
+    avgResponseTimeHours: decimal("avg_response_time_hours"),
+    responseTimeChange: decimal("response_time_change"),
+    signals: jsonb("signals"),
+    analysisDate: timestamp("analysis_date").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("cst_org_contact_idx").on(table.orgId, table.contactId),
+    index("cst_company_idx").on(table.companyId),
+    index("cst_trend_idx").on(table.orgId, table.sentimentTrend),
+  ],
+);
+
+export const insertContactSentimentSchema = createInsertSchema(contactSentimentTracking).omit({ id: true, createdAt: true });
+export type InsertContactSentiment = z.infer<typeof insertContactSentimentSchema>;
+export type ContactSentiment = typeof contactSentimentTracking.$inferSelect;
+
+export const followUpRecommendations = pgTable(
+  "follow_up_recommendations",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    contactId: varchar("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    recommendedDay: text("recommended_day"),
+    recommendedTimeOfDay: text("recommended_time_of_day"),
+    optimalCadenceDays: integer("optimal_cadence_days"),
+    maxSilenceDays: integer("max_silence_days"),
+    nextFollowUpDate: text("next_follow_up_date"),
+    reasoning: text("reasoning"),
+    confidenceScore: integer("confidence_score"),
+    dataPoints: integer("data_points").default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("fur_org_contact_idx").on(table.orgId, table.contactId),
+    index("fur_next_date_idx").on(table.orgId, table.nextFollowUpDate),
+  ],
+);
+
+export const insertFollowUpRecommendationSchema = createInsertSchema(followUpRecommendations).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFollowUpRecommendation = z.infer<typeof insertFollowUpRecommendationSchema>;
+export type FollowUpRecommendation = typeof followUpRecommendations.$inferSelect;
+
+export const relationshipCoachingInsights = pgTable(
+  "relationship_coaching_insights",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "cascade" }),
+    insightType: text("insight_type").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    priority: text("priority").notNull().default("moderate"),
+    suggestedAction: text("suggested_action"),
+    status: text("status").notNull().default("active"),
+    dataContext: jsonb("data_context"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("rci_org_company_idx").on(table.orgId, table.companyId),
+    index("rci_status_idx").on(table.orgId, table.status),
+  ],
+);
+
+export const insertRelationshipCoachingSchema = createInsertSchema(relationshipCoachingInsights).omit({ id: true, createdAt: true });
+export type InsertRelationshipCoaching = z.infer<typeof insertRelationshipCoachingSchema>;
+export type RelationshipCoaching = typeof relationshipCoachingInsights.$inferSelect;
+
+export const orgChartGaps = pgTable(
+  "org_chart_gaps",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    gapType: text("gap_type").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    suggestedContactName: text("suggested_contact_name"),
+    suggestedContactTitle: text("suggested_contact_title"),
+    suggestedContactEmail: text("suggested_contact_email"),
+    evidenceSources: jsonb("evidence_sources"),
+    priority: text("priority").notNull().default("moderate"),
+    status: text("status").notNull().default("open"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("ocg_org_company_idx").on(table.orgId, table.companyId),
+    index("ocg_status_idx").on(table.orgId, table.status),
+  ],
+);
+
+export const insertOrgChartGapSchema = createInsertSchema(orgChartGaps).omit({ id: true, createdAt: true });
+export type InsertOrgChartGap = z.infer<typeof insertOrgChartGapSchema>;
+export type OrgChartGap = typeof orgChartGaps.$inferSelect;
+
+export const warmIntroSuggestions = pgTable(
+  "warm_intro_suggestions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    targetContactId: varchar("target_contact_id").references(() => contacts.id, { onDelete: "cascade" }),
+    targetContactName: text("target_contact_name"),
+    bridgeContactId: varchar("bridge_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    bridgeContactName: text("bridge_contact_name"),
+    connectionStrength: text("connection_strength").notNull().default("moderate"),
+    reasoning: text("reasoning"),
+    suggestedApproach: text("suggested_approach"),
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("wis_org_company_idx").on(table.orgId, table.companyId),
+    index("wis_status_idx").on(table.orgId, table.status),
+  ],
+);
+
+export const insertWarmIntroSchema = createInsertSchema(warmIntroSuggestions).omit({ id: true, createdAt: true });
+export type InsertWarmIntro = z.infer<typeof insertWarmIntroSchema>;
+export type WarmIntro = typeof warmIntroSuggestions.$inferSelect;
+
+export const accountLookAlikes = pgTable(
+  "account_look_alikes",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    sourceCompanyId: varchar("source_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    targetCompanyId: varchar("target_company_id").references(() => companies.id, { onDelete: "set null" }),
+    targetCompanyName: text("target_company_name"),
+    similarityScore: integer("similarity_score").notNull(),
+    matchFactors: jsonb("match_factors"),
+    expansionOpportunity: text("expansion_opportunity"),
+    status: text("status").notNull().default("identified"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("ala_org_source_idx").on(table.orgId, table.sourceCompanyId),
+    index("ala_score_idx").on(table.orgId, table.similarityScore),
+  ],
+);
+
+export const insertAccountLookAlikeSchema = createInsertSchema(accountLookAlikes).omit({ id: true, createdAt: true });
+export type InsertAccountLookAlike = z.infer<typeof insertAccountLookAlikeSchema>;
+export type AccountLookAlike = typeof accountLookAlikes.$inferSelect;
+
+export const crossSellOpportunities = pgTable(
+  "cross_sell_opportunities",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    opportunityType: text("opportunity_type").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    lane: text("lane"),
+    estimatedValue: decimal("estimated_value"),
+    confidenceScore: integer("confidence_score"),
+    peerEvidence: jsonb("peer_evidence"),
+    suggestedApproach: text("suggested_approach"),
+    status: text("status").notNull().default("identified"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("cso_org_company_idx").on(table.orgId, table.companyId),
+    index("cso_status_idx").on(table.orgId, table.status),
+  ],
+);
+
+export const insertCrossSellSchema = createInsertSchema(crossSellOpportunities).omit({ id: true, createdAt: true });
+export type InsertCrossSell = z.infer<typeof insertCrossSellSchema>;
+export type CrossSell = typeof crossSellOpportunities.$inferSelect;
+
+export const walletSharePlays = pgTable(
+  "wallet_share_plays",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    playTitle: text("play_title").notNull(),
+    playDescription: text("play_description").notNull(),
+    targetLanes: jsonb("target_lanes"),
+    targetContacts: jsonb("target_contacts"),
+    pricingStrategy: text("pricing_strategy"),
+    estimatedRevenue: decimal("estimated_revenue"),
+    timelineWeeks: integer("timeline_weeks"),
+    steps: jsonb("steps"),
+    status: text("status").notNull().default("draft"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("wsp_org_company_idx").on(table.orgId, table.companyId),
+    index("wsp_status_idx").on(table.orgId, table.status),
+  ],
+);
+
+export const insertWalletSharePlaySchema = createInsertSchema(walletSharePlays).omit({ id: true, createdAt: true });
+export type InsertWalletSharePlay = z.infer<typeof insertWalletSharePlaySchema>;
+export type WalletSharePlay = typeof walletSharePlays.$inferSelect;
+
+export const winLossPatterns = pgTable(
+  "win_loss_patterns",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    patternType: text("pattern_type").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    outcome: text("outcome").notNull(),
+    frequency: integer("frequency").notNull().default(1),
+    factors: jsonb("factors"),
+    recommendations: jsonb("recommendations"),
+    affectedAccounts: jsonb("affected_accounts"),
+    confidenceScore: integer("confidence_score"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("wlp_org_type_idx").on(table.orgId, table.patternType),
+    index("wlp_outcome_idx").on(table.orgId, table.outcome),
+  ],
+);
+
+export const insertWinLossPatternSchema = createInsertSchema(winLossPatterns).omit({ id: true, createdAt: true });
+export type InsertWinLossPattern = z.infer<typeof insertWinLossPatternSchema>;
+export type WinLossPattern = typeof winLossPatterns.$inferSelect;
+
+export const competitiveSignals = pgTable(
+  "competitive_signals",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    signalType: text("signal_type").notNull(),
+    competitorName: text("competitor_name"),
+    description: text("description").notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceId: text("source_id"),
+    severity: text("severity").notNull().default("moderate"),
+    suggestedResponse: text("suggested_response"),
+    status: text("status").notNull().default("active"),
+    detectedAt: timestamp("detected_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("cs_org_company_idx").on(table.orgId, table.companyId),
+    index("cs_severity_idx").on(table.orgId, table.severity),
+    index("cs_status_idx").on(table.orgId, table.status),
+  ],
+);
+
+export const insertCompetitiveSignalSchema = createInsertSchema(competitiveSignals).omit({ id: true, createdAt: true });
+export type InsertCompetitiveSignal = z.infer<typeof insertCompetitiveSignalSchema>;
+export type CompetitiveSignal = typeof competitiveSignals.$inferSelect;

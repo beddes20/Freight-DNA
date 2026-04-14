@@ -52,6 +52,18 @@ Key functionalities include:
 - **Tactical Learning Engine**: Captures which response approaches lead to wins. `proven_tactics` table stores tactics linked to email signals and outcomes with success rates. Only "won" tactics are surfaced during AI email drafting. API endpoints: `GET /api/internal/proven-tactics`, `GET /api/internal/proven-tactics/stats`, `GET /api/internal/proven-tactics/for-signal?signalType=`, `POST /api/internal/proven-tactics`, `POST /api/internal/proven-tactics/:id/outcome`. Frontend page at `/proven-tactics` with KPI cards, filterable tactic list, expandable cards with example responses, and outcome recording (won/lost).
 - **AI Draft Feedback Loop**: Users rate AI-generated drafts (good/bad/needs_work) with optional notes. `draft_feedback` table stores ratings, original+edited text. `gatherFeedbackContext()` injects recent feedback into AI prompts. Feedback UI in DraftEmailModal with thumbs up/down/needs-work buttons.
 - **Sent Email Corrections**: Admins/directors can review sent emails and write "what should have been said." `sent_email_corrections` table stores original vs corrected text with coaching notes. Works on both customer-side (Conversations thread detail) and carrier-side (CarrierOutreachPanel history tab). Pencil icon on sent messages (admin/director only). Carrier corrections support multi-carrier outreach with tab selector per draft. Corrections heavily weighted in AI draft context via `gatherFeedbackContext()`. Role-gated API: `POST /api/email-corrections` (admin/director), `GET /api/email-corrections` (IDs only for reps, full data for leadership; supports `hasOutreachLog=1` filter), `GET /api/email-corrections/stats` (admin/director).
+- **AI Intelligence Hub** (`/ai-intelligence`): Unified AI-powered intelligence dashboard with 11 features across 10 tabs. Service layer in `server/services/aiIntelligenceService.ts`, routes in `server/routes/aiIntelligence.ts`.
+  1. **Meeting Prep Briefs**: AI generates pre-meeting one-pagers with talking points, risk alerts, opportunities, and suggested agenda. Stored in `meeting_prep_briefs` table.
+  2. **Sentiment Tracking**: Per-contact sentiment scoring (1-100) with trend detection (warming/stable/cooling/disengaged). Analyzes email response patterns and touchpoint frequency. Stored in `contact_sentiment_tracking`.
+  3. **Smart Follow-Up Timing**: AI learns optimal follow-up cadence per contact — best day, time of day, cadence interval, max silence days. Stored in `follow_up_recommendations`.
+  4. **Relationship Health Coaching**: Per-account coaching insights combining sentiment, touchpoints, and org coverage. Gap/risk/opportunity/strength classifications with specific suggested actions. Stored in `relationship_coaching_insights`.
+  5. **Org Chart Gap Analysis**: Maps touchpoints vs org chart to find missing roles, untouched contacts, single-threaded relationships, and missing executive sponsors. CC pattern analysis from emails. Stored in `org_chart_gaps`.
+  6. **Warm Introduction Paths**: Suggests warm intro paths through existing contacts to reach new targets. Connection strength scoring with specific approach suggestions. Stored in `warm_intro_suggestions`.
+  7. **Look-Alike Prospecting**: Finds CRM accounts most similar to top customers based on industry, freight spend, shipping modes, and lane patterns. Stored in `account_look_alikes`.
+  8. **Cross-Sell / Lane Gap Intelligence**: Compares customer lanes vs peer patterns to identify reverse lanes, new corridors, mode expansion, and volume growth. Stored in `cross_sell_opportunities`.
+  9. **Wallet Share Expansion Playbook**: AI generates per-account growth plans with target lanes, contacts, pricing strategy, estimated revenue, and week-by-week execution steps. Stored in `wallet_share_plays`.
+  10. **Win/Loss Pattern Engine**: Analyzes won/lost RFPs across the org to surface pricing, relationship, timing, geography patterns. Leadership-only generation. Stored in `win_loss_patterns`.
+  11. **Competitive Signal Detection**: Detects competitor mentions, rate shopping, switching risk from email analysis. Severity-rated with suggested responses. Stored in `competitive_signals`.
 
 ### DB Tables Added in Tasks #200–203, #225, Tactical Learning
 | Table | Purpose |
@@ -65,6 +77,17 @@ Key functionalities include:
 | `proven_tactics` | Response approaches linked to email signals/outcomes with success rates. Seeded with 8 demo tactics. Surfaced during AI email drafting. |
 | `draft_feedback` | AI draft ratings (good/bad/needs_work) with notes and edited text. Fed back into AI prompts via gatherFeedbackContext(). |
 | `sent_email_corrections` | Leadership corrections of sent emails — original vs corrected text with coaching notes. Heavily weighted in AI context. |
+| `meeting_prep_briefs` | AI-generated pre-meeting briefs with talking points, risk alerts, opportunities. |
+| `contact_sentiment_tracking` | Per-contact sentiment scores and trend tracking (warming/stable/cooling). |
+| `follow_up_recommendations` | AI-learned optimal follow-up cadence per contact. |
+| `relationship_coaching_insights` | Per-account coaching insights from AI analysis. |
+| `org_chart_gaps` | Identified gaps in org chart coverage at customer accounts. |
+| `warm_intro_suggestions` | AI-suggested warm introduction paths through existing contacts. |
+| `account_look_alikes` | Similar account pairings with match factors and similarity scores. |
+| `cross_sell_opportunities` | Lane/service gaps identified by comparing customer to peers. |
+| `wallet_share_plays` | AI-generated per-account growth playbooks with execution steps. |
+| `win_loss_patterns` | AI-analyzed patterns from won/lost RFPs across the org. |
+| `competitive_signals` | Competitor mentions and switching risk detected from emails. |
 
 ### DB Tables
 Key database tables support core functionalities, including `lane_summary_cache` for pre-computed lane data, `account_contact_suggestions` for email-derived contact suggestions, `geographic_lane_patterns` for defined corridors, `account_contact_lane_pattern_responsibilities` for contact-to-corridor mapping, and `email_conversation_threads` for managing email conversations.

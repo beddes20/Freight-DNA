@@ -68,6 +68,7 @@ import ConversationsPage from "@/pages/conversations";
 import ContactSuggestionsPage from "@/pages/contact-suggestions";
 import EmailIntelligencePage from "@/pages/email-intelligence";
 import ProvenTacticsPage from "@/pages/proven-tactics";
+import AIIntelligencePage from "@/pages/ai-intelligence";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -162,6 +163,7 @@ function Router() {
       <Route path="/contact-suggestions" component={ContactSuggestionsPage} />
       <Route path="/email-intelligence" component={EmailIntelligencePage} />
       <Route path="/proven-tactics" component={ProvenTacticsPage} />
+      <Route path="/ai-intelligence" component={AIIntelligencePage} />
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/terms" component={TermsPage} />
       <Route component={NotFound} />

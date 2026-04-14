@@ -24,6 +24,7 @@ import { registerGeographicResponsibilitiesRoutes } from "./routes/geographicRes
 import { registerContactGeographySuggestionRoutes } from "./routes/contactGeographySuggestions";
 import { registerSonarRoutes } from "./routes/sonar";
 import { registerCallIntelligenceRoutes } from "./routes/callIntelligence";
+import { registerAIIntelligenceRoutes } from "./routes/aiIntelligence";
 import { getPlayForRuleType } from "./playsRegistry";
 import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
 import { readFileSync } from "fs";
@@ -9762,6 +9763,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
   registerGeographicResponsibilitiesRoutes(app);
   registerContactGeographySuggestionRoutes(app);
+  registerAIIntelligenceRoutes(app);
 
   return httpServer;
 }

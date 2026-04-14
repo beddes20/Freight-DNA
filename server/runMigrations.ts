@@ -2337,4 +2337,225 @@ export async function runMigrations() {
   } finally {
     clientCorr.release();
   }
+
+  const clientAI = await pool.connect();
+  try {
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS meeting_prep_briefs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        generated_by_user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        brief_content jsonb NOT NULL,
+        recent_activity jsonb,
+        lane_highlights jsonb,
+        talking_points jsonb,
+        risk_alerts jsonb,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS mpb_org_company_idx ON meeting_prep_briefs (org_id, company_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS mpb_user_idx ON meeting_prep_briefs (generated_by_user_id)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS contact_sentiment_tracking (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        contact_id varchar NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        sentiment_score integer NOT NULL,
+        sentiment_trend text NOT NULL DEFAULT 'stable',
+        avg_response_time_hours decimal,
+        response_time_change decimal,
+        signals jsonb,
+        analysis_date timestamptz NOT NULL DEFAULT now(),
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS cst_org_contact_idx ON contact_sentiment_tracking (org_id, contact_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS cst_company_idx ON contact_sentiment_tracking (company_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS cst_trend_idx ON contact_sentiment_tracking (org_id, sentiment_trend)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS follow_up_recommendations (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        contact_id varchar NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        recommended_day text,
+        recommended_time_of_day text,
+        optimal_cadence_days integer,
+        max_silence_days integer,
+        next_follow_up_date text,
+        reasoning text,
+        confidence_score integer,
+        data_points integer DEFAULT 0,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS fur_org_contact_idx ON follow_up_recommendations (org_id, contact_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS fur_next_date_idx ON follow_up_recommendations (org_id, next_follow_up_date)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS relationship_coaching_insights (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        contact_id varchar REFERENCES contacts(id) ON DELETE CASCADE,
+        insight_type text NOT NULL,
+        title text NOT NULL,
+        description text NOT NULL,
+        priority text NOT NULL DEFAULT 'moderate',
+        suggested_action text,
+        status text NOT NULL DEFAULT 'active',
+        data_context jsonb,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS rci_org_company_idx ON relationship_coaching_insights (org_id, company_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS rci_status_idx ON relationship_coaching_insights (org_id, status)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS org_chart_gaps (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        gap_type text NOT NULL,
+        title text NOT NULL,
+        description text NOT NULL,
+        suggested_contact_name text,
+        suggested_contact_title text,
+        suggested_contact_email text,
+        evidence_sources jsonb,
+        priority text NOT NULL DEFAULT 'moderate',
+        status text NOT NULL DEFAULT 'open',
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS ocg_org_company_idx ON org_chart_gaps (org_id, company_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS ocg_status_idx ON org_chart_gaps (org_id, status)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS warm_intro_suggestions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        target_contact_id varchar REFERENCES contacts(id) ON DELETE CASCADE,
+        target_contact_name text,
+        bridge_contact_id varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        bridge_contact_name text,
+        connection_strength text NOT NULL DEFAULT 'moderate',
+        reasoning text,
+        suggested_approach text,
+        status text NOT NULL DEFAULT 'pending',
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS wis_org_company_idx ON warm_intro_suggestions (org_id, company_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS wis_status_idx ON warm_intro_suggestions (org_id, status)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS account_look_alikes (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        source_company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        target_company_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        target_company_name text,
+        similarity_score integer NOT NULL,
+        match_factors jsonb,
+        expansion_opportunity text,
+        status text NOT NULL DEFAULT 'identified',
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS ala_org_source_idx ON account_look_alikes (org_id, source_company_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS ala_score_idx ON account_look_alikes (org_id, similarity_score)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS cross_sell_opportunities (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        opportunity_type text NOT NULL,
+        title text NOT NULL,
+        description text NOT NULL,
+        lane text,
+        estimated_value decimal,
+        confidence_score integer,
+        peer_evidence jsonb,
+        suggested_approach text,
+        status text NOT NULL DEFAULT 'identified',
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS cso_org_company_idx ON cross_sell_opportunities (org_id, company_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS cso_status_idx ON cross_sell_opportunities (org_id, status)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS wallet_share_plays (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        play_title text NOT NULL,
+        play_description text NOT NULL,
+        target_lanes jsonb,
+        target_contacts jsonb,
+        pricing_strategy text,
+        estimated_revenue decimal,
+        timeline_weeks integer,
+        steps jsonb,
+        status text NOT NULL DEFAULT 'draft',
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS wsp_org_company_idx ON wallet_share_plays (org_id, company_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS wsp_status_idx ON wallet_share_plays (org_id, status)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS win_loss_patterns (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        pattern_type text NOT NULL,
+        title text NOT NULL,
+        description text NOT NULL,
+        outcome text NOT NULL,
+        frequency integer NOT NULL DEFAULT 1,
+        factors jsonb,
+        recommendations jsonb,
+        affected_accounts jsonb,
+        confidence_score integer,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS wlp_org_type_idx ON win_loss_patterns (org_id, pattern_type)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS wlp_outcome_idx ON win_loss_patterns (org_id, outcome)`);
+
+    await clientAI.query(`
+      CREATE TABLE IF NOT EXISTS competitive_signals (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        signal_type text NOT NULL,
+        competitor_name text,
+        description text NOT NULL,
+        source_type text NOT NULL,
+        source_id text,
+        severity text NOT NULL DEFAULT 'moderate',
+        suggested_response text,
+        status text NOT NULL DEFAULT 'active',
+        detected_at timestamptz NOT NULL DEFAULT now(),
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS cs_org_company_idx ON competitive_signals (org_id, company_id)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS cs_severity_idx ON competitive_signals (org_id, severity)`);
+    await clientAI.query(`CREATE INDEX IF NOT EXISTS cs_status_idx ON competitive_signals (org_id, status)`);
+
+    console.log("[migrations] AI Intelligence Suite tables created (11 features)");
+  } catch (err) {
+    console.error("[migrations] AI Intelligence Suite error:", err);
+  } finally {
+    clientAI.release();
+  }
 }
