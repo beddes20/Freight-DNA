@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -122,6 +122,27 @@ const ROLE_LABELS: Record<string, string> = {
   logistics_manager: "Logistics Manager",
   logistics_coordinator: "Logistics Coordinator",
 };
+
+function CollapsibleGroup({ label, children, defaultOpen = true }: { label: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel
+        className="cursor-pointer select-none flex items-center justify-between pr-2 hover:text-sidebar-foreground/80 transition-colors"
+        onClick={() => setOpen(v => !v)}
+        data-testid={`toggle-group-${label.toLowerCase().replace(/[\s/]+/g, "-")}`}
+      >
+        <span>{label}</span>
+        <ChevronDown className={`h-3.5 w-3.5 text-sidebar-foreground/40 transition-transform duration-200 ${open ? "" : "-rotate-90"}`} />
+      </SidebarGroupLabel>
+      {open && (
+        <SidebarGroupContent>
+          <SidebarMenu>{children}</SidebarMenu>
+        </SidebarGroupContent>
+      )}
+    </SidebarGroup>
+  );
+}
 
 function NotificationBadge({ count, color = "red" }: { count: number; color?: "red" | "green" }) {
   if (count <= 0) return null;
@@ -324,16 +345,11 @@ export function AppSidebar() {
 
         {/* ── Pipeline (hidden for LM/LC roles) ── */}
         {SALES_ROLES.includes(user?.role ?? "") && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Pipeline</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {pipelineItems
-                  .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
-                  .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          <CollapsibleGroup label="Pipeline">
+            {pipelineItems
+              .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
+              .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
+          </CollapsibleGroup>
         )}
 
         {/* ── Lane Tools ── */}
@@ -341,37 +357,29 @@ export function AppSidebar() {
           const visibleLaneTools = laneToolItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
           if (visibleLaneTools.length === 0) return null;
           return (
-            <SidebarGroup>
-              <SidebarGroupLabel>Lane Tools</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {visibleLaneTools.map(item => (
-                    <NavLink
-                      key={item.title}
-                      item={item}
-                      isActive={isActive(item.url)}
-                      badge={
-                        (item.title === "Lane Work Queue" || item.title === "My Procurement")
-                          ? unactionedReplyCount
-                          : item.title === "Conversations"
-                            ? conversationsWaitingCount
-                            : undefined
-                      }
-                      badgeColor={item.title === "Conversations" ? "red" : "green"}
-                    />
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
+            <CollapsibleGroup label="Lane Tools">
+              {visibleLaneTools.map(item => (
+                <NavLink
+                  key={item.title}
+                  item={item}
+                  isActive={isActive(item.url)}
+                  badge={
+                    (item.title === "Lane Work Queue" || item.title === "My Procurement")
+                      ? unactionedReplyCount
+                      : item.title === "Conversations"
+                        ? conversationsWaitingCount
+                        : undefined
+                  }
+                  badgeColor={item.title === "Conversations" ? "red" : "green"}
+                />
+              ))}
+            </CollapsibleGroup>
           );
         })()}
 
         {/* ── Admin / Team ── */}
         {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales" || user?.role === "sales_director") && (
-          <SidebarGroup>
-            <SidebarGroupLabel>{user?.role === "admin" ? "Admin" : "Team"}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
+          <CollapsibleGroup label={user?.role === "admin" ? "Admin" : "Team"} defaultOpen={false}>
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild isActive={location === "/admin/users"}>
                     <Link href="/admin/users" data-testid="link-admin-users">
@@ -460,9 +468,7 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          </CollapsibleGroup>
         )}
       </SidebarContent>
 

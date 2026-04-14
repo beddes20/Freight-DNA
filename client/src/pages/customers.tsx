@@ -431,33 +431,39 @@ export default function Customers() {
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6" data-tour="tour-companies-table">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold" data-testid="text-customers-title">
-            {showArchived ? "Archived Accounts" : "Customers"}
-          </h1>
-          <p className="text-muted-foreground">
-            {showArchived ? "Accounts that have been parked — click to view or restore" : "View customer org charts and manage contacts"}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant={showArchived ? "default" : "outline"}
-            onClick={() => setShowArchived(v => !v)}
-            data-testid="button-toggle-archived"
-          >
-            {showArchived ? (
-              <><ArchiveX className="h-4 w-4 mr-2" />Show Active</>
-            ) : (
-              <><Archive className="h-4 w-4 mr-2" />Archived</>
-            )}
-          </Button>
-          {!showArchived && (
-            <Button onClick={() => setDialogOpen(true)} data-testid="button-add-customer">
-              <Plus className="h-4 w-4 mr-2" />
-              Add Customer
+      <div className="relative overflow-hidden rounded-xl px-6 py-5 text-white" style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}>
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
+        <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-bold flex items-center gap-2" data-testid="text-customers-title">
+              <Network className="h-5 w-5" style={{ color: "#ffb400" }} />
+              {showArchived ? "Archived Accounts" : "Customers"}
+            </h1>
+            <p className="text-white/60 text-sm mt-1">
+              {showArchived ? "Accounts that have been parked — click to view or restore" : "View customer org charts and manage contacts"}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={showArchived ? "default" : "outline"}
+              onClick={() => setShowArchived(v => !v)}
+              className={showArchived ? "" : "bg-white/10 border-white/20 text-white hover:bg-white/20"}
+              data-testid="button-toggle-archived"
+            >
+              {showArchived ? (
+                <><ArchiveX className="h-4 w-4 mr-2" />Show Active</>
+              ) : (
+                <><Archive className="h-4 w-4 mr-2" />Archived</>
+              )}
             </Button>
-          )}
+            {!showArchived && (
+              <Button onClick={() => setDialogOpen(true)} data-testid="button-add-customer">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Customer
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -666,7 +672,7 @@ export default function Customers() {
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 min-w-0">
-                            <h3 className="font-medium truncate" data-testid={`text-customer-name-${company.id}`}>
+                            <h3 className="font-medium text-sm leading-tight break-words line-clamp-2" data-testid={`text-customer-name-${company.id}`}>
                               {company.name}
                             </h3>
                             {company.archivedAt && (
@@ -696,6 +702,21 @@ export default function Customers() {
                         {!company.archivedAt && (() => {
                           const gs = growthScoreMap.get(company.id);
                           if (!gs) return null;
+                          if (gs.score === 0) {
+                            return (
+                              <button
+                                type="button"
+                                data-testid={`badge-momentum-header-${company.id}`}
+                                title="Momentum not yet scored. Click to view details."
+                                aria-label="Momentum not yet scored"
+                                onClick={e => { e.preventDefault(); e.stopPropagation(); setMomentumCompanyId(company.id); }}
+                                className="inline-flex items-center font-medium rounded-full border px-2 py-0.5 text-xs hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-ring cursor-pointer mr-0.5 bg-muted text-muted-foreground border-border"
+                              >
+                                <span className="hidden sm:inline">Not Scored</span>
+                                <span className="sm:hidden">—</span>
+                              </button>
+                            );
+                          }
                           const style = GROWTH_BAND_STYLES[gs.band] ?? GROWTH_BAND_STYLES.stable;
                           return (
                             <button

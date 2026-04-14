@@ -899,16 +899,17 @@ export default function TeamPerformancePage() {
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-lg bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
-            <BarChart3 className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-          </div>
+      <div className="relative overflow-hidden rounded-xl px-6 py-5 text-white" style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}>
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
+        <div className="relative flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
           <div>
-            <h1 className="text-xl font-semibold" data-testid="text-page-title">Team Performance</h1>
-            <p className="text-sm text-muted-foreground">KPIs across your team — tasks, accounts, and activity</p>
+            <h1 className="text-xl font-bold flex items-center gap-2" data-testid="text-page-title">
+              <BarChart3 className="h-5 w-5" style={{ color: "#ffb400" }} />
+              Team Performance
+            </h1>
+            <p className="text-white/60 text-sm mt-1">KPIs across your team — tasks, accounts, and activity</p>
           </div>
-        </div>
         <div className="flex flex-col items-start sm:items-end gap-2">
           <div className="flex items-center gap-2">
             <div className="flex items-center rounded-lg border bg-muted/40 p-0.5 gap-0.5" data-testid="toggle-view-mode">
@@ -991,6 +992,7 @@ export default function TeamPerformancePage() {
             )}
           </div>
         </div>
+      </div>
       </div>
 
       {isLoading ? (

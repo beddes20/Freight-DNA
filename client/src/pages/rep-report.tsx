@@ -664,8 +664,10 @@ export default function RepReportPage() {
         </div>
       </div>
 
+      <div className="h-8" style={{ background: "linear-gradient(to bottom, #0d0d0d 0%, #0d0d0d10 40%, transparent 100%)" }} />
+
       {/* ── Page body ── */}
-      <div className="max-w-5xl mx-auto px-6 py-6 space-y-6 md:px-8">
+      <div className="max-w-5xl mx-auto px-6 py-6 space-y-6 md:px-8 -mt-3">
 
         {/* Goals Progress */}
         {goals.length > 0 && (

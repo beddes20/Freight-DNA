@@ -235,17 +235,19 @@ export default function AIIntelligencePage() {
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-6" data-testid="ai-intelligence-page">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-page-title">
-            <Brain className="h-7 w-7 text-blue-500" />
-            AI Intelligence Hub
-          </h1>
-          <p className="text-muted-foreground mt-1">AI-powered insights to build better relationships and grow accounts</p>
-        </div>
-        <div className="flex items-center gap-3">
+      <div className="relative overflow-hidden rounded-xl px-6 py-5 text-white" style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}>
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
+        <div className="relative flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold flex items-center gap-2" data-testid="text-page-title">
+              <Brain className="h-6 w-6" style={{ color: "#ffb400" }} />
+              AI Intelligence Hub
+            </h1>
+            <p className="text-white/60 mt-1 text-sm">AI-powered insights to build better relationships and grow accounts</p>
+          </div>
           <Select value={selectedCompany} onValueChange={setSelectedCompany}>
-            <SelectTrigger className="w-[280px]" data-testid="select-company">
+            <SelectTrigger className="w-[280px] bg-white/10 border-white/20 text-white" data-testid="select-company">
               <SelectValue placeholder="Select an account..." />
             </SelectTrigger>
             <SelectContent>
@@ -261,13 +263,27 @@ export default function AIIntelligencePage() {
         <div className="flex items-center justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
       ) : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <KPICard icon={<TrendingDown className="h-5 w-5 text-red-500" />} label="Cooling Contacts" value={dashboard?.sentimentAlerts || 0} color="red" testId="kpi-cooling" />
-            <KPICard icon={<Users className="h-5 w-5 text-orange-500" />} label="Org Chart Gaps" value={dashboard?.openOrgChartGaps || 0} color="orange" testId="kpi-org-gaps" />
-            <KPICard icon={<Target className="h-5 w-5 text-green-500" />} label="Cross-Sell Opps" value={dashboard?.crossSellOpportunities || 0} color="green" testId="kpi-cross-sell" />
-            <KPICard icon={<Shield className="h-5 w-5 text-purple-500" />} label="Competitive Alerts" value={dashboard?.competitiveAlerts || 0} color="purple" testId="kpi-competitive" />
-            <KPICard icon={<Clock className="h-5 w-5 text-blue-500" />} label="Follow-Ups Due" value={dashboard?.upcomingFollowUps || 0} color="blue" testId="kpi-followups" />
-          </div>
+          {(() => {
+            const totalKPIs = (dashboard?.sentimentAlerts || 0) + (dashboard?.openOrgChartGaps || 0) + (dashboard?.crossSellOpportunities || 0) + (dashboard?.competitiveAlerts || 0) + (dashboard?.upcomingFollowUps || 0);
+            if (totalKPIs === 0) {
+              return (
+                <div className="rounded-xl border border-dashed border-border p-6 text-center" data-testid="kpi-empty-state">
+                  <Sparkles className="h-8 w-8 text-amber-400 mx-auto mb-3" />
+                  <p className="text-sm font-medium">No insights generated yet</p>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">Select an account above and run any analysis to start generating AI-powered intelligence. Insights will appear here as alerts accumulate.</p>
+                </div>
+              );
+            }
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <KPICard icon={<TrendingDown className="h-5 w-5 text-red-500" />} label="Cooling Contacts" value={dashboard?.sentimentAlerts || 0} color="red" testId="kpi-cooling" />
+                <KPICard icon={<Users className="h-5 w-5 text-orange-500" />} label="Org Chart Gaps" value={dashboard?.openOrgChartGaps || 0} color="orange" testId="kpi-org-gaps" />
+                <KPICard icon={<Target className="h-5 w-5 text-green-500" />} label="Cross-Sell Opps" value={dashboard?.crossSellOpportunities || 0} color="green" testId="kpi-cross-sell" />
+                <KPICard icon={<Shield className="h-5 w-5 text-purple-500" />} label="Competitive Alerts" value={dashboard?.competitiveAlerts || 0} color="purple" testId="kpi-competitive" />
+                <KPICard icon={<Clock className="h-5 w-5 text-blue-500" />} label="Follow-Ups Due" value={dashboard?.upcomingFollowUps || 0} color="blue" testId="kpi-followups" />
+              </div>
+            );
+          })()}
 
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid grid-cols-5 lg:grid-cols-10 w-full" data-testid="tabs-intelligence">
