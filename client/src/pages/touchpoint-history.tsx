@@ -17,7 +17,11 @@ import {
   User,
   Building2,
   Filter,
+  Trash2,
 } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 
 function stripHtml(html: string): string {
@@ -85,15 +89,33 @@ function TypeIcon({ type }: { type: string }) {
 }
 
 const MANAGER_ROLES = ["admin", "director", "national_account_manager", "sales", "sales_director"];
+const DELETE_ROLES = ["admin", "director"];
 
 export default function TouchpointHistoryPage() {
   const { user } = useAuth();
   const isManager = MANAGER_ROLES.includes(user?.role ?? "");
+  const canDelete = DELETE_ROLES.includes(user?.role ?? "");
+  const { toast } = useToast();
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [presetIdx, setPresetIdx] = useState(1); // default: last 30 days
   const [repFilter, setRepFilter] = useState("all");
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/touchpoints/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/history"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
+      toast({ title: "Touchpoint deleted" });
+    },
+    onError: () => {
+      toast({ title: "Failed to delete touchpoint", variant: "destructive" });
+    },
+  });
 
   const { data: touchpoints, isLoading } = useQuery<EnrichedTouchpoint[]>({
     queryKey: ["/api/touchpoints/history"],
@@ -225,13 +247,14 @@ export default function TouchpointHistoryPage() {
                 <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground whitespace-nowrap">Sentiment</th>
                 <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground whitespace-nowrap">Rep</th>
                 <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground whitespace-nowrap">⭐</th>
+                {canDelete && <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground whitespace-nowrap w-10"></th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {isLoading ? (
                 Array.from({ length: 10 }).map((_, i) => (
                   <tr key={i} className="hover:bg-muted/30">
-                    {[160, 80, 140, 120, 240, 80, 100, 40].map((w, j) => (
+                    {[160, 80, 140, 120, 240, 80, 100, 40, ...(canDelete ? [28] : [])].map((w, j) => (
                       <td key={j} className="px-4 py-3">
                         <Skeleton className="h-4" style={{ width: w }} />
                       </td>
@@ -240,7 +263,7 @@ export default function TouchpointHistoryPage() {
                 ))
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-16 text-center text-muted-foreground text-sm">
+                  <td colSpan={canDelete ? 9 : 8} className="px-4 py-16 text-center text-muted-foreground text-sm">
                     No touchpoints found for the selected filters.
                   </td>
                 </tr>
@@ -249,7 +272,7 @@ export default function TouchpointHistoryPage() {
                   const typeCfg = TYPE_CONFIG[tp.type];
                   const sentCfg = tp.sentiment ? SENTIMENT_CONFIG[tp.sentiment] : null;
                   return (
-                    <tr key={tp.id} className="hover:bg-muted/30 transition-colors" data-testid={`row-touchpoint-${tp.id}`}>
+                    <tr key={tp.id} className="group hover:bg-muted/30 transition-colors" data-testid={`row-touchpoint-${tp.id}`}>
                       <td className="px-4 py-3 whitespace-nowrap text-foreground font-mono text-xs">
                         {tp.date}
                       </td>
@@ -299,6 +322,23 @@ export default function TouchpointHistoryPage() {
                           <span className="text-muted-foreground/30 text-xs">·</span>
                         )}
                       </td>
+                      {canDelete && (
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => {
+                              if (confirm("Delete this touchpoint? This cannot be undone.")) {
+                                deleteMutation.mutate(tp.id);
+                              }
+                            }}
+                            disabled={deleteMutation.isPending}
+                            className="text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
+                            data-testid={`button-delete-touchpoint-${tp.id}`}
+                            title="Delete touchpoint"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })

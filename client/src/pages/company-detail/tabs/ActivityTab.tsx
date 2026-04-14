@@ -49,6 +49,7 @@ interface ActivityTabProps {
   touchLogCollapsed: boolean;
   setTouchLogCollapsed: (updater: boolean | ((prev: boolean) => boolean)) => void;
   deleteCalloutMutation: { mutate: (id: string) => void; isPending: boolean };
+  deleteTouchpointMutation?: { mutate: (id: string) => void; isPending: boolean };
   toggleReactionMutation: { mutate: (v: { calloutId: string; emoji: string }) => void; isPending: boolean };
   toggleTaskStatus: { mutate: (v: { id: string; status: string }) => void; isPending: boolean };
   deleteTaskMutation: { mutate: (id: string) => void; isPending: boolean };
@@ -76,6 +77,7 @@ export function ActivityTab({
   touchLogCollapsed,
   setTouchLogCollapsed,
   deleteCalloutMutation,
+  deleteTouchpointMutation,
   toggleReactionMutation,
   toggleTaskStatus,
   deleteTaskMutation,
@@ -507,7 +509,7 @@ export function ActivityTab({
                       return (
                         <div
                           key={tp.id}
-                          className={`flex items-start gap-3 py-2 border-b last:border-0 cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors ${isEmail ? "bg-blue-50/40 dark:bg-blue-950/10" : ""}`}
+                          className={`group flex items-start gap-3 py-2 border-b last:border-0 cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1 transition-colors ${isEmail ? "bg-blue-50/40 dark:bg-blue-950/10" : ""}`}
                           onClick={() => setSelectedTouchpoint(tp)}
                           data-testid={`touch-log-row-${tp.id}`}
                         >
@@ -547,6 +549,22 @@ export function ActivityTab({
                               {tp.loggedByName} · {formatTimeAgo(tp.createdAt || tp.date)}
                             </p>
                           </div>
+                          {deleteTouchpointMutation && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirm("Delete this touchpoint? This cannot be undone.")) {
+                                  deleteTouchpointMutation.mutate(tp.id);
+                                }
+                              }}
+                              disabled={deleteTouchpointMutation.isPending}
+                              className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                              data-testid={`button-delete-touchpoint-${tp.id}`}
+                              title="Delete touchpoint"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                         </div>
                       );
                     })}

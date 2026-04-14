@@ -396,6 +396,22 @@ export default function CompanyDetail() {
     },
   });
 
+  const canDeleteTouchpoints = currentUser?.role === "admin" || currentUser?.role === "director";
+  const deleteTouchpointMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/touchpoints/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
+      toast({ title: "Touchpoint deleted" });
+    },
+    onError: () => {
+      toast({ title: "Failed to delete touchpoint", variant: "destructive" });
+    },
+  });
+
   const canReassign = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
 
   const deleteMutation = useMutation({
@@ -835,6 +851,7 @@ export default function CompanyDetail() {
             touchLogCollapsed={touchLogCollapsed}
             setTouchLogCollapsed={setTouchLogCollapsed}
             deleteCalloutMutation={deleteCalloutMutation}
+            deleteTouchpointMutation={canDeleteTouchpoints ? deleteTouchpointMutation : undefined}
             toggleReactionMutation={toggleReactionMutation}
             toggleTaskStatus={toggleTaskStatus}
             deleteTaskMutation={deleteTaskMutation}

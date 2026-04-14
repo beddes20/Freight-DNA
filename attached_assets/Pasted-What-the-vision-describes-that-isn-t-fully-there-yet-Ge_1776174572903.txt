@@ -1,0 +1,19 @@
+What the vision describes that isn't fully there yet
+Geographic responsibility per contact — The vision wants to tag each contact to specific geographies they own (e.g., "Jane owns Upper Midwest outbound") derived from their email and freight activity. Right now contacts have roles but not explicit geography ownership maps.
+
+Email as a live learning system — The vision's core idea is that AI reads every email thread and auto-suggests new contacts, infers who owns what freight, and tracks waiting state (waiting on us vs. them). Email signals exist, but this two-way, auto-building graph from email isn't fully realized.
+
+Waiting state / conversation ownership — Knowing that a thread is "waiting on us vs. waiting on them" and surfacing overdue threads isn't explicitly tracked today.
+
+AI-drafted emails in the rep's voice — DNA Guru can help draft, but the vision describes it deeply personalizing outreach based on the rep's past email patterns, specific lane history, and performance data — a tighter, more contextual drafting loop.
+
+Play tagging on every AI output — The vision wants every suggestion (NBA, conversation spark, call prep) to be explicitly labeled with a named play ("Consolidate Spot → Mini-bid", "Geography Expansion"). Today plays are referenced but not consistently labeled as a first-class concept across all surfaces.
+
+Pre-call / post-call summaries — A dedicated "prep mode" before a call or email (here's who you're talking to, their recent topics, open loops, suggested questions) and a post-call summary-and-follow-up flow aren't explicitly built as standalone surfaces.
+
+Where the proposed tasks land
+The DNA Guru upgrades (#97 and #98) are the closest to closing these gaps — specifically giving the AI access to more CRM context and improving response quality. The Launchpad (#99) covers new business development, which complements the vision but isn't in it directly.
+
+The biggest gap between the vision and what's planned: the email-as-nervous-system piece — auto-building the contact geography graph, tracking waiting states, and generating conversation sparks directly from email thread analysis. That's the "AI watches every conversation" layer the vision centers on, and it's not in any current or proposed task.
+
+Want me to scope that out as a task, or talk through which piece of that you'd want to tackle first?

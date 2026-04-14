@@ -5066,6 +5066,10 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const allowedRoles = ["admin", "director"];
+      if (!allowedRoles.includes(user.role)) {
+        return res.status(403).json({ error: "Only admins and directors can delete touchpoints" });
+      }
       await storage.deleteTouchpoint((req.params.id as string));
       cacheInvalidatePrefix(`cold-contacts:${user.id}`);
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
