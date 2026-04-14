@@ -139,6 +139,123 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
     }
   });
 
+  // ── "What Email Learned Today" daily digest ─────────────────────────────
+  app.get("/api/analytics/email-learned-today", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
+      const orgId = user.organizationId;
+
+      const [
+        newContactSuggestions,
+        conversationSparks,
+        enrichmentUpdates,
+        geographyInferences,
+      ] = await Promise.all([
+        storage.pool.query(
+          `SELECT
+             acs.id,
+             acs.email_address,
+             acs.suggested_name,
+             acs.suggested_title,
+             acs.suggestion_source,
+             acs.confidence_score,
+             acs.thread_count,
+             acs.notes,
+             acs.created_at,
+             c.name AS account_name
+           FROM account_contact_suggestions acs
+           LEFT JOIN companies c ON c.id = acs.account_id
+           WHERE acs.org_id = $1
+             AND acs.created_at > NOW() - INTERVAL '24 hours'
+             AND acs.status = 'pending'
+           ORDER BY acs.confidence_score DESC, acs.created_at DESC
+           LIMIT 50`,
+          [orgId]
+        ),
+
+        storage.pool.query(
+          `SELECT
+             es.id AS signal_id,
+             es.intent_type,
+             es.confidence,
+             es.extracted_data,
+             es.created_at AS signal_at,
+             em.subject,
+             em.from_email,
+             em.linked_account_id,
+             c.name AS company_name
+           FROM email_signals es
+           JOIN email_messages em ON em.id = es.message_id
+           LEFT JOIN companies c ON c.id = em.linked_account_id
+           WHERE em.org_id = $1
+             AND es.intent_type LIKE 'conversation_spark_%'
+             AND es.created_at > NOW() - INTERVAL '24 hours'
+           ORDER BY es.created_at DESC
+           LIMIT 50`,
+          [orgId]
+        ),
+
+        storage.pool.query(
+          `SELECT
+             ces.id,
+             ces.suggestion_type,
+             ces.confidence,
+             ces.payload,
+             ces.created_at,
+             ca.name AS carrier_name
+           FROM carrier_email_suggestions ces
+           LEFT JOIN carriers ca ON ca.id = ces.carrier_id
+           WHERE ca.org_id = $1
+             AND ces.created_at > NOW() - INTERVAL '24 hours'
+             AND ces.status = 'pending'
+           ORDER BY ces.created_at DESC
+           LIMIT 50`,
+          [orgId]
+        ),
+
+        storage.pool.query(
+          `SELECT
+             es.id AS signal_id,
+             es.intent_type,
+             es.confidence,
+             es.extracted_data,
+             es.created_at AS signal_at,
+             em.subject,
+             em.from_email,
+             em.linked_account_id,
+             c.name AS company_name
+           FROM email_signals es
+           JOIN email_messages em ON em.id = es.message_id
+           LEFT JOIN companies c ON c.id = em.linked_account_id
+           WHERE em.org_id = $1
+             AND es.intent_type IN ('new_lane_preference', 'capacity_available', 'lane_offer', 'conversation_spark_geography_expansion')
+             AND es.created_at > NOW() - INTERVAL '24 hours'
+           ORDER BY es.created_at DESC
+           LIMIT 30`,
+          [orgId]
+        ),
+      ]);
+
+      res.json({
+        new_contact_suggestions: newContactSuggestions.rows,
+        conversation_sparks: conversationSparks.rows,
+        enrichment_updates: enrichmentUpdates.rows,
+        geography_inferences: geographyInferences.rows,
+        summary: {
+          contacts_suggested: newContactSuggestions.rows.length,
+          sparks_generated: conversationSparks.rows.length,
+          enrichments_staged: enrichmentUpdates.rows.length,
+          geographies_inferred: geographyInferences.rows.length,
+        },
+      });
+    } catch (err) {
+      console.error("[email-analytics] learned-today error:", err);
+      res.status(500).json({ error: "Failed to load daily digest" });
+    }
+  });
+
   // ── Carrier reliability leaderboard ─────────────────────────────────────
   app.get("/api/analytics/carrier-reliability", requireAuth, async (req: Request, res: Response) => {
     try {

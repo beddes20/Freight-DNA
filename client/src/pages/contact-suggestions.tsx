@@ -301,6 +301,12 @@ function AccountSuggestionGroup({ accountId, accountName, pendingCount, onNaviga
                     {suggestion.emailAddress}
                   </span>
                   <ConfidenceBadge score={suggestion.confidenceScore} />
+                  {suggestion.suggestionSource === "email_domain_match" && (
+                    <Badge variant="outline" className="text-[10px] text-teal-600 border-teal-500/30 dark:text-teal-400">Domain</Badge>
+                  )}
+                  {suggestion.suggestionSource === "email_thread" && (
+                    <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-500/30 dark:text-blue-400">Thread</Badge>
+                  )}
                 </div>
                 {suggestion.suggestedName && (
                   <p className="text-xs text-muted-foreground mt-0.5">
@@ -309,7 +315,14 @@ function AccountSuggestionGroup({ accountId, accountName, pendingCount, onNaviga
                   </p>
                 )}
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {suggestion.threadCount} thread{suggestion.threadCount !== 1 ? "s" : ""} · {suggestion.suggestionSource === "email_thread" ? "Email thread" : "Email"}
+                  {suggestion.threadCount} thread{suggestion.threadCount !== 1 ? "s" : ""} ·{" "}
+                  {suggestion.suggestionSource === "email_thread"
+                    ? "Email thread"
+                    : suggestion.suggestionSource === "email_domain_match"
+                    ? "Domain match"
+                    : suggestion.suggestionSource === "email_message"
+                    ? "Email message"
+                    : suggestion.suggestionSource}
                 </p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">

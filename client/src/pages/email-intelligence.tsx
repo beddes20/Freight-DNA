@@ -10,7 +10,8 @@ import {
 } from "recharts";
 import {
   BrainCircuit, AlertTriangle, CheckCircle2, XCircle, TrendingUp, Activity,
-  Clock, Building2, Mail, Zap, RefreshCw, ChevronRight, ArrowUpRight, BarChart2
+  Clock, Building2, Mail, Zap, RefreshCw, ChevronRight, ArrowUpRight, BarChart2,
+  Lightbulb, UserPlus, MapPin, Wrench, Sparkles
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -65,6 +66,53 @@ interface EmailIntelligenceData {
   urgency_signals: UrgencySignal[];
 }
 
+interface LearnedTodayContactSuggestion {
+  id: string;
+  email_address: string;
+  suggested_name: string | null;
+  suggested_title: string | null;
+  suggestion_source: string;
+  confidence_score: number;
+  thread_count: number;
+  notes: string | null;
+  created_at: string;
+  account_name: string | null;
+}
+
+interface LearnedTodaySparkSignal {
+  signal_id: string;
+  intent_type: string;
+  confidence: number;
+  extracted_data: Record<string, unknown> | null;
+  signal_at: string;
+  subject: string | null;
+  from_email: string | null;
+  linked_account_id: string | null;
+  company_name: string | null;
+}
+
+interface LearnedTodayEnrichment {
+  id: string;
+  suggestion_type: string;
+  confidence: number;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+  carrier_name: string | null;
+}
+
+interface LearnedTodayData {
+  new_contact_suggestions: LearnedTodayContactSuggestion[];
+  conversation_sparks: LearnedTodaySparkSignal[];
+  enrichment_updates: LearnedTodayEnrichment[];
+  geography_inferences: LearnedTodaySparkSignal[];
+  summary: {
+    contacts_suggested: number;
+    sparks_generated: number;
+    enrichments_staged: number;
+    geographies_inferred: number;
+  };
+}
+
 const INTENT_LABELS: Record<string, string> = {
   lane_offer: "Lane Offer",
   lane_decline: "Lane Decline",
@@ -85,6 +133,9 @@ const INTENT_LABELS: Record<string, string> = {
   positive_feedback: "Positive Feedback",
   closed_won_indicator: "Closed Won",
   closed_lost_indicator: "Closed Lost",
+  conversation_spark_adhoc_to_structured: "Spark: Ad Hoc → Structured",
+  conversation_spark_new_stakeholder: "Spark: New Stakeholder",
+  conversation_spark_geography_expansion: "Spark: Geography Expansion",
 };
 
 const INTENT_COLORS: Record<string, string> = {
@@ -105,6 +156,9 @@ const INTENT_COLORS: Record<string, string> = {
   new_opportunity: "#22c55e",
   closed_won_indicator: "#16a34a",
   closed_lost_indicator: "#b91c1c",
+  conversation_spark_adhoc_to_structured: "#f59e0b",
+  conversation_spark_new_stakeholder: "#8b5cf6",
+  conversation_spark_geography_expansion: "#14b8a6",
 };
 
 function label(type: string) {
@@ -200,6 +254,16 @@ export default function EmailIntelligencePage() {
     queryFn: async () => {
       const r = await fetch("/api/analytics/email-intelligence");
       if (!r.ok) throw new Error("Failed to load analytics");
+      return r.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: learnedData, isLoading: learnedLoading } = useQuery<LearnedTodayData>({
+    queryKey: ["/api/analytics/email-learned-today"],
+    queryFn: async () => {
+      const r = await fetch("/api/analytics/email-learned-today");
+      if (!r.ok) throw new Error("Failed to load daily digest");
       return r.json();
     },
     staleTime: 5 * 60 * 1000,
@@ -317,6 +381,15 @@ export default function EmailIntelligencePage() {
             <TabsTrigger value="feed" data-testid="tab-feed">
               <Zap className="w-3.5 h-3.5 mr-1.5" />
               Recent Feed
+            </TabsTrigger>
+            <TabsTrigger value="learned" data-testid="tab-learned-today">
+              <Lightbulb className="w-3.5 h-3.5 mr-1.5" />
+              Learned Today
+              {learnedData && (learnedData.summary.contacts_suggested + learnedData.summary.sparks_generated + learnedData.summary.enrichments_staged + learnedData.summary.geographies_inferred) > 0 && (
+                <Badge variant="secondary" className="ml-1.5 h-4 px-1.5 text-[10px]">
+                  {learnedData.summary.contacts_suggested + learnedData.summary.sparks_generated + learnedData.summary.enrichments_staged + learnedData.summary.geographies_inferred}
+                </Badge>
+              )}
             </TabsTrigger>
           </TabsList>
 
@@ -612,6 +685,249 @@ export default function EmailIntelligencePage() {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* ── What Email Learned Today ──────────────────────────────────── */}
+          <TabsContent value="learned" className="mt-0">
+            {learnedLoading ? (
+              <div className="space-y-4">
+                {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-32 rounded-lg" />)}
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Summary KPIs */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { label: "Contacts Suggested", value: learnedData?.summary.contacts_suggested ?? 0, icon: UserPlus, color: "text-blue-500" },
+                    { label: "Conversation Sparks", value: learnedData?.summary.sparks_generated ?? 0, icon: Sparkles, color: "text-amber-500" },
+                    { label: "Enrichments Staged", value: learnedData?.summary.enrichments_staged ?? 0, icon: Wrench, color: "text-purple-500" },
+                    { label: "Geographies Inferred", value: learnedData?.summary.geographies_inferred ?? 0, icon: MapPin, color: "text-teal-500" },
+                  ].map(kpi => (
+                    <div key={kpi.label} className="rounded-lg border border-border bg-card p-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <kpi.icon className={`w-4 h-4 ${kpi.color}`} />
+                        <span className="text-xs text-muted-foreground">{kpi.label}</span>
+                      </div>
+                      <div className={`text-2xl font-bold ${kpi.color}`} data-testid={`learned-kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}>{kpi.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* No data state */}
+                {learnedData && learnedData.summary.contacts_suggested === 0 && learnedData.summary.sparks_generated === 0 && learnedData.summary.enrichments_staged === 0 && learnedData.summary.geographies_inferred === 0 && (
+                  <Card className="border-border">
+                    <CardContent className="pt-8 pb-8 text-center">
+                      <Lightbulb className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                      <p className="font-medium text-foreground">Nothing new in the last 24 hours</p>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        The email learning system runs on its 10-minute cycle. Insights will appear here as new emails are processed.
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* New Contact Suggestions */}
+                {(learnedData?.new_contact_suggestions ?? []).length > 0 && (
+                  <Card className="border-border">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                        <UserPlus className="w-4 h-4 text-blue-500" />
+                        New Contacts Detected
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        People discovered in email threads in the last 24 hours
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="divide-y divide-border">
+                        {(learnedData?.new_contact_suggestions ?? []).map(cs => (
+                          <div key={cs.id} className="px-4 py-3 flex items-start gap-3" data-testid={`learned-contact-${cs.id}`}>
+                            <UserPlus className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-medium text-foreground">{cs.email_address}</span>
+                                <Badge variant="outline" className="text-[10px]">
+                                  {cs.suggestion_source === "email_domain_match" ? "Domain Match" : cs.suggestion_source === "email_thread" ? "Email Thread" : cs.suggestion_source}
+                                </Badge>
+                                <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                                  {formatDistanceToNow(new Date(cs.created_at), { addSuffix: true })}
+                                </span>
+                              </div>
+                              {(cs.suggested_name || cs.suggested_title) && (
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  {cs.suggested_name}{cs.suggested_title && ` · ${cs.suggested_title}`}
+                                </p>
+                              )}
+                              <div className="flex items-center gap-2 mt-0.5">
+                                {cs.account_name && (
+                                  <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                    <Building2 className="w-3 h-3" />
+                                    {cs.account_name}
+                                  </span>
+                                )}
+                                <span className="text-[10px] text-muted-foreground">{cs.confidence_score}% confidence</span>
+                                {cs.thread_count > 1 && (
+                                  <span className="text-[10px] text-muted-foreground">{cs.thread_count} threads</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Conversation Sparks */}
+                {(learnedData?.conversation_sparks ?? []).length > 0 && (
+                  <Card className="border-border">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-amber-500" />
+                        Conversation Sparks
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Data-backed outreach opportunities detected from email patterns
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="divide-y divide-border">
+                        {(learnedData?.conversation_sparks ?? []).map(spark => {
+                          const data = spark.extracted_data ?? {};
+                          return (
+                            <div
+                              key={spark.signal_id}
+                              className="px-4 py-3 flex items-start gap-3 hover:bg-muted/20 transition-colors cursor-pointer"
+                              onClick={() => spark.linked_account_id && navigate(`/companies/${spark.linked_account_id}`)}
+                              data-testid={`learned-spark-${spark.signal_id}`}
+                            >
+                              <Sparkles className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <IntentBadge type={spark.intent_type} />
+                                  <span className="text-xs font-medium text-foreground truncate">
+                                    {spark.company_name ?? spark.from_email ?? "Unknown"}
+                                  </span>
+                                  <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                                    {formatDistanceToNow(new Date(spark.signal_at), { addSuffix: true })}
+                                  </span>
+                                </div>
+                                {spark.subject && (
+                                  <p className="text-[11px] text-muted-foreground mt-0.5 truncate">"{spark.subject}"</p>
+                                )}
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                  {data.corridor ? <span className="text-[10px] text-foreground/70">Corridor: {String(data.corridor)}</span> : null}
+                                  {data.loadCount ? <span className="text-[10px] text-foreground/70">{String(data.loadCount)} loads</span> : null}
+                                  {data.stakeholderName ? <span className="text-[10px] text-foreground/70">Stakeholder: {String(data.stakeholderName)}</span> : null}
+                                  {data.region ? <span className="text-[10px] text-foreground/70">Region: {String(data.region)}</span> : null}
+                                  <span className="text-[10px] text-muted-foreground">{spark.confidence}% confidence</span>
+                                </div>
+                              </div>
+                              {spark.linked_account_id && (
+                                <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Enrichment Updates */}
+                {(learnedData?.enrichment_updates ?? []).length > 0 && (
+                  <Card className="border-border">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                        <Wrench className="w-4 h-4 text-purple-500" />
+                        Carrier Enrichment Updates
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Profile updates staged from carrier email interactions
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="divide-y divide-border">
+                        {(learnedData?.enrichment_updates ?? []).map(eu => (
+                          <div key={eu.id} className="px-4 py-3 flex items-start gap-3" data-testid={`learned-enrichment-${eu.id}`}>
+                            <Wrench className="w-4 h-4 text-purple-400 mt-0.5 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-medium text-foreground">
+                                  {eu.carrier_name ?? "Unknown Carrier"}
+                                </span>
+                                <Badge variant="outline" className="text-[10px]">
+                                  {eu.suggestion_type.replace(/_/g, " ")}
+                                </Badge>
+                                <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                                  {formatDistanceToNow(new Date(eu.created_at), { addSuffix: true })}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground">{eu.confidence}% confidence</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Geography Inferences */}
+                {(learnedData?.geography_inferences ?? []).length > 0 && (
+                  <Card className="border-border">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                        <MapPin className="w-4 h-4 text-teal-500" />
+                        Geography & Lane Signals
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Freight ownership and lane patterns inferred from email activity
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="divide-y divide-border">
+                        {(learnedData?.geography_inferences ?? []).map(gi => {
+                          const data = gi.extracted_data ?? {};
+                          return (
+                            <div
+                              key={gi.signal_id}
+                              className="px-4 py-3 flex items-start gap-3 hover:bg-muted/20 transition-colors cursor-pointer"
+                              onClick={() => gi.linked_account_id && navigate(`/companies/${gi.linked_account_id}`)}
+                              data-testid={`learned-geo-${gi.signal_id}`}
+                            >
+                              <MapPin className="w-4 h-4 text-teal-400 mt-0.5 shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <IntentBadge type={gi.intent_type} />
+                                  <span className="text-xs font-medium text-foreground truncate">
+                                    {gi.company_name ?? gi.from_email ?? "Unknown"}
+                                  </span>
+                                  <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                                    {formatDistanceToNow(new Date(gi.signal_at), { addSuffix: true })}
+                                  </span>
+                                </div>
+                                {gi.subject && (
+                                  <p className="text-[11px] text-muted-foreground mt-0.5 truncate">"{gi.subject}"</p>
+                                )}
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                  {data.lane ? <span className="text-[10px] text-foreground/70">Lane: {String(data.lane)}</span> : null}
+                                  {data.region ? <span className="text-[10px] text-foreground/70">Region: {String(data.region)}</span> : null}
+                                  {data.corridor ? <span className="text-[10px] text-foreground/70">Corridor: {String(data.corridor)}</span> : null}
+                                  <span className="text-[10px] text-muted-foreground">{gi.confidence}% confidence</span>
+                                </div>
+                              </div>
+                              {gi.linked_account_id && (
+                                <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
           </TabsContent>
         </Tabs>
       </div>

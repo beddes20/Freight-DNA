@@ -638,6 +638,11 @@ const EMAIL_SIGNAL_NBA_MAP: Record<string, NbaSignalMapping | null> = {
   positive_feedback:      null,
   closed_won_indicator:   null,
   closed_lost_indicator:  { ruleType: "stale_account",                   urgency: "critical", outcomeType: "protect" },
+
+  // Conversation spark signals — actionable outreach opportunities from email patterns
+  conversation_spark_adhoc_to_structured:  { ruleType: "email_spark_adhoc_to_structured",   urgency: "high",     outcomeType: "grow"    },
+  conversation_spark_new_stakeholder:      { ruleType: "email_spark_new_stakeholder",        urgency: "moderate", outcomeType: "deepen"  },
+  conversation_spark_geography_expansion:  { ruleType: "email_spark_geography_expansion",    urgency: "high",     outcomeType: "grow"    },
 };
 
 export const SIGNAL_CONFIDENCE_THRESHOLD = 60;
@@ -742,6 +747,9 @@ const ACCOUNT_EMAIL_INTENT_FAMILIES: Record<string, string> = {
   urgency_signal:        "urgency",
   new_opportunity:       "opportunity",
   closed_lost_indicator: "outcome",
+  conversation_spark_adhoc_to_structured:  "spark_adhoc",
+  conversation_spark_new_stakeholder:      "spark_stakeholder",
+  conversation_spark_geography_expansion:  "spark_geography",
 };
 
 interface AccountEmailNbaRule {
@@ -794,6 +802,42 @@ const ACCOUNT_EMAIL_NBA_RULES: Record<string, AccountEmailNbaRule> = {
     urgency: "high",
     title: "Qualify new freight opportunity",
     body: (s, m) => `Customer mentioned new lanes or freight volume${m.subject ? ` in "${m.subject.slice(0, 60)}"` : ""}. Set up a qualification call to scope the opportunity.`,
+  },
+  conversation_spark_adhoc_to_structured: {
+    ruleType: "email_spark_adhoc_to_structured",
+    outcomeType: "grow",
+    urgency: "high",
+    title: "Propose mini-bid for repeated ad hoc corridor",
+    body: (s, m) => {
+      const data = (s.extractedData ?? {}) as Record<string, unknown>;
+      const corridor = data.corridor ? ` on ${data.corridor}` : "";
+      const loads = data.loadCount ? ` (${data.loadCount} ad hoc loads observed)` : "";
+      return `Repeated ad hoc loads detected${corridor}${loads}${m.subject ? ` — thread: "${m.subject.slice(0, 50)}"` : ""}. Propose a mini-bid or contracted lane to capture this volume.`;
+    },
+  },
+  conversation_spark_new_stakeholder: {
+    ruleType: "email_spark_new_stakeholder",
+    outcomeType: "deepen",
+    urgency: "moderate",
+    title: "New stakeholder active — send intro",
+    body: (s, m) => {
+      const data = (s.extractedData ?? {}) as Record<string, unknown>;
+      const who = data.stakeholderName ? ` ${data.stakeholderName}` : "";
+      const role = data.role ? ` (${data.role})` : "";
+      return `New stakeholder${who}${role} is active on recent threads${m.subject ? ` including "${m.subject.slice(0, 50)}"` : ""}. Send a personalized intro to build the relationship.`;
+    },
+  },
+  conversation_spark_geography_expansion: {
+    ruleType: "email_spark_geography_expansion",
+    outcomeType: "grow",
+    urgency: "high",
+    title: "Geography expansion opportunity detected",
+    body: (s, m) => {
+      const data = (s.extractedData ?? {}) as Record<string, unknown>;
+      const region = data.region ? ` in ${data.region}` : "";
+      const corridor = data.corridor ? ` (corridor: ${data.corridor})` : "";
+      return `Email threads reveal freight activity${region}${corridor} not previously covered${m.subject ? ` — "${m.subject.slice(0, 50)}"` : ""}. Expand coverage to capture this new geography.`;
+    },
   },
 };
 

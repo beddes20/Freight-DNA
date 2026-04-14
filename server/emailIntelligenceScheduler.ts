@@ -21,7 +21,7 @@ import { generateCarrierEmailNbas } from "./carrierEmailNbaService";
 import { stageCarrierEmailEnrichment } from "./carrierEmailEnrichmentService";
 import { processWinLossEvidence } from "./emailWinLossService";
 import { processCarrierEmailSignals } from "./services/carrierIntelSuggestions";
-import { detectAndSuggest } from "./accountContactCaptureService";
+import { detectAndSuggest, detectUnlinkedDomainSuggestions } from "./accountContactCaptureService";
 import { applyMessageToThread } from "./services/conversationWaitingStateService";
 import { determineInitialOwner } from "./services/conversationOwnershipService";
 import { ingestPatternEvidence, maybeFireResponsibilityNba } from "./accountContactLanePatternResponsibilityService";
@@ -74,6 +74,11 @@ async function runEmailIntelligenceBatch(): Promise<void> {
       if (msg.linkedAccountId) {
         detectAndSuggest(msg, storage).catch(err => {
           console.error(`[emailIntelligenceScheduler] contact capture error for message ${msg.id}:`, err);
+        });
+      } else if (msg.orgId) {
+        // Domain-based discovery: detect unknown senders whose domain matches a known account
+        detectUnlinkedDomainSuggestions(msg, storage).catch(err => {
+          console.error(`[emailIntelligenceScheduler] domain-match contact capture error for message ${msg.id}:`, err);
         });
       }
 

@@ -43,6 +43,9 @@ export const CUSTOMER_INTENTS = [
   "positive_feedback",
   "closed_won_indicator",
   "closed_lost_indicator",
+  "conversation_spark_adhoc_to_structured",
+  "conversation_spark_new_stakeholder",
+  "conversation_spark_geography_expansion",
 ] as const;
 
 export const ALL_INTENT_TYPES = [...CARRIER_INTENTS, ...CUSTOMER_INTENTS] as const;
@@ -113,6 +116,12 @@ CUSTOMER intent types (use when actorType is "customer"):
 - positive_feedback: customer expressing satisfaction
 - closed_won_indicator: signals a deal has been won
 - closed_lost_indicator: signals a deal has been lost or customer churned
+
+CONVERSATION SPARK intent types (use when actorType is "customer"):
+These capture data-backed outreach opportunities observed across email threads:
+- conversation_spark_adhoc_to_structured: pattern of repeated ad hoc/spot loads on the same corridor suggests proposing a mini-bid or contracted lane (extractedData should include corridor, loadCount estimate)
+- conversation_spark_new_stakeholder: a new person (not previously seen) is active on bids, quotes, or operational threads — suggests sending an intro (extractedData should include stakeholderName, role if visible)
+- conversation_spark_geography_expansion: email threads reveal freight activity in a new geography or region not previously covered — suggests expanding coverage (extractedData should include region, corridor)
 
 If no clear signal is present, return an empty signals array.
 Return ONLY valid JSON.`;

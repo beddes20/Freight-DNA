@@ -364,3 +364,88 @@ export async function detectAndSuggest(
 
   return { upserted, skipped };
 }
+
+// ─── Domain-based account discovery for unlinked messages ──────────────────
+
+/**
+ * For messages that have NO linkedAccountId, checks if the sender's email
+ * domain matches a known account's website/name in the org. If matched,
+ * auto-creates a contact suggestion with the thread context.
+ *
+ * This covers the "unknown sender at known domain" scenario where
+ * the webhook didn't link the message to an account but the domain
+ * clearly belongs to one.
+ */
+export async function detectUnlinkedDomainSuggestions(
+  message: EmailMessage,
+  storage: IStorage,
+): Promise<DetectAndSuggestResult> {
+  if (message.linkedAccountId) return { upserted: 0, skipped: 0 };
+  if (!message.orgId) return { upserted: 0, skipped: 0 };
+
+  const fromAddresses = parseEmailAddresses(message.fromEmail);
+  if (fromAddresses.length === 0) return { upserted: 0, skipped: 0 };
+
+  const senderEmail = fromAddresses[0];
+  const domain = senderEmail.split("@")[1] ?? "";
+  if (!domain || isFreeProvider(domain)) return { upserted: 0, skipped: 0 };
+
+  let companies: Awaited<ReturnType<IStorage["getCompanies"]>>;
+  try {
+    companies = await storage.getCompanies(message.orgId);
+  } catch (err) {
+    console.error(`[accountContactCapture] getCompanies failed for org ${message.orgId} (msg ${message.id}):`, err instanceof Error ? err.message : String(err));
+    return { upserted: 0, skipped: 0 };
+  }
+
+  if (message.direction !== "inbound") return { upserted: 0, skipped: 0 };
+  if (message.linkedCarrierId) return { upserted: 0, skipped: 0 };
+
+  let bestCompany: typeof companies[0] | null = null;
+  let bestScore = 0;
+  for (const company of companies) {
+    const score = domainMatchScore(domain, company);
+    if (score > bestScore) {
+      bestScore = score;
+      bestCompany = company;
+    }
+  }
+
+  if (!bestCompany || bestScore === 0) return { upserted: 0, skipped: 0 };
+
+  const existingContacts = await storage.getContactsByCompany(bestCompany.id);
+  const knownEmails = new Set(
+    existingContacts.map(c => c.email?.toLowerCase()).filter(Boolean) as string[],
+  );
+  if (knownEmails.has(senderEmail)) return { upserted: 0, skipped: 1 };
+
+  let confidence = 40 + 20 + bestScore;
+  if (isGenericInbox(senderEmail)) confidence = Math.min(confidence, 35);
+  confidence = Math.max(0, Math.min(100, confidence));
+
+  const sigHints = extractSignatureHints(message.body, senderEmail);
+
+  try {
+    await storage.upsertAccountContactSuggestion({
+      accountId: bestCompany.id,
+      orgId: message.orgId,
+      emailAddress: senderEmail,
+      suggestedName: sigHints.name ?? null,
+      suggestedTitle: sigHints.title ?? null,
+      suggestedPhone: sigHints.phone ?? null,
+      suggestionSource: "email_domain_match",
+      confidenceScore: confidence,
+      status: "pending",
+      threadCount: 1,
+      emailMessageId: message.id,
+      threadId: message.threadId ?? null,
+      snoozedUntil: null,
+      actedByUserId: null,
+      notes: `Auto-detected: sender domain "${domain}" matches account "${bestCompany.name}"`,
+    });
+    return { upserted: 1, skipped: 0 };
+  } catch (err) {
+    console.error(`[accountContactCapture] domain-match upsert error for ${senderEmail} on ${bestCompany.name}:`, err);
+    return { upserted: 0, skipped: 0 };
+  }
+}
