@@ -553,7 +553,7 @@ export default function RepReportPage() {
       {/* ── Dark hero header ── */}
       <div
         className="relative px-6 pt-6 pb-10 md:px-8 md:pt-8"
-        style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%)" }}
+        style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}
       >
         <div className="max-w-5xl mx-auto">
           {/* Back button */}
@@ -571,12 +571,12 @@ export default function RepReportPage() {
           <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
             {/* Rep info */}
             <div className="flex items-center gap-4">
-              <div className="h-14 w-14 rounded-2xl bg-primary/20 border border-primary/30 flex items-center justify-center text-white font-bold text-lg shadow-lg shrink-0">
+              <div className="h-14 w-14 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg shrink-0" style={{ background: "rgba(255,180,0,0.12)", border: "1px solid rgba(255,180,0,0.25)" }}>
                 {initials}
               </div>
               <div>
                 <h1 className="text-2xl font-bold text-white" data-testid="text-rep-name">{rep.name}</h1>
-                <p className="text-slate-300 text-sm mt-0.5">
+                <p className="text-white/60 text-sm mt-0.5">
                   {roleLabel}{managerLine ? ` · ${managerLine}` : ""}
                 </p>
               </div>
@@ -585,17 +585,17 @@ export default function RepReportPage() {
             {/* Period toggle + actions */}
             <div className="flex flex-col items-start md:items-end gap-2">
               <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1 bg-white/10 rounded-xl p-1">
+                <div className="flex items-center gap-1 rounded-xl p-1" style={{ background: "rgba(255,255,255,0.07)" }}>
                   <button
                     onClick={() => setPeriod("weekly")}
-                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "weekly" ? "bg-white text-slate-900" : "text-white/70 hover:text-white"}`}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "weekly" ? "bg-white text-black" : "text-white/70 hover:text-white"}`}
                     data-testid="button-period-weekly"
                   >
                     Weekly
                   </button>
                   <button
                     onClick={() => setPeriod("monthly")}
-                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "monthly" ? "bg-white text-slate-900" : "text-white/70 hover:text-white"}`}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "monthly" ? "bg-white text-black" : "text-white/70 hover:text-white"}`}
                     data-testid="button-period-monthly"
                   >
                     Monthly

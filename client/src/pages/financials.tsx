@@ -614,11 +614,11 @@ export default function Financials() {
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <div
         className="relative overflow-hidden rounded-xl px-6 py-5 text-white"
-        style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%)" }}
+        style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}
       >
-        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full bg-white/5" />
-        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full bg-white/5" />
-        <div className="pointer-events-none absolute top-1/2 right-24 -translate-y-1/2 h-20 w-20 rounded-full bg-white/5" />
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
+        <div className="pointer-events-none absolute top-1/2 right-24 -translate-y-1/2 h-20 w-20 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
         <div className="relative flex items-start justify-between">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">

@@ -235,14 +235,14 @@ export default function RepCustomers() {
         </button>
       </div>
 
-      <div className="rounded-xl p-6 text-white" style={{ background: "linear-gradient(135deg, #001AB3 0%, #044ad3 60%, #2868ff 100%)" }}>
+      <div className="rounded-xl p-6 text-white" style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}>
         <div className="flex items-center gap-4">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white/20 backdrop-blur-sm text-white font-bold text-xl">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-white font-bold text-xl" style={{ background: "rgba(255,180,0,0.12)", border: "1px solid rgba(255,180,0,0.25)" }}>
             {initials}
           </div>
           <div className="min-w-0">
             <h1 className="text-xl font-bold" data-testid="text-rep-name">{rep.name}</h1>
-            <p className="text-blue-200 text-sm mt-0.5">{rep.username}</p>
+            <p className="text-white/60 text-sm mt-0.5">{rep.username}</p>
             <div className="mt-2 flex items-center gap-2">
               <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-medium text-white">
                 {rep.role === "director" || rep.role === "national_account_manager" || rep.role === "sales" ? (
