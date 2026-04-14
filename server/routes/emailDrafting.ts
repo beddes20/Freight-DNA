@@ -578,8 +578,8 @@ export function registerEmailDraftingRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      if (!["admin", "sales_director", "director"].includes(user.role)) {
-        return res.status(403).json({ error: "Only admins and directors can submit corrections" });
+      if (!["admin", "sales_director", "director", "logistics_manager"].includes(user.role)) {
+        return res.status(403).json({ error: "Only admins, directors, and logistics managers can submit corrections" });
       }
 
       const schema = z.object({
@@ -626,7 +626,7 @@ export function registerEmailDraftingRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const isLeadership = ["admin", "sales_director", "director"].includes(user.role);
+      const isLeadership = ["admin", "sales_director", "director", "logistics_manager"].includes(user.role);
 
       const { emailMessageId, threadId, hasOutreachLog, limit: limitStr } = req.query;
       const conditions = [eq(sentEmailCorrections.orgId, user.organizationId)];
@@ -669,8 +669,8 @@ export function registerEmailDraftingRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      if (!["admin", "sales_director", "director"].includes(user.role)) {
-        return res.status(403).json({ error: "Only admins and directors can view correction stats" });
+      if (!["admin", "sales_director", "director", "logistics_manager"].includes(user.role)) {
+        return res.status(403).json({ error: "Only admins, directors, and logistics managers can view correction stats" });
       }
 
       const all = await db.select({ id: sentEmailCorrections.id })

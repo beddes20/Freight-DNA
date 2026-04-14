@@ -127,7 +127,7 @@ function ThreadDetailPanel({
   const { toast } = useToast();
   const { user } = useAuth();
 
-  const canCorrect = user && ["admin", "sales_director", "director"].includes(user.role);
+  const canCorrect = user && ["admin", "sales_director", "director", "logistics_manager"].includes(user.role);
 
   const { data: correctionsData } = useQuery<{ corrections: { emailMessageId: string }[] }>({
     queryKey: ["/api/email-corrections", { threadId: thread.threadId }],
