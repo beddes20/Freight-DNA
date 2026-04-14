@@ -8914,6 +8914,8 @@ Respond with valid JSON only:
         contactId?: string; companyId?: string; subject?: string; toName?: string; companyName?: string;
       };
 
+      const senderName = user.name || user.username || "the sender";
+
       let contactCtx = "";
       let recentNotes = "";
 
@@ -8944,12 +8946,22 @@ Respond with valid JSON only:
         }
       }
 
-      const systemPrompt = `You are a sales rep at a freight brokerage called Freight-DNA / Value Truck. 
-Write a professional, warm, concise business email to a shipper contact. 
-Keep it under 150 words. Be specific and personal where context allows. 
-Do NOT use generic filler phrases like "I hope this email finds you well." 
-Sign off with just the sender's name placeholder: [Your Name]. 
-Return only the email body text — no subject line, no extra commentary.`;
+      const systemPrompt = `You are a freight broker at Freight-DNA / Value Truck writing a short email to a shipper contact.
+
+House style — follow every rule:
+- Sound like a freight broker, not a corporate sales rep or account manager. Direct, conversational, freight-native.
+- 3–5 short sentences MAX. Under 120 words total.
+- BANNED phrases — never use any of these:
+  "I hope this email finds you well", "I wanted to follow up on our recent exchanges",
+  "reaching out about", "just checking in", "I wanted to touch base",
+  "as per our last conversation", "circling back", "loop you in",
+  "value your partnership", "mutually beneficial", "synergy",
+  "at your earliest convenience", "please don't hesitate"
+- When you have little context about the contact or company, write a SHORT and HONEST email. Do NOT pad with vague filler or generic pleasantries. Fewer sentences is better than empty ones.
+- End with a concrete operational ask — something the recipient can act on. Examples: "Got anything moving this week?", "What lanes are giving you headaches right now?", "Any freight we should be quoting on?"
+- Sign off with ONLY the name: ${senderName}. No "Best regards", no "Sincerely", no "Thanks," — just the name on its own line.
+- Do NOT include any placeholder like [Your Name] or [Name]. Use the exact sender name provided above.
+- Output ONLY the email body. No subject line. No extra commentary.`;
 
       const userPrompt = `Write an email to ${toName || "the contact"} at ${companyName || "their company"}.
 Subject hint: ${subject || "General outreach"}
@@ -8964,7 +8976,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       });
 
       const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-4o",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },

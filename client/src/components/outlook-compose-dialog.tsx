@@ -160,7 +160,11 @@ export function OutlookComposeDialog({
     },
     onSuccess: (data) => {
       if (data.draft) {
-        setBody(data.draft);
+        let cleaned = data.draft;
+        if (user?.name) {
+          cleaned = cleaned.replace(/\[Your Name\]|\[Name\]/gi, user.name);
+        }
+        setBody(cleaned);
         toast({ title: "Draft ready!", description: "AI draft inserted — review and edit before sending." });
       } else {
         toast({ title: "No draft returned", description: "Try again or write manually.", variant: "destructive" });
