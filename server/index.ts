@@ -21,6 +21,7 @@ import { initConversationArchiveScheduler } from "./conversationArchiveScheduler
 import { scoreAllEligibleLanes } from "./laneScoringService";
 import { startIntelEmailScheduler } from "./intelEmailScheduler";
 import { startEmailIntelligenceScheduler } from "./emailIntelligenceScheduler";
+import { startQuoteRequestSlaScheduler } from "./quoteRequestSlaService";
 import { initGraphSubscriptionService } from "./graphSubscriptionService";
 import { initDeltaSyncScheduler } from "./services/mailboxDeltaSyncService";
 import { runMigrations } from "./runMigrations";
@@ -281,6 +282,7 @@ async function initStripe() {
       setTimeout(() => {
         startIntelEmailScheduler();
         startEmailIntelligenceScheduler();
+        startQuoteRequestSlaScheduler();
         initGraphSubscriptionService().catch(err => {
           console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));
         });

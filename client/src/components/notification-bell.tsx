@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing, Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck, TrendingDown, BarChart2 } from "lucide-react";
+import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing, Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck, TrendingDown, BarChart2, Zap, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -34,6 +34,8 @@ const typeIcon: Record<string, React.ReactNode> = {
   momentum_drop:          <TrendingDown className="h-3.5 w-3.5 text-red-500" />,
   momentum_weekly_digest: <BarChart2 className="h-3.5 w-3.5 text-blue-500" />,
   votri_alert:            <TrendingDown className="h-3.5 w-3.5 text-orange-500" />,
+  quote_request_alert:    <Zap className="h-3.5 w-3.5 text-amber-500" />,
+  quote_request_escalation: <AlertTriangle className="h-3.5 w-3.5 text-red-500" />,
 };
 
 
@@ -43,7 +45,7 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],
-    refetchInterval: 180000,
+    refetchInterval: 30000,
   });
 
   const safeNotifications = notifications ?? [];
@@ -115,7 +117,13 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
               <button
                 key={notif.id}
                 onClick={() => handleNotifClick(notif)}
-                className={`w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-muted/50 transition-colors border-b last:border-0 ${!notif.read ? "bg-blue-50/50 dark:bg-blue-950/20" : ""}`}
+                className={`w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-muted/50 transition-colors border-b last:border-0 ${
+                  notif.type === "quote_request_alert" && !notif.read
+                    ? "bg-amber-50/70 dark:bg-amber-950/30 border-l-2 border-l-amber-500"
+                    : notif.type === "quote_request_escalation" && !notif.read
+                    ? "bg-red-50/70 dark:bg-red-950/30 border-l-2 border-l-red-500"
+                    : !notif.read ? "bg-blue-50/50 dark:bg-blue-950/20" : ""
+                }`}
                 data-testid={`notification-item-${notif.id}`}
               >
                 <div className="shrink-0 mt-0.5 h-6 w-6 rounded-full bg-muted flex items-center justify-center">

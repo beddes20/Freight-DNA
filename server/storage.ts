@@ -462,6 +462,7 @@ export interface IStorage {
 
   getNotifications(userId: string): Promise<import('../shared/schema').Notification[]>;
   hasUnreadNotification(userId: string, type: string, relatedId: string): Promise<boolean>;
+  hasAnyNotification(userId: string, type: string, relatedId: string): Promise<boolean>;
   createNotification(data: import('../shared/schema').InsertNotification): Promise<import('../shared/schema').Notification>;
   markNotificationRead(id: string): Promise<void>;
   markAllNotificationsRead(userId: string): Promise<void>;
@@ -2104,6 +2105,21 @@ export class DatabaseStorage implements IStorage {
           eq(notifications.type, type),
           eq(notifications.relatedId, relatedId),
           eq(notifications.read, false),
+        ),
+      )
+      .limit(1);
+    return !!row;
+  }
+
+  async hasAnyNotification(userId: string, type: string, relatedId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.userId, userId),
+          eq(notifications.type, type),
+          eq(notifications.relatedId, relatedId),
         ),
       )
       .limit(1);

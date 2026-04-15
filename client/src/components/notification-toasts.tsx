@@ -5,10 +5,54 @@ import {
   Bell, X, BellRing, ListTodo, MessageSquare, CheckCircle2,
   Target, Users, Megaphone, CornerDownRight, ExternalLink,
   Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck,
+  Zap, AlertTriangle, Clock,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Notification } from "@shared/schema";
 import { formatTimeAgo } from "@/lib/utils";
+
+const QUOTE_SLA_TYPES = new Set(["quote_request_alert", "quote_request_escalation"]);
+const QUOTE_SLA_MINUTES = 7;
+
+function SlaCountdown({ createdAt }: { createdAt: string | Date }) {
+  const [remaining, setRemaining] = useState("");
+  const [isExpired, setIsExpired] = useState(false);
+
+  useEffect(() => {
+    const deadline = new Date(createdAt).getTime() + QUOTE_SLA_MINUTES * 60 * 1000;
+
+    const tick = () => {
+      const diff = deadline - Date.now();
+      if (diff <= 0) {
+        setRemaining("OVERDUE");
+        setIsExpired(true);
+        return;
+      }
+      const mins = Math.floor(diff / 60000);
+      const secs = Math.floor((diff % 60000) / 1000);
+      setRemaining(`${mins}:${secs.toString().padStart(2, "0")}`);
+      setIsExpired(false);
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [createdAt]);
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-xs font-mono font-bold px-1.5 py-0.5 rounded ${
+        isExpired
+          ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 animate-pulse"
+          : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
+      }`}
+      data-testid="sla-countdown"
+    >
+      <Clock className="h-3 w-3" />
+      {remaining}
+    </span>
+  );
+}
 
 const TYPE_CONFIG: Record<string, { icon: React.ReactNode; accent: string; label: string }> = {
   task_assigned:   { icon: <ListTodo className="h-4 w-4" />,       accent: "text-blue-500",   label: "Task Assigned" },
@@ -29,6 +73,8 @@ const TYPE_CONFIG: Record<string, { icon: React.ReactNode; accent: string; label
   app_suggestion:  { icon: <Lightbulb className="h-4 w-4" />,    accent: "text-yellow-500", label: "New Suggestion" },
   promotion_nomination: { icon: <Star className="h-4 w-4" />,   accent: "text-amber-400",  label: "Nomination" },
   lane_assigned:        { icon: <Truck className="h-4 w-4" />,   accent: "text-amber-500",  label: "Lane Assigned" },
+  quote_request_alert:  { icon: <Zap className="h-4 w-4" />,    accent: "text-amber-500",  label: "Quote Request" },
+  quote_request_escalation: { icon: <AlertTriangle className="h-4 w-4" />, accent: "text-red-500", label: "SLA Breach" },
 };
 
 
@@ -38,6 +84,7 @@ interface ToastCard {
 }
 
 const TOAST_AUTO_DISMISS_MS = 8000;
+const QUOTE_TOAST_DISMISS_MS = 60000;
 
 export function NotificationToasts() {
   const [, navigate] = useLocation();
@@ -48,7 +95,7 @@ export function NotificationToasts() {
 
   const { data: notifications = [] } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],
-    refetchInterval: 180000,
+    refetchInterval: 30000,
   });
 
   const markRead = useMutation({
@@ -83,10 +130,11 @@ export function NotificationToasts() {
     });
 
     newOnes.forEach(n => {
+      const dismissMs = QUOTE_SLA_TYPES.has(n.type) ? QUOTE_TOAST_DISMISS_MS : TOAST_AUTO_DISMISS_MS;
       const t = setTimeout(() => {
         setToasts(prev => prev.filter(toast => toast.id !== n.id));
         timers.current.delete(n.id);
-      }, TOAST_AUTO_DISMISS_MS);
+      }, dismissMs);
       timers.current.set(n.id, t);
     });
   }, [notifications]);
@@ -146,7 +194,15 @@ export function NotificationToasts() {
                     <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{t.notif.body}</p>
                   )}
                   <div className="flex items-center justify-between mt-2">
-                    <span className="text-[10px] text-muted-foreground">{formatTimeAgo(t.notif.createdAt as unknown as string)}</span>
+                    {t.notif.type === "quote_request_alert" ? (
+                      <SlaCountdown createdAt={t.notif.createdAt as unknown as string} />
+                    ) : t.notif.type === "quote_request_escalation" ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 animate-pulse" data-testid="sla-breached">
+                        <AlertTriangle className="h-3 w-3" /> SLA BREACHED
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">{formatTimeAgo(t.notif.createdAt as unknown as string)}</span>
+                    )}
                     {t.notif.link && (
                       <button
                         onClick={() => handleView(t)}

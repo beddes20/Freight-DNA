@@ -9,7 +9,7 @@
  *   - Carrier enrichment staging
  *   - Win/loss evidence linkage
  *
- * Runs every 10 minutes via node-cron (matching the established platform pattern).
+ * Runs every 2 minutes via node-cron for fast quote request SLA response.
  * Batch size: 50 messages per run (configurable via EMAIL_INTEL_BATCH_SIZE).
  */
 
@@ -27,6 +27,7 @@ import { determineInitialOwner } from "./services/conversationOwnershipService";
 import { ingestPatternEvidence, maybeFireResponsibilityNba } from "./accountContactLanePatternResponsibilityService";
 import { mapLaneToPatternIds, extractStateFromLocation } from "./geographicLanePatternUtils";
 import { inferContactGeography } from "./contactGeographyInferenceService";
+import { fireQuoteRequestAlert } from "./quoteRequestSlaService";
 import { createHash } from "crypto";
 import type { InsertEmailSignal } from "@shared/schema";
 
@@ -209,6 +210,14 @@ async function runEmailIntelligenceBatch(): Promise<void> {
           generateAccountEmailNbas(msg.orgId, msg.linkedAccountId, msg, saved).catch(err =>
             console.error(`[emailIntelligenceScheduler] account email NBA error for ${msg.id}:`, err)
           );
+
+          const hasPricingRequest = saved.some(s => s.intentType === "pricing_request");
+          if (hasPricingRequest) {
+            const pricingSignal = saved.find(s => s.intentType === "pricing_request")!;
+            fireQuoteRequestAlert(msg.orgId, msg.linkedAccountId, pricingSignal.id, msg.subject ?? null).catch(err =>
+              console.error(`[emailIntelligenceScheduler] quote SLA alert error for ${msg.id}:`, err)
+            );
+          }
         }
 
         // ── Consumer area 3 & 4: Carrier email NBAs + enrichment ──────────────
@@ -243,7 +252,7 @@ async function runEmailIntelligenceBatch(): Promise<void> {
 }
 
 export function startEmailIntelligenceScheduler(): void {
-  console.log(`[emailIntelligenceScheduler] starting — every 10 min (cron: */10 * * * *), batch=${BATCH_SIZE}`);
+  console.log(`[emailIntelligenceScheduler] starting — every 2 min (cron: */2 * * * *), batch=${BATCH_SIZE}`);
 
   // Run an initial pass shortly after startup (30s delay to let DB settle)
   const initTimeout = setTimeout(() => {
@@ -253,7 +262,7 @@ export function startEmailIntelligenceScheduler(): void {
   }, 30_000);
   initTimeout.unref?.();
 
-  cron.schedule("*/10 * * * *", () => {
+  cron.schedule("*/2 * * * *", () => {
     runEmailIntelligenceBatch().catch(err =>
       console.error("[emailIntelligenceScheduler] batch error:", err)
     );
