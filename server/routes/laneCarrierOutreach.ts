@@ -753,6 +753,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         historicalCount: number;
         missingContactCount: number;
         isHighFrequency: boolean;
+        isManual: boolean;
       };
 
       type LeanBuckets = {
@@ -804,6 +805,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           historicalCount: item.historicalCount,
           missingContactCount: item.missingContactCount,
           isHighFrequency: isHighFrequencyLaneFromIndex(item.lane, hfIndex),
+          isManual: item.lane.isManual ?? false,
         });
         buckets = {
           unassigned: fullQueue.unassigned.map(adaptItem),
@@ -956,6 +958,35 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         dropTrailerShipper: dropTrailerShipper ?? false,
         dropTrailerReceiver: dropTrailerReceiver ?? false,
       });
+
+      storage.upsertLaneSummaryCache({
+        laneId: lane.id,
+        laneScore: 0,
+        priority: 0,
+        origin: lane.origin,
+        originState: lane.originState ?? null,
+        destination: lane.destination,
+        destinationState: lane.destinationState ?? null,
+        equipmentType: lane.equipmentType ?? null,
+        avgLoadsPerWeek: lane.avgLoadsPerWeek ?? null,
+        companyId: lane.companyId ?? null,
+        companyName: lane.companyName ?? null,
+        ownerUserId: lane.ownerUserId ?? null,
+        carriersContactedCount: 0,
+        contactableCount: 0,
+        totalBenchCount: 0,
+        historicalCount: 0,
+        missingContactCount: 0,
+        orgId: user.organizationId,
+        isEligible: true,
+        hasPreferredCarrierProgram: false,
+        snoozedUntil: null,
+        resolvedAt: null,
+        dropTrailerShipper: dropTrailerShipper ?? false,
+        dropTrailerReceiver: dropTrailerReceiver ?? false,
+        isManual: true,
+      }).catch(err => console.error("[lanes/manual] cache upsert error:", err));
+
       res.status(201).json(lane);
     } catch (err) {
       console.error("[lanes/manual] error:", err);

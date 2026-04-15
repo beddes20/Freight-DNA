@@ -135,6 +135,7 @@ interface LaneItem {
   historicalCount: number;
   missingContactCount: number;
   isHighFrequency?: boolean;
+  isManual?: boolean;
 }
 
 interface WorkQueue {
@@ -701,6 +702,16 @@ function LaneRow({
             <Badge variant="outline" className="text-[10px] py-0 px-1.5">
               {item.equipmentType ?? "Any"}
             </Badge>
+            {item.isManual && (
+              <Badge
+                variant="outline"
+                className="text-[10px] py-0 px-1.5 border-blue-500/50 text-blue-400 bg-blue-500/10 gap-0.5 font-semibold"
+                data-testid={`badge-manual-lane-${item.laneId}`}
+              >
+                <PlusCircle className="w-2.5 h-2.5" />
+                Manual
+              </Badge>
+            )}
           </div>
 
           {/* Coverage status + reply badges + VOTRI signal */}
@@ -1741,6 +1752,7 @@ export default function LaneWorkQueuePage() {
   const { toast } = useToast();
   const [openLaneId, setOpenLaneId] = useState<string | null>(null);
   const [highFreqOnly, setHighFreqOnly] = useState(false);
+  const [manualOnly, setManualOnly] = useState(false);
   const [customerFilter, setCustomerFilter] = useState<string>("__all__");
   const [buildLaneOpen, setBuildLaneOpen] = useState(false);
   const [selectedLaneIds, setSelectedLaneIds] = useState<Set<string>>(new Set());
@@ -1901,7 +1913,7 @@ export default function LaneWorkQueuePage() {
     return map;
   }, [batchVotriData]);
 
-  // Helper to apply customer + high-freq filters to a bucket
+  // Helper to apply customer + high-freq + manual filters to a bucket
   const filterBucket = (items: LaneItem[]) => {
     let out = items;
     if (customerFilter !== "__all__") {
@@ -1909,6 +1921,9 @@ export default function LaneWorkQueuePage() {
     }
     if (highFreqOnly) {
       out = out.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD);
+    }
+    if (manualOnly) {
+      out = out.filter(i => i.isManual);
     }
     return out;
   };
@@ -1922,7 +1937,7 @@ export default function LaneWorkQueuePage() {
       assignedUntouched: filterBucket(queue.assignedUntouched ?? []),
       inProgress: filterBucket(queue.inProgress ?? []),
     };
-  }, [queue, customerFilter, highFreqOnly]);
+  }, [queue, customerFilter, highFreqOnly, manualOnly]);
 
   // Count high-frequency lanes across all buckets for the filter chip label
   const highFreqCount = useMemo(() => {
@@ -1932,6 +1947,16 @@ export default function LaneWorkQueuePage() {
       (queue.noContactable ?? []).filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
       (queue.assignedUntouched ?? []).filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
       (queue.inProgress ?? []).filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length
+    );
+  }, [queue]);
+
+  const manualLaneCount = useMemo(() => {
+    if (!queue?.unassigned) return 0;
+    return (
+      queue.unassigned.filter(i => i.isManual).length +
+      (queue.noContactable ?? []).filter(i => i.isManual).length +
+      (queue.assignedUntouched ?? []).filter(i => i.isManual).length +
+      (queue.inProgress ?? []).filter(i => i.isManual).length
     );
   }, [queue]);
 
@@ -2041,6 +2066,17 @@ export default function LaneWorkQueuePage() {
           >
             <Zap className="w-3.5 h-3.5" />
             2+/week{highFreqCount > 0 && ` (${highFreqCount})`}
+          </Button>
+          {/* Manual lanes filter toggle */}
+          <Button
+            variant={manualOnly ? "default" : "outline"}
+            size="sm"
+            className={`h-8 text-xs gap-1.5 ${manualOnly ? "bg-blue-500 hover:bg-blue-600 text-white border-transparent" : ""}`}
+            onClick={() => setManualOnly(v => !v)}
+            data-testid="btn-filter-manual"
+          >
+            <PlusCircle className="w-3.5 h-3.5" />
+            Manual{manualLaneCount > 0 && ` (${manualLaneCount})`}
           </Button>
           {/* Admin-only: manually trigger the lane capacity engine */}
           {user?.role === "admin" && (

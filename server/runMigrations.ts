@@ -2634,4 +2634,20 @@ export async function runMigrations() {
   } finally {
     clientArchive.release();
   }
+
+  const clientManualCache = await pool.connect();
+  try {
+    await clientManualCache.query(`ALTER TABLE lane_summary_cache ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT false`);
+    await clientManualCache.query(`
+      UPDATE lane_summary_cache c
+      SET is_manual = true
+      FROM recurring_lanes r
+      WHERE c.lane_id = r.id AND r.is_manual = true AND c.is_manual = false
+    `);
+    console.log("[migrations] is_manual column added to lane_summary_cache and back-filled");
+  } catch (err) {
+    console.error("[migrations] lane_summary_cache is_manual migration error:", err);
+  } finally {
+    clientManualCache.release();
+  }
 }

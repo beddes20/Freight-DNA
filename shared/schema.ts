@@ -1933,6 +1933,7 @@ export const laneSummaryCache = pgTable("lane_summary_cache", {
   resolvedAt: text("resolved_at"),
   dropTrailerShipper: boolean("drop_trailer_shipper").default(false).notNull(),
   dropTrailerReceiver: boolean("drop_trailer_receiver").default(false).notNull(),
+  isManual: boolean("is_manual").default(false).notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("lane_summary_cache_owner_resolved_score").on(table.ownerUserId, table.resolvedAt, table.laneScore),
