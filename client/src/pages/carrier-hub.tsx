@@ -1540,6 +1540,7 @@ export default function CarrierHub() {
   const [hasPhone, setHasPhone] = useState(false);
   const [hasProvenHistory, setHasProvenHistory] = useState(false);
   const [hasClaimedLanes, setHasClaimedLanes] = useState(false);
+  const [hasPendingIntel, setHasPendingIntel] = useState(false);
   const [sort, setSort] = useState("name");
   const [selectedCarrierId, setSelectedCarrierId] = useState<string | null>(null);
   const [addCarrierOpen, setAddCarrierOpen] = useState(false);
@@ -1558,7 +1559,7 @@ export default function CarrierHub() {
   const PAGE_SIZE = 100;
 
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [search, statusFilter, equipFilter, hasEmail, hasPhone, hasProvenHistory, hasClaimedLanes, sort]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, equipFilter, hasEmail, hasPhone, hasProvenHistory, hasClaimedLanes, hasPendingIntel, sort]);
 
   const queryParams = new URLSearchParams({
     ...(search && { q: search }),
@@ -1568,6 +1569,7 @@ export default function CarrierHub() {
     ...(hasPhone && { hasPhone: "true" }),
     ...(hasProvenHistory && { hasProvenHistory: "true" }),
     ...(hasClaimedLanes && { hasClaimedLanes: "true" }),
+    ...(hasPendingIntel && { hasPendingIntel: "true" }),
     sort,
     limit: String(PAGE_SIZE),
     page: String(page),
@@ -1597,7 +1599,7 @@ export default function CarrierHub() {
   const totalCount = pageData?.total ?? 0;
   const hasMore = pageData ? page < pageData.pages : false;
 
-  const activeFilters = [statusFilterValue, equipFilterValue, hasEmail, hasPhone, hasProvenHistory, hasClaimedLanes].filter(Boolean).length;
+  const activeFilters = [statusFilterValue, equipFilterValue, hasEmail, hasPhone, hasProvenHistory, hasClaimedLanes, hasPendingIntel].filter(Boolean).length;
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
@@ -1671,6 +1673,17 @@ export default function CarrierHub() {
             </SelectContent>
           </Select>
 
+          <Button
+            variant={hasPendingIntel ? "default" : "outline"}
+            size="sm"
+            className={`h-8 text-xs gap-1.5 ${hasPendingIntel ? "bg-amber-500 hover:bg-amber-600 text-black border-transparent" : "border-amber-500/40 text-amber-400 hover:bg-amber-500/10"}`}
+            onClick={() => setHasPendingIntel(v => !v)}
+            data-testid="btn-filter-needs-review"
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            Needs Review
+          </Button>
+
           <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
             {[
               { label: "Has Email", val: hasEmail, set: setHasEmail },
@@ -1686,7 +1699,7 @@ export default function CarrierHub() {
           </div>
 
           {activeFilters > 0 && (
-            <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={() => { setStatusFilter("__all__"); setEquipFilter("__all__"); setHasEmail(false); setHasPhone(false); setHasProvenHistory(false); setHasClaimedLanes(false); }} data-testid="btn-clear-filters">
+            <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={() => { setStatusFilter("__all__"); setEquipFilter("__all__"); setHasEmail(false); setHasPhone(false); setHasProvenHistory(false); setHasClaimedLanes(false); setHasPendingIntel(false); }} data-testid="btn-clear-filters">
               Clear filters ({activeFilters})
             </Button>
           )}

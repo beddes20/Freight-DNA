@@ -64,6 +64,7 @@ export function registerCarrierHubRoutes(app: Express) {
         hasPhone = "",
         hasProvenHistory = "",
         hasClaimedLanes = "",
+        hasPendingIntel = "",
         sort = "name",
         page = "1",
         limit = "100",
@@ -130,6 +131,7 @@ export function registerCarrierHubRoutes(app: Express) {
         HAVING 1=1
           ${hasProvenHistory === "true" ? `AND COUNT(DISTINCT lci.id) FILTER (WHERE lci.carrier_id = c.id) > 0` : ""}
           ${hasClaimedLanes === "true" ? `AND COUNT(DISTINCT ccl.id) > 0` : ""}
+          ${hasPendingIntel === "true" ? `AND COUNT(DISTINCT cis.id) FILTER (WHERE cis.status = 'pending') > 0` : ""}
         ORDER BY ${
           sort === "loads" ? "total_loads DESC, c.name ASC" :
           sort === "last_used" ? "last_used DESC NULLS LAST, c.name ASC" :
@@ -153,6 +155,7 @@ export function registerCarrierHubRoutes(app: Express) {
           LEFT JOIN lane_carrier_interest lci ON lci.carrier_id = c.id
           LEFT JOIN carrier_contacts cc ON cc.carrier_id = c.id AND cc.is_active = true
           LEFT JOIN carrier_claimed_lanes ccl ON ccl.carrier_id = c.id
+          ${hasPendingIntel === "true" ? `LEFT JOIN carrier_intel_suggestions cis2 ON cis2.carrier_id = c.id` : ""}
           WHERE c.org_id = $1
             ${q ? `AND (c.name ILIKE $2 OR c.mc_dot ILIKE $2 OR c.dot_number ILIKE $2 OR c.primary_email ILIKE $2 OR c.phone ILIKE $2)` : ""}
             ${statusFilter ? `AND c.status = '${statusFilter.replace(/'/g, "''")}'` : ""}
@@ -163,6 +166,7 @@ export function registerCarrierHubRoutes(app: Express) {
           HAVING 1=1
             ${hasProvenHistory === "true" ? `AND COUNT(DISTINCT lci.id) FILTER (WHERE lci.carrier_id = c.id) > 0` : ""}
             ${hasClaimedLanes === "true" ? `AND COUNT(DISTINCT ccl.id) > 0` : ""}
+            ${hasPendingIntel === "true" ? `AND COUNT(DISTINCT cis2.id) FILTER (WHERE cis2.status = 'pending') > 0` : ""}
         ) subq
         `,
         q ? [org, `%${q}%`] : [org]
