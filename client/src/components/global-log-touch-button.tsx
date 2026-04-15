@@ -1,13 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { ResponsiveDialog } from "@/components/responsive-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient as qc } from "@/lib/queryClient";
@@ -126,16 +120,27 @@ export function GlobalLogTouchDialog() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
-      <DialogContent className="w-[calc(100%-2rem)] sm:max-w-md rounded-lg" data-testid="dialog-global-log-touch">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <PhoneCall className="h-4 w-4 text-cyan-500" />
-            Log a Touch
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-4 py-1">
+    <ResponsiveDialog
+      open={open}
+      onOpenChange={(v) => { if (!v) handleClose(); }}
+      title="Log a Touch"
+      className="sm:max-w-md"
+      footer={
+        <div className="flex justify-end gap-2 w-full">
+          <Button variant="outline" onClick={handleClose} data-testid="button-cancel-global-touch">
+            Cancel
+          </Button>
+          <Button
+            onClick={() => logTouchMutation.mutate()}
+            disabled={!selectedContact || logTouchMutation.isPending}
+            data-testid="button-submit-global-touch"
+          >
+            {logTouchMutation.isPending ? "Saving..." : "Log Touch"}
+          </Button>
+        </div>
+      }
+    >
+        <div className="space-y-4 py-1" data-testid="dialog-global-log-touch">
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Contact</label>
             <div className="relative" ref={dropdownRef}>
@@ -256,21 +261,7 @@ export function GlobalLogTouchDialog() {
             />
           </div>
         </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={handleClose} data-testid="button-cancel-global-touch">
-            Cancel
-          </Button>
-          <Button
-            onClick={() => logTouchMutation.mutate()}
-            disabled={!selectedContact || logTouchMutation.isPending}
-            data-testid="button-submit-global-touch"
-          >
-            {logTouchMutation.isPending ? "Saving..." : "Log Touch"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    </ResponsiveDialog>
   );
 }
 

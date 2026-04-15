@@ -1,15 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { ResponsiveDialog } from "@/components/responsive-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -96,10 +90,11 @@ export function NbaLogTouchDialog({
     staleTime: 60_000,
   });
 
-  // Ensure the dropdown has a default when contacts load and nothing is pre-selected
-  if (!selectedContactId && contacts.length > 0) {
-    setSelectedContactId(contacts[0].id);
-  }
+  useEffect(() => {
+    if (!selectedContactId && contacts.length > 0) {
+      setSelectedContactId(contacts[0].id);
+    }
+  }, [contacts, selectedContactId]);
 
   const logMutation = useMutation({
     mutationFn: async () => {
@@ -140,16 +135,21 @@ export function NbaLogTouchDialog({
   const canSubmit = !!selectedContactId && !logMutation.isPending;
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
-      <DialogContent className="w-[calc(100%-2rem)] sm:max-w-sm rounded-lg" data-testid="dialog-nba-log-touch">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <PhoneCall className="h-4 w-4 text-cyan-500" />
-            Log Touch
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-3 py-1">
+    <ResponsiveDialog
+      open={open}
+      onOpenChange={(v) => { if (!v) handleClose(); }}
+      title="Log Touch"
+      className="sm:max-w-sm"
+      footer={
+        <div className="flex justify-end gap-2 w-full">
+          <Button variant="outline" onClick={handleClose} data-testid="nba-touch-cancel">Cancel</Button>
+          <Button onClick={() => logMutation.mutate()} disabled={!canSubmit || (meaningful && !note.trim())} data-testid="nba-touch-submit">
+            {logMutation.isPending ? "Saving…" : "Log Touch"}
+          </Button>
+        </div>
+      }
+    >
+        <div className="space-y-3 py-1" data-testid="dialog-nba-log-touch">
           {/* Read-only company label */}
           <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-sm">
             <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -288,24 +288,6 @@ export function NbaLogTouchDialog({
             />
           </div>
         </div>
-
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={handleClose}
-            data-testid="nba-touch-cancel"
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={() => logMutation.mutate()}
-            disabled={!canSubmit || (meaningful && !note.trim())}
-            data-testid="nba-touch-submit"
-          >
-            {logMutation.isPending ? "Saving…" : "Log Touch"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    </ResponsiveDialog>
   );
 }

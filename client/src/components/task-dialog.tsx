@@ -3,13 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { ResponsiveDialog } from "@/components/responsive-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -362,15 +356,17 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
 
   const showAttachSection = !editingTask && !prefillData && (effectiveCompanyId && effectiveCompanyId !== "none");
 
+  const dialogTitle = prefillData ? "Force Task from Lane" : forwardingTask ? "Forward Task" : editingTask ? "Edit Task" : "New Task";
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto w-[calc(100%-2rem)] rounded-lg">
-        <DialogHeader>
-          <DialogTitle data-testid="text-task-dialog-title">
-            {prefillData ? "Force Task from Lane" : forwardingTask ? "Forward Task" : editingTask ? "Edit Task" : "New Task"}
-          </DialogTitle>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+    <ResponsiveDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={dialogTitle}
+      className="sm:max-w-lg max-h-[85vh] overflow-y-auto"
+      footer={undefined}
+    >
+        <form onSubmit={handleSubmit} className="space-y-4" data-testid="task-form">
           <div className="space-y-2">
             <Label htmlFor="task-title">Title</Label>
             <Input
@@ -742,17 +738,14 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
             </div>
           )}
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-task-cancel">
-              Cancel
-            </Button>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-task-cancel">Cancel</Button>
             <Button type="submit" disabled={isPending || (forwardingTask ? !assignedTo : (!title.trim() || (!editingTask && !assignedTo)))} data-testid="button-task-save">
               {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              {prefillData ? "Create Task" : forwardingTask ? "Forward Task" : editingTask ? "Save Changes" : "Create Task"}
+              {dialogTitle === "Edit Task" ? "Save Changes" : dialogTitle}
             </Button>
-          </DialogFooter>
+          </div>
         </form>
-      </DialogContent>
-    </Dialog>
+    </ResponsiveDialog>
   );
 }
