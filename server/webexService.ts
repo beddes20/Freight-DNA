@@ -44,7 +44,7 @@ export async function getWebexAccessToken(): Promise<string> {
     grant_type: "client_credentials",
     client_id: clientId,
     client_secret: clientSecret,
-    scope: "spark:calls_read spark:people_read spark:calls_write analytics:read_all",
+    scope: "spark:calls_read spark:people_read spark:calls_write",
   });
 
   const res = await fetch(url, {
@@ -117,44 +117,69 @@ export async function fetchCallHistory(
   const token = await getWebexAccessToken();
   const orgId = process.env.WEBEX_ORG_ID!;
 
+  const allRecords: WebexCallRecord[] = [];
+  let nextUrl: string | null = null;
+
   const params = new URLSearchParams({
     orgId,
     startTime,
     endTime,
-    max: String(maxRecords),
+    max: String(Math.min(maxRecords, 50)),
   });
 
-  const url = `https://analytics.webexapis.com/v1/cdr_feed?${params.toString()}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  let url: string = `https://webexapis.com/v1/telephony/calls/history?${params.toString()}`;
 
-  if (!res.ok) {
-    const text = await res.text();
-    log(`CDR fetch error ${res.status}: ${text}`);
-    return [];
+  while (url && allRecords.length < maxRecords) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      log(`Call history fetch error ${res.status}: ${text}`);
+      break;
+    }
+
+    const data = await res.json();
+    const items = data.items ?? [];
+
+    for (const item of items) {
+      if (allRecords.length >= maxRecords) break;
+
+      const direction = (item.direction ?? "").toUpperCase();
+      const callOutcome = (item.callResult ?? item.callOutcome ?? "").toLowerCase();
+      const answered = callOutcome === "success" || callOutcome === "connected" ||
+        (item.answered === true) || (item.duration > 0 && callOutcome !== "missed");
+
+      allRecords.push({
+        id: item.id ?? item.callId ?? "",
+        callingNumber: item.callingNumber ?? item.callingLineId ?? "",
+        calledNumber: item.calledNumber ?? item.calledLineId ?? "",
+        direction: direction === "ORIGINATING" ? "ORIGINATING" : "TERMINATING",
+        answered,
+        duration: parseInt(item.duration ?? item.durationSeconds ?? "0", 10),
+        startTime: item.startTime ?? item.time ?? "",
+        answerTime: item.answerTime ?? item.answerIndicator,
+        releaseTime: item.releaseTime,
+        callType: item.callType ?? item.originalReason ?? "unknown",
+        correlationId: item.correlationId,
+        location: item.location ?? item.siteName,
+        recordingId: item.recordingId,
+        voicemailLeft: item.voicemailLeft === true,
+      });
+    }
+
+    const linkHeader = res.headers.get("link");
+    if (linkHeader) {
+      const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+      url = match ? match[1] : "";
+    } else {
+      url = "";
+    }
   }
 
-  const data = await res.json();
-  const items = data.items ?? [];
-  log(`Fetched ${items.length} CDR records`);
-
-  return items.map((item: any) => ({
-    id: item["Call ID"] ?? item.id ?? "",
-    callingNumber: item["Calling Number"] ?? item.callingNumber ?? "",
-    calledNumber: item["Called Number"] ?? item.calledNumber ?? "",
-    direction: item.Direction === "ORIGINATING" ? "ORIGINATING" : "TERMINATING",
-    answered: item["Call outcome"] === "Success" || item.answered === true,
-    duration: parseInt(item["Duration"] ?? item.duration ?? "0", 10),
-    startTime: item["Start time"] ?? item.startTime ?? "",
-    answerTime: item["Answer time"] ?? item.answerTime,
-    releaseTime: item["Release time"] ?? item.releaseTime,
-    callType: item["Call type"] ?? item.callType ?? "unknown",
-    correlationId: item["Correlation ID"] ?? item.correlationId,
-    location: item.Location ?? item.location,
-    recordingId: item["Related reason"] === "Recording" ? item["Redirect number"] : undefined,
-    voicemailLeft: item["Related reason"] === "Voicemail" || item.voicemailLeft === true,
-  }));
+  log(`Fetched ${allRecords.length} call history records`);
+  return allRecords;
 }
 
 export async function fetchWebexPeople(
