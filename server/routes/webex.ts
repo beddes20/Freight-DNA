@@ -3,6 +3,10 @@ import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
 import {
   webexCredentialsConfigured,
+  getWebexOAuthUrl,
+  exchangeWebexCode,
+  setWebexRefreshToken,
+  hasWebexTokens,
   fetchCallHistory,
   fetchWebexPeople,
   fetchPersonStatus,
@@ -11,6 +15,7 @@ import {
   buildWebexCallDeepLink,
   type WebexCallRecord,
 } from "../webexService";
+import { db, storage } from "../storage";
 import { analyzeTouchpointNote } from "../aiTouchpoint";
 import { computeGrowthScore } from "../growthScoreCalculator";
 import { checkAndFireMomentumDropNotification } from "../momentumNotifications";
@@ -345,8 +350,91 @@ Respond with valid JSON only (no markdown):
 
 export function registerWebexRoutes(app: Express) {
 
+  async function loadStoredRefreshToken() {
+    try {
+      const result = await storage.pool.query(
+        `SELECT response_data FROM api_response_cache WHERE cache_key = 'webex_refresh_token' LIMIT 1`
+      );
+      const row = result.rows?.[0];
+      if (row?.response_data?.token) {
+        setWebexRefreshToken(row.response_data.token);
+        log("Loaded stored refresh token from DB");
+      }
+    } catch (e) {
+      log(`No stored refresh token found`);
+    }
+  }
+
+  async function saveRefreshToken(token: string) {
+    await storage.pool.query(
+      `INSERT INTO api_response_cache (cache_key, response_data, cached_at, ttl_seconds)
+       VALUES ('webex_refresh_token', $1::jsonb, NOW(), 7776000)
+       ON CONFLICT (cache_key) DO UPDATE SET response_data = $1::jsonb, cached_at = NOW()`,
+      [JSON.stringify({ token })]
+    );
+  }
+
+  loadStoredRefreshToken();
+
+  app.get("/api/webex/authorize", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Only admins can authorize Webex" });
+      }
+      if (!webexCredentialsConfigured()) {
+        return res.status(400).json({ error: "Webex credentials not configured" });
+      }
+      const host = req.get("host") || "localhost:5000";
+      const protocol = req.get("x-forwarded-proto") || req.protocol || "https";
+      const redirectUri = `${protocol}://${host}/api/webex/callback`;
+      const authUrl = getWebexOAuthUrl(redirectUri);
+      res.redirect(authUrl);
+    } catch (err) {
+      log(`Authorize error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to generate authorization URL" });
+    }
+  });
+
+  app.get("/api/webex/callback", async (req: Request, res: Response) => {
+    try {
+      const code = req.query.code as string;
+      if (!code) {
+        return res.status(400).send("Missing authorization code from Webex");
+      }
+      const host = req.get("host") || "localhost:5000";
+      const protocol = req.get("x-forwarded-proto") || req.protocol || "https";
+      const redirectUri = `${protocol}://${host}/api/webex/callback`;
+
+      const tokens = await exchangeWebexCode(code, redirectUri);
+      await saveRefreshToken(tokens.refresh_token);
+
+      log("OAuth complete — tokens stored");
+      res.send(`
+        <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+          <h2>Webex Connected Successfully!</h2>
+          <p>FreightDNA can now sync your call history.</p>
+          <p>You can close this window and return to the app.</p>
+          <script>setTimeout(() => window.close(), 3000)</script>
+        </body></html>
+      `);
+    } catch (err) {
+      log(`Callback error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).send(`
+        <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+          <h2>Webex Authorization Failed</h2>
+          <p>${err instanceof Error ? err.message : "Unknown error"}</p>
+          <p>Please try again from the Settings page.</p>
+        </body></html>
+      `);
+    }
+  });
+
   app.get("/api/webex/status", requireAuth, async (_req: Request, res: Response) => {
-    res.json({ configured: webexCredentialsConfigured() });
+    res.json({
+      configured: webexCredentialsConfigured(),
+      authorized: hasWebexTokens(),
+    });
   });
 
   app.get("/api/webex/deep-link/:phone", requireAuth, async (req: Request, res: Response) => {
@@ -392,6 +480,9 @@ export function registerWebexRoutes(app: Express) {
 
       if (!webexCredentialsConfigured()) {
         return res.status(400).json({ error: "Webex credentials not configured" });
+      }
+      if (!hasWebexTokens()) {
+        return res.status(400).json({ error: "Webex not authorized. Visit /api/webex/authorize to connect." });
       }
 
       const hoursBack = Math.min(Number(req.body?.hoursBack) || 24, 168);
@@ -485,6 +576,7 @@ export function initWebexSyncScheduler(): void {
   }
 
   cron.schedule("*/30 * * * *", async () => {
+    if (!hasWebexTokens()) return;
     log("Background call sync starting...");
     try {
       const { db } = await import("../storage");

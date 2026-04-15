@@ -1,12 +1,12 @@
 /**
  * Webex Calling API — authentication & helper methods
  *
- * Uses the Client Credentials (app-only) flow to obtain an access token
- * for the Webex APIs. Mirrors the existing graphService.ts pattern.
+ * Uses OAuth2 Authorization Code flow for Service Apps.
+ * Admin must authorize via browser, then tokens are refreshed automatically.
  *
  * Environment variables required:
- *   WEBEX_CLIENT_ID     — Webex integration client ID
- *   WEBEX_CLIENT_SECRET — Webex integration client secret
+ *   WEBEX_CLIENT_ID     — Webex Service App client ID
+ *   WEBEX_CLIENT_SECRET — Webex Service App client secret
  *   WEBEX_ORG_ID        — Webex organization ID
  */
 
@@ -24,6 +24,61 @@ export function webexCredentialsConfigured(): boolean {
 }
 
 let _cachedToken: { token: string; expiresAt: number } | null = null;
+let _refreshToken: string | null = null;
+
+export function getWebexOAuthUrl(redirectUri: string): string {
+  const clientId = process.env.WEBEX_CLIENT_ID!.trim();
+  const scopes = "spark:calls_read spark:people_read spark:calls_write";
+  const state = "webex_oauth_" + Date.now();
+  return (
+    `https://webexapis.com/v1/authorize?` +
+    `client_id=${encodeURIComponent(clientId)}` +
+    `&response_type=code` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&scope=${encodeURIComponent(scopes)}` +
+    `&state=${state}`
+  );
+}
+
+export async function exchangeWebexCode(code: string, redirectUri: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
+  const clientId = process.env.WEBEX_CLIENT_ID!.trim();
+  const clientSecret = process.env.WEBEX_CLIENT_SECRET!.trim();
+
+  const res = await fetch("https://webexapis.com/v1/access_token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    }).toString(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to exchange Webex auth code: ${res.status} ${text}`);
+  }
+
+  const data = await res.json();
+  _cachedToken = {
+    token: data.access_token,
+    expiresAt: Date.now() + (data.expires_in ?? 43200) * 1000,
+  };
+  _refreshToken = data.refresh_token;
+  log("OAuth tokens obtained via authorization code");
+  return data;
+}
+
+export function setWebexRefreshToken(token: string) {
+  _refreshToken = token;
+  _cachedToken = null;
+}
+
+export function hasWebexTokens(): boolean {
+  return !!_refreshToken;
+}
 
 export async function getWebexAccessToken(): Promise<string> {
   if (_cachedToken && Date.now() < _cachedToken.expiresAt - 30_000) {
@@ -36,38 +91,43 @@ export async function getWebexAccessToken(): Promise<string> {
     );
   }
 
-  const clientId = process.env.WEBEX_CLIENT_ID!;
-  const clientSecret = process.env.WEBEX_CLIENT_SECRET!;
+  if (!_refreshToken) {
+    throw new Error(
+      "Webex not authorized. An admin must complete the OAuth flow at /api/webex/authorize first."
+    );
+  }
 
-  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  const clientId = process.env.WEBEX_CLIENT_ID!.trim();
+  const clientSecret = process.env.WEBEX_CLIENT_SECRET!.trim();
 
-  const url = "https://webexapis.com/v1/access_token";
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    scope: "spark:calls_read spark:people_read spark:calls_write",
-  });
-
-  const res = await fetch(url, {
+  const res = await fetch("https://webexapis.com/v1/access_token", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Authorization": `Basic ${basicAuth}`,
-    },
-    body: body.toString(),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: _refreshToken,
+    }).toString(),
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Failed to get Webex access token: ${res.status} ${text}`);
+    _refreshToken = null;
+    _cachedToken = null;
+    throw new Error(`Failed to refresh Webex access token: ${res.status} ${text}`);
   }
 
   const data = await res.json();
   _cachedToken = {
     token: data.access_token,
-    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+    expiresAt: Date.now() + (data.expires_in ?? 43200) * 1000,
   };
+  if (data.refresh_token) {
+    _refreshToken = data.refresh_token;
+  }
 
-  log("Access token obtained/refreshed");
+  log("Access token refreshed");
   return _cachedToken.token;
 }
 
