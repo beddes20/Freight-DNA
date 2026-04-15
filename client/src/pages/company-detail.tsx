@@ -618,7 +618,7 @@ export default function CompanyDetail() {
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-2xl font-semibold" data-testid="text-company-name">
+                <h1 className="text-lg md:text-2xl font-semibold" data-testid="text-company-name">
                   {company.name}
                 </h1>
                 {!company.archivedAt && <PinButton companyId={companyId} size="default" className="h-8 w-8" />}
@@ -833,13 +833,13 @@ export default function CompanyDetail() {
       )}
 
       <Tabs value={detailTab} onValueChange={(t) => { setDetailTab(t); localStorage.setItem("cd_tab", t); }}>
-        <TabsList className="w-full grid grid-cols-6 mb-1">
-          <TabsTrigger value="overview" data-testid="tab-detail-overview">Overview</TabsTrigger>
-          <TabsTrigger value="activity" data-testid="tab-detail-activity">Activity</TabsTrigger>
-          <TabsTrigger value="intelligence" data-testid="tab-detail-intelligence">Intel</TabsTrigger>
-          <TabsTrigger value="people" data-testid="tab-detail-people">People</TabsTrigger>
-          <TabsTrigger value="opportunities" data-testid="tab-detail-opportunities">Opportunities</TabsTrigger>
-          <TabsTrigger value="rfp" data-testid="tab-detail-rfp">RFP & Lanes</TabsTrigger>
+        <TabsList className="w-full flex md:grid md:grid-cols-6 mb-1 overflow-x-auto no-scrollbar">
+          <TabsTrigger value="overview" className="flex-shrink-0" data-testid="tab-detail-overview">Overview</TabsTrigger>
+          <TabsTrigger value="activity" className="flex-shrink-0" data-testid="tab-detail-activity">Activity</TabsTrigger>
+          <TabsTrigger value="intelligence" className="flex-shrink-0" data-testid="tab-detail-intelligence">Intel</TabsTrigger>
+          <TabsTrigger value="people" className="flex-shrink-0" data-testid="tab-detail-people">People</TabsTrigger>
+          <TabsTrigger value="opportunities" className="flex-shrink-0" data-testid="tab-detail-opportunities"><span className="md:hidden">Opps</span><span className="hidden md:inline">Opportunities</span></TabsTrigger>
+          <TabsTrigger value="rfp" className="flex-shrink-0" data-testid="tab-detail-rfp"><span className="md:hidden">RFP</span><span className="hidden md:inline">RFP & Lanes</span></TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 mt-2">

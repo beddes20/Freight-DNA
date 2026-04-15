@@ -20,6 +20,7 @@ import { dark } from "@clerk/themes";
 import { GlobalLogTouchButton, GlobalLogTouchDialog } from "@/components/global-log-touch-button";
 import { LogTouchFab, useKeyboardShortcut } from "@/components/log-touch-fab";
 import { LogTouchProvider } from "@/context/log-touch-context";
+import { MobileBottomNav } from "@/components/mobile-bottom-nav";
 import { TourProvider } from "@/components/app-tour";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -360,7 +361,7 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
               </div>
             )}
             <header className="flex items-center gap-2 p-2 border-b" style={{ backgroundColor: "hsl(var(--sidebar))", borderColor: "hsl(var(--sidebar-border))" }}>
-              <SidebarTrigger className="text-white/80 hover:text-white hover:bg-white/10" data-testid="button-sidebar-toggle" />
+              <SidebarTrigger className="hidden md:flex text-white/80 hover:text-white hover:bg-white/10" data-testid="button-sidebar-toggle" />
               <div className="flex-1 flex items-center justify-center overflow-hidden px-4">
                 <p className="hidden md:flex items-center gap-0 text-xs font-semibold uppercase tracking-widest whitespace-nowrap select-none" style={{ color: "#ffc333" }}>
                   {[
@@ -381,11 +382,12 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
               <span data-tour="tour-global-search"><GlobalSearch navBar /></span>
               <NotificationBell navBar />
             </header>
-            <main className="flex-1 overflow-auto">
+            <main className="flex-1 overflow-auto pb-14 md:pb-0">
               <Router />
             </main>
           </div>
         </div>
+        <MobileBottomNav />
       </SidebarProvider>
       <GlobalLogTouchDialog />
       <LogTouchFabWithShortcut />

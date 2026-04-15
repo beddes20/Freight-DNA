@@ -344,7 +344,7 @@ export default function CarrierLaneSearchPage() {
   const totalLoads = data?.corridors.reduce((s, c) => s + c.totalLoads, 0) ?? 0;
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4 md:space-y-6">
       {/* Lane Intelligence tab switcher */}
       <div className="flex items-center gap-1 border-b pb-0 -mb-2">
         <a href="/research-tasks" className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" data-testid="tab-lane-research">Lane Research</a>

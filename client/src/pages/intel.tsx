@@ -1635,7 +1635,7 @@ export default function IntelPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className="p-4 md:p-6 max-w-5xl mx-auto">
         <IntelSkeleton />
       </div>
     );
@@ -1643,7 +1643,7 @@ export default function IntelPage() {
 
   if (error || !data) {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className="p-4 md:p-6 max-w-5xl mx-auto">
         <div className="rounded-xl border border-red-200 bg-red-50 dark:bg-red-950/20 p-6 text-center">
           <AlertTriangle className="h-8 w-8 text-red-500 mx-auto mb-3" />
           <p className="text-sm font-medium text-red-700 dark:text-red-300">

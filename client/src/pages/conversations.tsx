@@ -738,10 +738,10 @@ export default function ConversationsPage() {
   });
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex items-center gap-3 mb-6">
-        <MessageSquare className="w-6 h-6 text-primary" />
-        <h1 className="text-2xl font-semibold">Conversations</h1>
+    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+      <div className="flex items-center gap-3 mb-4 md:mb-6">
+        <MessageSquare className="w-5 h-5 md:w-6 md:h-6 text-primary" />
+        <h1 className="text-xl md:text-2xl font-semibold">Conversations</h1>
         <Badge className="text-xs" data-testid="badge-total-count">{data?.count ?? "—"}</Badge>
       </div>
 
@@ -750,7 +750,7 @@ export default function ConversationsPage() {
         setAllThreads([]);
         setNextCursor(null);
       }}>
-        <TabsList className="mb-4" data-testid="tabs-quick-views">
+        <TabsList className="mb-4 flex md:inline-flex overflow-x-auto no-scrollbar w-full md:w-auto" data-testid="tabs-quick-views">
           <TabsTrigger value="mine" data-testid="tab-waiting-on-me">
             Waiting on me
             {(mineData?.count ?? 0) > 0 && (
@@ -777,9 +777,9 @@ export default function ConversationsPage() {
         </TabsList>
 
         {activeTab === "all" && (
-          <div className="flex items-center gap-3 mb-4" data-testid="filters-container">
+          <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 mb-4" data-testid="filters-container">
             <Select value={filterState} onValueChange={setFilterState}>
-              <SelectTrigger className="w-44" data-testid="select-filter-state">
+              <SelectTrigger className="w-full md:w-44" data-testid="select-filter-state">
                 <SelectValue placeholder="Waiting state" />
               </SelectTrigger>
               <SelectContent>
@@ -791,7 +791,7 @@ export default function ConversationsPage() {
             </Select>
 
             <Select value={filterPriority} onValueChange={setFilterPriority}>
-              <SelectTrigger className="w-40" data-testid="select-filter-priority">
+              <SelectTrigger className="w-full md:w-40" data-testid="select-filter-priority">
                 <SelectValue placeholder="Priority" />
               </SelectTrigger>
               <SelectContent>

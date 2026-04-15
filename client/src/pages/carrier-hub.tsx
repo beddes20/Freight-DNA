@@ -22,7 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import {
-  Truck, Building2, Phone, Mail, MapPin, Search, Plus, X, ChevronRight,
+  Truck, Building2, Phone, Mail, MapPin, Search, Plus, X, ChevronRight, ChevronLeft,
   AlertTriangle, CheckCircle2, Star, User, Route, Activity, Settings,
   Globe, Loader2, Edit2, Trash2, Shield, History, Zap, ExternalLink,
   HelpCircle, Brain, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, ShieldCheck,
@@ -1696,7 +1696,7 @@ export default function CarrierHub() {
       {/* Body: list + drawer */}
       <div className="flex flex-1 overflow-hidden">
         {/* Carrier list */}
-        <div className={`flex flex-col overflow-hidden transition-all duration-200 ${selectedCarrierId ? "w-[420px] min-w-[420px]" : "flex-1"}`}>
+        <div className={`flex flex-col overflow-hidden transition-all duration-200 ${selectedCarrierId ? "hidden md:flex md:w-[420px] md:min-w-[420px]" : "flex-1"}`}>
           <div className="px-6 py-2 border-b border-border shrink-0 flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-muted-foreground" data-testid="text-carrier-count">
@@ -1768,8 +1768,11 @@ export default function CarrierHub() {
         {/* Profile drawer — right side panel */}
         {selectedCarrierId && (
           <div className="flex-1 border-l border-border overflow-hidden flex flex-col bg-background">
-            <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-between">
+            <div className="px-4 md:px-6 py-3 border-b border-border shrink-0 flex items-center justify-between">
               <div className="flex items-center gap-3">
+                <button className="md:hidden flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground" onClick={() => setSelectedCarrierId(null)} data-testid="btn-back-to-list">
+                  <ChevronLeft className="w-4 h-4" /> Back
+                </button>
                 <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Carrier Profile</span>
                 {isAdmin && (
                   <a

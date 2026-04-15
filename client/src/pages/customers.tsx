@@ -495,7 +495,7 @@ export default function Customers() {
 
       {/* Search + Filter bar */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
+        <div className="relative flex-1 min-w-0 w-full md:max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder={showArchived ? "Search archived..." : "Search customers..."}
@@ -549,10 +549,10 @@ export default function Customers() {
           )
         )}
         {!showArchived && (
-          <div className="flex items-center gap-1.5 ml-auto">
+          <div className="flex items-center gap-1.5 ml-auto w-full md:w-auto">
             <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="h-9 text-sm w-[170px]" data-testid="select-sort-by">
+              <SelectTrigger className="h-9 text-sm flex-1 md:w-[170px]" data-testid="select-sort-by">
                 <SelectValue placeholder="Sort by…" />
               </SelectTrigger>
               <SelectContent>
@@ -580,7 +580,7 @@ export default function Customers() {
       </div>
 
       {showFilters && !showArchived && (
-        <div className="flex items-center gap-3 flex-wrap p-3 bg-muted/40 rounded-lg border" data-testid="filter-bar">
+        <div className="flex flex-col md:flex-row md:items-center gap-3 flex-wrap p-3 bg-muted/40 rounded-lg border" data-testid="filter-bar">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Rep</span>
             <Select value={repFilter} onValueChange={setRepFilter}>

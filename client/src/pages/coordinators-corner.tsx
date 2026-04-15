@@ -312,7 +312,7 @@ export default function CoordinatorsCornerPage() {
   }, [relevantCompanies, search, contactsByCompany]);
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-5">
+    <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4 md:space-y-5">
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="h-10 w-10 rounded-lg bg-amber-500/10 flex items-center justify-center border border-amber-500/20 shrink-0">

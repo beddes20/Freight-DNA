@@ -110,7 +110,7 @@ export default function PipelineAnalyticsPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      <div className="p-4 md:p-6 space-y-4 md:space-y-6 max-w-7xl mx-auto">
         <Skeleton className="h-9 w-64" />
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {[1,2,3,4].map(i => <Skeleton key={i} className="h-24" />)}
@@ -138,7 +138,7 @@ export default function PipelineAnalyticsPage() {
   const maxLostReason = Math.max(...Object.values(data.lostReasonCounts), 1);
 
   return (
-    <div className="p-6 space-y-8 max-w-7xl mx-auto" data-testid="page-pipeline-analytics">
+    <div className="p-4 md:p-6 space-y-6 md:space-y-8 max-w-7xl mx-auto" data-testid="page-pipeline-analytics">
       {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <div>

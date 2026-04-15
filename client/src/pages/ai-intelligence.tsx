@@ -234,20 +234,20 @@ export default function AIIntelligencePage() {
   const isLeadership = user && ["admin", "sales_director", "director"].includes(user.role);
 
   return (
-    <div className="p-6 max-w-[1400px] mx-auto space-y-6" data-testid="ai-intelligence-page">
+    <div className="p-4 md:p-6 max-w-[1400px] mx-auto space-y-4 md:space-y-6" data-testid="ai-intelligence-page">
       <div className="relative overflow-hidden rounded-xl px-6 py-5 text-white" style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}>
         <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
         <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
-        <div className="relative flex items-center justify-between">
+        <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold flex items-center gap-2" data-testid="text-page-title">
-              <Brain className="h-6 w-6" style={{ color: "#ffb400" }} />
+            <h1 className="text-lg md:text-xl font-bold flex items-center gap-2" data-testid="text-page-title">
+              <Brain className="h-5 w-5 md:h-6 md:w-6" style={{ color: "#ffb400" }} />
               AI Intelligence Hub
             </h1>
-            <p className="text-white/60 mt-1 text-sm">AI-powered insights to build better relationships and grow accounts</p>
+            <p className="text-white/60 mt-1 text-xs md:text-sm">AI-powered insights to build better relationships and grow accounts</p>
           </div>
           <Select value={selectedCompany} onValueChange={setSelectedCompany}>
-            <SelectTrigger className="w-[280px] bg-white/10 border-white/20 text-white" data-testid="select-company">
+            <SelectTrigger className="w-full md:w-[280px] bg-white/10 border-white/20 text-white" data-testid="select-company">
               <SelectValue placeholder="Select an account..." />
             </SelectTrigger>
             <SelectContent>
@@ -286,17 +286,17 @@ export default function AIIntelligencePage() {
           })()}
 
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid grid-cols-5 lg:grid-cols-10 w-full" data-testid="tabs-intelligence">
-              <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
-              <TabsTrigger value="meeting-prep" data-testid="tab-meeting-prep">Meeting Prep</TabsTrigger>
-              <TabsTrigger value="sentiment" data-testid="tab-sentiment">Sentiment</TabsTrigger>
-              <TabsTrigger value="follow-ups" data-testid="tab-follow-ups">Follow-Ups</TabsTrigger>
-              <TabsTrigger value="coaching" data-testid="tab-coaching">Coaching</TabsTrigger>
-              <TabsTrigger value="org-gaps" data-testid="tab-org-gaps">Org Gaps</TabsTrigger>
-              <TabsTrigger value="cross-sell" data-testid="tab-cross-sell">Cross-Sell</TabsTrigger>
-              <TabsTrigger value="growth" data-testid="tab-growth">Growth Plays</TabsTrigger>
-              <TabsTrigger value="competitive" data-testid="tab-competitive">Competitive</TabsTrigger>
-              <TabsTrigger value="win-loss" data-testid="tab-win-loss">Win/Loss</TabsTrigger>
+            <TabsList className="flex md:grid md:grid-cols-5 lg:grid-cols-10 w-full overflow-x-auto no-scrollbar" data-testid="tabs-intelligence">
+              <TabsTrigger value="overview" className="flex-shrink-0" data-testid="tab-overview">Overview</TabsTrigger>
+              <TabsTrigger value="meeting-prep" className="flex-shrink-0" data-testid="tab-meeting-prep">Meeting Prep</TabsTrigger>
+              <TabsTrigger value="sentiment" className="flex-shrink-0" data-testid="tab-sentiment">Sentiment</TabsTrigger>
+              <TabsTrigger value="follow-ups" className="flex-shrink-0" data-testid="tab-follow-ups">Follow-Ups</TabsTrigger>
+              <TabsTrigger value="coaching" className="flex-shrink-0" data-testid="tab-coaching">Coaching</TabsTrigger>
+              <TabsTrigger value="org-gaps" className="flex-shrink-0" data-testid="tab-org-gaps">Org Gaps</TabsTrigger>
+              <TabsTrigger value="cross-sell" className="flex-shrink-0" data-testid="tab-cross-sell">Cross-Sell</TabsTrigger>
+              <TabsTrigger value="growth" className="flex-shrink-0" data-testid="tab-growth"><span className="md:hidden">Growth</span><span className="hidden md:inline">Growth Plays</span></TabsTrigger>
+              <TabsTrigger value="competitive" className="flex-shrink-0" data-testid="tab-competitive">Competitive</TabsTrigger>
+              <TabsTrigger value="win-loss" className="flex-shrink-0" data-testid="tab-win-loss">Win/Loss</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview" className="space-y-4 mt-4">

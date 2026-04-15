@@ -1964,13 +1964,13 @@ export default function LaneWorkQueuePage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="border-b border-border px-6 py-4 flex items-center justify-between bg-card">
+      <div className="border-b border-border px-4 md:px-6 py-3 md:py-4 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-card">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
-            <ListFilter className="w-5 h-5 text-amber-500" />
+          <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-amber-500/10 flex items-center justify-center shrink-0">
+            <ListFilter className="w-4 h-4 md:w-5 md:h-5 text-amber-500" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-foreground flex items-center gap-1.5">
+            <h1 className="text-base md:text-lg font-bold text-foreground flex items-center gap-1.5">
               Lane Work Queue
               <InfoTooltip
                 title="Lane Work Queue"
@@ -2001,8 +2001,7 @@ export default function LaneWorkQueuePage() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          {/* Build Lane button */}
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant="outline"
             size="sm"
@@ -2073,7 +2072,7 @@ export default function LaneWorkQueuePage() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto px-6 py-6">
+      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-6">
         {isError ? (
           <QueryError message="Couldn't load the lane work queue. This is usually temporary." onRetry={() => refetch()} />
         ) : isLoading ? (
@@ -2368,7 +2367,7 @@ export default function LaneWorkQueuePage() {
       {/* Bulk assign panel — floats at bottom when lanes are selected */}
       {selectedLaneIds.size > 0 && (
         <div
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-card border border-blue-500/40 rounded-xl shadow-xl px-4 py-3 min-w-[340px]"
+          className="fixed bottom-[4.5rem] md:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 md:gap-3 bg-card border border-blue-500/40 rounded-xl shadow-xl px-3 md:px-4 py-3 min-w-0 w-[calc(100%-2rem)] md:w-auto md:min-w-[340px]"
           data-testid="panel-bulk-assign"
         >
           <span className="text-sm font-medium text-blue-400 shrink-0">

@@ -82,7 +82,7 @@ export default function NotificationsPage() {
   const typesPresent = [...new Set(notifications.map(n => n.type))].filter(t => ALL_TYPES.includes(t));
 
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-4">
+    <div className="p-4 md:p-6 max-w-2xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center">

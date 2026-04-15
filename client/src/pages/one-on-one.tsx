@@ -295,7 +295,7 @@ function DevelopmentGoalsPanel({ managerId, repId }: { managerId: string; repId:
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-3">
+      <div className="p-4 md:p-6 space-y-3">
         <Skeleton className="h-6 w-40" />
         <Skeleton className="h-40 w-full" />
       </div>
@@ -368,7 +368,7 @@ function ActionItemsPanel({ managerId, repId, allUsers }: ActionItemsPanelProps)
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-3">
+      <div className="p-4 md:p-6 space-y-3">
         <Skeleton className="h-8 w-48" />
         {[1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full" />)}
       </div>
@@ -2319,7 +2319,7 @@ export default function OneOnOnePage() {
 
   if (usersLoading || pairingsLoading) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="p-4 md:p-6 space-y-4">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-96 w-full" />
       </div>

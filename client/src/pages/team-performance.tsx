@@ -382,7 +382,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
         )}
 
         {!isLmRole && (
-          <div className="grid grid-cols-5 gap-1.5 mb-2">
+          <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5 mb-2">
             <StatPill value={rep.openTasks} label="Open" color={rep.openTasks > 5 ? "text-amber-600" : "text-foreground"} />
             <StatPill value={rep.overdueTasks} label="Overdue" color={rep.overdueTasks > 0 ? "text-red-600" : "text-foreground"} />
             <StatPill value={rep.companyCount} label="Accounts" color="text-blue-600" />
@@ -419,7 +419,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
           </div>
         )}
 
-        <div className="grid grid-cols-5 gap-1.5 mb-1.5">
+        <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5 mb-1.5">
           <StatPill value={rep.callTouchpoints} label="Calls" color="text-blue-600" icon={<Phone className="h-3 w-3 text-blue-500" />} />
           <StatPill value={rep.textTouchpoints} label="Texts" color="text-green-600" icon={<MessageSquare className="h-3 w-3 text-green-500" />} />
           <StatPill value={rep.emailTouchpoints} label="Emails" color="text-purple-600" icon={<Mail className="h-3 w-3 text-purple-500" />} />
@@ -898,7 +898,7 @@ export default function TeamPerformancePage() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl mx-auto">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-6 max-w-6xl mx-auto">
       <div className="relative overflow-hidden rounded-xl px-6 py-5 text-white" style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}>
         <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
         <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />

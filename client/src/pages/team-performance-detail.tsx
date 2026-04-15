@@ -419,7 +419,7 @@ export default function TeamPerformanceDetailPage() {
 
   if (!config) {
     return (
-      <div className="p-6 flex items-center justify-center">
+      <div className="p-4 md:p-6 flex items-center justify-center">
         <p className="text-muted-foreground">Unknown metric</p>
       </div>
     );
@@ -448,7 +448,7 @@ export default function TeamPerformanceDetailPage() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-3">
         <Button
           variant="ghost"

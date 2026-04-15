@@ -155,7 +155,7 @@ export default function TouchpointHistoryPage() {
   const meaningful = useMemo(() => filtered.filter(tp => tp.isMeaningful).length, [filtered]);
 
   return (
-    <div className="p-6 space-y-5 max-w-7xl mx-auto">
+    <div className="p-4 md:p-6 space-y-4 md:space-y-5 max-w-7xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>

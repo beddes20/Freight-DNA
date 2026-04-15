@@ -148,7 +148,7 @@ function TaskCalendarView({
         </div>
         <div className="grid grid-cols-7 divide-x divide-y border-t">
           {Array.from({ length: firstDow }).map((_, i) => (
-            <div key={`pad-${i}`} className="h-24 bg-muted/20" />
+            <div key={`pad-${i}`} className="h-14 md:h-24 bg-muted/20" />
           ))}
           {Array.from({ length: daysInMonth }).map((_, i) => {
             const day = i + 1;
@@ -161,19 +161,19 @@ function TaskCalendarView({
             return (
               <div
                 key={day}
-                className={`h-24 p-1.5 cursor-pointer transition-colors relative overflow-hidden
+                className={`h-14 md:h-24 p-1 md:p-1.5 cursor-pointer transition-colors relative overflow-hidden
                   ${isSelected ? "bg-primary/10 ring-1 ring-inset ring-primary" : "hover:bg-muted/40"}
                   ${ptos.length > 0 ? "bg-violet-50 dark:bg-violet-950/20" : ""}
                 `}
                 onClick={() => setSelectedDay(day === selectedDay ? null : day)}
                 data-testid={`calendar-day-${day}`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs font-medium w-5 h-5 flex items-center justify-center rounded-full
+                <div className="flex items-center justify-between mb-0.5 md:mb-1">
+                  <span className={`text-[10px] md:text-xs font-medium w-4 h-4 md:w-5 md:h-5 flex items-center justify-center rounded-full
                     ${isToday ? "bg-primary text-primary-foreground" : "text-foreground"}`}>
                     {day}
                   </span>
-                  {ptos.length > 0 && <Plane className="h-3 w-3 text-violet-500 shrink-0" />}
+                  {ptos.length > 0 && <Plane className="h-3 w-3 text-violet-500 shrink-0 hidden md:block" />}
                 </div>
                 {dayTasks.length > 0 && (
                   <div className="flex flex-wrap gap-0.5 mt-0.5">
@@ -185,12 +185,14 @@ function TaskCalendarView({
                     )}
                   </div>
                 )}
-                {dayTasks.slice(0, 2).map(t => (
-                  <p key={t.id} className="text-[10px] leading-tight text-muted-foreground truncate mt-0.5">{t.title}</p>
-                ))}
-                {dayTasks.length > 2 && (
-                  <p className="text-[9px] text-muted-foreground">+{dayTasks.length - 2} more</p>
-                )}
+                <div className="hidden md:block">
+                  {dayTasks.slice(0, 2).map(t => (
+                    <p key={t.id} className="text-[10px] leading-tight text-muted-foreground truncate mt-0.5">{t.title}</p>
+                  ))}
+                  {dayTasks.length > 2 && (
+                    <p className="text-[9px] text-muted-foreground">+{dayTasks.length - 2} more</p>
+                  )}
+                </div>
               </div>
             );
           })}

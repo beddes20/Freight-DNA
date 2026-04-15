@@ -360,7 +360,7 @@ export default function EmailIntelligencePage() {
         )}
       </div>
 
-      <div className="p-6 space-y-6">
+      <div className="p-4 md:p-6 space-y-4 md:space-y-6">
         <Tabs defaultValue="urgency" className="w-full">
           <TabsList className="bg-muted/30 mb-4">
             <TabsTrigger value="urgency" data-testid="tab-urgency">
