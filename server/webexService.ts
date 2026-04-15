@@ -39,17 +39,20 @@ export async function getWebexAccessToken(): Promise<string> {
   const clientId = process.env.WEBEX_CLIENT_ID!;
   const clientSecret = process.env.WEBEX_CLIENT_SECRET!;
 
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+
   const url = "https://webexapis.com/v1/access_token";
   const body = new URLSearchParams({
     grant_type: "client_credentials",
-    client_id: clientId,
-    client_secret: clientSecret,
     scope: "spark:calls_read spark:people_read spark:calls_write",
   });
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Authorization": `Basic ${basicAuth}`,
+    },
     body: body.toString(),
   });
 
