@@ -31,12 +31,13 @@ function log(msg: string) {
 const presenceCache = new Map<string, { status: string; fetchedAt: number }>();
 const PRESENCE_CACHE_TTL = 60_000;
 
-async function syncCallsForOrg(orgId: string, hoursBack: number): Promise<{
+async function syncCallsForOrg(orgId: string, hoursBack: number, customEndMs?: number): Promise<{
   touchpoints: any[];
   nbaCards: any[];
 }> {
-  const endTime = new Date().toISOString();
-  const startTime = new Date(Date.now() - hoursBack * 3600 * 1000).toISOString();
+  const endMs = customEndMs ?? Date.now();
+  const endTime = new Date(endMs).toISOString();
+  const startTime = new Date(endMs - hoursBack * 3600 * 1000).toISOString();
 
   log(`Syncing calls for org ${orgId}: ${startTime} → ${endTime}`);
 
@@ -393,14 +394,36 @@ export function registerWebexRoutes(app: Express) {
         return res.status(400).json({ error: "Webex credentials not configured" });
       }
 
-      const { hoursBack = 24 } = req.body || {};
-      const result = await syncCallsForOrg(user.organizationId, hoursBack);
+      const hoursBack = Math.min(Number(req.body?.hoursBack) || 24, 168);
+
+      if (hoursBack <= 48) {
+        const result = await syncCallsForOrg(user.organizationId, hoursBack);
+        return res.json({
+          synced: result.touchpoints.length,
+          missedCallCards: result.nbaCards.length,
+          touchpoints: result.touchpoints,
+          nbaCards: result.nbaCards,
+        });
+      }
+
+      let totalTouchpoints: any[] = [];
+      let totalNbaCards: any[] = [];
+      const now = Date.now();
+      const chunkHours = 48;
+      for (let offset = 0; offset < hoursBack; offset += chunkHours) {
+        const chunkEndMs = now - offset * 3600_000;
+        const chunkSize = Math.min(chunkHours, hoursBack - offset);
+        log(`Batch sync chunk: ${chunkSize}h ending at ${new Date(chunkEndMs).toISOString()}`);
+        const result = await syncCallsForOrg(user.organizationId, chunkSize, chunkEndMs);
+        totalTouchpoints = totalTouchpoints.concat(result.touchpoints);
+        totalNbaCards = totalNbaCards.concat(result.nbaCards);
+      }
 
       res.json({
-        synced: result.touchpoints.length,
-        missedCallCards: result.nbaCards.length,
-        touchpoints: result.touchpoints,
-        nbaCards: result.nbaCards,
+        synced: totalTouchpoints.length,
+        missedCallCards: totalNbaCards.length,
+        touchpoints: totalTouchpoints,
+        nbaCards: totalNbaCards,
       });
     } catch (err) {
       log(`Sync error: ${err instanceof Error ? err.message : String(err)}`);
